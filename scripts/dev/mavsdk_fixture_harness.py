@@ -22,7 +22,7 @@ from mavsdk_peer import ACCEPTED, CommandRecord, VehiclePeer
 from mavsdk_qland_peer import with_qland_peer
 
 ROOT = Path(__file__).resolve().parents[2]
-BUILD_DIR = Path(os.environ.get("NOMAD_MAVSDK_FIXTURE_BUILD_DIR", ROOT / "build" / "mavsdk-phase-a"))
+BUILD_DIR = Path(os.environ.get("NOMAD_MAVSDK_FIXTURE_BUILD_DIR", ROOT / "build" / "mavsdk-qualification"))
 
 
 def find_binary(name: str) -> Path | None:

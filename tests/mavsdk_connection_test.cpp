@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 //
-// Phase B contract tests for the MAVSDK-backed MavlinkConnection that do not
+// Contract tests for the MAVSDK-backed MavlinkConnection that do not
 // need a live peer: configuration validation and fail-closed behavior. The
 // peer-driven accepted/denied/timeout cases run from the Python fixture
 // (scripts/dev/mavsdk_connection_fixture.py), which drives the real CLI.

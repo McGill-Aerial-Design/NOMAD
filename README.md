@@ -34,12 +34,16 @@ documents for confirmed directions, confirmed source requirements and unresolved
   and [safety case](docs/safety.md)
 
 ~~~sh
+pixi run build-core
 pixi run test-core
 pixi run test-python
 pixi run docs-build
 ~~~
 
-These checks do not start hardware. The status matrix lists the scoped live SITL
+`build-core` creates the production CLI and runtime in the build tree. It does
+not install them; `package-core` creates release archives, and
+`verify-core-staged-install` checks an isolated staged prefix. These checks do
+not start hardware. The status matrix lists the scoped live SITL
 evidence; broader image/profile and ROS startup gates at G1 remain open. Real
 configuration stays in ignored local storage.
 

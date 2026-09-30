@@ -1,4 +1,4 @@
-# MAVSDK Phase A dependency inventory
+# Pinned MAVSDK dependency inventory
 
 This inventory records the MAVSDK build inputs at the reviewed NOMAD gitlink. It
 is an engineering and notice audit, not a release approval. The production core
@@ -24,13 +24,13 @@ reviewed fork gitlink.
 | tinyxml2 | tag `11.0.0` | Zlib |
 | liblzma from XZ Utils | archive `5.4.5`, SHA-256 `135c90b934aee8fbc0d467de87a05cb70d627da36abe518c357a873709e5b7d6` | public domain for liblzma; package contains mixed licenses |
 
-The Phase A build disables the MAVSDK server and curl, so their optional
-dependency sets are outside this inventory. MAVSDK's patched MAVLink build uses
+The connectivity-smoke build disables the MAVSDK server and curl, so their
+optional dependency sets are outside this inventory. MAVSDK's patched MAVLink build uses
 the pymavlink generator source nested in the pinned MAVLink checkout instead of
 running a build-time `pip install`; generator packages are not linked into the
 smoke executable.
 
-The checker `pixi run check-mavsdk-phase-a` fails if reviewed gitlinks,
+The checker `pixi run verify-mavsdk-provenance` fails if reviewed gitlinks,
 dependency references, archive hashes/timestamp handling, the pinned-generator
 patch, NOTICE component names, or any bundled licence text changes without an
 explicit audit update. The complete selected-build texts and their checked hashes

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Tests for MAVSDK Phase A resource-metric collection."""
+"""Tests for MAVSDK connectivity-smoke build metrics."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from scripts.dev import mavsdk_phase_a_metrics as metrics
+from scripts.dev import mavsdk_build_metrics as metrics
 
 
 def test_directory_size_counts_regular_files(tmp_path: Path) -> None:
@@ -20,10 +20,10 @@ def test_directory_size_counts_regular_files(tmp_path: Path) -> None:
 
 
 def test_collect_build_metrics_reports_executable_and_static_archives(tmp_path: Path) -> None:
-    build_dir = tmp_path / "mavsdk-phase-a"
+    build_dir = tmp_path / "mavsdk-qualification"
     release = build_dir / "Release"
     release.mkdir(parents=True)
-    executable = release / "nomad_mavsdk_phase_a_smoke.exe"
+    executable = release / "nomad_mavsdk_connectivity_smoke.exe"
     executable.write_bytes(b"x" * 11)
 
     install_lib = build_dir / "mavsdk" / "third_party" / "install" / "lib"
@@ -40,7 +40,7 @@ def test_collect_build_metrics_reports_executable_and_static_archives(tmp_path: 
 
 
 def test_collect_build_metrics_fails_without_smoke_binary(tmp_path: Path) -> None:
-    build_dir = tmp_path / "mavsdk-phase-a"
+    build_dir = tmp_path / "mavsdk-qualification"
     build_dir.mkdir()
     try:
         metrics.collect_build_metrics(build_dir)
@@ -65,7 +65,7 @@ def test_run_build_measures_configure_and_target(monkeypatch, tmp_path: Path) ->
 
     assert result == {"configure_seconds": 1.25, "target_build_seconds": 2.5}
     assert commands[0][:3] == ["cmake", "-S", str(metrics.ROOT)]
-    assert commands[1][-2:] == ["--target", "nomad_mavsdk_phase_a_smoke"]
+    assert commands[1][-2:] == ["--target", "nomad_mavsdk_connectivity_smoke"]
 
 
 def test_run_build_propagates_phase_failure(monkeypatch, tmp_path: Path) -> None:
@@ -89,7 +89,7 @@ def test_write_github_summary_contains_all_metrics(tmp_path: Path) -> None:
     }
     metrics.write_github_summary(values, summary)
     text = summary.read_text(encoding="utf-8")
-    assert "MAVSDK Phase A build metrics" in text
+    assert "MAVSDK connectivity smoke build metrics" in text
     for key, value in values.items():
         assert f"`{key}`" in text
         assert str(value) in text
@@ -106,7 +106,7 @@ def test_main_emits_machine_readable_json(monkeypatch, capsys) -> None:
     monkeypatch.setattr(metrics, "collect_build_metrics", lambda: values)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     assert metrics.main() == 0
-    prefix = "mavsdk_phase_a_build_metrics="
+    prefix = "mavsdk_connectivity_build_metrics="
     output = capsys.readouterr().out.strip()
     assert output.startswith(prefix)
     assert json.loads(output.removeprefix(prefix)) == values

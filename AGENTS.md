@@ -158,11 +158,22 @@ pixi run test-python
 pixi run lint
 pixi run format
 pixi run docs-build
+pixi run build-core-release
+pixi run package-core
+pixi run verify-core-staged-install
 ```
 
 During the transition, the existing Python/SITL tasks remain available. Use
 placeholders for deployment values and keep real configuration in the ignored
 `config/nomad.env`.
+
+`build-core` and `build-core-release` build production executables into the build
+tree. They do not install them. `package-core` creates release archives, and
+`verify-core-staged-install` installs only into `build/package/stage` for
+verification. `install-core` is the explicit prefix-install task and requires a
+destination argument. Mission Planner deployment uses its explicit packaging
+installer; ordinary build and test tasks must not call installation or host
+deployment scripts.
 
 ## Documentation
 

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Run the MAVSDK Phase A connect/status smoke against SITL."""
+"""Run the MAVSDK connect/status smoke against SITL."""
 
 from __future__ import annotations
 
@@ -30,8 +30,8 @@ def get_system_id() -> str:
 
 
 def find_binary() -> Path | None:
-    names = ("nomad_mavsdk_phase_a_smoke.exe", "nomad_mavsdk_phase_a_smoke")
-    build_dir = ROOT / "build" / "mavsdk-phase-a"
+    names = ("nomad_mavsdk_connectivity_smoke.exe", "nomad_mavsdk_connectivity_smoke")
+    build_dir = ROOT / "build" / "mavsdk-qualification"
     for directory in (build_dir, build_dir / "Debug", build_dir / "Release"):
         for name in names:
             candidate = directory / name
@@ -88,7 +88,7 @@ def report_runtime_metric(command: str, elapsed_seconds: float, peak_rss: int | 
         fields.append(f"peak_process_tree_rss_bytes={peak_rss}")
     else:
         fields.append("peak_process_tree_rss_bytes=unavailable")
-    print(f"mavsdk_phase_a_runtime_metric {' '.join(fields)}", flush=True)
+    print(f"mavsdk_connectivity_runtime_metric {' '.join(fields)}", flush=True)
 
 
 def run_smoke(binary: Path, command: str, endpoint: str, system_id: str) -> int:
@@ -124,7 +124,7 @@ def main() -> int:
     binary = find_binary()
     if binary is None:
         print(
-            "error: MAVSDK Phase A smoke binary not found; run `pixi run build-core-mavsdk` first",
+            "error: MAVSDK connectivity smoke binary not found; run `pixi run build-mavsdk-connectivity-smoke` first",
             file=sys.stderr,
         )
         return 2

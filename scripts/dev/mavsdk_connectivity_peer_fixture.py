@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Run deterministic MAVSDK Phase A positive and negative UDP peer cases."""
+"""Run deterministic positive and negative connectivity cases with a UDP peer."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import subprocess
 import threading
 from pathlib import Path
 
-from mavsdk_phase_a_smoke import find_binary, has_required_output
+from mavsdk_connectivity_smoke import find_binary, has_required_output
 from pymavlink.dialects.v20 import ardupilotmega as mavlink
 
 
@@ -139,7 +139,7 @@ def require_case(condition: bool, name: str, result: subprocess.CompletedProcess
 def main() -> int:
     binary = find_binary()
     if binary is None:
-        print("MAVSDK Phase A smoke binary is missing")
+        print("MAVSDK connectivity smoke binary is missing")
         return 2
 
     valid = run_peer_case(binary, peer_id=1, expected_id=1, command="status")

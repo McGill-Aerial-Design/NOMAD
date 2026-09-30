@@ -342,9 +342,10 @@ mode and telemetry semantics; NOMAD keeps safety policy, validation, verificatio
 of outcomes, deadlines and the client contract. Owning a semantic never transfers
 outcome authority, and new ArduPilot command construction belongs in the fork
 rather than in a NOMAD adapter. The transport landed in gated phases A-D and the
-Phase E cutover deleted the codec it replaced; the Phase A/B names survive only
-as qualification task and provenance-check names. Preserve Vehicle, safety and
-outcome semantics through adoption. Do not trust library ACKs, Offboard mode, background resends,
+Phase E cutover deleted the codec it replaced. Current build and qualification
+entrypoints use their present purpose; historical phase labels remain in the
+validation namespace, pinned license path and adoption evidence. Preserve Vehicle,
+safety and outcome semantics through adoption. Do not trust library ACKs, Offboard mode, background resends,
 GCS heartbeats, or default identity without tests against the selected firmware.
 Pin firmware/dialect/library combinations and requalify each changed combination.
 

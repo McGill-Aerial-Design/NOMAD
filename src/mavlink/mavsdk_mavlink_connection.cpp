@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 //
-// MAVSDK-backed MavlinkConnection: the Phase B transport. MAVSDK owns framing,
+// MAVSDK-backed MavlinkConnection. MAVSDK owns framing,
 // transport and its internal workers; NOMAD keeps command authorization and
 // authoritative outcome verification. Guided goto uses MAVSDK Action; remaining
 // commands without a suitable high-level API use COMMAND_LONG passthrough.

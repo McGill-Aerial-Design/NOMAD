@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def find_binary() -> Path | None:
     names = ("nomad-qualification.exe", "nomad-qualification")
-    build_dirs = (ROOT / "build" / "core", ROOT / "build" / "mavsdk-phase-a", ROOT / "build-core")
+    build_dirs = (ROOT / "build" / "core", ROOT / "build" / "mavsdk-qualification", ROOT / "build-core")
     configurations = tuple(
         directory for build_dir in build_dirs for directory in (build_dir, build_dir / "Debug", build_dir / "Release")
     )

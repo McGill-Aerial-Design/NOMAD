@@ -14,29 +14,34 @@ dependencies, so a first configure needs network access. C++ runtime use does no
 require Python, ROS or a GPU.
 
 ~~~sh
+pixi run build-core
 pixi run test-core
 pixi run test-python
 pixi run lint
 pixi run format-check
 pixi run complexity-check
 pixi run docs-build
+pixi run build-core-release
 pixi run package-core
-pixi run verify-core-install
+pixi run verify-core-staged-install
 pixi run verify-core-package
 ~~~
 
-test-core configures/builds before CTest; build-core builds without tests.
-`build-core` builds the installed runtime-only `nomad` client and
-`nomad-runtime`. Run `pixi run build-qualification-cli` to explicitly build the
-non-installed direct MAVSDK driver needed by SITL and transport qualification.
+`build-core` builds only the production `nomad` client and `nomad-runtime` in the
+build tree. `test-core` builds and runs the CTest suite. Use
+`build-qualification-cli` for the non-installed direct MAVSDK driver, or
+`build-sitl-tools` for the production executables plus that driver.
 format-check is read-only with respect to source; format rewrites source and is
 not appropriate for a documentation-only review of unrelated migration work.
 docs-build is the strict ProperDocs site check.
-The package tasks are non-deploying release checks: `package-core` builds the
-Release CLI and CPack ZIP/TGZ artifacts, `verify-core-install` stages a clean
-install prefix, and `verify-core-package` checks the staged tree or both CPack
-archives without opening a vehicle connection. They do not install to a system
-prefix or change runtime infrastructure.
+Build, package, stage and install are separate operations. `build-core-release`
+creates the Release CLI/runtime in the build tree. `package-core` creates CPack
+ZIP/TGZ artifacts from that build.
+`verify-core-staged-install` installs into `build/package/stage` and verifies
+that isolated tree; `verify-core-package` checks both archives without opening a
+vehicle connection. `install-core` is the explicit prefix-install task and
+requires a destination argument. Build, test and package tasks do not write to a
+user or system installation.
 
 complexity-check applies the source-size rules to new and modified files: 500
 lines per source file, 40 per Python function, and 120 columns per C/C++ line
@@ -81,7 +86,7 @@ tracked-file and function/lambda counts, macro/conditional totals, known omitted
 constructor count, and representative safety-function rows are reviewed; then
 ratchet only a reviewed subset or replace the lexical analyzer.
 
-`pixi run dev` and `dev-build` now build the C++ core. `pixi run test` measures
+`build-core` is the production build entrypoint. `pixi run test` measures
 coverage of retained Python tools and Tailscale helpers. The deleted API server,
 API smoke task and gimbal SITL task are removed.
 
@@ -253,14 +258,15 @@ qualification.
 
 ## Adapter and optional build checks
 
-The `build-core-mavsdk` and `mavsdk-phase-a-smoke` task names are historical.
-The Phase A connect/status executable is excluded from default builds and is
-not installed. Its explicit smoke task still requires live SITL. Follow
-[MAVSDK parity gates](mavsdk-adoption.md). The build task emits configure/build
-timing and footprint JSON to standard output.
+`build-mavsdk-connectivity-smoke` builds the non-installed connect/status
+executable and records configure/build timing and footprint metrics.
+`run-mavsdk-sitl-smoke` runs that check against an already-running SITL vehicle.
+`test-mavsdk-connectivity` runs the equivalent deterministic UDP peer cases plus
+provenance tests; `verify-mavsdk-provenance` checks the pinned source and
+dependency inventory. Follow [MAVSDK parity gates](mavsdk-adoption.md).
 
 `nomad` is an IPC-only client and has no aircraft transport selector or endpoint
-configuration. Run `pixi run test-mavsdk-phase-b` for the direct transport
+configuration. Run `pixi run test-mavsdk-transport-qualification` for the direct
 qualification check: it builds `nomad-qualification`,
 `nomad_mavsdk_connection_tests` and `nomad_mavsdk_zero_delivery_tests`, then runs
 `scripts/dev/mavsdk_connection_fixture.py`, which asserts accepted, denied,
@@ -280,6 +286,10 @@ parity evidence, not a closed Phase B-E or G-M gate. The hosted matrix also writ
 retains a JSON artifact; local output from a dirty vendor checkout is diagnostic,
 not clean-checkout qualification. Live smoke output includes per-process-tree
 peak RSS and elapsed connect/status time and is retained by the SITL workflow.
+
+After the transport qualification has built its probes,
+`pixi run test-mavsdk-authority-wire` runs the final-send cancellation checks at
+the MAVLink peer and the command probe.
 
 ROS builds use the separate ament package and supported image; test-ros-integration
 runs its real adapter tests. Current source still has blocking callbacks; passing

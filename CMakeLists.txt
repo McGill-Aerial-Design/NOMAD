@@ -199,7 +199,7 @@ else()
     target_compile_options(nomad_mavsdk_system PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-# Receive-only UDP telemetry observation used by ROS and the Phase A status smoke.
+# Receive-only UDP telemetry observation used by ROS and the connectivity smoke.
 # MAVLink parsing uses the generated dialect header but owns no MAVSDK connection.
 add_library(nomad_mavlink_observation src/mavlink/mavlink_observation.cpp)
 target_include_directories(nomad_mavlink_observation PUBLIC include)
@@ -249,10 +249,10 @@ else()
 endif()
 
 # Non-installed direct connect/status smoke retained for explicit qualification.
-add_executable(nomad_mavsdk_phase_a_smoke EXCLUDE_FROM_ALL examples/mavsdk_phase_a_smoke.cpp)
-target_include_directories(nomad_mavsdk_phase_a_smoke PRIVATE include)
-add_dependencies(nomad_mavsdk_phase_a_smoke mavsdk)
-target_link_libraries(nomad_mavsdk_phase_a_smoke PRIVATE nomad_mavlink_observation)
+add_executable(nomad_mavsdk_connectivity_smoke EXCLUDE_FROM_ALL examples/mavsdk_connectivity_smoke.cpp)
+target_include_directories(nomad_mavsdk_connectivity_smoke PRIVATE include)
+add_dependencies(nomad_mavsdk_connectivity_smoke mavsdk)
+target_link_libraries(nomad_mavsdk_connectivity_smoke PRIVATE nomad_mavlink_observation)
 
 # The adapter packages embed this file as a subproject; only build the CTest
 # targets when the tests/ source tree is actually present.
@@ -267,12 +267,12 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
         add_test(NAME nomad_runtime_tests COMMAND nomad_runtime_tests)
     endif()
 
-    add_executable(nomad_mavsdk_phase_a_tests tests/mavsdk_phase_a_test.cpp)
-    target_link_libraries(nomad_mavsdk_phase_a_tests PRIVATE nomad_mavsdk_validation)
+    add_executable(nomad_mavsdk_validation_tests tests/mavsdk_validation_test.cpp)
+    target_link_libraries(nomad_mavsdk_validation_tests PRIVATE nomad_mavsdk_validation)
     if(MSVC)
-        target_compile_options(nomad_mavsdk_phase_a_tests PRIVATE /W4 /permissive- /EHsc)
+        target_compile_options(nomad_mavsdk_validation_tests PRIVATE /W4 /permissive- /EHsc)
     endif()
-    add_test(NAME nomad_mavsdk_phase_a_tests COMMAND nomad_mavsdk_phase_a_tests)
+    add_test(NAME nomad_mavsdk_validation_tests COMMAND nomad_mavsdk_validation_tests)
 
     nomad_add_core_test(nomad_core_tests tests/core_test.cpp)
     nomad_add_core_test(nomad_fake_connection_contract_tests tests/fake_connection_contract_test.cpp)
@@ -305,7 +305,7 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     add_test(NAME nomad_mavsdk_connection_tests COMMAND nomad_mavsdk_connection_tests)
 
     if(PROJECT_IS_TOP_LEVEL)
-        add_executable(nomad_mavsdk_authority_wire_probe tests/mavsdk_authority_wire_probe.cpp)
+        add_executable(nomad_mavsdk_authority_wire_probe EXCLUDE_FROM_ALL tests/mavsdk_authority_wire_probe.cpp)
         target_link_libraries(nomad_mavsdk_authority_wire_probe PRIVATE nomad_mavsdk_connection nomad_core)
     endif()
 
