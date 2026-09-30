@@ -27,6 +27,8 @@ jobs:
           cache: true
       - name: Run Python tests
         run: pixi run test-python
+      - name: Verify authority SITL observation and guard regressions
+        run: pixi run test-authority-sitl-harness
 
   core:
     name: C++ core

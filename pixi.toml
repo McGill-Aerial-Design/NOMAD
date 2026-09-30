@@ -67,6 +67,7 @@ cmake -S . -B build/mavsdk-qualification -DCMAKE_BUILD_TYPE=Release -DBUILD_TEST
 """
 test-mavsdk-transport-qualification = "pixi run build-mavsdk-transport-qualification && pytest tests/test_qualification_cli.py tests/test_fence_config_env.py -q && python scripts/dev/mavsdk_connection_fixture.py"
 test-mavsdk-authority-wire = "python scripts/dev/mavsdk_authority_wire_fixture.py && python scripts/dev/mavsdk_authority_probe_fixture.py"
+test-authority-sitl-harness = "pytest tests/test_authority_sitl.py -q"
 
 # Coverage floor is a ratchet set just below the current level so coverage can
 # only trend up; raise it as more of the codebase gets tested.
@@ -246,6 +247,10 @@ env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 [tasks.core-sitl-quadplane-observe]
 cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_observe.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
+
+# Dedicated, guarded native Copter simulator; see tests/sitl/README.md.
+[tasks.core-sitl-runtime-authority]
+cmd = "pixi run build-core && python scripts/dev/core_sitl_authority.py"
 
 # Simulator-only, disarmed receiver-injection proof; never airborne qualification.
 [tasks.core-sitl-quadplane-rc-loss-probe]

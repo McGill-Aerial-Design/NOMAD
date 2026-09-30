@@ -1,9 +1,13 @@
 # Safety and qualification status
 
 This is the current summary of what the repository proves and what remains
-unqualified. The documentation cleanup started from `main` at
-`042c980838007e770894b3fce4e6f8579bc4aaa8`; this change does not alter flight
-code. A test, passing workflow or simulator result proves only the boundary and
+unqualified. The source-arbitration qualification slice started from `main` at
+`34d93335c41a000d78a323436e9027704bffc160` after PR #52. It adds a disarmed
+production-runtime SITL scenario and a physical qualification procedure without
+changing the production command surface or aircraft parameters. The executable
+mutation scenario uses Copter; current runtime v1 mutations are unsupported for
+QuadPlane, and that capability gate remains intact.
+A test, passing workflow or simulator result proves only the boundary and
 revision it actually exercised. This page is not flight authorization.
 
 ## Evidence levels
@@ -21,6 +25,12 @@ historical task names and run-specific reports remain in the
 [migration evidence archive](migration.md).
 
 ## Proven software boundaries
+
+The [source-arbitration model](source-arbitration.md) lists every intended
+source, the software/SITL/bench/flight distinctions, controller mechanisms,
+unresolved production RC inputs and the later hardware procedure. `handback`
+explicitly returns software authority to NOMAD after `revoke`; it does not
+establish pilot control. External mode changes do not revoke runtime ownership.
 
 - The production runtime starts without an admitted software command owner.
   Typed mutations require explicit authority admission and carry the runtime
@@ -100,6 +110,17 @@ need their compatible hardware and base images. See the exact local commands in
 [development](development.md#sitl-and-live-mavsdk-smoke).
 
 ## Not yet equivalent to qualification
+
+The new [runtime authority SITL scenario](../scripts/dev/core_sitl_authority.py)
+and its [run procedure](../tests/sitl/README.md#runtime-authority-and-independent-source)
+are wired into scheduled/manual Copter CI with a lighter PR guard/observer
+gate. Record exact successful runs before calling the software/SITL slice
+complete; configured coverage alone does not establish a pass. Native GCS
+source-250 mode acceptance in a disarmed simulator is simulated external-source
+evidence, not physical pilot takeover. Copter output evidence does not qualify
+a QuadPlane runtime mutation; protocol v1 currently has none that can execute.
+The standalone production router and
+aircraft-side router are absent from this scenario's direct simulator topology.
 
 - Runtime authority is one admitted **software source** for typed requests to
   that runtime. It is not whole-aircraft authority. Native Mission Planner
