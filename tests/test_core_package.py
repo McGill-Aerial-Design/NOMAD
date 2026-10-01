@@ -4,7 +4,12 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import zipfile
 from pathlib import Path
+
+import pytest
 
 from scripts.dev import verify_core_package
 
@@ -72,6 +77,22 @@ def test_find_install_root_accepts_cpack_top_level_directory(tmp_path: Path) -> 
     (nested / "bin").mkdir(parents=True)
 
     assert verify_core_package.find_install_root(tmp_path) == nested
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix executable permissions")
+def test_zip_executable_runs_after_extraction(tmp_path: Path) -> None:
+    archive = tmp_path / "package.zip"
+    binary = zipfile.ZipInfo("bin/nomad")
+    binary.create_system = 3
+    binary.external_attr = 0o104755 << 16
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr(binary, "#!/bin/sh\nprintf 'package executable works\\n'\n")
+    root = verify_core_package.extract_archive(archive, tmp_path / "extracted")
+
+    result = subprocess.run([root / "bin/nomad"], capture_output=True, text=True, check=True, timeout=5)
+
+    assert result.stdout == "package executable works\n"
+    assert (root / "bin/nomad").stat().st_mode & 0o7777 == 0o755
 
 
 def test_cmake_keeps_direct_driver_outside_the_installed_cli() -> None:

@@ -172,6 +172,16 @@ def safe_archive_member(name: str) -> bool:
     return not path.is_absolute() and ".." not in path.parts
 
 
+def restore_zip_permissions(members: list[zipfile.ZipInfo], destination: Path) -> None:
+    """Preserve archived Unix permissions; ZIP extraction otherwise drops executable bits."""
+    if os.name == "nt":
+        return
+    for member in members:
+        mode = (member.external_attr >> 16) & 0o777
+        if mode:
+            (destination / member.filename).chmod(mode)
+
+
 def extract_archive(archive: Path, destination: Path) -> Path:
     """Extract a CPack ZIP/TGZ while rejecting path traversal and links."""
     destination.mkdir(parents=True, exist_ok=True)
@@ -181,6 +191,7 @@ def extract_archive(archive: Path, destination: Path) -> Path:
             if any(not safe_archive_member(member.filename) for member in members):
                 raise ValueError("archive contains an unsafe ZIP path")
             package.extractall(destination)
+            restore_zip_permissions(members, destination)
     elif archive.name.endswith((".tar.gz", ".tgz")):
         with tarfile.open(archive) as package:
             members = package.getmembers()
