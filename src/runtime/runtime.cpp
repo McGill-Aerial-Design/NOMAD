@@ -404,8 +404,8 @@ struct Runtime::Implementation {
                       {"ok", true}, {"type", "command_response"},
                       {"command_result", {{"success", result.success}, {"message", result.message},
                                           {"acknowledged", result.acknowledged}}}};
-        const auto outcome = result.success ? "success" : !request.admission_check_passed->load() ? "rejected" :
-                             result.acknowledged ? "failed" : "unknown";
+        const auto outcome = result.success ? "success" : result.acknowledged ? "failed" :
+                             request.admission_check_passed->load() ? "unknown" : "rejected";
         response["outcome"] = outcome;
         return finish_operation(request, response, outcome);
     }

@@ -133,7 +133,7 @@
 
     Json finish_operation(const Request &request, Json response, const std::string &outcome) {
         if (!audit_request(request, "mutation_outcome", outcome)) {
-            return audit_error(request, request.admission_check_passed->load());
+            return audit_error(request, request.admission_check_passed->load() || request.ack_observed->load());
         }
         return response;
     }

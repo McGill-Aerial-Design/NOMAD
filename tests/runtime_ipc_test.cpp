@@ -389,6 +389,8 @@ int main() {
         test_authenticated_authority_events();
         test_rejection_audit_failure(false);
         test_rejection_audit_failure(true);
+        test_acknowledgement_without_admission_evidence(false);
+        test_acknowledgement_without_admission_evidence(true);
         test_session_rollover_revokes_at_admission();
     });
 }

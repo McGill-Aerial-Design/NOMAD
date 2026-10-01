@@ -265,7 +265,11 @@ Native writes handle partial writes and synchronize every complete line with
 POSIX `fsync` or Windows `FlushFileBuffers`. POSIX creation uses mode 0600,
 directory mode 0700, owner-only checks, no symlink/hardlink files and directory
 fsync at creation. Windows creation uses an explicit protected current-user,
-SYSTEM/administrator DACL and rejects reparse points. These are OS/filesystem
+SYSTEM/administrator DACL and rejects reparse points.
+Existing Windows object validation restricts allowed ACEs to its owner, SYSTEM
+and administrators; it does not verify that the owner SID is the runtime account.
+Deploy under the intended standard account with protected storage; this is not
+an administrator-compromise defense. These are OS/filesystem
 flush semantics, not a promise of power-loss atomicity or hardware persistence;
 Windows has no portable directory-fsync guarantee here.
 

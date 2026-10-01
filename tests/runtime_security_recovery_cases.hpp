@@ -135,3 +135,37 @@ void test_rejection_audit_failure(bool authentication) {
     CHECK(client.request(base_request("rejected-health", "status"))["status"]["audit_healthy"] == false);
     runtime.stop();
 }
+
+class AcknowledgementOnlyConnection : public FakeConnection {
+  public:
+    std::optional<nomad::mavlink::CommandAck> send_command(const nomad::mavlink::Command &command,
+                                                         std::chrono::milliseconds) override {
+        // Deliberately incomplete test transport: ACK evidence must outrank an unobserved admission callback.
+        return nomad::mavlink::CommandAck{command.id, 2};
+    }
+};
+
+void test_acknowledgement_without_admission_evidence(bool audit_failure) {
+    auto config = test_config();
+    config.ipc_port = free_port();
+    config.actuation_enabled = true;
+    if (audit_failure) {
+        config.audit_write_guard = [](const std::string &line) {
+            return Json::parse(line)["event"] != "mutation_outcome";
+        };
+    }
+    nomad::runtime::Runtime runtime(std::make_unique<AcknowledgementOnlyConnection>(), config);
+    start_ready(runtime, config.ipc_port);
+    admit_authority(config.ipc_port);
+    Client client(config.ipc_port);
+    const auto response = client.request(servo_request("ack-stronger-than-callback", 1500));
+    CHECK(response["outcome"] == (audit_failure ? "unknown" : "failed"));
+    if (!audit_failure) {
+        const auto records = read_journal(config.audit_directory);
+        CHECK(records.back()["event"] == "mutation_outcome");
+        CHECK(records.back()["send_eligible"] == true);
+        CHECK(records.back()["result"] == "failed");
+        CHECK(records.back()["admission_checked"] == false);
+    }
+    runtime.stop();
+}
