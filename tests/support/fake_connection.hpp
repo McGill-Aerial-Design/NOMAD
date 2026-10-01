@@ -6,6 +6,7 @@
 #include <chrono>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -79,6 +80,9 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
                 command.id, 0, nomad::mavlink::CommandAck::Status::AdmissionCancelled};
         }
         command_started = true;
+        if (before_command_send) {
+            before_command_send();
+        }
         if (command_delay > std::chrono::milliseconds::zero()) {
             std::this_thread::sleep_for(command_delay);
         }
@@ -204,6 +208,7 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
     std::atomic_bool connected{false};
     std::atomic_int connect_count{0};
     std::atomic_bool command_started{false};
+    std::function<void()> before_command_send;
     std::chrono::milliseconds command_delay{0};
     // Most tests model a live feed, so polling refreshes valid timestamps by default.
     // Disabling this suppresses only that blanket refresh; simulated effects still

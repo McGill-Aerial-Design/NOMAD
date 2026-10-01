@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+void gate_command_send(FakeConnection &connection, std::shared_future<void> release) {
+    connection.before_command_send = [release] {
+        CHECK(release.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+    };
+}
+
 void test_service_stop_closes_admission() {
     const auto port = free_port();
     auto config = test_config();
@@ -61,7 +67,8 @@ void test_shutdown_fences_queued_command() {
     config.actuation_enabled = true;
     auto connection = std::make_unique<FakeConnection>();
     auto *observed = connection.get();
-    observed->command_delay = std::chrono::milliseconds(500);
+    std::promise<void> release;
+    gate_command_send(*observed, release.get_future().share());
     nomad::runtime::Runtime runtime(std::move(connection), config);
     start_ready(runtime, config.ipc_port);
     admit_authority(config.ipc_port);
@@ -72,6 +79,7 @@ void test_shutdown_fences_queued_command() {
     });
     wait_until([&] { return observed->command_started.load(); });
     runtime.request_stop();
+    release.set_value();
     CHECK(pending.get()["error"]["code"] == "authority_interrupted");
     CHECK(observed->command_count() == 0);
     CHECK(runtime.stop());
@@ -114,7 +122,8 @@ void test_shutdown_drain_audit_failure() {
     };
     auto connection = std::make_unique<FakeConnection>();
     auto *observed = connection.get();
-    observed->command_delay = std::chrono::milliseconds(500);
+    std::promise<void> release;
+    gate_command_send(*observed, release.get_future().share());
     nomad::runtime::Runtime runtime(std::move(connection), config);
     start_ready(runtime, config.ipc_port);
     admit_authority(config.ipc_port);
@@ -124,7 +133,12 @@ void test_shutdown_drain_audit_failure() {
         return client.request(command);
     });
     wait_until([&] { return observed->command_started.load(); });
-    const int exit_code = nomad::runtime::process::shutdown_runtime(runtime);
+    auto stopping = std::async(std::launch::async, [&] {
+        return nomad::runtime::process::shutdown_runtime(runtime);
+    });
+    wait_until([&] { return !runtime.ready(); });
+    release.set_value();
+    const int exit_code = stopping.get();
     CHECK(exit_code == 74);
     CHECK(!pending.get()["ok"].get<bool>());
     CHECK(outcome_failed.load());
