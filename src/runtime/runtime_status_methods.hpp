@@ -7,13 +7,15 @@
         const auto identity = state.identity.aircraft_class;
         std::string owner;
         std::uint64_t generation;
+        bool stopping;
         {
             std::shared_lock lock(authority_gate_->mutex);
             owner = authority_gate_->owner;
             generation = authority_gate_->generation;
+            stopping = authority_gate_->stopping;
         }
         const bool healthy = journal_->healthy();
-        const std::string lifecycle = stopping_ ? "stopping" :
+        const std::string lifecycle = stopping ? "stopping" :
             healthy && connection_open && state.connected && state.heartbeat_fresh ? "ready" : "degraded";
         return {{"runtime_ready", ready()},
                 {"lifecycle", lifecycle},

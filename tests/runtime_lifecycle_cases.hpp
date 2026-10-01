@@ -7,6 +7,16 @@ void gate_command_send(FakeConnection &connection, std::shared_future<void> rele
     };
 }
 
+std::vector<Json> read_stop_statuses(std::uint16_t port, std::shared_future<void> begin) {
+    Client client(port);
+    begin.wait();
+    std::vector<Json> statuses;
+    for (int index = 0; index < 20; ++index) {
+        statuses.push_back(client.request(base_request("stop-status-" + std::to_string(index), "status"))["status"]);
+    }
+    return statuses;
+}
+
 void test_service_stop_closes_admission() {
     const auto port = free_port();
     auto config = test_config();
@@ -22,6 +32,9 @@ void test_service_stop_closes_admission() {
         return client.request(base_request("service-ready", "status"))["status"]["vehicle_session"] != 0;
     });
     admit_authority(port);
+    std::promise<void> begin;
+    auto statuses = std::async(std::launch::async, read_stop_statuses, port, begin.get_future().share());
+    begin.set_value();
 #ifdef _WIN32
     nomad::runtime::process::test_begin_service();
     CHECK(nomad::runtime::process::test_service_state() == SERVICE_START_PENDING);
@@ -41,6 +54,13 @@ void test_service_stop_closes_admission() {
     const auto status = client.request(base_request("service-stopping", "status"))["status"];
     CHECK(status["lifecycle"] == "stopping");
     CHECK(status["authority_owner"].is_null());
+    CHECK(status["authority_generation"].get<std::uint64_t>() > authority.generation);
+    for (const auto &snapshot : statuses.get()) {
+        if (snapshot["lifecycle"] == "stopping") {
+            CHECK(snapshot["authority_owner"].is_null());
+            CHECK(snapshot["authority_generation"].get<std::uint64_t>() > authority.generation);
+        }
+    }
     CHECK(observed->command_count() == 0);
 #ifdef _WIN32
     nomad::runtime::process::publish_stopping();
