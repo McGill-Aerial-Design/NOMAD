@@ -49,7 +49,7 @@ jobs:
       - name: Build and test C++ core
         run: pixi run test-core
       - name: Exercise authenticated runtime and installed CLI against a deterministic peer
-        run: pixi run test-runtime-ipc
+        run: pixi run python scripts/dev/runtime_ipc_smoke.py
 
   mavsdk-qualification:
     name: MAVSDK qualification (${{ matrix.os }})

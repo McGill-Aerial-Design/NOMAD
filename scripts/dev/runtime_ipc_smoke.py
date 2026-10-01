@@ -129,6 +129,7 @@ def write_fixture_credentials(directory: str) -> Path:
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         json.dump(FIXTURE_CREDENTIALS, stream)
     if os.name == "nt":
+        subprocess.run(["icacls", str(credential_file), "/setowner", os.getlogin()], capture_output=True, check=True)
         subprocess.run(
             [
                 "icacls",

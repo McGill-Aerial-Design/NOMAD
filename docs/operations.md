@@ -172,7 +172,9 @@ identity/token object into a local protected file outside tracked configuration;
 never print tokens to shared logs or copy example/gate values as credentials.
 On POSIX use an owner-only directory and mode 0600 file. On Windows restrict the
 file/directory DACL to the runtime account, SYSTEM and administrators, removing
-broad inherited access. Provision only each client's token into its protected
+broad inherited access, and explicitly set the owner to the runtime account
+(for example `icacls <credential-file> /setowner <runtime-account>` when provisioning
+from an elevated shell). Provision only each client's token into its protected
 environment (CLI) or `CoreClientCredential` plugin setting. Protect that plugin
 JSON configuration and its `.bak`/`.tmp` siblings as credential stores with the
 client account's ACL. Portable plugin exports omit the credential. These controls

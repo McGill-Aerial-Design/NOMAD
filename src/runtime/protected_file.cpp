@@ -21,6 +21,35 @@ namespace nomad::runtime::detail {
 namespace {
 
 #ifdef _WIN32
+std::string current_user_sid() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        return {};
+    }
+    DWORD size = 0;
+    GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+    std::string buffer(size, '\0');
+    const bool obtained = GetTokenInformation(token, TokenUser, buffer.data(), size, &size) != 0;
+    CloseHandle(token);
+    LPSTR sid = nullptr;
+    if (!obtained || !ConvertSidToStringSidA(reinterpret_cast<TOKEN_USER *>(buffer.data())->User.Sid, &sid)) {
+        return {};
+    }
+    const std::string result(sid);
+    LocalFree(sid);
+    return result;
+}
+
+bool owned_by_current_user(PSID owner) {
+    LPSTR sid = nullptr;
+    if (!ConvertSidToStringSidA(owner, &sid)) {
+        return false;
+    }
+    const bool owned = current_user_sid() == sid;
+    LocalFree(sid);
+    return owned;
+}
+
 bool private_acl(HANDLE handle) {
     PSID owner = nullptr;
     PACL acl = nullptr;
@@ -32,7 +61,8 @@ bool private_acl(HANDLE handle) {
     }
     BYTE system[SECURITY_MAX_SID_SIZE], admins[SECURITY_MAX_SID_SIZE];
     DWORD system_size = sizeof(system), admin_size = sizeof(admins);
-    bool valid = CreateWellKnownSid(WinLocalSystemSid, nullptr, system, &system_size) &&
+    bool valid = owned_by_current_user(owner) &&
+                 CreateWellKnownSid(WinLocalSystemSid, nullptr, system, &system_size) &&
                  CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, admins, &admin_size);
     for (DWORD index = 0; valid && index < acl->AceCount; ++index) {
         void *entry = nullptr;
@@ -57,21 +87,11 @@ class FileSecurity {
   public:
     FileSecurity() {
         // Protected DACL: current user, SYSTEM and administrators only.
-        HANDLE token = nullptr;
-        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        const auto sid = current_user_sid();
+        if (sid.empty()) {
             return;
         }
-        DWORD size = 0;
-        GetTokenInformation(token, TokenUser, nullptr, 0, &size);
-        std::string buffer(size, '\0');
-        const bool obtained = GetTokenInformation(token, TokenUser, buffer.data(), size, &size) != 0;
-        CloseHandle(token);
-        LPSTR sid = nullptr;
-        if (!obtained || !ConvertSidToStringSidA(reinterpret_cast<TOKEN_USER *>(buffer.data())->User.Sid, &sid)) {
-            return;
-        }
-        const std::string sddl = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + std::string(sid) + ")";
-        LocalFree(sid);
+        const std::string sddl = "O:" + sid + "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + sid + ")";
         if (ConvertStringSecurityDescriptorToSecurityDescriptorA(sddl.c_str(), SDDL_REVISION_1, &descriptor_,
                                                                  nullptr)) {
             attributes = {sizeof(SECURITY_ATTRIBUTES), descriptor_, FALSE};
