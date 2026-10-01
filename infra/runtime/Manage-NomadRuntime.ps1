@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: Apache-2.0
+[CmdletBinding()]
+param(
+    [ValidateSet('Plan', 'Protect', 'Install', 'Uninstall')][string]$Action = 'Plan',
+    [string]$Executable,
+    [string]$Config
+)
+$ErrorActionPreference = 'Stop'
+
+function Get-ServiceCommand {
+    param([string]$Binary, [string]$Configuration)
+    foreach ($value in @($Binary, $Configuration)) {
+        if (-not [IO.Path]::IsPathRooted($value) -or $value -match '["\r\n]') {
+            throw 'Executable and config must be absolute paths without quotes or line breaks.'
+        }
+    }
+    return ('"{0}" --service --config "{1}"' -f $Binary, $Configuration)
+}
+
+function Invoke-ServiceTool {
+    param([string[]]$ToolArguments)
+    & "$env:SystemRoot/System32/sc.exe" @ToolArguments
+    if ($LASTEXITCODE -ne 0) { throw 'Service configuration failed.' }
+}
+
+function Set-PrivatePath {
+    param([string]$Path, [bool]$Directory)
+    $sid = [Security.Principal.SecurityIdentifier]::new('S-1-5-19')
+    if ($Directory) {
+        $acl = [Security.AccessControl.DirectorySecurity]::new()
+        $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    } else {
+        $acl = [Security.AccessControl.FileSecurity]::new()
+        $inherit = [Security.AccessControl.InheritanceFlags]::None
+    }
+    $acl.SetOwner($sid)
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($identity in @('S-1-5-19', 'S-1-5-18', 'S-1-5-32-544')) {
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new($identity), 'FullControl', $inherit,
+            [Security.AccessControl.PropagationFlags]::None, 'Allow')
+        $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
+if ($Action -eq 'Uninstall') {
+    $service = Get-Service nomad-runtime -ErrorAction SilentlyContinue
+    if ($service) {
+        Stop-Service nomad-runtime
+        $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+        Invoke-ServiceTool @('delete', 'nomad-runtime')
+    }
+    return
+}
+$command = Get-ServiceCommand $Executable $Config
+if ($Action -eq 'Plan') {
+    [pscustomobject]@{ BinaryPath = $command; Account = 'NT AUTHORITY\LocalService'; Start = 'demand';
+        Recovery = 'restart/5000/restart/30000/none/0'; ResetSeconds = 86400; NonCrashRecovery = $false }
+    return
+}
+if ($Action -eq 'Protect') {
+    $settings = Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
+    $credentials = $settings.NOMAD_CLIENT_CREDENTIALS_FILE
+    $audit = $settings.NOMAD_AUDIT_DIRECTORY
+    foreach ($path in @($Config, $credentials, $audit)) {
+        if (-not [IO.Path]::IsPathRooted($path)) { throw 'Provision absolute configuration paths.' }
+        if (Test-Path -LiteralPath $path) {
+            if ((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw 'Reparse points are not supported.'
+            }
+        }
+    }
+    if (-not (Test-Path -LiteralPath $audit)) { New-Item -ItemType Directory -Path $audit | Out-Null }
+    Set-PrivatePath $Config $false
+    Set-PrivatePath $credentials $false
+    Set-PrivatePath $audit $true
+    return
+}
+if (-not (Test-Path -LiteralPath $Executable -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $Config -PathType Leaf)) { throw 'Provision executable and config first.' }
+if (-not [Diagnostics.EventLog]::SourceExists('nomad-runtime')) {
+    [Diagnostics.EventLog]::CreateEventSource('nomad-runtime', 'Application')
+}
+if (Get-Service nomad-runtime -ErrorAction SilentlyContinue) {
+    $service = Get-Service nomad-runtime
+    if ($service.Status -ne 'Stopped') { throw 'Stop the runtime before upgrading service configuration.' }
+    $installed = Get-CimInstance -ClassName Win32_Service -Filter "Name='nomad-runtime'"
+    $result = Invoke-CimMethod -InputObject $installed -MethodName Change -Arguments @{
+        PathName = $command; StartMode = 'Manual'; StartName = 'NT AUTHORITY\LocalService'; StartPassword = ''
+    }
+} else {
+    $result = Invoke-CimMethod -ClassName Win32_Service -MethodName Create -Arguments @{
+        Name = 'nomad-runtime'; DisplayName = 'NOMAD runtime'; PathName = $command
+        ServiceType = [byte]16; ErrorControl = [byte]1; StartMode = 'Manual'; DesktopInteract = $false
+        StartName = 'NT AUTHORITY\LocalService'; StartPassword = ''
+    }
+}
+if ($result.ReturnValue -ne 0) { throw "SCM registration failed with code $($result.ReturnValue)." }
+Invoke-ServiceTool @('failure', 'nomad-runtime', 'reset=', '86400', 'actions=', 'restart/5000/restart/30000/none/0')
+Invoke-ServiceTool @('failureflag', 'nomad-runtime', '0')

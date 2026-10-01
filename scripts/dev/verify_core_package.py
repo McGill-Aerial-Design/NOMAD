@@ -21,6 +21,11 @@ REQUIRED_FILES = (
     Path("share/nomad/NOTICE"),
     Path("share/nomad/config/README.md"),
     Path("share/nomad/config/nomad.env.example"),
+    Path("share/nomad/operations.md"),
+    Path("share/nomad/lifecycle/nomad-runtime.service.in"),
+    Path("share/nomad/lifecycle/install_systemd.py"),
+    Path("share/nomad/lifecycle/Manage-NomadRuntime.ps1"),
+    Path("share/nomad/lifecycle/runtime.example.json"),
 )
 CLI_NAMES = ("nomad", "nomad.exe")
 RUNTIME_NAMES = ("nomad-runtime", "nomad-runtime.exe")

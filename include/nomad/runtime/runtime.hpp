@@ -39,7 +39,9 @@ class Runtime {
     Runtime &operator=(const Runtime &) = delete;
 
     bool start(std::string &error);
-    void stop();
+    // Close final-send admission immediately; stop() then drains owned workers.
+    void request_stop();
+    bool stop();
     bool ready() const;
 
   private:

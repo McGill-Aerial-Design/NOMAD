@@ -3,6 +3,8 @@
 #include "nomad/mavlink/mavsdk_validation.hpp"
 #include "nomad/runtime/runtime.hpp"
 #include "client_auth.hpp"
+#include "lifecycle.hpp"
+#include "service_config.hpp"
 #include "nomad/safety/fence_config.hpp"
 #include "nomad/safety/velocity_config.hpp"
 
@@ -21,12 +23,6 @@
 #include <utility>
 
 namespace {
-
-volatile std::sig_atomic_t stop_requested = 0;
-
-void request_stop(int) {
-    stop_requested = 1;
-}
 
 struct Arguments {
     std::string endpoint{"udpin:127.0.0.1:14601"};
@@ -96,6 +92,13 @@ std::optional<Arguments> parse_arguments(int argc, char **argv) {
     }
     for (int index = 1; index < argc; ++index) {
         const std::string_view token(argv[index]);
+        if (token == "--service") {
+            continue;
+        }
+        if (token == "--config" && index + 1 < argc) {
+            ++index;
+            continue;
+        }
         if (token == "--help" || token == "-h") {
             return arguments;
         }
@@ -109,6 +112,7 @@ std::optional<Arguments> parse_arguments(int argc, char **argv) {
 void print_usage() {
     std::cout << "Usage: nomad-runtime [--endpoint udpin:127.0.0.1:14601] [--ipc-port 14611] [--system-id 1]\n";
     std::cout << "IPC binds only to 127.0.0.1. NOMAD_RUNTIME_IPC_PORT and NOMAD_MAVLINK_ENDPOINT may set defaults.\n";
+    std::cout << "--config <protected-json> loads service environment; --service uses Windows SCM.\n";
 }
 
 bool api_key_configured() {
@@ -116,29 +120,30 @@ bool api_key_configured() {
     return key != nullptr && key[0] != '\0';
 }
 
-} // namespace
+int fail_runtime(const char *message, int code = nomad::runtime::process::kConfigurationFailure) {
+    std::cerr << message << '\n';
+    nomad::runtime::process::publish_error(message);
+    return code;
+}
 
-int main(int argc, char **argv) {
+bool load_process_configuration(int argc, char **argv) {
+    bool loaded = false;
+    bool service = false;
     for (int index = 1; index < argc; ++index) {
-        const std::string_view token(argv[index]);
-        if (token == "--help" || token == "-h") {
-            print_usage();
-            return EXIT_SUCCESS;
+        service = service || std::string_view(argv[index]) == "--service";
+        if (std::string_view(argv[index]) == "--config") {
+            if (loaded || ++index >= argc || !load_service_environment(argv[index])) {
+                return false;
+            }
+            loaded = true;
         }
     }
-    const auto arguments = parse_arguments(argc, argv);
-    if (!arguments.has_value()) {
-        print_usage();
-        return EXIT_FAILURE;
-    }
-    const auto endpoint = nomad::mavsdk_phase_a::canonicalize_udp_endpoint(arguments->endpoint);
-    if (!endpoint.has_value()) {
-        std::cerr << "runtime configuration error: NOMAD_MAVLINK_ENDPOINT must be a supported UDP MAVSDK endpoint\n";
-        return EXIT_FAILURE;
-    }
+    return !service || loaded;
+}
 
+std::optional<nomad::runtime::RuntimeConfig> load_runtime_config(const Arguments &arguments) {
     nomad::runtime::RuntimeConfig config;
-    config.ipc_port = arguments->port;
+    config.ipc_port = arguments.port;
 #ifdef NOMAD_VERSION
     config.version = NOMAD_VERSION;
 #endif
@@ -146,8 +151,7 @@ int main(int argc, char **argv) {
     const char *credentials = std::getenv("NOMAD_CLIENT_CREDENTIALS_FILE");
     const char *audit = std::getenv("NOMAD_AUDIT_DIRECTORY");
     if (credentials == nullptr || !nomad::runtime::detail::load_credentials(credentials, config.client_credentials)) {
-        std::cerr << "runtime configuration error: valid protected client credentials file required\n";
-        return EXIT_FAILURE;
+        return std::nullopt;
     }
     config.audit_directory = audit == nullptr ? "" : audit;
     config.fence_policy = nomad::safety::load_fence_policy(std::getenv("NOMAD_FENCE_POLYGON"),
@@ -155,24 +159,74 @@ int main(int argc, char **argv) {
     config.velocity_limits = nomad::safety::load_velocity_limits(
         std::getenv("NOMAD_VELOCITY_MAX_XY"), std::getenv("NOMAD_VELOCITY_MAX_Z"),
         std::getenv("NOMAD_VELOCITY_MAX_YAW_RATE"));
-    auto connection = nomad::mavlink::make_mavsdk_connection(*endpoint, arguments->system_id,
-                                                              config.discovery_timeout);
-    nomad::runtime::Runtime runtime(std::move(connection), std::move(config));
+    return config;
+}
+
+int wait_runtime(nomad::runtime::Runtime &runtime, std::uint16_t port) {
     std::string error;
     if (!runtime.start(error)) {
         std::cerr << "runtime startup failed: " << error << '\n';
-        return EXIT_FAILURE;
+        return fail_runtime("runtime startup failed: audit/lock/IPC initialization failed");
     }
-
-    std::signal(SIGINT, request_stop);
-    std::signal(SIGTERM, request_stop);
-#ifdef SIGBREAK
-    std::signal(SIGBREAK, request_stop);
-#endif
-    std::cout << "READY protocol=nomad-core version=1 ipc=127.0.0.1:" << arguments->port << '\n';
-    while (stop_requested == 0) {
+    struct Publication {
+        ~Publication() { nomad::runtime::process::publish_stopping(); }
+    } publication;
+    nomad::runtime::process::publish_ready(runtime);
+    std::cout << "READY protocol=nomad-core version=1 ipc=127.0.0.1:" << port << '\n';
+    while (!nomad::runtime::process::stop_requested()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    runtime.stop();
+    runtime.request_stop();
+    nomad::runtime::process::publish_stopping();
+    if (!runtime.stop()) {
+        return fail_runtime("runtime shutdown audit failure", 74);
+    }
     return EXIT_SUCCESS;
+}
+
+int run_runtime(int argc, char **argv) {
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view token(argv[index]);
+        if (token == "--help" || token == "-h") {
+            print_usage();
+            return EXIT_SUCCESS;
+        }
+    }
+    if (!load_process_configuration(argc, argv)) {
+        return fail_runtime("runtime configuration error: valid protected service configuration required");
+    }
+    const auto arguments = parse_arguments(argc, argv);
+    if (!arguments) {
+        return fail_runtime("runtime configuration error: invalid endpoint/IPC/system arguments");
+    }
+    const auto endpoint = nomad::mavsdk_phase_a::canonicalize_udp_endpoint(arguments->endpoint);
+    if (!endpoint) {
+        return fail_runtime(
+            "runtime configuration error: NOMAD_MAVLINK_ENDPOINT must be a supported UDP MAVSDK endpoint");
+    }
+    auto config = load_runtime_config(*arguments);
+    if (!config) {
+        return fail_runtime("runtime configuration error: valid protected client credentials file required");
+    }
+    auto connection = nomad::mavlink::make_mavsdk_connection(
+        *endpoint, arguments->system_id, config->discovery_timeout);
+    nomad::runtime::Runtime runtime(std::move(connection), std::move(*config));
+    return wait_runtime(runtime, arguments->port);
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+    for (int index = 1; index < argc; ++index) {
+        if (std::string_view(argv[index]) == "--service") {
+            return nomad::runtime::process::run_service(argc, argv, run_runtime);
+        }
+    }
+    nomad::runtime::process::initialize_console();
+    try {
+        return run_runtime(argc, argv);
+    } catch (...) {
+        std::cerr << "runtime process failure\n";
+        return EXIT_FAILURE;
+    }
 }

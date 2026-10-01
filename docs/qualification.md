@@ -1,5 +1,16 @@
 # Safety and qualification status
 
+Runtime lifecycle supervision has software-only checks for clean/crash process
+replacement over persistent protected credentials/audit history, new incarnation
+journals, stale-context rejection and no implicit ownership/replay. The peer
+also covers absent/returning aircraft/router traffic, permanent startup errors
+and bounded fixture retries. See the [lifecycle fixture](../scripts/dev/runtime_lifecycle_qualification.py).
+Systemd syntax/path and Windows SCM control/provisioning tests need no privileged
+registration. They validate adapters and process invariants, not an installed
+host's service account, boot recovery or physical flight safety. Accept privileged
+registration, permissions, upgrade and rollback on the deployment host;
+see [Operations](operations.md).
+
 This is the current summary of what the repository proves and what remains
 unqualified. The source-arbitration qualification slice started from `main` at
 `34d93335c41a000d78a323436e9027704bffc160` after PR #52. It adds a disarmed

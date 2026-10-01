@@ -50,6 +50,12 @@ jobs:
         run: pixi run test-core
       - name: Exercise authenticated runtime and installed CLI against a deterministic peer
         run: pixi run python scripts/dev/runtime_ipc_smoke.py
+      - name: Qualify clean/crash restart and persistent audit history without hardware
+        run: pixi run python scripts/dev/runtime_lifecycle_qualification.py
+      - name: Verify service provisioning without privileged installation
+        run: pixi run test-runtime-service-artifacts
+      - name: Verify production package and staged installation
+        run: pixi run verify-core-package && pixi run verify-core-staged-install
 
   mavsdk-qualification:
     name: MAVSDK qualification (${{ matrix.os }})

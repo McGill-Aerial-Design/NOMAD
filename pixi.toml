@@ -50,6 +50,8 @@ build-qualification-cli = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DC
 build-sitl-tools = "pixi run build-core && pixi run build-qualification-cli"
 test-core = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DBUILD_TESTING=ON && cmake --build build/core --config Debug && ctest --test-dir build/core -C Debug --output-on-failure"
 test-runtime-ipc = "pixi run build-core && python scripts/dev/runtime_ipc_smoke.py"
+test-runtime-lifecycle = "pixi run build-core && python scripts/dev/runtime_lifecycle_qualification.py"
+test-runtime-service-artifacts = "pytest tests/test_runtime_lifecycle.py -q"
 sitl = "pixi run build-core && pixi run dev-up && pixi run sitl-scenario"
 # Builds the non-installed MAVSDK connectivity smoke and records build metrics.
 build-mavsdk-connectivity-smoke = "python scripts/dev/mavsdk_build_metrics.py --build"

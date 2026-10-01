@@ -6,11 +6,27 @@ For the current component boundaries, see [Architecture](architecture.md).
 
 ## Processes and endpoints
 
+### Supported deployment matrix
+
+| Profile / placement | Runtime host and supervisor | Client / router boundary |
+| --- | --- | --- |
+| `groundstation_minimal` | Windows groundstation: native SCM service; Linux CLI groundstation: systemd | Mission Planner requires runtime on the same Windows host; standalone ground router remains separate |
+| `groundstation_gpu` | Same ground runtime placement as minimal | Optional GPU/ROS workloads do not own commands or supervise runtime |
+| `onboard_companion` | Linux onboard CLI deployment: systemd; Windows Mission Planner deployment retains a ground runtime | Loopback IPC cannot reach an onboard runtime from Mission Planner; do not run both command owners for one vehicle |
+| Development / deterministic peers | Foreground console, either OS | No privileged service installation required |
+
+Profiles describe optional compute and endpoint defaults, not runtime placement
+discovery. The onboard profile's wildcard UDP endpoint must be reviewed for the
+chosen host; a ground runtime uses the standalone router's loopback endpoint.
+The existing `infra/systemd/install.sh` manages optional aircraft router/media/ROS
+units from a checkout, and `scripts/setup/setup_service.sh` delegates to it.
+Neither currently supervises the production runtime. Keep that optional setup
+separate from the packaged runtime service and from the Windows ground router.
+
 Run one `nomad-runtime` process for each vehicle connection. It owns the
 long-lived MAVSDK connection, vehicle policy, authority/request lifecycle, and
-runtime IPC listener. The runtime does not load `config/nomad.env` itself and
-does not have a checked-in systemd service. A local process supervisor must
-start it with the deployment environment and restart policy. Do not start a
+runtime IPC listener. The runtime does not load `config/nomad.env` itself.
+Use the packaged systemd or native Windows SCM deployment below. Do not start a
 second runtime against the same vehicle endpoint.
 
 The runtime and installed CLI accept these process-environment settings:
@@ -26,8 +42,8 @@ The runtime and installed CLI accept these process-environment settings:
 | `NOMAD_CLIENT_ID` | CLI identity, default `nomad-cli` |
 | `--system-id` | Optional runtime command system ID; defaults to `1` |
 
-Use the example environment file as a template, then have the supervisor load
-the operator's local `config/nomad.env`. Keep credentials local. Runtime IPC is
+Use the example environment file for console development. Services use a
+protected external JSON configuration, loaded with `--config`. Keep credentials local. Runtime IPC is
 bound to loopback and is not authenticated as a general remote API; the API key
 is an actuation gate, not a substitute for host access control. The example key
 is blank; configure a nonempty secret value or runtime mutations remain unavailable.
@@ -146,7 +162,10 @@ pixi run install-core <prefix>
 ```
 
 The core package includes `nomad` and `nomad-runtime`; qualification drivers are
-not installed. Linux runtime/client binaries require the compatible system OpenSSL
+not installed. Templates, explicit registration helpers, a blank service JSON
+example and this guide are in `share/nomad/`. Package/prefix installation never
+registers, starts or enables a service, or overwrites operator secrets/state.
+Linux runtime/client binaries require the compatible system OpenSSL
 Crypto shared library used by that build (Ubuntu builds use `libcrypto.so.3`);
 Windows uses the OS BCrypt library. Mission Planner packaging is separate and handled by the release
 workflow described above.
@@ -201,3 +220,182 @@ latches mutations off; status remains available. See the precise
 Keep these states separate: actuation enabled; client authenticated; client
 admitted as software authority; command eligible for final send; vehicle command
 accepted by an observed response; physical outcome. None implies the next.
+
+## Managed runtime configuration
+
+Copy the packaged `share/nomad/lifecycle/runtime.example.json` outside the
+installation tree. Values are strings: set the endpoint, IPC port, absolute
+credential-file and audit-directory paths, and independent API gate. The protected
+`--config` loader rejects unknown/duplicate keys, non-string values and missing
+required settings. It replaces inherited runtime settings, so a missing API gate
+stays disabled. Optional fence/velocity settings use their console environment
+names. JSON is data, never shell code. Keep per-client tokens in the separate
+protected identity/token map; both files load once per process.
+
+The stable service account must own configuration, credential file and audit
+directory. Linux files require mode 0600 and state directories 0700. Windows
+uses `NT AUTHORITY\LocalService`, with owner/DACL restricted to that account,
+SYSTEM and administrators. Protect parent directories against untrusted replacement
+as well. Keep binaries administrator-owned but readable/executable by the service
+account, and keep configuration/state outside the package prefix. Use local
+persistent storage with durable flush support, not network shares. Provision the
+audit parent directory first. Runtime startup verifies credential and audit
+protection; registration alone is not deployment readiness.
+
+## Linux systemd procedure
+
+Use a Linux systemd host, Python 3 and the build's OpenSSL Crypto runtime library.
+These conventional paths are operator choices, not compiled-in paths:
+
+```sh
+sudo useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin nomad
+sudo install -d -o nomad -g nomad -m 0700 /etc/nomad /var/lib/nomad
+sudo install -o nomad -g nomad -m 0600 /opt/nomad/share/nomad/lifecycle/runtime.example.json /etc/nomad/runtime.json
+```
+
+Generate a separate `/etc/nomad/clients.json` identity/token map using independent
+`secrets.token_hex(32)` credentials in a secure provisioning tool/editor, without
+printing them. Set owner `nomad:nomad` and mode 0600. Provision each client's token
+separately. Edit the protected runtime JSON to reference that file and
+`/var/lib/nomad/audit`; review endpoints and deliberately set the API gate if
+actuation is wanted. The account must traverse all these paths. `ProtectHome=yes`
+intentionally excludes home directories. Render for review, then register:
+
+```sh
+python3 /opt/nomad/share/nomad/lifecycle/install_systemd.py render --executable /opt/nomad/bin/nomad-runtime --config /etc/nomad/runtime.json --state /var/lib/nomad --user nomad
+sudo python3 /opt/nomad/share/nomad/lifecycle/install_systemd.py install --executable /opt/nomad/bin/nomad-runtime --config /etc/nomad/runtime.json --state /var/lib/nomad --user nomad
+sudo systemctl start nomad-runtime.service
+systemctl status nomad-runtime.service
+journalctl -u nomad-runtime.service
+/opt/nomad/bin/nomad status
+sudo systemctl stop nomad-runtime.service
+sudo systemctl restart nomad-runtime.service
+```
+
+Configure the client's IPC port when it differs from default. The foreground unit
+has no router dependency or network-online readiness assertion. Hardening removes
+capabilities, isolates temporary files/devices and restricts writes to `--state`.
+Put audit beneath that path, with credentials elsewhere. Custom users require a
+matching primary group. Registration does not enable boot startup; explicitly run
+`sudo systemctl enable nomad-runtime.service` only after provisioning if desired.
+
+Upgrade by stopping, preserving secrets/evidence, installing the new package and
+re-registering if paths changed, then starting. Never overwrite `/etc/nomad` or
+`/var/lib/nomad`. Unregister with:
+
+```sh
+sudo python3 /opt/nomad/share/nomad/lifecycle/install_systemd.py uninstall
+```
+
+This disables/stops and removes only the unit, retaining secrets and audit history.
+Remove the package prefix separately if wanted.
+
+## Windows native service procedure
+
+Mission Planner needs the Windows core package on the same host.
+`nomad-runtime --service --config <absolute-path>` connects to native SCM;
+without `--service`, console mode remains available. RUNNING is reported only
+after protected config, credentials, audit and IPC binding initialize. The binary
+never registers itself; no third-party service wrapper is needed.
+
+In elevated PowerShell create `C:\ProgramData\NOMAD`, copy the packaged
+`runtime.example.json` there, and provision a separate `clients.json` map with
+independent random tokens. Edit the JSON with absolute credential/audit paths,
+loopback endpoint/IPC configuration and the deliberately configured API gate.
+Choose an administrator-controlled binary prefix such as `C:\NOMAD`:
+
+```powershell
+$helper = 'C:\NOMAD\share\nomad\lifecycle\Manage-NomadRuntime.ps1'
+& $helper -Action Protect -Executable 'C:\NOMAD\bin\nomad-runtime.exe' -Config 'C:\ProgramData\NOMAD\runtime.json'
+& $helper -Action Plan -Executable 'C:\NOMAD\bin\nomad-runtime.exe' -Config 'C:\ProgramData\NOMAD\runtime.json'
+& $helper -Action Install -Executable 'C:\NOMAD\bin\nomad-runtime.exe' -Config 'C:\ProgramData\NOMAD\runtime.json'
+Start-Service nomad-runtime
+Get-Service nomad-runtime
+sc.exe query nomad-runtime
+Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='nomad-runtime'} -MaxEvents 10
+& 'C:\NOMAD\bin\nomad.exe' status
+Stop-Service nomad-runtime
+Restart-Service nomad-runtime
+```
+
+`Protect` explicitly provisions owner/DACL for config, credentials and audit
+directory, refusing reparse points. Run it before first start. It does not
+recursively rewrite prior journals; retain the same identity on upgrade.
+Give LocalService read/execute access to the binary prefix; avoid user-profile
+paths. Configure Mission Planner's `CoreClientCredential` separately under the
+operator account. Do not share LocalService's full map with clients.
+
+Registration passes only executable/config paths on argv, never tokens or the
+API gate. Startup errors report service-specific code 78 and safe categorical
+Application events. Console startup under the service identity provides detailed
+initialization diagnostics. Audit failure is also visible through status. STOP
+and SHUTDOWN immediately close the existing authority/final-send gate, then report
+STOP_PENDING while the main thread drains (30-second budget). The callback never
+calls concurrent `Runtime::stop()` operations or requests a flight maneuver.
+
+Upgrade by stopping, retaining operator state, replacing the package, updating
+registration if needed, then starting. Install refuses a running service.
+Unregister with elevated `& $helper -Action Uninstall`; it waits for stop and
+deletes only the SCM registration, preserving credentials, journals and event
+evidence. Default startup is demand/manual; explicitly use
+`sc.exe config nomad-runtime start= delayed-auto` after provisioning if wanted.
+
+## Lifecycle, recovery and health
+
+| Lifecycle | Meaning / observation |
+| --- | --- |
+| configured | Operator files/registration exist; not a readiness claim |
+| starting | Credential, audit and IPC initialization; SCM START_PENDING / systemd process startup |
+| ready | IPC/audit healthy, transport open and fresh vehicle heartbeat; derived `status.lifecycle` |
+| degraded | IPC available but audit, transport or fresh vehicle state unavailable |
+| stopping | Existing gate closed, owner cleared, generation invalidated; workers drain |
+| stopped / failed | Process exited; manager exit status/journal distinguish clean stop from failure |
+
+Lifecycle projects existing state; it is not another authority state machine.
+Manager running means process availability, even when runtime is degraded.
+Inspect read-only `nomad status`: `runtime_ready` (IPC), `audit_healthy`,
+`mavsdk_connection_open`, `vehicle_session_established`, `vehicle_connected`,
+`telemetry.heartbeat_fresh`, `actuation_enabled` and `authority_owner` separately.
+HMAC authentication is request-bound, not a connected-client lease: a fresh HELLO
+server proof establishes client credential availability; status does not fabricate
+an authenticated-client count. Process health never proves aircraft controllability
+or physical flight safety.
+
+| Failure | Process/recovery policy | Authority/mutation result |
+| --- | --- | --- |
+| Invalid/inaccessible config/credentials, audit history/permissions/lock failure, IPC conflict | Startup exits 78, no automatic retry | No vehicle mutation |
+| Unexpected crash | systemd waits 5 s; at most 3 starts/120 s. SCM waits 5 s then 30 s, then no action; reset after 24 h | New incarnation, no owner; fresh authentication/admission |
+| Clean service stop | No recovery restart | Closed gate and durable shutdown evidence where possible |
+| Shutdown evidence unavailable | Exit 74; systemd may retry before audit validation refuses; SCM reports failure without recovery | Closed gate; preserve evidence/investigate |
+| Router/endpoint unavailable, aircraft absent/lost/returns | Stay running/degraded; worker retries | Loss revokes/inhibits; reconnect never restores owner |
+| Audit failure while running | IPC stays available/degraded; no process restart | Latched mutation inhibition, final-send admission denied |
+
+SCM `failureflag 0` applies recovery to unexpected process death, not a reported
+STOPPED failure; permanent startup errors stay failed. Further crashes repeat the
+last no-action entry. systemd excludes 78 with RestartPreventExitStatus; after
+repairing configuration/start-limit failure, reset-failed and explicitly start.
+Recovery is unrelated to flight policy. See [systemd semantics](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)
+and [SCM failure actions](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/ns-winsvc-service_failure_actions_flag).
+
+Orderly stop closes mutation/final-send admission under the existing authority
+lock, clears owner and advances generation, stops IPC acceptance/drains clients,
+joins the connection worker, disconnects MAVSDK, appends/flushes runtime_shutdown
+where possible, releases audit lock and exits. Client sockets close during drain
+before transport disconnect; the send fence precedes both. A send admitted before
+the fence may complete; queued/retrying sends cannot cross the closed gate.
+Runtime v1 exposes no active velocity stream: stop adds no zero/LAND/RTL command
+and never bypasses transport fencing.
+
+Each replacement validates preserved history and creates a new incarnation
+journal, never restoring owners/caches or replaying unmatched intent. Vehicle
+session must be established anew; old incarnation/session/generation/request
+context is invalid. Supervisor restart is neither handback nor admission.
+Credential rotation requires stop, preserved evidence, protected file replacement
+and separate client provisioning, then restart and fresh authentication/admission.
+
+The standalone ground router retains separate operator/supervisor ownership.
+These helpers supervise only runtime, have no router-first ordering and never
+restart the router. Optional aircraft router units remain separate. Neither
+router nor runtime restart grants authority. Software qualification uses peer
+traffic absence/return; privileged host registration, boot recovery and deployed
+upgrade/rollback remain operator acceptance checks.

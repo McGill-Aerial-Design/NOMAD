@@ -1,0 +1,30 @@
+[Unit]
+Description=NOMAD persistent command runtime
+After=network.target
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=exec
+User=@USER@
+Group=@USER@
+ExecStart="@EXECUTABLE@" --config "@CONFIG@"
+Restart=on-failure
+RestartSec=5s
+RestartPreventExitStatus=78
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths="@STATE@"
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

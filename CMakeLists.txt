@@ -136,8 +136,9 @@ else()
 endif()
 
 if(PROJECT_IS_TOP_LEVEL)
-    add_executable(nomad-runtime tools/runtime/main.cpp)
+    add_executable(nomad-runtime tools/runtime/main.cpp tools/runtime/lifecycle.cpp tools/runtime/service_config.cpp)
     target_include_directories(nomad-runtime PRIVATE src/runtime)
+    target_include_directories(nomad-runtime PRIVATE "${NOMAD_MAVSDK_INSTALL_DIR}/include")
     target_link_libraries(nomad-runtime PRIVATE nomad_runtime_core nomad_mavsdk_connection)
     target_compile_definitions(nomad-runtime PRIVATE NOMAD_VERSION="${PROJECT_VERSION}")
 
@@ -168,6 +169,10 @@ if(PROJECT_IS_TOP_LEVEL)
     install(FILES LICENSE NOTICE DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad COMPONENT nomad_runtime)
     install(FILES config/README.md config/nomad.env.example
             DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad/config COMPONENT nomad_runtime)
+    install(FILES infra/runtime/nomad-runtime.service.in infra/runtime/runtime.example.json
+            infra/runtime/install_systemd.py infra/runtime/Manage-NomadRuntime.ps1
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad/lifecycle COMPONENT nomad_runtime)
+    install(FILES docs/operations.md DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad COMPONENT nomad_runtime)
     install(DIRECTORY licenses/mavsdk-phase-a/
             DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad/licenses/mavsdk-phase-a COMPONENT nomad_runtime)
 
@@ -278,6 +283,10 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
         target_include_directories(nomad_runtime_tests PRIVATE "${NOMAD_MAVSDK_INSTALL_DIR}/include")
         target_link_libraries(nomad_runtime_tests PRIVATE nomad_runtime_core)
         target_compile_definitions(nomad_runtime_tests PRIVATE NOMAD_TESTS)
+        if(WIN32)
+            target_sources(nomad_runtime_tests PRIVATE tools/runtime/lifecycle.cpp)
+            target_compile_definitions(nomad_runtime_tests PRIVATE NOMAD_SERVICE_TEST)
+        endif()
         add_test(NAME nomad_runtime_tests COMMAND nomad_runtime_tests)
     endif()
 
