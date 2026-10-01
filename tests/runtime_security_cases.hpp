@@ -36,6 +36,47 @@ void start_ready(nomad::runtime::Runtime &runtime, std::uint16_t port) {
     });
 }
 
+void check_authentication_faults(Client &client, const Json &valid) {
+    std::vector<Json> forged(7, valid);
+    forged[0].erase("credential");
+    forged[1]["credential"] = std::string(64, '0');
+    forged[2]["client_id"] = "unknown";
+    forged[3]["client_id"] = "client-b";
+    forged[4]["command_source"] = "client-b";
+    forged[5]["source"] = "client-b";
+    forged[6]["credential"] = "malformed";
+    for (const auto &request : forged) {
+        const auto denied = client.request(request);
+        CHECK(denied["error"]["code"] == "authentication_failed");
+        CHECK(denied.dump().find(test_credentials.at("test-client")) == std::string::npos);
+    }
+}
+
+void check_tampered_authentication_payload(Client &client, const Json &valid) {
+    auto tampered = valid;
+    tampered.erase("credential");
+    const auto payload = tampered.dump();
+    tampered["auth_payload"] = payload;
+    tampered["auth_proof"] = nomad::runtime::detail::make_proof(
+        test_credentials.at("test-client"), "nomad-core:request:v1:" + payload);
+    tampered["pwm_microseconds"] = 1900;
+    client.send_raw(tampered.dump());
+    CHECK(client.receive()["error"]["code"] == "authentication_failed");
+}
+
+void check_distinct_client_cache_ownership(Client &client, FakeConnection &observed) {
+    auto other = servo_request("auth-command", 1700, "client-b");
+    CHECK(client.request(other)["error"]["code"] == "not_authoritative");
+    CHECK(observed.command_count() == 1);
+    CHECK(client.request(authority_request("distinct-revoke", "revoke_authority", "client-b"))["ok"] == true);
+    read_authority(client);
+    const auto handback = client.request(authority_request("distinct-handback", "handback_authority", "client-b"));
+    CHECK(handback["ok"] == true);
+    authority.generation = handback["authority_generation"].get<std::uint64_t>();
+    CHECK(client.request(servo_request("auth-command", 1700, "client-b"))["outcome"] == "success");
+    CHECK(observed.command_count() == 2);
+}
+
 void test_client_authentication() {
     auto config = test_config();
     config.ipc_port = free_port();
@@ -51,44 +92,15 @@ void test_client_authentication() {
     CHECK(client.request(claim)["error"]["code"] == "authentication_failed");
     admit_authority(config.ipc_port);
     const auto valid = servo_request("auth-command", 1500);
-    for (int fault = 0; fault < 7; ++fault) {
-        auto forged = valid;
-        if (fault == 0) { forged.erase("credential"); }
-        if (fault == 1) { forged["credential"] = std::string(64, '0'); }
-        if (fault == 2) { forged["client_id"] = "unknown"; }
-        if (fault == 3) { forged["client_id"] = "client-b"; }
-        if (fault == 4) { forged["command_source"] = "client-b"; }
-        if (fault == 5) { forged["source"] = "client-b"; }
-        if (fault == 6) { forged["credential"] = "malformed"; }
-        const auto denied = client.request(forged);
-        CHECK(denied["error"]["code"] == "authentication_failed");
-        CHECK(denied.dump().find(test_credentials.at("test-client")) == std::string::npos);
-    }
+    check_authentication_faults(client, valid);
     CHECK(observed->command_count() == 0);
-    auto tampered = valid;
-    tampered.erase("credential");
-    const auto payload = tampered.dump();
-    tampered["auth_payload"] = payload;
-    tampered["auth_proof"] = nomad::runtime::detail::make_proof(
-        test_credentials.at("test-client"), "nomad-core:request:v1:" + payload);
-    tampered["pwm_microseconds"] = 1900;
-    client.send_raw(tampered.dump());
-    CHECK(client.receive()["error"]["code"] == "authentication_failed");
+    check_tampered_authentication_payload(client, valid);
     CHECK(client.request(valid)["command_result"]["success"] == true);
     CHECK(observed->command_count() == 1);
     auto public_read = base_request("public-status", "status");
     public_read.erase("credential");
     CHECK(client.request(public_read)["ok"] == true);
-    auto other = servo_request("auth-command", 1700, "client-b");
-    CHECK(client.request(other)["error"]["code"] == "not_authoritative");
-    CHECK(observed->command_count() == 1);
-    CHECK(client.request(authority_request("distinct-revoke", "revoke_authority", "client-b"))["ok"] == true);
-    read_authority(client);
-    const auto handback = client.request(authority_request("distinct-handback", "handback_authority", "client-b"));
-    CHECK(handback["ok"] == true);
-    authority.generation = handback["authority_generation"].get<std::uint64_t>();
-    CHECK(client.request(servo_request("auth-command", 1700, "client-b"))["outcome"] == "success");
-    CHECK(observed->command_count() == 2);
+    check_distinct_client_cache_ownership(client, *observed);
     runtime.stop();
     CHECK(count_event(read_journal(config.audit_directory), "request_rejected") == 10);
     CHECK(count_event(read_journal(config.audit_directory), "mutation_intent") == 2);
