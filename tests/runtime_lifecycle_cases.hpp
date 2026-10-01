@@ -99,3 +99,40 @@ void test_shutdown_audit_failure(bool previously_failed) {
     CHECK(!runtime.stop());
     CHECK(count_event(read_journal(config.audit_directory), "runtime_shutdown") == 0);
 }
+
+void test_shutdown_drain_audit_failure() {
+    auto config = test_config();
+    config.ipc_port = free_port();
+    config.actuation_enabled = true;
+    std::atomic<bool> outcome_failed{false};
+    config.audit_write_guard = [&](const std::string &line) {
+        if (Json::parse(line)["event"] == "mutation_outcome") {
+            outcome_failed = true;
+            return false;
+        }
+        return true;
+    };
+    auto connection = std::make_unique<FakeConnection>();
+    auto *observed = connection.get();
+    observed->command_delay = std::chrono::milliseconds(500);
+    nomad::runtime::Runtime runtime(std::move(connection), config);
+    start_ready(runtime, config.ipc_port);
+    admit_authority(config.ipc_port);
+    const auto command = servo_request("audit-fails-during-drain", 1500);
+    auto pending = std::async(std::launch::async, [&] {
+        Client client(config.ipc_port);
+        return client.request(command);
+    });
+    wait_until([&] { return observed->command_started.load(); });
+    const int exit_code = nomad::runtime::process::shutdown_runtime(runtime);
+    CHECK(exit_code == 74);
+    CHECK(!pending.get()["ok"].get<bool>());
+    CHECK(outcome_failed.load());
+    CHECK(observed->command_count() == 0);
+    CHECK(!runtime.stop());
+    CHECK(count_event(read_journal(config.audit_directory), "runtime_shutdown") == 0);
+#ifdef _WIN32
+    nomad::runtime::process::test_finish_service(exit_code);
+    CHECK(nomad::runtime::process::test_service_error() == 74);
+#endif
+}

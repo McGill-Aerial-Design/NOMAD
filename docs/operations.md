@@ -10,7 +10,7 @@ For the current component boundaries, see [Architecture](architecture.md).
 
 | Profile / placement | Runtime host and supervisor | Client / router boundary |
 | --- | --- | --- |
-| `groundstation_minimal` | Windows groundstation: native SCM service; Linux CLI groundstation: systemd | Mission Planner requires runtime on the same Windows host; standalone ground router remains separate |
+| `groundstation_minimal` | Windows groundstation: native SCM service | Mission Planner requires runtime on the same Windows host; standalone ground router remains separate |
 | `groundstation_gpu` | Same ground runtime placement as minimal | Optional GPU/ROS workloads do not own commands or supervise runtime |
 | `onboard_companion` | Linux onboard CLI deployment: systemd; Windows Mission Planner deployment retains a ground runtime | Loopback IPC cannot reach an onboard runtime from Mission Planner; do not run both command owners for one vehicle |
 | Development / deterministic peers | Foreground console, either OS | No privileged service installation required |
@@ -18,6 +18,10 @@ For the current component boundaries, see [Architecture](architecture.md).
 Profiles describe optional compute and endpoint defaults, not runtime placement
 discovery. The onboard profile's wildcard UDP endpoint must be reviewed for the
 chosen host; a ground runtime uses the standalone router's loopback endpoint.
+The checked-in standalone ground router requires Windows; a Linux groundstation
+profile is not currently supported. Linux supervision supports the onboard
+local-client placement and software-only peers. Optional compute profiles do not
+constitute OS or hardware qualification.
 The existing `infra/systemd/install.sh` manages optional aircraft router/media/ROS
 units from a checkout, and `scripts/setup/setup_service.sh` delegates to it.
 Neither currently supervises the production runtime. Keep that optional setup
@@ -257,7 +261,10 @@ Generate a separate `/etc/nomad/clients.json` identity/token map using independe
 `secrets.token_hex(32)` credentials in a secure provisioning tool/editor, without
 printing them. Set owner `nomad:nomad` and mode 0600. Provision each client's token
 separately. Edit the protected runtime JSON to reference that file and
-`/var/lib/nomad/audit`; review endpoints and deliberately set the API gate if
+`/var/lib/nomad/audit`. For the onboard profile, review its
+`NOMAD_MAVLINK_ENDPOINT` (`udpin:0.0.0.0:14550`) and the separately supervised
+aircraft-side router's output; the example's ground loopback port is not an
+onboard deployment default. Keep IPC loopback-only and deliberately set the API gate if
 actuation is wanted. The account must traverse all these paths. `ProtectHome=yes`
 intentionally excludes home directories. Render for review, then register:
 

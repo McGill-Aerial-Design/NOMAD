@@ -89,6 +89,12 @@ void WINAPI service_main(DWORD, LPSTR *) {
 
 } // namespace
 
+int shutdown_runtime(Runtime &runtime) {
+    runtime.request_stop();
+    publish_stopping();
+    return runtime.stop() ? 0 : 74;
+}
+
 void initialize_console() {
     std::signal(SIGINT, signal_stop);
     std::signal(SIGTERM, signal_stop);

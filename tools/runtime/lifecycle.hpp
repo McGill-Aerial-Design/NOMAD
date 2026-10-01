@@ -13,6 +13,7 @@ bool stop_requested();
 void publish_ready(Runtime &runtime);
 void publish_stopping();
 void publish_error(const char *message);
+int shutdown_runtime(Runtime &runtime);
 
 #ifdef NOMAD_SERVICE_TEST
 void test_begin_service();

@@ -176,10 +176,9 @@ int wait_runtime(nomad::runtime::Runtime &runtime, std::uint16_t port) {
     while (!nomad::runtime::process::stop_requested()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    runtime.request_stop();
-    nomad::runtime::process::publish_stopping();
-    if (!runtime.stop()) {
-        return fail_runtime("runtime shutdown audit failure", 74);
+    const int result = nomad::runtime::process::shutdown_runtime(runtime);
+    if (result != 0) {
+        return fail_runtime("runtime shutdown audit failure", result);
     }
     return EXIT_SUCCESS;
 }

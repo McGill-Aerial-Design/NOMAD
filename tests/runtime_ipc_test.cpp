@@ -5,9 +5,7 @@
 #include "../src/runtime/client_auth.hpp"
 #include "../src/runtime/protected_file.hpp"
 #include "support/test_harness.hpp"
-#ifdef _WIN32
 #include "../tools/runtime/lifecycle.hpp"
-#endif
 
 #include <nlohmann/json.hpp>
 
@@ -385,6 +383,7 @@ int main() {
         test_shutdown_fences_queued_command();
         test_shutdown_audit_failure(false);
         test_shutdown_audit_failure(true);
+        test_shutdown_drain_audit_failure();
         test_competing_admission();
         test_client_authentication();
         test_journal_order_and_outcomes();

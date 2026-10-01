@@ -130,9 +130,7 @@ struct Runtime::Implementation {
 
     bool stop() {
         request_stop();
-        if (server_.running() && !journal_->healthy()) {
-            shutdown_recorded_ = false;
-        }
+        const bool was_running = server_.running();
         server_.stop();
         if (connection_worker_.joinable()) {
             connection_worker_.join();
@@ -141,6 +139,8 @@ struct Runtime::Implementation {
         if (journal_->healthy()) {
             shutdown_recorded_ = journal_->append(
                 {{"event", "runtime_shutdown"}, {"authority_generation", current_generation()}});
+        } else if (was_running) {
+            shutdown_recorded_ = false;
         }
         journal_->stop();
         return shutdown_recorded_;
