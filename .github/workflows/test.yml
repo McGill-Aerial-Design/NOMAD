@@ -31,8 +31,12 @@ jobs:
         run: pixi run test-authority-sitl-harness
 
   core:
-    name: C++ core
-    runs-on: ubuntu-latest
+    name: C++ core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       # The transport is the pinned third_party/MAVSDK submodule, so the checkout
       # must be recursive for the core to configure at all.
@@ -44,6 +48,8 @@ jobs:
           cache: true
       - name: Build and test C++ core
         run: pixi run test-core
+      - name: Exercise authenticated runtime and installed CLI against a deterministic peer
+        run: pixi run test-runtime-ipc
 
   mavsdk-qualification:
     name: MAVSDK qualification (${{ matrix.os }})

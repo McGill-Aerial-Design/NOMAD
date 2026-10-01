@@ -24,17 +24,19 @@ in the [historical migration archive](docs/migration.md).
 - [ ] Define and qualify the complete C2-loss policy across supported aircraft
   and phases. Keep communication loss, pilot takeover, and termination as
   separate fault paths with observed FC state and physical outcomes.
-- [ ] Resolve the hosted GCS-heartbeat cadence failure in run `36672382568`.
-  The unchanged relay gate observed a `0.000s` interval; isolated local checks
-  did not reproduce it. Identify the actual packet sources/timing before
-  changing the assertion, then rerun the skipped velocity/geofence checks.
+- [x] Resolve the hosted GCS-heartbeat cadence failure in run `36672382568`.
+  Verified PR53 final-head run `36744321862`: the heartbeat scenario and all
+  downstream velocity/geofence checks passed, as did both full aircraft jobs.
+  See the exact head and evidence limits in [qualification](docs/qualification.md).
 - [ ] Select, implement and qualify production termination behavior. Include
   activation, latching, reset, external-source interaction and every QuadPlane
   phase required by unresolved Q02. The Mission Planner termination control
   currently reports unavailable and sends no substitute command.
-- [ ] Establish a durable command/outcome audit record and an authenticated
-  client trust boundary. The nonempty local API-key check is an actuation gate,
-  not identity authentication.
+- [x] Establish a durable command/outcome audit record and an authenticated
+  client trust boundary. Per-client HMAC proofs bind identity, and the runtime
+  synchronizes JSONL intent before execution and outcomes afterward, failing
+  closed on audit faults. The nonempty API-key setting remains an actuation gate.
+  See [protocol and recovery semantics](docs/runtime-ipc.md#authenticated-local-clients).
 
 ## Aircraft and mission qualification
 

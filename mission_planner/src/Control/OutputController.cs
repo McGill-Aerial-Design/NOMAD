@@ -46,7 +46,7 @@ namespace NOMAD.MissionPlanner
         internal static void Initialize(NOMADConfig config)
         {
             _coreClient = config == null ? null :
-                new NomadCoreClient(config.CoreApiKey, config.CoreRuntimePort);
+                new NomadCoreClient(config.CoreClientCredential, config.CoreRuntimePort);
         }
 
         internal static NomadCoreClient CreateCoreClient()

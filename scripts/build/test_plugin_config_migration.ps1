@@ -61,7 +61,8 @@ try {
         RouterLocalPort = 14620
         ManagementPort = 14621
         CoreRuntimePort = 14631
-        CoreApiKey = 'local-actuation-gate'
+        CoreClientCredential = 'local-client-credential'
+        CoreApiKey = 'retired-enable-gate'
     }
     $legacyJson = ConvertTo-Json -InputObject $legacy -Depth 8
     $config = Load-Config $legacyJson
@@ -69,17 +70,20 @@ try {
     if ($config.RouterLocalPort -ne 14620 -or $config.ManagementPort -ne 14621) {
         throw 'Mission Planner client endpoints were not preserved.'
     }
-    if ($config.CoreRuntimePort -ne 14631 -or $config.CoreApiKey -ne 'local-actuation-gate') {
-        throw 'Runtime client endpoint or actuation gate was not preserved.'
+    if ($config.CoreRuntimePort -ne 14631 -or $config.CoreClientCredential -ne 'local-client-credential') {
+        throw 'Runtime client endpoint or independent credential was not preserved.'
     }
 
     $firstPath = Join-Path $temporary 'migrated-first.json'
     $secondPath = Join-Path $temporary 'migrated-second.json'
     $config.ExportToFile($firstPath)
     $migrated = [IO.File]::ReadAllText($firstPath)
+    if ($migrated.Contains('local-client-credential') -or $migrated.Contains('retired-enable-gate')) {
+        throw 'Portable profile export leaked a credential or retired gate.'
+    }
     foreach ($field in @(
         'IntegratedFlightMode', 'RouterLinks', 'RouterConsumers', 'RouterEnabled', 'RouterMode',
-        'RadioMasterConnectionType', 'LteMavlinkPort', 'RouterBindAddress', 'ManagementBindAddress'
+        'RadioMasterConnectionType', 'LteMavlinkPort', 'RouterBindAddress', 'ManagementBindAddress', 'CoreApiKey'
     )) {
         if ($migrated.Contains('"' + $field + '"')) { throw "Retired field remained after migration: $field" }
     }

@@ -117,7 +117,9 @@ namespace NOMAD.MissionPlanner
             if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
                 Directory.CreateDirectory(directory);
 
-            File.WriteAllText(path, JsonConvert.SerializeObject(this, Formatting.Indented));
+            var profile = JObject.FromObject(this);
+            profile.Remove(nameof(CoreClientCredential));
+            File.WriteAllText(path, profile.ToString(Formatting.Indented));
         }
 
         private static NOMADConfig Deserialize(string json)
@@ -179,7 +181,7 @@ namespace NOMAD.MissionPlanner
                 "PreferredLinkReconnectDelay", "MavlinkHeartbeatTimeout",
                 "RouterBindAddress", "RouterDedupEnabled", "ManagementBindAddress",
                 "CoreMavlinkEndpoint", "CoreClientMode", "CoreExePath",
-                "JetsonApiKey", "JetsonIP", "JetsonPort",
+                "JetsonApiKey", "JetsonIP", "JetsonPort", "CoreApiKey",
             };
             var found = new System.Collections.Generic.List<string>();
             foreach (var key in removed)
@@ -324,7 +326,7 @@ namespace NOMAD.MissionPlanner
             CoreRuntimePort = defaults.CoreRuntimePort;
             RouterLocalPort = defaults.RouterLocalPort;
             ManagementPort = defaults.ManagementPort;
-            CoreApiKey = defaults.CoreApiKey;
+            CoreClientCredential = defaults.CoreClientCredential;
             VideoUrl = defaults.VideoUrl;
             VideoNetworkCaching = defaults.VideoNetworkCaching;
             PreferredVideoPlayer = defaults.PreferredVideoPlayer;

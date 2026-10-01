@@ -41,9 +41,9 @@ CommandResult validate_command_acknowledgement(
         return {false, std::string(name) + " received an acknowledgement for another command"};
     }
     if (acknowledgement->result != kAcceptedResult) {
-        return {false, std::string(name) + " rejected by ArduPilot"};
+        return {false, std::string(name) + " rejected by ArduPilot", true};
     }
-    return {true, std::string(name) + " accepted"};
+    return {true, std::string(name) + " accepted", true};
 }
 
 } // namespace

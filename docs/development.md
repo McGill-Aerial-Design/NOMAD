@@ -8,7 +8,9 @@ prove.
 
 ## Bootstrap and prerequisites
 
-Install Git, Pixi, CMake 3.22.1 or newer and a C++20 compiler. Initialize the
+Install Git, Pixi, CMake 3.22.1 or newer and a C++20 compiler. Non-Windows
+runtime/client builds also require OpenSSL Crypto development headers/libraries
+(for example `libssl-dev` on Ubuntu); Windows uses the OS BCrypt library. Initialize the
 submodules before configuring the C++ build:
 
 ```sh

@@ -11,7 +11,7 @@ namespace nomad::vehicle {
 namespace {
 
 CommandResult verified(const CommandResult &result, const char *message) {
-    return result.success ? CommandResult{true, message} : result;
+    return result.success ? CommandResult{true, message, result.acknowledged} : result;
 }
 
 } // namespace

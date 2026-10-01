@@ -225,6 +225,7 @@ def test_save_uses_template_schema_and_preserves_secret_placeholder(tmp_path: Pa
         "NOMAD_PROFILE=groundstation_minimal\n"
         "NOMAD_MAVLINK_ENDPOINT=udpin:0.0.0.0:14550\n"
         "NOMAD_API_KEY=\n"
+        "NOMAD_CLIENT_CREDENTIAL=\n"
         "NOMAD_SIM_MODE=false\n",
         encoding="utf-8",
     )
@@ -233,6 +234,7 @@ def test_save_uses_template_schema_and_preserves_secret_placeholder(tmp_path: Pa
         "NOMAD_PROFILE=groundstation_minimal\n"
         "NOMAD_MAVLINK_ENDPOINT=127.0.0.1:14550\n"
         "NOMAD_API_KEY=deployment-secret\n"
+        "NOMAD_CLIENT_CREDENTIAL=client-secret\n"
         "NOMAD_SIM_MODE=true\n"
         "NOMAD_AUTOSTART_EDGE_CORE=true\n"
         "NOMAD_DEV_ONLY=unexpected\n",
@@ -249,6 +251,8 @@ def test_save_uses_template_schema_and_preserves_secret_placeholder(tmp_path: Pa
     assert "NOMAD_SIM_MODE=true" in saved
     assert "NOMAD_API_KEY=\n" in saved
     assert "deployment-secret" not in saved
+    assert "NOMAD_CLIENT_CREDENTIAL=\n" in saved
+    assert "client-secret" not in saved
     assert "NOMAD_AUTOSTART_EDGE_CORE" not in saved
     assert "NOMAD_DEV_ONLY" not in saved
 
@@ -307,6 +311,7 @@ def legacy_plugin_config() -> dict[str, object]:
         "CoreClientMode": "LegacyOneShot",
         "CoreMavlinkEndpoint": "udpin:0.0.0.0:14550",
         "CoreApiKey": "old-key",
+        "CoreClientCredential": "separately-provisioned-test-credential",
         "VideoUrl": "old-video",
     }
 
@@ -325,7 +330,8 @@ def test_sync_mission_planner_removes_stale_profile_fields(tmp_path: Path, monke
     assert synced["ActiveProfile"] == "onboard_companion"
     assert synced["DualLinkEnabled"] is False
     assert "IntegratedFlightMode" not in synced
-    assert synced["CoreApiKey"] == onboard_env["NOMAD_API_KEY"]
+    assert "CoreApiKey" not in synced
+    assert synced["CoreClientCredential"] == "separately-provisioned-test-credential"
     assert synced["VideoUrl"] == onboard_env["NOMAD_VIDEO_RTSP_URL"]
     assert_retired_mp_fields_removed(synced)
 

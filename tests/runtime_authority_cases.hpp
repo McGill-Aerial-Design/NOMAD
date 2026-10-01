@@ -10,7 +10,12 @@ void test_disconnect_does_not_cancel_or_replay(std::uint16_t port, FakeConnectio
     wait_until([&connection, before] { return connection.command_count() == before + 1; });
 
     Client reconnect(port);
-    CHECK(reconnect.request(request)["command_result"]["success"] == true);
+    Json response;
+    wait_until([&] {
+        response = reconnect.request(request);
+        return response.value("ok", false);
+    });
+    CHECK(response["command_result"]["success"] == true);
     CHECK(connection.command_count() == before + 1);
 }
 
@@ -23,7 +28,10 @@ void test_evicted_replay_and_wrong_source(std::uint16_t port, FakeConnection &co
                   ["command_result"]["success"] == true);
     }
     const auto before = connection.command_count();
-    CHECK(client.request(first)["error"]["code"] == "stale_request");
+    auto replay = first;
+    replay["expires_at_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count() + 3000;
+    CHECK(client.request(replay)["error"]["code"] == "stale_request");
     CHECK(connection.command_count() == before);
     CHECK(client.request(servo_request("wrong-source", 1500, "other-client"))["error"]["code"] ==
           "not_authoritative");
@@ -117,7 +125,7 @@ void test_session_rollover_revokes_at_admission() {
     const auto port = free_port();
     auto connection = std::make_unique<FakeConnection>();
     auto *observed = connection.get();
-    nomad::runtime::RuntimeConfig config;
+    auto config = test_config();
     config.ipc_port = port;
     config.actuation_enabled = true;
     nomad::runtime::Runtime runtime(std::move(connection), config);

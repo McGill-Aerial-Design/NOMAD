@@ -32,6 +32,9 @@ struct Request {
     std::uint64_t generation{};
     std::uint64_t sequence{};
     std::int64_t expires_at_ms{};
+    std::shared_ptr<std::atomic_bool> admission_check_passed{std::make_shared<std::atomic_bool>(false)};
+    std::shared_ptr<std::atomic_bool> ack_observed{std::make_shared<std::atomic_bool>(false)};
+    std::shared_ptr<std::atomic_bool> observed_success{std::make_shared<std::atomic_bool>(false)};
 };
 
 thread_local const Request *active_request = nullptr;

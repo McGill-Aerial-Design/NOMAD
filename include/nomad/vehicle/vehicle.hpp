@@ -48,6 +48,7 @@ struct LandingPoint {
 struct CommandResult {
     bool success{false};
     std::string message;
+    bool acknowledged{false};
 };
 
 class Vehicle {

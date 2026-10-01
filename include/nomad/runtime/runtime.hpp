@@ -8,6 +8,8 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <map>
+#include <functional>
 #include <string>
 
 namespace nomad::runtime {
@@ -20,6 +22,10 @@ struct RuntimeConfig {
     safety::GlobalFencePolicy fence_policy{};
     safety::VelocityLimits velocity_limits{};
     bool actuation_enabled{false};
+    std::map<std::string, std::string> client_credentials;
+    std::string audit_directory;
+    // Optional test fault injector: may reject an append, never bypass its native durability barrier.
+    std::function<bool(const std::string &)> audit_write_guard;
 };
 
 // Owns one MAVLink connection and one Vehicle for the life of the process.

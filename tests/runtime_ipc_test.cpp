@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "support/fake_connection.hpp"
 #include "nomad/runtime/runtime.hpp"
+#include "../src/runtime/auth_proof.hpp"
+#include "../src/runtime/client_auth.hpp"
+#include "../src/runtime/protected_file.hpp"
 #include "support/test_harness.hpp"
 
 #include <nlohmann/json.hpp>
@@ -10,6 +13,10 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <random>
 #include <future>
 #include <stdexcept>
 #include <string>
@@ -33,145 +40,12 @@ namespace {
 
 using Json = nlohmann::json;
 
-#ifdef _WIN32
-using Socket = SOCKET;
-constexpr Socket kInvalidSocket = INVALID_SOCKET;
-#else
-using Socket = int;
-constexpr Socket kInvalidSocket = -1;
-#endif
-
-void initialize_sockets() {
-#ifdef _WIN32
-    static const bool initialized = [] {
-        WSADATA data{};
-        return WSAStartup(MAKEWORD(2, 2), &data) == 0;
-    }();
-    CHECK(initialized);
-#endif
-}
-
-void close_socket(Socket socket) {
-#ifdef _WIN32
-    closesocket(socket);
-#else
-    ::close(socket);
-#endif
-}
-
-void set_timeout(Socket socket) {
-#ifdef _WIN32
-    const DWORD timeout = 2000;
-    setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&timeout), sizeof(timeout));
-#else
-    const timeval timeout{2, 0};
-    setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-#endif
-}
-
-std::uint16_t free_port() {
-    initialize_sockets();
-    const auto socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    CHECK(socket != kInvalidSocket);
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    address.sin_port = 0;
-    CHECK(::bind(socket, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) == 0);
-#ifdef _WIN32
-    int length = sizeof(address);
-#else
-    socklen_t length = sizeof(address);
-#endif
-    CHECK(getsockname(socket, reinterpret_cast<sockaddr *>(&address), &length) == 0);
-    const auto port = ntohs(address.sin_port);
-    close_socket(socket);
-    return port;
-}
-
-class Client {
-  public:
-    explicit Client(std::uint16_t port) {
-        initialize_sockets();
-        socket_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        CHECK(socket_ != kInvalidSocket);
-        sockaddr_in address{};
-        address.sin_family = AF_INET;
-        address.sin_port = htons(port);
-        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        CHECK(::connect(socket_, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) == 0);
-        set_timeout(socket_);
-    }
-
-    ~Client() {
-        if (socket_ != kInvalidSocket) {
-            close_socket(socket_);
-        }
-    }
-
-    void send_raw(std::string_view line) {
-        std::string framed(line);
-        framed.push_back('\n');
-        std::size_t offset = 0;
-        while (offset < framed.size()) {
-#ifdef _WIN32
-            const int count = ::send(socket_, framed.data() + offset, static_cast<int>(framed.size() - offset), 0);
-            CHECK(count > 0);
-#else
-            const auto count = ::send(socket_, framed.data() + offset, framed.size() - offset, 0);
-            CHECK(count > 0);
-#endif
-            offset += static_cast<std::size_t>(count);
-        }
-    }
-
-    void send(const Json &request) {
-        send_raw(request.dump());
-    }
-
-    Json receive() {
-        std::string line;
-        char character{};
-        while (line.size() <= 65536) {
-#ifdef _WIN32
-            const int count = ::recv(socket_, &character, 1, 0);
-#else
-            const auto count = ::recv(socket_, &character, 1, 0);
-#endif
-            CHECK(count == 1);
-            if (character == '\n') {
-                return Json::parse(line);
-            }
-            line.push_back(character);
-        }
-        throw std::runtime_error("response exceeded the test client limit");
-    }
-
-    Json request(const Json &body) {
-        send(body);
-        return receive();
-    }
-
-    void send_partial(std::string_view data) {
-#ifdef _WIN32
-        CHECK(::send(socket_, data.data(), static_cast<int>(data.size()), 0) == static_cast<int>(data.size()));
-#else
-        CHECK(::send(socket_, data.data(), data.size(), 0) == static_cast<ssize_t>(data.size()));
-#endif
-    }
-
-    void disconnect() {
-        close_socket(socket_);
-        socket_ = kInvalidSocket;
-    }
-
-  private:
-    Socket socket_{kInvalidSocket};
-};
+#include "runtime_test_clients.hpp"
 
 Json base_request(std::string id, std::string type, std::string client = "test-client") {
     return {{"protocol", "nomad-core"}, {"version", 1}, {"id", std::move(id)},
-            {"client_id", std::move(client)}, {"type", std::move(type)}};
+            {"client_id", client}, {"type", std::move(type)}, {"command_source", client},
+            {"credential", test_credentials.contains(client) ? test_credentials.at(client) : ""}};
 }
 
 struct AuthorityContext {
@@ -238,6 +112,8 @@ void wait_until(const std::function<bool()> &predicate) {
 
 #include "runtime_gimbal_cases.hpp"
 #include "runtime_authority_cases.hpp"
+#include "runtime_security_cases.hpp"
+#include "runtime_security_recovery_cases.hpp"
 void test_protocol_and_status(std::uint16_t port, FakeConnection &connection) {
     Client client(port);
     const auto hello = client.request(base_request("1", "hello"));
@@ -326,8 +202,8 @@ void test_command_dispatch_and_dedupe(std::uint16_t port, FakeConnection &connec
     CHECK(client.request(reused_id)["error"]["code"] == "request_id_conflict");
     CHECK(connection.command_count() == 1);
 
-    CHECK(client.request(servo_request("c", 1500, "a\nb"))["error"]["code"] == "not_authoritative");
-    CHECK(client.request(servo_request("b\nc", 1500, "a"))["error"]["code"] == "not_authoritative");
+    CHECK(client.request(servo_request("c", 1500, "a\nb"))["error"]["code"] == "authentication_failed");
+    CHECK(client.request(servo_request("b\nc", 1500, "a"))["error"]["code"] == "authentication_failed");
     CHECK(connection.command_count() == 1);
 }
 
@@ -368,7 +244,7 @@ void test_runtime_owns_one_connection_and_releases_port() {
     auto connection = std::make_unique<FakeConnection>();
     auto *observed = connection.get();
     observed->set_identity({});
-    nomad::runtime::RuntimeConfig config;
+    auto config = test_config();
     config.ipc_port = port;
     config.actuation_enabled = true;
     nomad::runtime::Runtime runtime(std::move(connection), config);
@@ -399,7 +275,7 @@ void test_runtime_owns_one_connection_and_releases_port() {
 
 void test_runtime_restart_and_missing_key() {
     const auto port = free_port();
-    nomad::runtime::RuntimeConfig config;
+    auto config = test_config();
     config.ipc_port = port;
     config.actuation_enabled = false;
     std::string error;
@@ -421,7 +297,7 @@ void test_runtime_restart_and_missing_key() {
 
 void test_restart_rejects_old_request() {
     const auto port = free_port();
-    nomad::runtime::RuntimeConfig config;
+    auto config = test_config();
     config.ipc_port = port;
     config.actuation_enabled = true;
     std::string error;
@@ -453,7 +329,7 @@ void test_restart_rejects_old_request() {
 
 void test_competing_admission() {
     const auto port = free_port();
-    nomad::runtime::RuntimeConfig config;
+    auto config = test_config();
     config.ipc_port = port;
     config.actuation_enabled = true;
     auto connection = std::make_unique<FakeConnection>();
@@ -485,6 +361,13 @@ void test_competing_admission() {
     CHECK(rejected.request(servo_request("winning-command", 1500, winner))["command_result"]["success"] == true);
     CHECK(observed->command_count() == 1);
     runtime.stop();
+    const auto records = read_journal(config.audit_directory);
+    CHECK(count_event(records, "authority_admission") == 1);
+    CHECK(count_event(records, "mutation_intent") == 1);
+    std::uint64_t ordinal = 0;
+    for (const auto &record : records) {
+        CHECK(record["ordinal"] == ++ordinal);
+    }
 }
 
 } // namespace
@@ -495,6 +378,17 @@ int main() {
         test_runtime_restart_and_missing_key();
         test_restart_rejects_old_request();
         test_competing_admission();
+        test_client_authentication();
+        test_journal_order_and_outcomes();
+        test_journal_failure(false);
+        test_journal_failure(true);
+        test_journal_startup_and_recovery();
+        test_credential_configuration();
+        test_damaged_history();
+        test_native_file_failure_and_lock();
+        test_authenticated_authority_events();
+        test_rejection_audit_failure(false);
+        test_rejection_audit_failure(true);
         test_session_rollover_revokes_at_admission();
     });
 }

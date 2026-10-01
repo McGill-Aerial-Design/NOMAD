@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "cli_client.hpp"
+#include "auth_proof.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -255,7 +256,9 @@ std::uint16_t runtime_port() {
 }
 
 Json make_request(const std::string &id, const std::string &type) {
-    return {{"protocol", kProtocolName}, {"version", kProtocolVersion}, {"client_id", "nomad-cli"},
+    const char *client = std::getenv("NOMAD_CLIENT_ID");
+    return {{"protocol", kProtocolName}, {"version", kProtocolVersion},
+            {"client_id", client == nullptr ? "nomad-cli" : client},
             {"id", id}, {"type", type}};
 }
 
@@ -318,7 +321,7 @@ bool bind_authority(Json &request, const Json &hello_response) {
     request["runtime_incarnation"] = hello_response["runtime_incarnation"];
     request["vehicle_session"] = authority["vehicle_session"];
     request["authority_generation"] = authority["generation"];
-    request["command_source"] = "nomad-cli";
+    request["command_source"] = request["client_id"];
     request["sequence"] = authority["next_sequence"];
     request["expires_at_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(now).count() + 3000;
     return true;
@@ -331,6 +334,9 @@ bool valid_response(const Json &response, const std::string &id) {
 }
 
 void print_error(const Json &response) {
+    if (response.value("outcome", "") == "unknown") {
+        std::cerr << "vehicle outcome is unknown; request must not be replayed\n";
+    }
     const auto error = response.value("error", Json::object());
     std::cerr << "error[" << error.value("code", "protocol_error") << "]: "
               << error.value("message", "runtime rejected the request") << '\n';
@@ -400,7 +406,8 @@ int run_runtime_command(const Arguments &arguments) {
     }
 
     const auto hello_id = new_request_id();
-    const auto hello = make_request(hello_id, "hello");
+    auto hello = make_request(hello_id, "hello");
+    hello["auth_nonce"] = nomad::runtime::detail::make_nonce();
     if (!write_message(socket, hello)) {
         close_socket(socket);
         std::cerr << "error[runtime_unavailable]: could not send protocol HELLO\n";
@@ -423,6 +430,22 @@ int run_runtime_command(const Arguments &arguments) {
         close_socket(socket);
         std::cerr << "error[invalid_response]: runtime did not provide an authority context\n";
         return EXIT_FAILURE;
+    }
+    const char *credential = std::getenv("NOMAD_CLIENT_CREDENTIAL");
+    const auto server_payload = "nomad-core:server:v1:" + hello["client_id"].get<std::string>() + ":" +
+        hello["auth_nonce"].get<std::string>() + ":" + hello_response.value("runtime_incarnation", "");
+    if (is_mutating(request) && (credential == nullptr ||
+        hello_response.value("client_authentication", "") != "hmac-sha256-v1" ||
+        !nomad::runtime::detail::equal_proof(hello_response.value("server_proof", ""),
+            nomad::runtime::detail::make_proof(credential, server_payload)))) {
+        close_socket(socket);
+        std::cerr << "error[authentication_required]: runtime does not support authenticated clients\n";
+        return EXIT_FAILURE;
+    }
+    if (is_mutating(request)) {
+        const auto payload = request.dump();
+        request["auth_payload"] = payload;
+        request["auth_proof"] = nomad::runtime::detail::make_proof(credential, "nomad-core:request:v1:" + payload);
     }
 
     const auto request_id = request["id"].get<std::string>();

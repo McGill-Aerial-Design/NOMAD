@@ -2,14 +2,23 @@
 
 ## Current trust boundary
 
-The working tree removes Edge Core and its remote API. The C++ CLI only checks
-that NOMAD_API_KEY is nonempty; this is an operator opt-in, not verification of
-identity or a remote credential. Local OS permissions currently protect executable
-and configuration access. Core library calls do not inherit CLI authentication
-or audit.
+Production clients use loopback typed IPC to `nomad-runtime`, which owns the single
+NOMAD vehicle-writing path. Per-client shared secrets authenticate HMAC request
+proofs and runtime hello proofs; request identity and source must match the
+authenticated configured identity. `NOMAD_API_KEY` remains only an explicit
+deployment actuation-enable gate. Authentication alone does not admit authority.
+Authority generation, vehicle session, expiry and sequence fence final-send admission.
+The runtime durably journals intent before command execution and observed outcomes
+afterward. Audit failure inhibits further mutations; software evidence does not
+prove physical action. Core library and qualification calls are outside this
+installed-client boundary.
 
-Authenticated/authorized local and remote clients, replay protection, complete
-outcome audit and exposed ROS/media endpoint protection remain release gates.
+This protects against ordinary local processes without the client's credential,
+including identity claims and a rogue listener trying to harvest raw credentials.
+It does not protect against administrator/root, kernel, credential-reading malware
+or physical host compromise. Credential files and local client settings require
+OS access protection. Remote authentication and exposed ROS/media endpoint protection
+remain outside this slice.
 A VPN is an optional network control; it does not authorize commands by itself.
 The retained video tool's HTTP controls currently lack authentication.
 

@@ -50,6 +50,7 @@ def _config_path() -> Path | None:
 
 
 def _apply_profile_settings(config: dict[str, object], name: str, env: dict[str, str]) -> None:
+    config.pop("CoreApiKey", None)
     legacy_mode = config.get("RouterMode")
     if legacy_mode is not None and (not isinstance(legacy_mode, str) or legacy_mode.strip().lower() != "standalone"):
         raise ValueError(f"RouterMode {legacy_mode!r} is unsupported; run only the standalone ground router")
@@ -67,12 +68,11 @@ def _apply_profile_settings(config: dict[str, object], name: str, env: dict[str,
     if removed:
         print("[INFO] Removed retired Mission Planner settings: " + ", ".join(removed))
 
-    for env_key, config_key in (("NOMAD_API_KEY", "CoreApiKey"), ("NOMAD_VIDEO_RTSP_URL", "VideoUrl")):
-        value = env.get(env_key, "").strip()
-        if value:
-            config[config_key] = value
-        else:
-            config.pop(config_key, None)
+    value = env.get("NOMAD_VIDEO_RTSP_URL", "").strip()
+    if value:
+        config["VideoUrl"] = value
+    else:
+        config.pop("VideoUrl", None)
     config["ActiveProfile"] = name
 
 

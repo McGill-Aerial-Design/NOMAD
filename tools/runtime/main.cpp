@@ -2,6 +2,7 @@
 #include "nomad/mavlink/mavsdk_transport.hpp"
 #include "nomad/mavlink/mavsdk_validation.hpp"
 #include "nomad/runtime/runtime.hpp"
+#include "client_auth.hpp"
 #include "nomad/safety/fence_config.hpp"
 #include "nomad/safety/velocity_config.hpp"
 
@@ -142,6 +143,13 @@ int main(int argc, char **argv) {
     config.version = NOMAD_VERSION;
 #endif
     config.actuation_enabled = api_key_configured();
+    const char *credentials = std::getenv("NOMAD_CLIENT_CREDENTIALS_FILE");
+    const char *audit = std::getenv("NOMAD_AUDIT_DIRECTORY");
+    if (credentials == nullptr || !nomad::runtime::detail::load_credentials(credentials, config.client_credentials)) {
+        std::cerr << "runtime configuration error: valid protected client credentials file required\n";
+        return EXIT_FAILURE;
+    }
+    config.audit_directory = audit == nullptr ? "" : audit;
     config.fence_policy = nomad::safety::load_fence_policy(std::getenv("NOMAD_FENCE_POLYGON"),
                                                             std::getenv("NOMAD_FENCE_MARGIN_M"));
     config.velocity_limits = nomad::safety::load_velocity_limits(

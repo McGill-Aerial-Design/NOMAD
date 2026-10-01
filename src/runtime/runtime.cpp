@@ -2,6 +2,9 @@
 #include "nomad/runtime/runtime.hpp"
 
 #include "ipc_server.hpp"
+#include "audit_journal.hpp"
+#include "client_auth.hpp"
+#include "auth_proof.hpp"
 #include "nomad/safety/velocity_config.hpp"
 #include "nomad/telemetry/state.hpp"
 #include "nomad/vehicle/vehicle.hpp"
@@ -38,20 +41,23 @@ struct Runtime::Implementation {
     };
 
     Implementation(std::unique_ptr<mavlink::MavlinkConnection> connection, RuntimeConfig config)
-        : incarnation_(new_incarnation()), authority_gate_(std::make_shared<AuthorityGate>()),
+        : incarnation_(new_incarnation()), journal_(std::make_shared<detail::AuditJournal>(config.audit_write_guard)),
+          authority_gate_(std::make_shared<AuthorityGate>()),
           connection_(std::move(connection)), config_(std::move(config)),
           vehicle_(require_connection(connection_), make_vehicle_config(config_)) {
         authority_gate_->incarnation = incarnation_;
         const std::weak_ptr<AuthorityGate> weak_gate = authority_gate_;
-        connection_->set_transmission_admission_factory([weak_gate] {
+        const auto journal = journal_;
+        connection_->set_transmission_admission_factory([weak_gate, journal] {
             if (active_request == nullptr) {
                 return mavlink::TransmissionAdmission([](const std::function<void()> &) { return false; });
             }
             const auto &request = *active_request;
+            const auto evidence = request.admission_check_passed;
             const mavlink::SendAuthorityToken token{request.incarnation, request.session, request.generation,
                                                     request.source, request.id, request.sequence,
                                                     request.expires_at_ms};
-            return mavlink::TransmissionAdmission([weak_gate, token](const std::function<void()> &send) {
+            return mavlink::TransmissionAdmission([weak_gate, journal, token, evidence](const auto &send) {
                 const auto gate = weak_gate.lock();
                 if (!gate || !send) {
                     return false;
@@ -60,21 +66,39 @@ struct Runtime::Implementation {
                 if (!matches_authority(*gate, token)) {
                     return false;
                 }
-                send();
-                return true;
+                return journal->admit_send([&] {
+                    *evidence = true;
+                    send();
+                });
             });
         });
-        connection_->set_vehicle_session_changed_handler([weak_gate](std::uint64_t session) {
+        connection_->set_vehicle_session_changed_handler([weak_gate, journal](std::uint64_t session) {
             const auto gate = weak_gate.lock();
             if (!gate) {
                 return;
             }
             std::unique_lock lock(gate->mutex);
+            if (gate->vehicle_session != session) {
+                journal->append({{"event", gate->owner.empty() ? "vehicle_session" : "session_authority_loss"},
+                                 {"vehicle_session", session}, {"previous_session", gate->vehicle_session},
+                                 {"authority_generation", gate->generation},
+                                 {"resulting_generation", gate->generation + (gate->owner.empty() ? 0 : 1)},
+                                 {"client", gate->owner}});
+            }
             update_gate_session(*gate, session);
         });
     }
 
     bool start(std::string &error) {
+        if (!detail::valid_credentials(config_.client_credentials)) {
+            error = "valid client authentication configuration required";
+            return false;
+        }
+        if (!journal_->start(config_.audit_directory, incarnation_) ||
+            !journal_->append({{"event", "runtime_start"}, {"vehicle_session", 0}, {"authority_generation", 0}})) {
+            error = "durable audit startup failed; mutations inhibited";
+            return false;
+        }
         if (!server_.start(config_.ipc_port, [this](std::string_view request) { return handle_message(request); },
                            error)) {
             return false;
@@ -107,6 +131,10 @@ struct Runtime::Implementation {
             connection_worker_.join();
         }
         connection_->disconnect();
+        if (journal_->healthy()) {
+            journal_->append({{"event", "runtime_shutdown"}, {"authority_generation", current_generation()}});
+        }
+        journal_->stop();
     }
 
     bool ready() const {
@@ -137,6 +165,7 @@ struct Runtime::Implementation {
     void revoke_changed_session_locked(const telemetry::VehicleState &state, bool connection_open) {
         if (state.session_id != authority_gate_->vehicle_session) {
             if (is_newer_session(state.session_id, authority_gate_->vehicle_session)) {
+                audit_session_loss(state.session_id);
                 update_gate_session(*authority_gate_, state.session_id);
             }
             return;
@@ -147,6 +176,7 @@ struct Runtime::Implementation {
         if (connection_open && state.connected && state.session_id == authority_gate_->owner_session) {
             return;
         }
+        audit_session_loss(state.session_id);
         ++authority_gate_->generation;
         authority_gate_->owner.clear();
         authority_gate_->owner_session = 0;
@@ -155,22 +185,71 @@ struct Runtime::Implementation {
     }
 
     std::string handle_message(std::string_view line) {
-        auto parsed = parse_request(line);
+        return detail::redact_credentials(handle_authenticated_message(line).dump(), config_.client_credentials);
+    }
+
+    Json handle_authenticated_message(std::string_view line) {
+        if (line.size() > detail::kMaximumMessageBytes || !has_reasonable_json_depth(line)) {
+            return parse_request(line).error;
+        }
+        auto envelope = Json::parse(line, nullptr, false);
+        const auto type = envelope.is_object() ? field_string(envelope, "type") : "";
+        const bool protected_request = is_mutating(type) || type == "admit_authority" ||
+                                       type == "revoke_authority" || type == "handback_authority";
+        if (protected_request && !authenticate_request(envelope)) {
+            const auto id = field_string(envelope, "id");
+            return journal_->healthy() ?
+                error_response(id.size() <= 64 ? id : "", "authentication_failed",
+                               "valid credential proof and matching client identity required") :
+                rejected_audit_error(id);
+        }
+        const auto authenticated_client = protected_request ? field_string(envelope, "client_id") : "";
+        if (envelope.is_object()) {
+            envelope.erase("auth_payload");
+            envelope.erase("auth_proof");
+            envelope.erase("credential");
+        }
+        auto parsed = parse_request(envelope.is_discarded() ? line : envelope.dump());
         if (!parsed.request.has_value()) {
-            return parsed.error.dump();
+            if (protected_request) {
+                if (!audit_rejection(envelope, "invalid_request", authenticated_client)) {
+                    return rejected_audit_error(field_string(envelope, "id"));
+                }
+            }
+            return parsed.error;
         }
         const auto &request = *parsed.request;
         if (request.type == "admit_authority" || request.type == "revoke_authority" ||
             request.type == "handback_authority") {
-            return handle_authority_request(request).dump();
+            const auto response = handle_authority_request(request);
+            if (!response.value("ok", false)) {
+                if (!audit_request(request, "request_rejected", response["error"]["code"])) {
+                    return audit_error(request);
+                }
+            }
+            return response;
         }
         if (is_mutating(request.type)) {
-            return handle_mutating_request(request).dump();
+            return handle_mutating_request(request);
         }
-        return handle_read_request(request).dump();
+        return handle_read_request(request);
     }
 
     Json handle_mutating_request(const Request &request) {
+        const auto response = process_mutating_request(request);
+        if (!response.value("ok", false) && response["error"]["code"] != "authority_interrupted" &&
+            response["error"]["code"] != "internal_error" && response["error"]["code"] != "audit_failure") {
+            if (!audit_request(request, "request_rejected", response["error"]["code"])) {
+                return audit_error(request);
+            }
+        }
+        return response;
+    }
+
+    Json process_mutating_request(const Request &request) {
+        if (!journal_->healthy()) {
+            return audit_error(request);
+        }
         if (!config_.actuation_enabled) {
             return error_response(request.id, "missing_api_key", "NOMAD_API_KEY is not set for the runtime");
         }
@@ -206,6 +285,7 @@ struct Runtime::Implementation {
             response = execute_mutating_request(request);
         } catch (...) {
             response = error_response(request.id, "internal_error", "vehicle request failed internally");
+            response = finish_operation(request, response, "unknown");
         }
         remember_response(key, fingerprint, response);
         return response;
@@ -223,6 +303,8 @@ struct Runtime::Implementation {
                     {"type", "hello_response"},
                     {"runtime_version", config_.version},
                     {"runtime_incarnation", incarnation_},
+                    {"client_authentication", "hmac-sha256-v1"},
+                    {"server_proof", hello_proof(request)},
                     {"authority", {{"vehicle_session", connection_->get_state().session_id},
                                     {"generation", current_generation()},
                                     {"next_sequence", next_sequence()},
@@ -256,6 +338,8 @@ struct Runtime::Implementation {
         }
         return {{"runtime_ready", ready()},
                 {"runtime_incarnation", incarnation_},
+                {"audit_healthy", journal_->healthy()},
+                {"actuation_enabled", config_.actuation_enabled},
                 {"vehicle_session", state.session_id},
                 {"authority_generation", generation},
                 {"authority_owner", owner.empty() ? Json(nullptr) : Json(owner)},
@@ -301,15 +385,29 @@ struct Runtime::Implementation {
         if (const auto denied = check_request_authority(request); denied.has_value()) {
             return *denied;
         }
+        if (!journal_->healthy()) {
+            return audit_error(request);
+        }
+        if (!audit_request(request, "mutation_intent", "pending")) {
+            return audit_error(request);
+        }
         ActiveRequest active(request);
         const auto result = invoke_vehicle(request);
+        *request.ack_observed = result.acknowledged;
+        *request.observed_success = result.success;
         if (!owns_generation(request)) {
-            return error_response(request.id, "authority_interrupted", "authority changed during vehicle operation");
+            return finish_operation(request,
+                error_response(request.id, "authority_interrupted", "authority changed during vehicle operation"),
+                "interrupted");
         }
         Json response{{"protocol", kProtocolName}, {"version", kProtocolVersion}, {"id", request.id},
                       {"ok", true}, {"type", "command_response"},
-                      {"command_result", {{"success", result.success}, {"message", result.message}}}};
-        return response;
+                      {"command_result", {{"success", result.success}, {"message", result.message},
+                                          {"acknowledged", result.acknowledged}}}};
+        const auto outcome = result.success ? "success" : !request.admission_check_passed->load() ? "rejected" :
+                             result.acknowledged ? "failed" : "unknown";
+        response["outcome"] = outcome;
+        return finish_operation(request, response, outcome);
     }
 
     vehicle::CommandResult invoke_vehicle(const Request &request) {
@@ -344,93 +442,9 @@ struct Runtime::Implementation {
         }
     }
 
-    bool valid_context(const Request &request, std::uint64_t session) const {
-        return request.incarnation == authority_gate_->incarnation && request.session == session && session != 0 &&
-               session == authority_gate_->vehicle_session && request.generation == authority_gate_->generation;
-    }
+#include "runtime_authority_methods.hpp"
 
-    bool valid_expiry(const Request &request) const {
-        const auto now = unix_milliseconds();
-        return request.expires_at_ms >= now && request.expires_at_ms <= now + 5000;
-    }
-
-    std::optional<Json> check_request_authority(const Request &request, bool require_expiry = true) {
-        const auto state = connection_->get_state();
-        const bool connection_open = connection_->is_connected();
-        {
-            std::unique_lock lock(authority_gate_->mutex);
-            revoke_changed_session_locked(state, connection_open);
-        }
-        std::shared_lock lock(authority_gate_->mutex);
-        if (!valid_context(request, state.session_id) || !connection_open || !state.connected ||
-            !state.heartbeat_fresh) {
-            return error_response(request.id, "stale_authority", "runtime, vehicle session or generation changed");
-        }
-        if (authority_gate_->stopping || authority_gate_->owner.empty() ||
-            request.source != authority_gate_->owner || request.client_id != authority_gate_->owner) {
-            return error_response(request.id, "not_authoritative", "client is not the admitted command source");
-        }
-        if (require_expiry && !valid_expiry(request)) {
-            return error_response(request.id, "expired_request", "request validity must end within five seconds");
-        }
-        if (request.sequence == 0) {
-            return error_response(request.id, "invalid_request", "mutation requires a positive sequence");
-        }
-        return std::nullopt;
-    }
-
-    bool owns_generation(const Request &request) const {
-        const auto state = connection_->get_state();
-        const bool connection_open = connection_->is_connected();
-        std::shared_lock lock(authority_gate_->mutex);
-        return !authority_gate_->stopping && valid_context(request, state.session_id) &&
-               authority_gate_->owner == request.source && authority_gate_->owner == request.client_id &&
-               authority_gate_->owner_session == state.session_id && state.connected && connection_open;
-    }
-
-    bool reserve_sequence(const Request &request) {
-        std::unique_lock lock(authority_gate_->mutex);
-        if (authority_gate_->stopping || request.generation != authority_gate_->generation ||
-            request.sequence <= authority_gate_->last_sequence) {
-            return false;
-        }
-        authority_gate_->last_sequence = request.sequence;
-        return true;
-    }
-
-    Json handle_authority_request(const Request &request) {
-        const auto state = connection_->get_state();
-        const bool connection_open = connection_->is_connected();
-        std::unique_lock lock(authority_gate_->mutex);
-        revoke_changed_session_locked(state, connection_open);
-        if (!config_.actuation_enabled || !valid_context(request, state.session_id) || !valid_expiry(request)) {
-            return error_response(request.id, "stale_authority", "authority context or request validity is stale");
-        }
-        if (authority_gate_->stopping) {
-            return error_response(request.id, "stale_authority", "runtime is stopping");
-        }
-        if (request.type == "revoke_authority") {
-            ++authority_gate_->generation;
-            authority_gate_->owner.clear();
-            authority_gate_->owner_session = 0;
-            authority_gate_->last_sequence = 0;
-            return authority_response(request);
-        }
-        if (!authority_gate_->owner.empty() || !connection_open || !state.connected || !state.heartbeat_fresh ||
-            request.source.empty() || request.source != request.client_id || request.source.size() > 64) {
-            return error_response(request.id, "authority_unavailable", "source or fresh aircraft state is unavailable");
-        }
-        const bool handback = request.type == "handback_authority";
-        if (handback == !authority_gate_->ever_admitted) {
-            return error_response(request.id, "invalid_handover", "use admission first and handback after revocation");
-        }
-        ++authority_gate_->generation;
-        authority_gate_->owner = request.source;
-        authority_gate_->owner_session = state.session_id;
-        authority_gate_->ever_admitted = true;
-        authority_gate_->last_sequence = 0;
-        return authority_response(request);
-    }
+#include "runtime_audit_methods.hpp"
 
     Json authority_response(const Request &request) const {
         return {{"protocol", kProtocolName}, {"version", kProtocolVersion}, {"id", request.id},
@@ -440,6 +454,7 @@ struct Runtime::Implementation {
     }
 
     const std::string incarnation_;
+    std::shared_ptr<detail::AuditJournal> journal_;
     std::shared_ptr<AuthorityGate> authority_gate_;
     std::unique_ptr<mavlink::MavlinkConnection> connection_;
     RuntimeConfig config_;

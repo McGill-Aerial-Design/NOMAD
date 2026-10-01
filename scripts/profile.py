@@ -7,7 +7,7 @@ Provides load / save / list / show / diff / edit for configuration profiles.
 Each profile is a complete .env file in config/profiles/ that can be loaded
 into config/nomad.env (the gitignored runtime config).
 
-On `load`, the local actuation gate is synced into the Mission Planner plugin
+On `load`, the client profile is synced into the Mission Planner plugin
 config (nomad_config.json) along with an ActiveProfile marker. The qualification
 inhibition flag remains in the environment and is not a Mission Planner setting.
 The MAVLink endpoint stays in the runtime environment; Mission Planner connects
@@ -64,7 +64,7 @@ _RETIRED_PROFILE_SETTINGS = {
     "NOMAD_VIO_SOURCE_REQUIRED": "this profile setting has no runtime consumer and must be removed",
     "NOMAD_VIO_MAX_AGE_S": "this profile setting has no runtime consumer and must be removed",
 }
-_UNSAVED_SECRET_KEYS = {"NOMAD_API_KEY"}
+_UNSAVED_SECRET_KEYS = {"NOMAD_API_KEY", "NOMAD_CLIENT_CREDENTIAL"}
 _HOST_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 
 
@@ -248,7 +248,7 @@ def cmd_load(name: str) -> None:
     ENV_FILE.write_text(content, encoding="utf-8")
     print(f"[OK] Loaded profile: {name}")
 
-    # Keep the Mission Planner plugin in sync (actuation gate and client profile).
+    # Sync the client profile without copying the runtime gate or client credentials.
     try:
         sync_mission_planner(name, profile_env)
     except ValueError as exc:

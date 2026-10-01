@@ -72,8 +72,12 @@ restart cannot restore an old owner or replay an old mutation. Mutating requests
 are serialized and a concurrent request can return `busy`. See the full
 [runtime IPC contract](runtime-ipc.md).
 
-The local `NOMAD_API_KEY` requirement is a nonempty actuation gate, not client
-authentication. IPC is loopback-only and trusts the local OS account. One
+The local `NOMAD_API_KEY` requirement is a nonempty actuation gate. Per-client
+shared-secret credentials authenticate local IPC identity separately; authentication
+does not grant software authority. A runtime-owned durable journal records
+intent before vehicle execution and observed outcomes. Audit failure inhibits
+mutations. See [runtime IPC](runtime-ipc.md#authenticated-local-clients).
+IPC is loopback-only; credential confidentiality relies on host access control. One
 admitted source is a software boundary for typed requests to this runtime, not a
 whole-aircraft single-writer guarantee. Native Mission Planner controls, pilot
 and RC/ELRS input, ArduPilot behavior, maintenance tools and unrelated MAVLink

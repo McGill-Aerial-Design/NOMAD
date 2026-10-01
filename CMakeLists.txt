@@ -105,16 +105,29 @@ target_include_directories(nomad PRIVATE "${NOMAD_MAVSDK_INSTALL_DIR}/include")
 add_dependencies(nomad mavsdk)
 target_link_libraries(nomad PRIVATE nomad_core)
 
+add_library(nomad_local_crypto src/runtime/auth_proof.cpp)
+target_compile_features(nomad_local_crypto PUBLIC cxx_std_20)
+if(WIN32)
+    target_link_libraries(nomad_local_crypto PRIVATE bcrypt)
+else()
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+    target_link_libraries(nomad_local_crypto PRIVATE OpenSSL::Crypto)
+endif()
+target_link_libraries(nomad PRIVATE nomad_local_crypto)
+
 add_library(nomad_runtime_core
+    src/runtime/client_auth.cpp
+    src/runtime/protected_file.cpp
+    src/runtime/audit_journal.cpp
     src/runtime/ipc_server.cpp
     src/runtime/runtime.cpp)
 target_include_directories(nomad_runtime_core PUBLIC include PRIVATE
     "${NOMAD_MAVSDK_INSTALL_DIR}/include")
 target_compile_features(nomad_runtime_core PUBLIC cxx_std_20)
 add_dependencies(nomad_runtime_core mavsdk)
-target_link_libraries(nomad_runtime_core PUBLIC nomad_core)
+target_link_libraries(nomad_runtime_core PUBLIC nomad_core PRIVATE nomad_local_crypto)
 if(WIN32)
-    target_link_libraries(nomad_runtime_core PUBLIC ws2_32)
+    target_link_libraries(nomad_runtime_core PUBLIC ws2_32 advapi32)
 endif()
 if(MSVC)
     target_compile_options(nomad_runtime_core PRIVATE /W4 /permissive- /EHsc)
@@ -124,6 +137,7 @@ endif()
 
 if(PROJECT_IS_TOP_LEVEL)
     add_executable(nomad-runtime tools/runtime/main.cpp)
+    target_include_directories(nomad-runtime PRIVATE src/runtime)
     target_link_libraries(nomad-runtime PRIVATE nomad_runtime_core nomad_mavsdk_connection)
     target_compile_definitions(nomad-runtime PRIVATE NOMAD_VERSION="${PROJECT_VERSION}")
 
@@ -139,7 +153,7 @@ if(PROJECT_IS_TOP_LEVEL)
         src/cli_arguments.cpp
         src/cli_command_table.cpp)
     target_include_directories(nomad-qualification PRIVATE src "${NOMAD_MAVSDK_INSTALL_DIR}/include")
-    target_link_libraries(nomad-qualification PRIVATE nomad_core nomad_mavsdk_connection)
+    target_link_libraries(nomad-qualification PRIVATE nomad_core nomad_mavsdk_connection nomad_local_crypto)
 endif()
 
 if(PROJECT_IS_TOP_LEVEL)
