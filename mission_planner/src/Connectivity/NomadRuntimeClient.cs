@@ -8,6 +8,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Web.Script.Serialization;
 
@@ -17,17 +18,17 @@ namespace NOMAD.MissionPlanner.Connectivity
     {
         private static long _nextSequence;
         private readonly int _runtimePort;
-        private readonly string _apiKey;
+        private readonly string _credential;
         private readonly string _clientId;
 
         internal NomadCoreRequestOutcome LastOutcome { get; private set; }
         internal string LastErrorCode { get; private set; } = "";
         internal string LastMessage { get; private set; } = "";
 
-        internal NomadRuntimeClient(int runtimePort, string apiKey, string clientId)
+        internal NomadRuntimeClient(int runtimePort, string credential, string clientId)
         {
             _runtimePort = runtimePort;
-            _apiKey = apiKey;
+            _credential = credential;
             _clientId = clientId;
         }
 
@@ -49,11 +50,11 @@ namespace NOMAD.MissionPlanner.Connectivity
                 LastMessage = "This operation is not supported by protocol v1.";
                 return -1;
             }
-            if (string.IsNullOrWhiteSpace(_apiKey))
+            if (string.IsNullOrWhiteSpace(_credential))
             {
                 LastOutcome = NomadCoreRequestOutcome.Rejected;
-                LastErrorCode = "missing_api_key";
-                LastMessage = "The NOMAD API key setting is empty.";
+                LastErrorCode = "missing_credential";
+                LastMessage = "The NOMAD client credential setting is empty.";
                 return -1;
             }
 
@@ -66,12 +67,23 @@ namespace NOMAD.MissionPlanner.Connectivity
                 stream.WriteTimeout = 3000;
                 var serializer = new JavaScriptSerializer { MaxJsonLength = 65536, RecursionLimit = 16 };
                 var hello = BaseRequest(Guid.NewGuid().ToString("N"), "hello");
+                hello["auth_nonce"] = MakeNonce();
                 WriteMessage(stream, serializer.Serialize(hello));
                 var helloResponse = ReadResponse(stream, serializer);
                 if (!HasAcceptedHello(helloResponse, hello["id"].ToString()))
                 {
                     SetProtocolFailure(helloResponse);
                     LastOutcome = NomadCoreRequestOutcome.FailedBeforeSend;
+                    return -1;
+                }
+                var serverPayload = "nomad-core:server:v1:" + _clientId + ":" + hello["auth_nonce"] + ":"
+                    + GetString(helloResponse, "runtime_incarnation");
+                if (GetString(helloResponse, "client_authentication") != "hmac-sha256-v1" ||
+                    !EqualProof(GetString(helloResponse, "server_proof"), MakeProof(_credential, serverPayload)))
+                {
+                    LastOutcome = NomadCoreRequestOutcome.FailedBeforeSend;
+                    LastErrorCode = "authentication_required";
+                    LastMessage = "Runtime does not support authenticated clients.";
                     return -1;
                 }
 
@@ -87,6 +99,9 @@ namespace NOMAD.MissionPlanner.Connectivity
                 command["client_id"] = _clientId;
                 command["protocol"] = "nomad-core";
                 command["version"] = 1;
+                var payload = serializer.Serialize(command);
+                command["auth_payload"] = payload;
+                command["auth_proof"] = MakeProof(_credential, "nomad-core:request:v1:" + payload);
                 commandWriteStarted = true;
                 WriteMessage(stream, serializer.Serialize(command));
                 var response = ReadResponse(stream, serializer);
@@ -103,6 +118,34 @@ namespace NOMAD.MissionPlanner.Connectivity
                     : ex.Message;
                 return -1;
             }
+        }
+
+        private static string MakeNonce()
+        {
+            using var random = RandomNumberGenerator.Create();
+            var bytes = new byte[32];
+            random.GetBytes(bytes);
+            return BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
+        }
+
+        private static string MakeProof(string secret, string payload)
+        {
+            using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+            return BitConverter.ToString(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload))).Replace("-", "").ToLowerInvariant();
+        }
+
+        private static bool EqualProof(string left, string right)
+        {
+            if (left.Length != 64 || right.Length != 64)
+            {
+                return false;
+            }
+            int difference = 0;
+            for (int index = 0; index < 64; index++)
+            {
+                difference |= left[index] ^ right[index];
+            }
+            return difference == 0;
         }
 
         private TcpClient ConnectToRuntime()
@@ -279,7 +322,8 @@ namespace NOMAD.MissionPlanner.Connectivity
             }
             if (TryReadError(response, out var code, out var message))
             {
-                LastOutcome = NomadCoreRequestOutcome.Rejected;
+                LastOutcome = code == "audit_failure" && GetString(response, "outcome") == "unknown"
+                    ? NomadCoreRequestOutcome.UnknownOutcome : NomadCoreRequestOutcome.Rejected;
                 LastErrorCode = code;
                 LastMessage = message;
                 return -1;
@@ -311,7 +355,8 @@ namespace NOMAD.MissionPlanner.Connectivity
             }
             LastMessage = GetString(result, "message");
             var success = GetBool(result, "success");
-            LastOutcome = success ? NomadCoreRequestOutcome.Succeeded : NomadCoreRequestOutcome.Rejected;
+            LastOutcome = success ? NomadCoreRequestOutcome.Succeeded : GetString(response, "outcome") == "unknown"
+                ? NomadCoreRequestOutcome.UnknownOutcome : NomadCoreRequestOutcome.Rejected;
             LastErrorCode = success ? "" : "vehicle_rejected";
             return success ? 0 : -1;
         }

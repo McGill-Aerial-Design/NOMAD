@@ -88,8 +88,8 @@ The endpoint is IPv4 loopback only (`127.0.0.1:<port>`); the default port is
 one UTF-8 JSON object, with a maximum JSON payload of 65,536 bytes. Clients send
 one request and wait for its response before sending the next request on that
 connection. The server applies a bounded read timeout and a bounded number of
-client workers. The local OS account is the trust boundary; loopback TCP is not
-multi-user authentication.
+client workers. Loopback limits exposure to local processes. Privileged requests additionally
+require a shared-secret credential bound to one configured identity.
 
 Every request carries:
 
@@ -167,11 +167,143 @@ fixed `DO_MOUNT_CONTROL` command after angle validation. Mission Planner keeps
 its in-flight drop behavior; runtime `busy`, missing authority and unavailable
 runtime outcomes do not trigger a direct MAVLink fallback or replay.
 
-`NOMAD_API_KEY` retains its current limited meaning. The Mission Planner client
-requires its configured local gate to be non-empty, and the runtime requires its own
-`NOMAD_API_KEY` environment value to be non-empty for mutation. The value is
-not sent in IPC and the two values are not compared. This is an actuation gate,
-not client authentication; local machine access remains trusted.
+`NOMAD_API_KEY` remains a nonempty runtime deployment/actuation enable gate.
+It does not authenticate identity. Mission Planner's old `CoreApiKey` setting
+is retired and ignored; it is never migrated into an authentication credential.
+
+## Authenticated local clients
+
+The pre-slice implementation checked only self-declared `client_id` and
+`command_source`. The CLI asserted `nomad-cli`; Mission Planner asserted a
+process-generated `mission-planner:<guid>`. Any local process could read status,
+copy the owner/context and impersonate that owner. No installed client had a
+stronger identity check. The nonempty runtime key and plugin setting were gates.
+
+Protocol v1 is retained with an explicit `hmac-sha256-v1` authenticated-client
+extension. A local port-squatting process must not be able to harvest a reusable
+bearer credential. `hello` carries a CSPRNG-generated 64-hex `auth_nonce`.
+The response advertises `client_authentication: hmac-sha256-v1` and a hex
+`server_proof`: HMAC-SHA256 keyed by the client's configured secret over UTF-8
+`nomad-core:server:v1:<client_id>:<nonce>:<runtime_incarnation>`. Updated installed
+clients verify this proof before sending privileged requests; an old or rogue
+runtime is refused. An old client may read hello/status/ping, but cannot mutate.
+
+Each privileged request adds `auth_payload`, the exact serialized unsigned
+request JSON string, and `auth_proof`, HMAC-SHA256 of UTF-8
+`nomad-core:request:v1:` followed by those exact bytes. Secrets are UTF-8
+64-hex strings used as the HMAC key (not hex-decoded). The runtime checks that
+parsing `auth_payload` equals the outer request with the two authentication
+fields removed. It then verifies the proof against configured secrets and
+derives the identity from the matching entry. No raw credential is transmitted;
+a legacy `credential` field is rejected. Request-bound proofs cannot authorize
+changed requests; existing incarnation/session/generation/expiry/sequence/cache
+fences reject replay. The 65,536-byte envelope limit still applies; authenticated
+inner payloads are limited to 32,768 bytes and the same depth bound.
+
+Malformed, missing, unknown or mismatched proofs fail closed. `client_id`,
+required `command_source`, and optional `source` must equal the identity resolved
+from the proof. Auth fields are discarded before cache/dispatch/audit. Updated
+clients require the marker and runtime proof; there is no legacy mutation
+fallback. Unknown unrelated additive fields remain ignored.
+
+The runtime loads a protected JSON object mapping stable identities to distinct
+random tokens at startup. It requires 1..32 identities, unique keys and tokens,
+IDs of 1..64 ASCII letters/digits or `-_.:`, and exactly 64 lowercase hexadecimal
+characters per token. It computes proofs across all configured secrets and compares 64-hex proofs
+with fixed-length XOR accumulation without an early byte exit; this is a practical timing
+mitigation, not a formal compiler/microarchitecture guarantee. Configuration
+is immutable during runtime; rotation requires restart and fresh admission.
+
+The installed CLI reads `NOMAD_CLIENT_CREDENTIAL` and optional `NOMAD_CLIENT_ID`
+(default `nomad-cli`). Mission Planner uses stable identity `mission-planner`
+and separately provisioned `CoreClientCredential` (empty by default), entered
+in its masked settings field. Profile synchronization removes `CoreApiKey` and
+preserves the separately provisioned credential; it no longer copies
+`NOMAD_API_KEY` into plugin credentials. Profiles must never save credentials.
+Future approved clients may receive their own configured identity/token.
+
+Any configured authenticated client may explicitly revoke software authority,
+including another owner's authority. Authentication alone grants no authority:
+admission/handback still require fresh aircraft state, matching incarnation,
+session, generation and expiry. Mutations still require the authenticated
+owner, generation, sequence, expiry and final-send MAVSDK admission.
+Read-only hello/status/ping remain unauthenticated on loopback and do not
+create ordinary telemetry journal entries. Context fields are not secrets.
+
+The threat model is an ordinary local process that can reach IPC but cannot
+read provisioned client credentials. Protect the runtime credential map and
+each client's environment/configuration with OS account separation and file
+permissions. Shared-secret credentials identify a configured client, not a process binary
+or human operator. Processes sharing credentials are the same identity.
+There is no claim against root/administrator, kernel compromise, malware that
+can read another process's credentials, or physical host compromise. There is
+no remote IPC, TLS, OAuth, user account or general permission framework.
+
+## Durable runtime command evidence
+
+The runtime requires `NOMAD_AUDIT_DIRECTORY`, creates a missing final directory
+under an existing parent, and exclusively locks it for its lifetime. Each
+incarnation exclusively creates `<incarnation>.jsonl`; previous files remain
+unchanged. Every JSON line has schema 1, a wall-clock `time_ms`, monotonic
+per-incarnation `ordinal`, event and runtime incarnation. Request records
+include authenticated client, request ID, requested incarnation/session/
+generation, sequence/expiry, operation and normalized typed numeric/boolean
+parameters, result and final-send eligibility. Outcome records also contain
+observed session/generation. No raw JSON, credentials, signing keys, phrases,
+user tokens or telemetry payloads are journaled.
+
+Ordering is authentication, request/authority/cache/replay validation, sequence
+consumption, command serialization and revalidation, durable mutation intent,
+Vehicle invocation with the existing final-send admission, then durable outcome
+before response caching/return. Intent failure prevents vehicle invocation.
+Exact cached retries produce no new intent or vehicle call. Evicted replay and
+context/authority/expiry rejection are separate rejection records. Cache and
+in-flight keys use authenticated identity plus request ID; cache fingerprints
+exclude the credential. Replay tracking and this journal have separate roles.
+
+Native writes handle partial writes and synchronize every complete line with
+POSIX `fsync` or Windows `FlushFileBuffers`. POSIX creation uses mode 0600,
+directory mode 0700, owner-only checks, no symlink/hardlink files and directory
+fsync at creation. Windows creation uses an explicit protected current-user,
+SYSTEM/administrator DACL and rejects reparse points.
+Windows creation explicitly sets the current process user as owner, including
+elevated processes whose OS default owner may otherwise be Administrators.
+Existing objects must have that same owner and only owner/SYSTEM/administrator
+allowed ACEs. This remains outside an administrator-compromise defense. These are OS/filesystem
+flush semantics, not a promise of power-loss atomicity or hardware persistence;
+Windows has no portable directory-fsync guarantee here.
+
+Outcome write failure latches audit health false, returns `audit_failure` with
+`outcome: unknown` when a send may have been eligible, and inhibits subsequent mutations
+and authority changes until restart. `status.audit_healthy` exposes the latch.
+Final-send admission serializes against journal health transitions. An unhealthy
+sink cannot reliably journal its own failure; the runtime emits a secret-free
+structured `audit_failure` to stderr and never pretends that marker is durable.
+Safety-driven session loss and shutdown still revoke authority if auditing fails.
+
+Startup refuses a missing/invalid credential configuration, unavailable audit
+file/lock, empty prior journal, malformed complete history, or an unterminated final record. It
+preserves damaged evidence for operator investigation; there is no automatic
+truncation, replay or repair. This includes a crash between file creation and the first
+start record. An operator must preserve and move damaged files out of the active
+directory before restarting. A new incarnation always requires fresh admission.
+An intent without a matching outcome is interpreted as unknown/possibly sent;
+absence of orderly shutdown is an unclean previous boundary. A restart begins
+a new file/start record and never replays old work. History validation currently
+has a 64 MiB per-file ceiling; archive validated closed files outside the active
+directory before that limit, preserving them as evidence.
+
+Events cover runtime start/shutdown, vehicle sessions and session authority loss,
+authority intent/admission/revoke/handback, authenticated request rejection,
+authentication rejection, mutation intent/outcome and interrupted authority.
+`send_eligible` is tri-state: false when no admission check passed; `unknown`
+when a check passed but no matching ACK was observed; true when NOMAD observed
+a matching ACK. The pinned MAVSDK guard invokes indistinguishable preflight and
+send callbacks, so callback admission alone cannot prove actual delivery.
+`admission_checked`, `acknowledged` and `observed_command_success` retain that
+separate evidence, including interrupted outcomes. None proves physical action. A positive
+Vehicle result is only the software observation. Failed/interrupted/unknown
+outcomes must not be reported as proof of a physical outcome.
 
 ## Software authority foundation
 
@@ -203,8 +335,9 @@ captures the request context for each SDK command operation. `nomad admit`,
 Mission Planner exposes the same deliberate controls on its Core settings tab.
 Neither client admits itself on reconnect.
 
-This is local-account trust, not authenticated user identity. A local process
-can claim another client ID. The pinned MAVSDK fork checks the captured context
+The HMAC credential authenticates a configured client identity; it does not identify
+a human operator or protect a compromised host. A process without the client's
+secret cannot use its authority by claiming its ID. The pinned MAVSDK fork checks the captured context
 before the first send and each retry of `COMMAND_LONG` and `COMMAND_INT`. Its
 posted UDP delivery also runs under the same authority gate used by revoke and
 handback. Denied passthrough work returns a distinct admission-cancelled result

@@ -27,7 +27,7 @@ namespace NOMAD.MissionPlanner
 
         // Connection Tab
         private NumericUpDown _numCoreRuntimePort;
-        private TextBox _txtCoreApiKey;
+        private TextBox _txtCoreClientCredential;
 
         // Video Tab
         private TextBox _txtVideoUrl;
@@ -389,7 +389,7 @@ namespace NOMAD.MissionPlanner
         private void BtnTest_Click(object sender, EventArgs e)
         {
             SaveSettings();
-            bool configured = !string.IsNullOrWhiteSpace(Config.CoreApiKey)
+            bool configured = !string.IsNullOrWhiteSpace(Config.CoreClientCredential)
                 && Config.CoreRuntimePort >= 1 && Config.CoreRuntimePort <= 65535;
             MessageBox.Show(
                 configured

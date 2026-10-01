@@ -13,13 +13,17 @@ does not have a checked-in systemd service. A local process supervisor must
 start it with the deployment environment and restart policy. Do not start a
 second runtime against the same vehicle endpoint.
 
-The runtime accepts these settings from its process environment:
+The runtime and installed CLI accept these process-environment settings:
 
 | Setting | Purpose |
 | --- | --- |
 | `NOMAD_MAVLINK_ENDPOINT` | MAVSDK vehicle endpoint, such as `udpin:127.0.0.1:14601` |
 | `NOMAD_RUNTIME_IPC_PORT` | Loopback TCP port for installed CLI and typed clients; default `14611` |
-| `NOMAD_API_KEY` | Nonempty local actuation gate for runtime requests |
+| `NOMAD_API_KEY` | Nonempty deployment actuation enable gate; not identity authentication |
+| `NOMAD_CLIENT_CREDENTIALS_FILE` | Protected JSON identity-to-token map, loaded once at startup |
+| `NOMAD_AUDIT_DIRECTORY` | Private runtime journal directory; parent must exist |
+| `NOMAD_CLIENT_CREDENTIAL` | CLI-only shared-secret credential; do not give clients the full runtime map |
+| `NOMAD_CLIENT_ID` | CLI identity, default `nomad-cli` |
 | `--system-id` | Optional runtime command system ID; defaults to `1` |
 
 Use the example environment file as a template, then have the supervisor load
@@ -142,7 +146,9 @@ pixi run install-core <prefix>
 ```
 
 The core package includes `nomad` and `nomad-runtime`; qualification drivers are
-not installed. Mission Planner packaging is separate and handled by the release
+not installed. Linux runtime/client binaries require the compatible system OpenSSL
+Crypto shared library used by that build (Ubuntu builds use `libcrypto.so.3`);
+Windows uses the OS BCrypt library. Mission Planner packaging is separate and handled by the release
 workflow described above.
 
 ## Failure states and authority limits
@@ -157,3 +163,41 @@ NOMAD's guarantees cover its own software request path. They do not arbitrate
 the flight controller's other MAVLink sources, RC/ELRS input, a native GCS, or
 physical pilot control. Production C2-loss, termination, pilot takeover, and
 hardware flight behavior remain unqualified; see [Qualification status](qualification.md).
+
+## Local client credential deployment
+
+Generate independent 32-byte random credentials (for example Python
+`secrets.token_hex(32)`) for `nomad-cli` and `mission-planner`. Write only the
+identity/token object into a local protected file outside tracked configuration;
+never print tokens to shared logs or copy example/gate values as credentials.
+On POSIX use an owner-only directory and mode 0600 file. On Windows restrict the
+file/directory DACL to the runtime account, SYSTEM and administrators, removing
+broad inherited access, and explicitly set the owner to the runtime account
+(for example `icacls <credential-file> /setowner <runtime-account>` when provisioning
+from an elevated shell). Provision only each client's token into its protected
+environment (CLI) or `CoreClientCredential` plugin setting. Protect that plugin
+JSON configuration and its `.bak`/`.tmp` siblings as credential stores with the
+client account's ACL. Portable plugin exports omit the credential. These controls
+do not protect against malware that can read the account's credentials.
+
+Set the runtime's credential-file and audit-directory environment variables,
+and independently set the nonempty `NOMAD_API_KEY` deployment gate. The runtime
+does not automatically load `config/nomad.env`. Rotating the file while running
+has no effect: stop the runtime, replace protected credentials, provision clients,
+and restart; authority must be admitted again. Profile loading never substitutes
+the API gate for the plugin credential. Existing `CoreApiKey` is discarded,
+so upgrading the plugin requires explicit provisioning.
+
+For audit startup failure, preserve the files and inspect permissions, space,
+JSONL integrity and any competing directory owner. The journal is an operational
+record, not a cryptographic tamper-evident ledger against its host administrator.
+Do not delete evidence to
+hide an error. Damaged history requires operator investigation and preservation
+outside the active directory before starting a fresh journal. Intent without
+outcome remains unknown; a restart must never replay it. Runtime audit failure
+latches mutations off; status remains available. See the precise
+[durability policy](runtime-ipc.md#durable-runtime-command-evidence).
+
+Keep these states separate: actuation enabled; client authenticated; client
+admitted as software authority; command eligible for final send; vehicle command
+accepted by an observed response; physical outcome. None implies the next.

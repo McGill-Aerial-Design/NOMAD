@@ -131,16 +131,29 @@ restoring an owner; runtime restart rejected old context and required new
 admission. The initial simulator output was restored and observed after runtime
 shutdown. These results complete the tested Copter/software slice only.
 
-The full manual run above finished with the complete pinned QuadPlane chain
-passing, including the disarmed RC-fault probe and QLAND landing. Its Copter job
-passed authority, telemetry, connectivity, command flow, mission, velocity
-watchdog, payload, link-loss, zero-delivery and link-recovery checks, then failed
-the existing GCS-heartbeat relay cadence assertion: an observed announcement
-interval was `0.000s`, below the unchanged 0.9 s bound. The later velocity-loop,
-geofence-containment and geofence-upload checks were skipped. Three isolated
-local closed-gate checks passed without reproducing this failure; its cause is
-unresolved. Retain the failed hosted record: this PR does not claim a complete
-Copter workflow pass or relax the heartbeat gate.
+The earlier hosted run above failed the heartbeat cadence assertion and skipped
+later velocity/geofence steps; retain that failed record as historical evidence.
+PR53's final-head [manual SITL run 36744321862](https://github.com/YoussGm3o8/NOMAD/actions/runs/36744321862)
+at `1c8baf76de29b1db5134db11dbac979d1fc2c73d` passed the heartbeat relay-gate
+scenario and all downstream velocity loop-closure, geofence containment and
+geofence upload/readback steps. Both full Copter and QuadPlane jobs passed.
+GitHub job/step conclusions were verified before updating this ledger. This
+closes the stale hosted-heartbeat TODO without claiming physical qualification.
+
+## Authenticated client and durable audit slice
+
+The software-only client trust boundary adds distinct configured shared-secret
+credentials, HMAC request/runtime proofs and a runtime-owned JSONL command journal. Its
+[protocol, threat model and failure policy](runtime-ipc.md#authenticated-local-clients)
+retain the PR53 generation/session/expiry/sequence and MAVSDK final-send fences.
+No physical hardware is needed, and no PR54 physical-arbitration work is included.
+Software command results and journal records are not physical outcome evidence.
+Local full CTest suites passed all 21 tests on Windows/MSVC and native Linux/GCC
+(WSL Ubuntu). The real runtime/installed CLI deterministic-peer smoke passed on
+both platforms. Authentication, admission, replay, expiry, interrupted authority,
+durable intent ordering, native protected-file failure/locking and corrupt-history
+recovery are software-only checks. Validation results for this slice are reported
+against its PR head; the prior SITL run above is baseline evidence only.
 
 ## Not yet equivalent to qualification
 

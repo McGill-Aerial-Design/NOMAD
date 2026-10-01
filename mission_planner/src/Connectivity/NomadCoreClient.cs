@@ -20,7 +20,7 @@ namespace NOMAD.MissionPlanner.Connectivity
     /// </summary>
     public sealed class NomadCoreClient
     {
-        private static readonly string ProcessSource = "mission-planner:" + Guid.NewGuid().ToString("N");
+        private const string ProcessSource = "mission-planner";
 
         public const int DefaultRuntimePort = 14611;
 

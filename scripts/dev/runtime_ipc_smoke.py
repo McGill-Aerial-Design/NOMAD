@@ -4,8 +4,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import signal
 import socket
 import subprocess
@@ -18,6 +21,15 @@ from typing import Any
 from mavsdk_peer import COMMAND_DO_MOUNT_CONTROL, COMMAND_DO_SET_SERVO, VehiclePeer
 
 ROOT = Path(__file__).resolve().parents[2]
+FIXTURE_CREDENTIALS = {
+    client: secrets.token_hex(32)
+    for client in (
+        "runtime-smoke",
+        "nomad-cli",
+        "runtime-gimbal-smoke",
+        "operator",
+    )
+}
 
 
 def find_runtime() -> Path:
@@ -63,6 +75,14 @@ def wait_for_listener(port: int, deadline_seconds: float = 10.0) -> None:
 
 def send_request(port: int, message: dict[str, Any]) -> dict[str, Any]:
     """Send one bounded JSON Lines request and read its response."""
+    message = dict(message)
+    secret = message.pop("credential", "")
+    if secret:
+        unsigned = json.dumps(message, separators=(",", ":"))
+        message["auth_payload"] = unsigned
+        message["auth_proof"] = hmac.new(
+            secret.encode(), ("nomad-core:request:v1:" + unsigned).encode(), hashlib.sha256
+        ).hexdigest()
     payload = json.dumps(message, separators=(",", ":")).encode("utf-8") + b"\n"
     if len(payload) > 65537:
         raise ValueError("smoke request exceeds protocol limit")
@@ -95,17 +115,48 @@ def request(
             "client_id": client_id,
             "id": request_id,
             "type": request_type,
+            "credential": FIXTURE_CREDENTIALS.get(client_id, ""),
+            "command_source": client_id,
             **fields,
         },
     )
+
+
+def write_fixture_credentials(directory: str) -> Path:
+    """Create a private credential file accepted by the production loader."""
+    credential_file = Path(directory) / "credentials.json"
+    descriptor = os.open(credential_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(FIXTURE_CREDENTIALS, stream)
+    if os.name == "nt":
+        subprocess.run(["icacls", str(credential_file), "/setowner", os.getlogin()], capture_output=True, check=True)
+        subprocess.run(
+            [
+                "icacls",
+                str(credential_file),
+                "/inheritance:r",
+                "/grant:r",
+                f"{os.getlogin()}:(F)",
+                "*S-1-5-18:(F)",
+                "*S-1-5-32-544:(F)",
+            ],
+            capture_output=True,
+            check=True,
+        )
+    return credential_file
 
 
 def start_runtime(binary: Path, udp_port: int, ipc_port: int) -> tuple[subprocess.Popen[bytes], Any, Any]:
     """Start a runtime attached to the local fake vehicle."""
     environment = os.environ.copy()
     environment["NOMAD_API_KEY"] = "runtime-smoke-key"
+    storage = tempfile.TemporaryDirectory(prefix="nomad-runtime-test-")
+    credential_file = write_fixture_credentials(storage.name)
+    environment["NOMAD_CLIENT_CREDENTIALS_FILE"] = str(credential_file)
+    environment["NOMAD_AUDIT_DIRECTORY"] = str(Path(storage.name) / "audit")
     environment["NOMAD_MAVLINK_ENDPOINT"] = f"udpin:127.0.0.1:{udp_port}"
     environment["NOMAD_RUNTIME_IPC_PORT"] = str(ipc_port)
+    environment["NOMAD_CLIENT_CREDENTIAL"] = FIXTURE_CREDENTIALS["nomad-cli"]
     stdout = tempfile.TemporaryFile()
     stderr = tempfile.TemporaryFile()
     options: dict[str, object] = {}
@@ -118,6 +169,7 @@ def start_runtime(binary: Path, udp_port: int, ipc_port: int) -> tuple[subproces
         stderr=stderr,
         **options,
     )
+    process._nomad_test_storage = storage
     return process, stdout, stderr
 
 
@@ -225,6 +277,7 @@ def verify_cli_servo(binary: Path, peer: VehiclePeer, ipc_port: int) -> dict[str
     """Prove the CLI sends one typed command and closes its client connection."""
     environment = os.environ.copy()
     environment["NOMAD_RUNTIME_IPC_PORT"] = str(ipc_port)
+    environment["NOMAD_CLIENT_CREDENTIAL"] = FIXTURE_CREDENTIALS["nomad-cli"]
     admitted = run_cli(binary, environment, "admit")
     require(admitted.returncode == 0, "CLI explicitly admits its software source")
     result = run_cli(binary, environment, "servo", "8", "1500")
@@ -316,6 +369,7 @@ def verify_runtime(binary: Path, peer: VehiclePeer, udp_port: int, ipc_port: int
     except Exception:
         if process.poll() is None:
             stop_runtime(process)
+        print(read_logs(stdout, stderr), file=sys.stderr)
         raise
     stop_runtime(process)
     require(process.returncode == 0, f"runtime shuts down cleanly; {read_logs(stdout, stderr)}")

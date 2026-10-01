@@ -8,8 +8,10 @@ vehicle. Direct vehicle commands remain in the non-installed qualification tool.
 
 from __future__ import annotations
 
+import json
 import socket
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -117,6 +119,43 @@ def free_tcp_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
         return int(probe.getsockname()[1])
+
+
+@pytest.mark.parametrize("advertise_auth", [False, True])
+def test_rogue_or_legacy_runtime_cannot_receive_cli_mutation(monkeypatch, advertise_auth: bool) -> None:
+    secret = "a" * 64
+    monkeypatch.setenv("NOMAD_CLIENT_CREDENTIAL", secret)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(5)
+        monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", str(listener.getsockname()[1]))
+
+        def serve() -> bytes:
+            with listener.accept()[0] as connection:
+                connection.settimeout(5)
+                hello = json.loads(connection.makefile("rb").readline())
+                response = {
+                    "protocol": "nomad-core",
+                    "version": 1,
+                    "id": hello["id"],
+                    "ok": True,
+                    "type": "hello_response",
+                    "runtime_incarnation": "rogue",
+                    "authority": {"vehicle_session": 1, "generation": 0, "next_sequence": 1},
+                }
+                if advertise_auth:
+                    response.update(client_authentication="hmac-sha256-v1", server_proof="0" * 64)
+                connection.sendall(json.dumps(response).encode() + b"\n")
+                return connection.recv(65536)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(serve)
+            result = invoke("servo", "8", "1500")
+            assert pending.result() == b"", "CLI sent a mutation to an unauthenticated runtime"
+    assert result.returncode != 0
+    assert "authentication_required" in result.stderr
+    assert secret not in result.stdout + result.stderr
 
 
 def test_no_arguments_prints_usage_and_fails() -> None:

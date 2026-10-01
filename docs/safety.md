@@ -42,7 +42,7 @@ Missing hardware, CONOPS detail or evidence keeps the relevant gate open.
 | H-05 | Fence breach | Target polygon validation, upload/readback and enable check; not continuous trajectory/traffic/altitude containment |
 | H-06 | Unintended payload action | Dedicated consuming release interlock and off attempt; raw outputs bypass it; hardware timeout/feedback open |
 | H-07 | Failsafe suppression | Narrow command surface and structural scans; generic user commands/parameter writers require semantic review |
-| H-08 | Unauthorized commands | Runtime nonempty-key gate and typed-request admission; no authenticated remote boundary or inherited library audit |
+| H-08 | Unauthorized commands | Loopback per-client HMAC authentication, authority/final-send fencing and durable runtime intent/outcome journal; compromised hosts, remote clients and direct library callers remain outside this boundary |
 
 Historical Copter SITL results support development but do not close current
 release gates without artifact provenance. The zero-delivery loopback test keeps
@@ -172,8 +172,8 @@ These retain their original obligations; partial coverage is not satisfaction.
 | SR-PAY-02 | Bound payload duration and de-energize outputs on failure | Dedicated release/off-failure tests; generic relay and physical power-loss behavior open |
 | SR-PAY-03 | Release requires explicit operator interlock | Dedicated core release and UI tests; all raw output access must share authorization |
 | SR-SEC-01 | No NOMAD command disables FC failsafes | Structural scan only; semantic allowlist and plugin parameter audit open |
-| SR-SEC-02 | Authenticate command clients at trust boundary | Nonempty environment value is not authentication; production gate open |
-| SR-SEC-03 | Authenticate and audit command requests | Runtime typed outcomes and authority context are returned to clients and covered by integration tests; local API-key gating is not user authentication, and a durable audit trail remains open |
+| SR-SEC-02 | Authenticate command clients at trust boundary | Per-client HMAC proofs authenticate configured local client identities; the nonempty deployment gate remains separate, and no human-user or remote identity is established |
+| SR-SEC-03 | Authenticate and audit command requests | Runtime JSONL intent is synchronized before execution and observed outcomes afterward; authentication/audit faults fail closed, and recorded software evidence does not prove physical action; see [protocol policy](runtime-ipc.md#durable-runtime-command-evidence) |
 | SR-TYP-02 | QuadPlane forward transition and VTOL takeoff stay bound to the admitted aircraft identity and session; transition completion remains armed/AUTO and takeoff requires a fresh post-ACK climb sample | Deterministic counterexamples and controls in `tests/vehicle/quadplane/quadplane_transition_test.cpp` and `tests/quadplane_vtol_takeoff_test.cpp`; the pinned profile chain through QLAND has SITL evidence at the SHA recorded in [qualification status](qualification.md#sitl-and-ros-readiness), with hardware and other scenarios unqualified |
 | SR-LND-01 | Pinned QuadPlane landing success requires fresh post-ACK descent, landed-state telemetry, disarm and a stable final envelope; ACK alone is never touchdown | C++ falsification and deterministic MAVSDK landed-state mapping pass; pinned SITL evidence and exact revision are summarized in [qualification status](qualification.md#sitl-and-ros-readiness) |
 

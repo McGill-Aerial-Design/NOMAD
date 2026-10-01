@@ -211,7 +211,7 @@ namespace NOMAD.MissionPlanner
         private void UpdateCoreCard()
         {
             bool configured = _config.CoreRuntimePort >= 1 && _config.CoreRuntimePort <= 65535
-                && !string.IsNullOrWhiteSpace(_config.CoreApiKey);
+                && !string.IsNullOrWhiteSpace(_config.CoreClientCredential);
             _lblCore.Text = configured ? "IPC configured" : "Not configured";
             _lblCore.ForeColor = configured ? NOMADTheme.SUCCESS : NOMADTheme.WARNING;
         }

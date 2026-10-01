@@ -14,7 +14,7 @@ namespace NOMAD.MissionPlanner
         private void LoadSettings()
         {
             _numCoreRuntimePort.Value = ClampValue(_numCoreRuntimePort, Config.CoreRuntimePort);
-            _txtCoreApiKey.Text = Config.CoreApiKey ?? "";
+            _txtCoreClientCredential.Text = Config.CoreClientCredential ?? "";
 
             _txtVideoUrl.Text = Config.VideoUrl;
             _numVideoCaching.Value = ClampValue(_numVideoCaching, Config.VideoNetworkCaching);
@@ -118,7 +118,7 @@ namespace NOMAD.MissionPlanner
         private void SaveSettings()
         {
             Config.CoreRuntimePort = (int)_numCoreRuntimePort.Value;
-            Config.CoreApiKey = _txtCoreApiKey.Text.Trim();
+            Config.CoreClientCredential = _txtCoreClientCredential.Text.Trim();
 
             Config.VideoUrl = _txtVideoUrl.Text.Trim();
             Config.VideoNetworkCaching = (int)_numVideoCaching.Value;

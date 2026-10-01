@@ -26,6 +26,8 @@ internal static partial class NomadCoreClientTests
         GimbalConfigure_FailsClosedOnInvalidInput();
         GimbalTarget_FailsClosedOnInvalidInput();
         Runtime_SendsTypedRequestOnce();
+        Runtime_RejectsRogueRuntimeWithoutCredentialDisclosure();
+        Runtime_AuditFailureAfterSendIsUnknown();
         Runtime_GimbalTarget_UsesTypedRequestAndRequiresAuthority();
         Runtime_GimbalTargetDoesNotReplayUnknownOutcome();
         Runtime_ReportsUnknownOutcomeWithoutReplay();

@@ -38,8 +38,11 @@ protocol v1. If the runtime is unavailable, commands fail closed; Mission Planne
 does not launch the CLI or fall back to native MAVLink or direct vehicle writes.
 Requests with an unknown outcome are not replayed. GuidedGoto is unavailable
 until runtime protocol v1 adds a typed navigation request, and the boundary
-monitor tells the operator to take manual control. The local API-key setting is
-a nonempty actuation gate, not IPC authentication. Gimbal angle targeting uses
+monitor tells the operator to take manual control. `CoreApiKey` is retired; the
+new `CoreClientCredential` is a per-client shared secret for HMAC-authenticated IPC.
+Portable profile exports omit this secret. The runtime deployment
+`NOMAD_API_KEY` gate remains separate; provision the plugin
+`CoreClientCredential` setting as described in [operations](../docs/operations.md#local-client-credential-deployment). Gimbal angle targeting uses
 typed runtime requests; maintenance parameter paths and native
 Mission Planner/RC controls remain outside this client boundary. Global authority
 handover is open.

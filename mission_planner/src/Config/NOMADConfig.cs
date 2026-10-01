@@ -33,10 +33,10 @@ namespace NOMAD.MissionPlanner
         public int CoreRuntimePort { get; set; } = Connectivity.NomadCoreClient.DefaultRuntimePort;
 
         /// <summary>
-        /// Local nonempty actuation gate. The value is not sent over IPC or
-        /// compared with NOMAD_API_KEY in the runtime environment.
+        /// Shared secret used for HMAC proofs over loopback IPC, bound to the configured
+        /// mission-planner identity. Deploy it independently of NOMAD_API_KEY.
         /// </summary>
-        public string CoreApiKey { get; set; } = "nomad-dev-sitl-key";
+        public string CoreClientCredential { get; set; } = "";
 
         // ============================================================
         // Video Streaming Configuration

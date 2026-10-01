@@ -21,15 +21,15 @@ namespace NOMAD.MissionPlanner
             _numCoreRuntimePort = AddNumericUpDown(tab, 170, y, 90, 1, 65535, 14611);
             y += 30;
 
-            AddLabel(tab, "Local actuation gate:", 20, y);
-            _txtCoreApiKey = AddTextBox(tab, 170, y, 360);
-            _txtCoreApiKey.UseSystemPasswordChar = true;
+            AddLabel(tab, "Client credential:", 20, y);
+            _txtCoreClientCredential = AddTextBox(tab, 170, y, 360);
+            _txtCoreClientCredential.UseSystemPasswordChar = true;
             y += 35;
 
             var hint = new Label
             {
-                Text = "Core command actions use versioned loopback IPC only. The configured key is a " +
-                       "local nonempty gate, not IPC authentication. A separately supervised " +
+                Text = "Core command actions use authenticated loopback IPC. The credential identifies " +
+                       "mission-planner; runtime authority admission is still required. A separately supervised " +
                        "nomad-runtime process must be running; these commands fail closed when it is " +
                        "unavailable. GuidedGoto is unavailable until the runtime adds a typed request.",
                 Font = new Font("Segoe UI", 8, FontStyle.Italic),

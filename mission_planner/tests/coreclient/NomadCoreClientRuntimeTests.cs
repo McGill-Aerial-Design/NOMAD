@@ -8,6 +8,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Web.Script.Serialization;
 using NOMAD.MissionPlanner.Connectivity;
@@ -31,7 +32,12 @@ internal static partial class NomadCoreClientTests
         Expect(Convert.ToInt32(runtime.LastCommand["authority_generation"], CultureInfo.InvariantCulture) == 1,
             "mutation binds the authority generation");
         Expect(runtime.LastCommand.ContainsKey("expires_at_ms"), "mutation has a bounded validity deadline");
-        Expect(!runtime.LastCommand.ContainsKey("api_key"), "loopback protocol does not claim API-key authentication");
+        Expect(!runtime.LastCommand.ContainsKey("credential"), "client never sends the reusable credential");
+        Expect(Convert.ToString(runtime.LastCommand["auth_proof"], CultureInfo.InvariantCulture) ==
+            MockProof("test-key", "nomad-core:request:v1:" + runtime.LastCommand["auth_payload"]),
+            "client proof binds exact request bytes");
+        Expect(Convert.ToString(runtime.LastCommand["client_id"], CultureInfo.InvariantCulture) == "mission-planner",
+            "credential uses a stable configured identity");
         Expect(client.LastOutcome == NomadCoreRequestOutcome.Succeeded, "structured success is reported");
     }
 
@@ -160,6 +166,26 @@ internal static partial class NomadCoreClientTests
             "malformed authority response is not reported as admitted");
     }
 
+    private static void Runtime_RejectsRogueRuntimeWithoutCredentialDisclosure()
+    {
+        using var runtime = new MockRuntime(1, rogueRuntime: true);
+        var client = new NomadCoreClient("test-key", runtime.Port);
+        Expect(!client.AdmitAuthority(), "rogue runtime fails authentication");
+        runtime.Wait();
+        Expect(client.LastOutcome == NomadCoreRequestOutcome.FailedBeforeSend, "rogue proof fails before send");
+        Expect(runtime.CommandCount == 0, "no command or reusable credential is disclosed to rogue runtime");
+    }
+
+    private static void Runtime_AuditFailureAfterSendIsUnknown()
+    {
+        using var runtime = new MockRuntime(1, auditFailure: true);
+        var client = new NomadCoreClient("test-key", runtime.Port);
+        Expect(!client.Servo(8, 1500), "audit failure is not success");
+        runtime.Wait();
+        Expect(client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome, "possible send audit failure is unknown");
+        Expect(runtime.CommandCount == 1, "audit failure is never retried");
+    }
+
     private static int ReservePort()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -167,6 +193,12 @@ internal static partial class NomadCoreClientTests
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
         return port;
+    }
+
+    private static string MockProof(string secret, string payload)
+    {
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+        return BitConverter.ToString(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload))).Replace("-", "").ToLowerInvariant();
     }
 
     private sealed class MockRuntime : IDisposable
@@ -179,6 +211,8 @@ internal static partial class NomadCoreClientTests
         private readonly int _commandResponseVersion;
         private readonly bool _enforceAuthority;
         private readonly bool _wrongAuthorityResponseType;
+        private readonly bool _rogueRuntime;
+        private readonly bool _auditFailure;
         private string _owner = "";
         private int _generation;
         private bool _everAdmitted;
@@ -194,7 +228,7 @@ internal static partial class NomadCoreClientTests
 
         public MockRuntime(int expectedConnections, bool dropCommandResponse = false, int helloVersion = 1,
                            int commandResponseVersion = 1, int port = 0, bool enforceAuthority = false,
-                           bool wrongAuthorityResponseType = false)
+                           bool wrongAuthorityResponseType = false, bool rogueRuntime = false, bool auditFailure = false)
         {
             _expectedConnections = expectedConnections;
             _dropCommandResponse = dropCommandResponse;
@@ -202,6 +236,8 @@ internal static partial class NomadCoreClientTests
             _commandResponseVersion = commandResponseVersion;
             _enforceAuthority = enforceAuthority;
             _wrongAuthorityResponseType = wrongAuthorityResponseType;
+            _rogueRuntime = rogueRuntime;
+            _auditFailure = auditFailure;
             _listener = new TcpListener(IPAddress.Loopback, port);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -228,12 +264,15 @@ internal static partial class NomadCoreClientTests
                         ["protocol"] = "nomad-core", ["version"] = _helloVersion,
                         ["id"] = hello["id"], ["ok"] = true, ["type"] = "hello_response",
                         ["runtime_incarnation"] = "mock-runtime-incarnation",
+                        ["client_authentication"] = "hmac-sha256-v1",
+                        ["server_proof"] = _rogueRuntime ? new string('0', 64) : MockProof("test-key", "nomad-core:server:v1:mission-planner:" +
+                            hello["auth_nonce"] + ":mock-runtime-incarnation"),
                         ["authority"] = new Dictionary<string, object>
                         {
                             ["vehicle_session"] = 1, ["generation"] = _enforceAuthority ? _generation : 1
                         }
                     }));
-                    if (_helloVersion != 1)
+                    if (_helloVersion != 1 || _rogueRuntime)
                     {
                         continue;
                     }
@@ -265,6 +304,16 @@ internal static partial class NomadCoreClientTests
                 ["protocol"] = "nomad-core", ["version"] = _commandResponseVersion,
                 ["id"] = command["id"], ["ok"] = true
             };
+            if (_auditFailure)
+            {
+                response["ok"] = false;
+                response["outcome"] = "unknown";
+                response["error"] = new Dictionary<string, object>
+                {
+                    ["code"] = "audit_failure", ["message"] = "Audit append failed after possible send"
+                };
+                return response;
+            }
             if (_enforceAuthority && !ApplyAuthority(command, response))
             {
                 return response;
