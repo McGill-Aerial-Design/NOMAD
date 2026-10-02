@@ -32,9 +32,13 @@ METADATA_KEYS = {
 
 
 def validate_report(report: dict) -> None:
-    if report.get("schema_version") != 1:
+    if not isinstance(report, dict) or type(report.get("schema_version")) is not int or report["schema_version"] != 1:
         raise ValueError("unsupported resource schema_version")
     environment = report.get("environment", {})
+    if not isinstance(environment, dict):
+        raise ValueError("resource environment must be an object")
+    if environment.get("source_clean", True) is not True:
+        raise ValueError("dirty resource source provenance cannot pass")
     missing = METADATA_KEYS - environment.keys()
     if missing:
         raise ValueError(f"missing resource environment metadata: {sorted(missing)}")
@@ -54,9 +58,15 @@ def validate_report(report: dict) -> None:
         raise ValueError("compiler id/version must be nonempty strings")
     if datetime.fromisoformat(environment["timestamp"]).tzinfo is None:
         raise ValueError("resource timestamp requires an explicit timezone")
-    if not report.get("metrics"):
+    validate_metrics(report.get("metrics"))
+
+
+def validate_metrics(metrics: dict) -> None:
+    if not isinstance(metrics, dict) or not metrics:
         raise ValueError("no measured metrics")
-    for name, item in report["metrics"].items():
+    for name, item in metrics.items():
+        if not isinstance(item, dict):
+            raise ValueError(f"measurement must be an object: {name}")
         value = item.get("value")
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             raise ValueError(f"invalid nonnegative finite measurement: {name}")
@@ -92,7 +102,9 @@ def validate_sections(report: dict) -> None:
         if not isinstance(distribution, dict) or set(distribution) != {"count", "min", "median", "p95", "max"}:
             raise ValueError(f"incomplete {name}")
         values = [distribution[key] for key in ("min", "median", "p95", "max")]
-        if distribution["count"] != 5 or any(not isinstance(value, (int, float)) for value in values):
+        if distribution["count"] != 5 or any(
+            isinstance(value, bool) or not isinstance(value, (int, float)) for value in values
+        ):
             raise ValueError(f"invalid {name}")
         if values != sorted(values) or any(not math.isfinite(value) or value < 0 for value in values):
             raise ValueError(f"invalid {name} range")
@@ -101,7 +113,8 @@ def validate_sections(report: dict) -> None:
 def validate_workload(runtime: dict, phases: dict) -> None:
     for index, sample in enumerate(runtime["samples"]):
         cycles = 300 if index == 0 else 30
-        if sample.get("operations", {}).get("cycles") != cycles:
+        operations = sample.get("operations", {}) if isinstance(sample, dict) else {}
+        if not isinstance(operations, dict) or operations.get("cycles") != cycles:
             raise ValueError("incomparable resource operation count")
         audit = sample.get("audit_counts", {})
         expected = {
@@ -118,7 +131,7 @@ def validate_workload(runtime: dict, phases: dict) -> None:
     for name, expected in (("poll_seconds", 0.02), ("stabilization_seconds", 1.0), ("sample_window_seconds", 1.0)):
         if runtime.get(name) != expected:
             raise ValueError(f"incomparable runtime {name}")
-    if not phases or any(phase.get("exit_code") != 0 for phase in phases.values()):
+    if not phases or any(not isinstance(phase, dict) or phase.get("exit_code") != 0 for phase in phases.values()):
         raise ValueError("resource qualification phases must succeed")
 
 
@@ -140,6 +153,7 @@ def select_profile(report: dict, policy: dict) -> dict:
 
 
 def apply_budgets(report: dict, policy: dict) -> list[str]:
+    validate_policy(policy)
     validate_report(report)
     profile = select_profile(report, policy)
     failures = []
@@ -178,6 +192,28 @@ def apply_budgets(report: dict, policy: dict) -> list[str]:
     annotate_phases(report)
     report["policy_version"] = policy["policy_version"]
     return failures
+
+
+def validate_policy(policy: dict) -> None:
+    if not isinstance(policy, dict) or type(policy.get("policy_version")) is not int or policy["policy_version"] != 1:
+        raise ValueError("unsupported resource policy_version")
+    profiles = policy.get("profiles")
+    if not isinstance(profiles, dict) or not profiles:
+        raise ValueError("resource policy requires reviewed profiles")
+    for profile in profiles.values():
+        if not isinstance(profile, dict) or not isinstance(profile.get("comparable"), dict):
+            raise ValueError("resource profile requires comparable metadata")
+        definitions = profile.get("budgets")
+        if not isinstance(definitions, dict) or not definitions:
+            raise ValueError("resource profile requires approved budgets")
+        for name, definition in definitions.items():
+            if not isinstance(definition, dict) or definition.get("mode") not in {"hard", "advisory"}:
+                raise ValueError(f"invalid budget mode: {name}")
+            values = [definition.get(key) for key in ("baseline", "limit")]
+            if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in values):
+                raise ValueError(f"invalid budget value: {name}")
+            if any(not math.isfinite(value) or value < 0 for value in values) or values[1] < values[0]:
+                raise ValueError(f"invalid budget range: {name}")
 
 
 def annotate_phases(report: dict) -> None:

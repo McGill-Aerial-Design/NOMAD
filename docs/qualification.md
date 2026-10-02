@@ -277,7 +277,7 @@ passed locally and in both hosted measurement jobs.
 The [versioned policy](../config/core-resource-budgets.json) records every
 baseline, headroom, rationale and exact comparable metadata. Release footprint
 headroom is 25% with small absolute floors; peak memory gets 50% plus 8 MiB;
-startup gets at least five extra seconds or five times baseline. These allow
+startup limits are `max(baseline + 5 seconds, 6 * baseline)`. These allow
 engineering growth and normal native variance while detecting meaningful
 payload or gross runtime regressions. State medians, bounded growth, dependency
 footprints and compile/test phases remain advisory. No functionality or safety

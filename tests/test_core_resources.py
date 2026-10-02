@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts/dev"))
 
 from resource_footprint import collect_footprint, release_binary
+from resource_metadata import source_identity
 from runtime_resource_measurement import distribution
 from verify_core_resource_budgets import apply_budgets, validate_report
 
@@ -190,6 +192,127 @@ def test_release_lookup_never_falls_back_to_debug(tmp_path: Path) -> None:
     (debug / "nomad-runtime.exe").write_bytes(b"debug")
     with pytest.raises(FileNotFoundError):
         release_binary(tmp_path, "nomad-runtime")
+
+
+@pytest.mark.parametrize("finder", ["connectivity", "transport"])
+def test_resource_qualifications_require_release(finder: str, tmp_path: Path, monkeypatch) -> None:
+    from mavsdk_connectivity_smoke import find_binary as find_connectivity
+    from mavsdk_fixture_harness import find_binary as find_transport
+
+    name = "nomad_mavsdk_connectivity_smoke" if finder == "connectivity" else "nomad-qualification"
+    monkeypatch.setenv("NOMAD_RESOURCE_BUILD_DIR", str(tmp_path))
+    debug, release = tmp_path / "Debug", tmp_path / "Release"
+    debug.mkdir()
+    (debug / f"{name}.exe").write_bytes(b"stale debug")
+    lookup = find_connectivity if finder == "connectivity" else lambda: find_transport(name)
+    with pytest.raises(FileNotFoundError):
+        lookup()
+    release.mkdir()
+    expected = release / f"{name}.exe"
+    expected.write_bytes(b"release")
+    assert lookup() == expected
+
+
+def run_git(directory: Path, *arguments: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(directory), "-c", "protocol.file.allow=always", *arguments],
+        check=True,
+        capture_output=True,
+    )
+
+
+def commit_fixture(directory: Path) -> None:
+    run_git(directory, "add", ".")
+    run_git(
+        directory,
+        "-c",
+        "user.name=ResourceTest",
+        "-c",
+        "user.email=resource@example.invalid",
+        "commit",
+        "-m",
+        "[test,fixture] Create source snapshot",
+    )
+
+
+def create_source_fixture(directory: Path) -> None:
+    directory.mkdir()
+    run_git(directory, "init", "--initial-branch=main")
+    (directory / "source.txt").write_text("known source", encoding="utf-8")
+    commit_fixture(directory)
+
+
+def test_dirty_recursive_sources_cannot_be_attributed_to_commit(tmp_path: Path) -> None:
+    root, sdk, proto = [tmp_path / name for name in ("nomad", "sdk", "proto")]
+    for directory in (root, sdk, proto):
+        create_source_fixture(directory)
+    run_git(sdk, "submodule", "add", str(proto), "proto")
+    commit_fixture(sdk)
+    run_git(root, "submodule", "add", str(sdk), "third_party/MAVSDK")
+    run_git(root, "submodule", "update", "--init", "--recursive")
+    commit_fixture(root)
+    assert len(source_identity(root)["mavsdk_sha"]) == 40
+    nested = root / "third_party/MAVSDK/proto"
+    (nested / "source.txt").write_text("modified source", encoding="utf-8")
+    with pytest.raises(ValueError, match="clean NOMAD checkout and recursive submodules"):
+        source_identity(root)
+
+
+def test_observe_marker_binds_both_source_revisions(tmp_path: Path) -> None:
+    from core_resources import validate_build_source
+
+    marker = tmp_path / "resource-build-source.json"
+    original = {"nomad_sha": "a" * 40, "mavsdk_sha": "b" * 40}
+    marker.write_text(json.dumps(original), encoding="utf-8")
+    validate_build_source(marker, original)
+    with pytest.raises(ValueError, match="NOMAD/MAVSDK source marker"):
+        validate_build_source(marker, {**original, "mavsdk_sha": "c" * 40})
+
+
+def test_source_change_during_collection_cannot_write_report(tmp_path: Path, monkeypatch) -> None:
+    import core_resources
+
+    original = {"nomad_sha": "a" * 40, "mavsdk_sha": "b" * 40}
+    identities = iter([original, {**original, "mavsdk_sha": "c" * 40}])
+    (tmp_path / "resource-build-source.json").write_text(json.dumps(original), encoding="utf-8")
+    monkeypatch.setattr(core_resources, "source_identity", lambda root: next(identities))
+    monkeypatch.setattr(core_resources, "collect_footprint", lambda build: ({}, {}))
+    monkeypatch.setattr(core_resources, "release_binary", lambda build, name: tmp_path / name)
+    monkeypatch.setattr(core_resources, "collect_runtime", lambda binary: ({}, {}))
+    monkeypatch.setattr(core_resources, "create_report", lambda *args: {})
+    output = tmp_path / "metrics.json"
+    with pytest.raises(ValueError, match="source revisions changed"):
+        core_resources.measure(tmp_path, output, observe=True, qualify=False)
+    assert not output.exists()
+
+
+def test_foreign_mavsdk_source_cannot_claim_pinned_provenance(tmp_path: Path, monkeypatch) -> None:
+    import resource_metadata
+
+    cache = tmp_path / "CMakeCache.txt"
+    cache.write_text(f"NOMAD_MAVSDK_SOURCE_DIR:PATH={tmp_path.as_posix()}/different-sdk\n", encoding="utf-8")
+    monkeypatch.setattr(resource_metadata, "source_identity", lambda root: {})
+    with pytest.raises(ValueError, match="pinned repository MAVSDK checkout"):
+        resource_metadata.collect_metadata(tmp_path, "cold-build-tree")
+
+
+def test_invalid_schema_or_dirty_report_cannot_pass() -> None:
+    report, _ = evidence()
+    report["schema_version"] = True
+    with pytest.raises(ValueError, match="schema_version"):
+        validate_report(report)
+    report, _ = evidence()
+    report["environment"]["source_clean"] = False
+    with pytest.raises(ValueError, match="dirty resource source provenance"):
+        validate_report(report)
+
+
+@pytest.mark.parametrize("key,value", [("mode", "hrd"), ("limit", float("nan")), ("limit", True)])
+def test_invalid_policy_cannot_silently_disable_hard_gate(key: str, value) -> None:
+    report, policy = evidence()
+    policy["profiles"]["Linux-x86_64-GNU"]["budgets"]["runtime_binary_bytes"][key] = value
+    with pytest.raises(ValueError, match="invalid budget"):
+        apply_budgets(report, policy)
 
 
 def test_debug_artifacts_in_stage_reject_footprint(tmp_path: Path) -> None:

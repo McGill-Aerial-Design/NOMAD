@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
 
 from core_resource_phases import build_release, package_release, qualify_release, save_phases
 from resource_footprint import collect_footprint, release_binary
-from resource_metadata import ROOT, collect_metadata, git_sha, write_report
+from resource_metadata import ROOT, collect_metadata, source_identity, write_report
 from runtime_resource_measurement import collect_runtime
 
 
@@ -26,19 +27,34 @@ def summarize(report: dict) -> None:
 
 
 def measure(build: Path, output: Path, observe: bool, qualify: bool) -> dict:
-    source_sha = git_sha(ROOT)
-    marker = build / "resource-build-sha.txt"
-    if observe and (not marker.is_file() or marker.read_text(encoding="utf-8").strip() != source_sha):
-        raise ValueError("existing build has no matching resource-source marker; rerun the full resource build")
+    identity = source_identity(ROOT)
+    marker = build / "resource-build-source.json"
+    if observe:
+        validate_build_source(marker, identity)
     cache_state = "incremental" if (build / "CMakeCache.txt").exists() else "cold-build-tree"
     durations = {}
     if not observe:
         build_and_qualify(build, qualify, durations, cache_state)
-        marker.write_text(source_sha + "\n", encoding="utf-8")
+        write_report(marker, identity)
     footprint, composition = collect_footprint(build)
     runtime, detail = collect_runtime(release_binary(build, "nomad-runtime"))
     values = {**footprint, **runtime}
     values.update({f"phase_{key}_seconds": item["seconds"] for key, item in durations.items()})
+    report = create_report(build, cache_state, values, composition, detail, durations)
+    if source_identity(ROOT) != identity:
+        raise ValueError("source revisions changed during collection; discard this sample and rerun")
+    write_report(output, report)
+    return report
+
+
+def validate_build_source(marker: Path, identity: dict) -> None:
+    if not marker.is_file() or json.loads(marker.read_text(encoding="utf-8")) != identity:
+        raise ValueError("existing build has no matching NOMAD/MAVSDK source marker; rerun the full resource build")
+
+
+def create_report(
+    build: Path, cache_state: str, values: dict, composition: dict, detail: dict, durations: dict
+) -> dict:
     report = {
         "schema_version": 1,
         "environment": collect_metadata(build, cache_state),
@@ -56,9 +72,6 @@ def measure(build: Path, output: Path, observe: bool, qualify: bool) -> dict:
         "phases": durations,
     }
     report["environment"]["phase_cache_state"] = cache_state if durations else "unmeasured"
-    if report["environment"]["nomad_sha"] != source_sha:
-        raise ValueError("NOMAD HEAD changed during collection; discard this sample and rerun")
-    write_report(output, report)
     return report
 
 
@@ -79,7 +92,13 @@ def main() -> int:
     parser.add_argument("--observe", action="store_true", help="measure an existing Release build/stage")
     parser.add_argument("--qualify", action="store_true", help="run all deterministic native qualifications")
     arguments = parser.parse_args()
-    report = measure(arguments.build_dir.resolve(), arguments.output.resolve(), arguments.observe, arguments.qualify)
+    try:
+        report = measure(
+            arguments.build_dir.resolve(), arguments.output.resolve(), arguments.observe, arguments.qualify
+        )
+    except (ValueError, FileNotFoundError) as error:
+        print(f"resource collection rejected: {error}", file=sys.stderr)
+        return 2
     summarize(report)
     return 0
 

@@ -19,6 +19,29 @@ def git_sha(directory: Path) -> str:
     return subprocess.check_output(["git", "-C", str(directory), "rev-parse", "HEAD"], text=True).strip()
 
 
+def source_identity(directory: Path) -> dict[str, str]:
+    status = subprocess.check_output(
+        ["git", "-C", str(directory), "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"],
+        text=True,
+    )
+    nested = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(directory),
+            "submodule",
+            "foreach",
+            "--recursive",
+            "--quiet",
+            "git status --porcelain --untracked-files=normal --ignore-submodules=none",
+        ],
+        text=True,
+    )
+    if status.strip() or nested.strip():
+        raise ValueError("resource evidence requires a clean NOMAD checkout and recursive submodules")
+    return {"nomad_sha": git_sha(directory), "mavsdk_sha": git_sha(directory / "third_party/MAVSDK")}
+
+
 def read_cache(build: Path) -> dict[str, str]:
     entries = {}
     for line in (build / "CMakeCache.txt").read_text(encoding="utf-8").splitlines():
@@ -44,6 +67,9 @@ def compiler_metadata(build: Path) -> dict[str, str]:
 
 def collect_metadata(build: Path, cache_state: str) -> dict:
     cache = read_cache(build)
+    identity = source_identity(ROOT)
+    if Path(cache["NOMAD_MAVSDK_SOURCE_DIR"]).resolve() != (ROOT / "third_party/MAVSDK").resolve():
+        raise ValueError("resource evidence requires the pinned repository MAVSDK checkout")
     if cache.get("CMAKE_BUILD_TYPE") != "Release":
         raise ValueError("resource footprint requires a Release build")
     configuration = json.loads((build / "resource-build-config.json").read_text(encoding="utf-8"))
@@ -61,8 +87,8 @@ def collect_metadata(build: Path, cache_state: str) -> dict:
     }
     configuration["flags_sha256"] = hashlib.sha256(json.dumps(flags, sort_keys=True).encode()).hexdigest()
     return {
-        "nomad_sha": git_sha(ROOT),
-        "mavsdk_sha": git_sha(ROOT / "third_party/MAVSDK"),
+        **identity,
+        "source_clean": True,
         "os": platform.system(),
         "os_release": platform.release(),
         "architecture": platform.machine().lower().replace("amd64", "x86_64"),

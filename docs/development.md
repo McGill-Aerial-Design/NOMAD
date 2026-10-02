@@ -96,6 +96,12 @@ The policy records measured baselines, exact comparable toolchains/configuration
 engineering headroom and rationale for every limit. Current profiles are hosted
 Linux/GCC 13.3, hosted Windows/MSVC 19.51 and local Windows/MSVC 19.44. Toolchain
 upgrades require a new reviewed baseline; they cannot silently inherit a profile.
+Collection requires a clean source checkout and recursive submodules before
+and after execution, and the repository's pinned MAVSDK source directory.
+The existing-build marker binds both NOMAD and MAVSDK SHAs. Keep custom build
+directories and observation outputs under ignored `build/` or outside the
+checkout. A changed/dirty source snapshot requires a fresh full measurement;
+resource qualification never falls back to Debug binaries.
 This Release qualification supplements the existing Debug core job so timings
 and peer observations apply to the measured production build; it adds CI work
 deliberately and does not share or restore a CMake build-tree cache.
@@ -113,8 +119,8 @@ the 45-minute job timeout guards catastrophic regressions.
 Release executables and archives get 25% or 128 KiB headroom, rounded up to
 64 KiB; the core stage gets 25% or 512 KiB. Peak resident memory gets 50% plus
 8 MiB, rounded up to a MiB, to catch gross growth while allowing native allocator
-variation. Startup/restart maxima get at least five extra seconds or five times
-the measured maximum as headroom; these are catastrophic guards. State medians,
+variation. Startup/restart limits are `max(baseline + 5 seconds, 6 * baseline)`,
+rounded up to a tenth of a second; these are catastrophic guards. State medians,
 growth, dependency/workspace sizes and timings are advisory. Phase limits are
 twice the measured baseline plus 30 seconds, rounded up to a second. Exact
 per-profile limits and remaining advisory headroom are in the policy, and

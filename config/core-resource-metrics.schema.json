@@ -12,6 +12,7 @@
       "properties": {
         "nomad_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
         "mavsdk_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "source_clean": {"const": true},
         "build_type": {"const": "Release"},
         "compiler": {"type": "object", "required": ["id", "version"]},
         "cache_state": {"enum": ["cold-build-tree", "incremental", "unknown"]},
