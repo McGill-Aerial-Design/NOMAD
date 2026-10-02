@@ -17,7 +17,7 @@ import psutil
 from mavsdk_peer import VehiclePeer
 from runtime_ipc_smoke import authority_fields, free_port, request, stop_runtime
 from runtime_lifecycle_fixture import deployment, wait_for
-from runtime_lifecycle_qualification import admit, execute_servo, status, wait_for_vehicle
+from runtime_lifecycle_qualification import execute_servo, status, wait_for_vehicle
 
 STABILIZE_SECONDS = 1.0
 SAMPLES = 5
@@ -74,12 +74,20 @@ def sample_stabilized(pid: int) -> dict[str, int]:
 
 def run_cycle(ipc: int, peer: VehiclePeer, number: int) -> None:
     request(ipc, f"resource-status-{number}", "status")
-    admit(ipc)
+    admit_source(ipc, number)
     execute_servo(ipc, peer, number, f"resource-servo-{number}")
     hello = request(ipc, f"resource-revoke-hello-{number}", "hello")
     result = request(ipc, f"resource-revoke-{number}", "revoke_authority", **authority_fields(hello, "runtime-smoke"))
     if not result["ok"] or status(ipc)["authority_owner"] is not None:
         raise AssertionError("resource cycle must independently observe authority revocation")
+
+
+def admit_source(ipc: int, number: int) -> None:
+    hello = request(ipc, f"resource-admit-hello-{number}", "hello")
+    kind = "admit_authority" if number == 1 else "handback_authority"
+    result = request(ipc, f"resource-admit-{number}", kind, **authority_fields(hello, "runtime-smoke"))
+    if not result["ok"] or status(ipc)["authority_owner"] != "runtime-smoke":
+        raise AssertionError(f"resource cycle {number}: authenticated {kind} did not establish ownership")
 
 
 def observe_peak(pid: int, stopped: threading.Event, readings: list[dict]) -> None:
@@ -99,7 +107,7 @@ def measure_operations(process: subprocess.Popen, ipc: int, peer: VehiclePeer, c
     started = time.perf_counter()
     try:
         session = sample_stabilized(process.pid)
-        admit(ipc)
+        admit_source(ipc, 1)
         admitted = sample_stabilized(process.pid)
         execute_servo(ipc, peer, 1, "resource-servo-1")
         hello = request(ipc, "resource-revoke-first", "hello")

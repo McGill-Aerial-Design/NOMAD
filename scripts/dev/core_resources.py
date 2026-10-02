@@ -56,6 +56,7 @@ def measure(build: Path, output: Path, observe: bool, qualify: bool) -> dict:
         "runtime": detail,
         "phases": durations,
     }
+    report["environment"]["phase_cache_state"] = cache_state if durations else "unmeasured"
     write_report(output, report)
     return report
 

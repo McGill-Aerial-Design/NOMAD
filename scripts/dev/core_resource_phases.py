@@ -22,6 +22,9 @@ def run_phase(name: str, command: list[str], durations: dict, environment: dict 
 
 
 def build_release(build: Path, durations: dict) -> None:
+    query = build / ".cmake/api/v1/query/codemodel-v2"
+    query.parent.mkdir(parents=True, exist_ok=True)
+    query.touch()
     configure = ["cmake", "-S", str(ROOT), "-B", str(build), "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTING=ON"]
     run_phase("configure_including_dependency_superbuild", configure, durations)
     command = ["cmake", "--build", str(build), "--config", "Release", "--parallel", "2"]
@@ -62,10 +65,14 @@ def qualify_release(build: Path, durations: dict) -> None:
 
 
 def package_release(build: Path, durations: dict) -> None:
+    run_phase(
+        "mavsdk_staged_install",
+        ["cmake", "--install", str(build / "mavsdk"), "--prefix", str(build / "mavsdk-stage"), "--config", "Release"],
+        durations,
+    )
     run_phase("package", ["cpack", "--config", str(build / "CPackConfig.cmake"), "-C", "Release"], durations)
     run_phase("package_verification", [sys.executable, "scripts/dev/verify_core_package.py", str(build)], durations)
-    if (build / "stage").exists():
-        raise ValueError("stage already exists; use --observe for an existing verified stage or a fresh build tree")
+    # CMake overwrites current payload files; the verifier rejects unexpected stale files.
     run_phase(
         "staged_install",
         [
@@ -87,4 +94,9 @@ def package_release(build: Path, durations: dict) -> None:
 
 
 def save_phases(build: Path, durations: dict, cache_state: str) -> None:
-    write_report(build / "resource-phases.json", {"cache_state": cache_state, "phases": durations})
+    from resource_metadata import collect_metadata
+
+    write_report(
+        build / "resource-phases.json",
+        {"schema_version": 1, "environment": collect_metadata(build, cache_state), "phases": durations},
+    )

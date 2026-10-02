@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from mavsdk_build_metrics import directory_size
+from resource_composition import collect_composition
 from resource_metadata import ROOT
 
 
@@ -35,6 +36,7 @@ def collect_footprint(build: Path) -> tuple[dict[str, int], dict]:
         "package_tgz_bytes": next(item.stat().st_size for item in archives if item.suffix == ".gz"),
         "mavsdk_build_tree_bytes": directory_size(build / "mavsdk"),
         "dependency_stage_bytes": directory_size(build / "mavsdk/third_party/install"),
+        "mavsdk_stage_bytes": directory_size(build / "mavsdk-stage"),
         "mavsdk_source_bytes": directory_size(ROOT / "third_party/MAVSDK"),
     }
     libraries = [
@@ -49,5 +51,9 @@ def collect_footprint(build: Path) -> tuple[dict[str, int], dict]:
         )
     ]
     inventory = {item.relative_to(build).as_posix(): item.stat().st_size for item in sorted(libraries)}
-    values["selected_library_bytes"] = sum(inventory.values())
-    return values, {"static_libraries": inventory, "linkage": "static; CLI has build-order dependency only"}
+    composition = collect_composition(build, inventory)
+    values["built_static_library_bytes"] = sum(inventory.values())
+    values["linked_static_library_bytes"] = sum(
+        size for name, size in inventory.items() if Path(name).name in composition["runtime_link_archives"]
+    )
+    return values, composition
