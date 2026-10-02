@@ -34,9 +34,12 @@
         }
       }
     },
-    "composition": {"type": "object", "required": ["static_libraries", "linkage"]},
+    "composition": {"type": "object", "required": ["static_libraries", "linkage", "compiled_plugins",
+                                                     "compiled_plugin_count", "runtime_link_archives", "cli_link_archives"]},
     "runtime": {"type": "object", "required": ["samples", "ipc_distribution", "vehicle_distribution",
-                                                 "memory_method", "stabilization_seconds", "poll_seconds", "boundary"]},
+                                                 "restart_ipc_distribution", "restart_vehicle_distribution",
+                                                 "memory_method", "stabilization_seconds", "sample_window_seconds",
+                                                 "poll_seconds", "boundary"]},
     "phases": {"type": "object"}
   }
 }

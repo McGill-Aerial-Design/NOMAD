@@ -166,6 +166,131 @@ durable intent ordering, native protected-file failure/locking and corrupt-histo
 recovery are software-only checks. Validation results for this slice are reported
 against its PR head; the prior SITL run above is baseline evidence only.
 
+## Software resource budgets
+
+The software-only resource slice starts from merged PR56/main
+`ded3f5a5f6287c2b1af68eddeeba959e0d4f37a8`; PR54 is excluded. Baselines come from
+[hosted run 36952301883](https://github.com/YoussGm3o8/NOMAD/actions/runs/36952301883),
+whose checkout was PR head `ddf24ca060f4e9c405ba9bc6609705a9a9a27fd8` merged by
+GitHub with that base, measured as `a89b65b44ea766e18d3e9fcafa540ec1ab4bab94`.
+Both platform measurement steps passed; their verifier steps deliberately
+failed because no budgets had yet been approved. This is baseline evidence,
+not a passing final policy run. Subsequent resource jobs check out the exact PR
+head and retain its SHA in each report. MAVSDK remains pinned at
+`900fb0fe7fec74608f1911331218557915cc501a` with the unchanged six-plugin static
+[composition](mavsdk-dependencies.md#production-resource-composition).
+
+Both hosted trees were fresh Release builds, with Pixi caching enabled but hit
+status and dependency download-cache state unknown. Linux used GCC 13.3.0,
+CMake 3.31.6 and unstripped ELF; Windows used MSVC 19.51.36260.0, CMake 4.4.3,
+Visual Studio 2026 and PE without PDBs. These representations are distinct.
+Values below are bytes; each cell is **baseline / hard limit**.
+
+| Metric | Hosted Linux | Hosted Windows |
+|---|---:|---:|
+| `nomad-runtime` | 5,760,592 / 7,208,960 | 2,526,208 / 3,211,264 |
+| `nomad` CLI | 217,312 / 393,216 | 157,696 / 327,680 |
+| Complete core stage | 6,173,748 / 7,733,248 | 2,879,748 / 3,604,480 |
+| TGZ | 1,753,079 / 2,228,224 | 948,790 / 1,245,184 |
+| ZIP | 1,780,817 / 2,228,224 | 973,452 / 1,245,184 |
+| Peak runtime resident memory | 15,613,952 / 32,505,856 | 14,393,344 / 30,408,704 |
+
+Memory state-window maxima across five processes were idle 11,505,664 /
+11,128,832; session 12,488,704 / 12,943,360; authenticated admission 14,983,168 /
+13,090,816; and admitted-after-command 14,987,264 / 13,135,872 bytes
+(Linux / Windows). Linux RSS and Windows working set cover the runtime PID,
+not the peer, child process tree, private allocations or deployed service stack.
+Windows private-memory fields are retained separately when native APIs provide
+them. The 20 ms sampled peak can miss shorter transients.
+
+Hosted Linux gained 86,016 resident bytes between cycles 256 and 300; hosted
+Windows gained 61,440 bytes and local Windows gained zero. These small slopes
+were investigated before approval. Source review found the 256-response cache,
+32-active-client limit/reaping and completed MAVSDK command queue bounded; audit
+records append to disk rather than accumulating in memory. Two additional
+1,200-cycle WSL/GCC Release diagnostics at PR head `ddf24ca` checked native
+`/proc` RSS, anonymous/file RSS, PSS, private-dirty pages and thread count, and
+validated all 1,200 peer commands plus durable intent/outcome/handback/revoke
+records. Their different kernel, CMake and `BUILD_TESTING=OFF` configuration
+exclude them from hosted absolute-memory comparisons.
+
+The default allocator run lasted 111.73 seconds. RSS stayed at 14,938,112 bytes
+from cycles 1,000 through 1,200, with five settled threads and constant file
+RSS; private-dirty pages increased another 81,920 bytes in that interval.
+An explicitly labeled `MALLOC_ARENA_MAX=1` control lasted 106.77 seconds:
+RSS 13,869,056, anonymous RSS 3,276,800 and private-dirty 3,387,392 bytes all
+stayed flat from cycles 850 through 1,200, again with five threads. This supports
+allocator/page retention as an explanation rather than proving leak freedom.
+The allocator control is not a production setting or budget baseline. Growth
+remains advisory; sustained slopes across longer comparable runs still require
+investigation before raising ceilings.
+
+Startup/restart distributions have five samples, in seconds. Empirical p95 is
+the observed maximum. Vehicle readiness requires a deterministic peer session
+and fresh heartbeat; IPC readiness requires a valid HELLO without a peer.
+
+| Measurement | Linux min / median / max | Windows min / median / max | Hard limits Linux / Windows |
+|---|---|---|---|
+| Launch to IPC | 0.0524 / 0.0526 / 0.0541 | 0.5056 / 0.5116 / 1.0564 | 5.1 / 6.4 |
+| Launch to vehicle | 0.4243 / 0.4246 / 0.4275 | 0.5494 / 0.5505 / 0.5614 | 5.5 / 5.6 |
+| Clean restart to IPC | 0.0525 / 0.0526 / 0.0526 | 0.5061 / 0.5084 / 0.5287 | 5.1 / 5.6 |
+| Clean restart to vehicle | 0.3725 / 0.3727 / 0.3728 | 0.5381 / 0.5619 / 0.5768 | 5.4 / 5.6 |
+
+Fresh hosted phase baselines are advisory, not deterministic wall-time gates:
+
+| Phase, seconds | Linux | Windows |
+|---|---:|---:|
+| Root configure, including dependency downloads/configure/build | 45.33 | 190.53 |
+| MAVSDK target build | 131.61 | 343.10 |
+| Core configure/build remainder (build only) | 40.16 | 87.60 |
+| Full C++ suite | 63.68 | 66.86 |
+| Connectivity / transport | 11.49 / 64.91 | 11.57 / 101.31 |
+| Authenticated IPC / lifecycle | 1.17 / 17.45 | 2.00 / 14.25 |
+| Package / package verification | 2.93 / 0.16 | 1.25 / 3.70 |
+| Core stage / stage verification | 0.03 / 0.06 | 0.09 / 1.68 |
+
+The superbuild runs synchronously inside root configure, so its work cannot be
+presented as a separate exclusive configure phase without instrumenting the
+dependency. All remaining named phases are retained too. Timing limits are
+twice each baseline plus 30 seconds; a 45-minute job ceiling catches catastrophic
+regressions. Incremental timings are labeled and never compared with cold-tree
+phase thresholds. No CMake build-tree cache is restored in hosted CI.
+
+Advisory footprint references are MAVSDK workspace 219,062,155 / 434,217,493,
+SDK stage 20,367,778 / 122,412,915, dependency stage 20,477,282 / 29,070,297,
+and linked static archive inputs 12,152,456 / 124,504,890 bytes (Linux / Windows).
+Intermediate SDK archives/workspaces may contain toolchain metadata; they do
+not enter release payload gates. Both reports list seven SDK-side archive
+inputs, with no built SDK-side archive absent from the runtime link line.
+Archive-input size does not establish embedded object-code cost; a link-map or
+shared-link counterfactual remains unmeasured.
+
+Local Windows/MSVC 19.44.35228.0, Visual Studio 2022, CMake 4.2.0-rc1 has a
+separate incremental profile. At the same PR head it measured runtime 2,561,024,
+CLI 157,696, core stage 2,914,564, TGZ 964,145, ZIP 989,596 and peak resident
+14,741,504 bytes. Its hard stage ceiling is 3,670,016 and peak ceiling 31,457,280
+bytes; other release ceilings match hosted Windows. This is not pooled with
+the newer hosted compiler. Full Release CTest, IPC/auth/audit, lifecycle,
+connectivity, transport, authority-wire, final-send and package/stage checks
+passed locally and in both hosted measurement jobs.
+
+The [versioned policy](../config/core-resource-budgets.json) records every
+baseline, headroom, rationale and exact comparable metadata. Release footprint
+headroom is 25% with small absolute floors; peak memory gets 50% plus 8 MiB;
+startup gets at least five extra seconds or five times baseline. These allow
+engineering growth and normal native variance while detecting meaningful
+payload or gross runtime regressions. State medians, bounded growth, dependency
+footprints and compile/test phases remain advisory. No functionality or safety
+check was removed to meet a threshold.
+
+Per-run JSON and phase evidence are retained for 30 days as separate
+`core-resource-metrics-ubuntu-latest` and `core-resource-metrics-windows-latest`
+artifacts, with measured-versus-budget CI summaries. The checked-in baseline
+definitions remain after artifact expiration. Reproduction, error exit codes
+and review procedure are in
+[development](development.md#software-resource-qualification). These software
+budgets do not prove physical-aircraft startup latency or flight performance.
+
 ## Not yet equivalent to qualification
 
 Native GCS

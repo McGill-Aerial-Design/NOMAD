@@ -28,7 +28,7 @@ def environment_metadata() -> dict:
         "compiler": {"id": "GNU", "version": "13.3"},
         "cmake_version": "cmake version 3.28",
         "build_type": "Release",
-        "cmake": {"shared": False},
+        "cmake": {"shared": False, "plugins": ["telemetry"]},
         "binary_format": "ELF-unstripped",
         "cache_state": "cold-build-tree",
         "timestamp": "2026-10-02T00:00:00+00:00",
@@ -73,16 +73,41 @@ def evidence() -> tuple[dict, dict]:
 
 def evidence_sections() -> dict:
     return {
-        "composition": {"static_libraries": {}, "linkage": "static"},
-        "phases": {},
+        "composition": {
+            "static_libraries": {},
+            "linkage": "static",
+            "compiled_plugins": ["telemetry"],
+            "compiled_plugin_count": 1,
+            "runtime_link_archives": ["libmavsdk.a"],
+            "cli_link_archives": ["libnomad_core.a"],
+        },
+        "phases": {"core_build": {"seconds": 5, "exit_code": 0}},
         "runtime": {
-            "samples": [{}] * 5,
+            "samples": [sample_evidence(cycles) for cycles in (300, 30, 30, 30, 30)],
             "ipc_distribution": distribution([1, 2, 3, 4, 5]),
             "vehicle_distribution": distribution([1, 2, 3, 4, 5]),
+            "restart_ipc_distribution": distribution([1, 2, 3, 4, 5]),
+            "restart_vehicle_distribution": distribution([1, 2, 3, 4, 5]),
             "memory_method": "test",
             "stabilization_seconds": 1,
+            "sample_window_seconds": 1,
             "poll_seconds": 0.02,
             "boundary": "software test",
+        },
+    }
+
+
+def sample_evidence(cycles: int) -> dict:
+    return {
+        "operations": {"cycles": cycles},
+        "audit_counts": {
+            "runtime_start": 1,
+            "runtime_shutdown": 1,
+            "mutation_intent": cycles,
+            "mutation_outcome": cycles,
+            "authority_admission": 1,
+            "authority_handback": cycles - 1,
+            "authority_revoke": cycles,
         },
     }
 
@@ -177,6 +202,37 @@ def test_debug_artifacts_in_stage_reject_footprint(tmp_path: Path) -> None:
 
 def test_distribution_retains_all_five_samples() -> None:
     assert distribution([5, 1, 3, 2, 4]) == {"count": 5, "min": 1, "median": 3, "p95": 5, "max": 5}
+
+
+def test_changed_workload_or_failed_qualification_cannot_pass() -> None:
+    report, policy = evidence()
+    report["runtime"]["samples"][0]["operations"]["cycles"] = 30
+    with pytest.raises(ValueError, match="operation count"):
+        apply_budgets(report, policy)
+    report, policy = evidence()
+    report["phases"]["core_build"]["exit_code"] = 1
+    with pytest.raises(ValueError, match="phases must succeed"):
+        apply_budgets(report, policy)
+
+
+def test_retained_phase_annotations_match_verified_metric() -> None:
+    report, policy = evidence()
+    assert apply_budgets(report, policy) == []
+    phase = report["phases"]["core_build"]
+    assert phase["budget"] == 4 and phase["mode"] == "advisory"
+    assert phase["status"] == report["metrics"]["phase_core_build_seconds"]["status"] == "advisory"
+
+
+def test_reviewed_policy_records_measured_baselines_and_headroom() -> None:
+    policy = json.loads((ROOT / "config/core-resource-budgets.json").read_text(encoding="utf-8"))
+    assert len(policy["profiles"]) == 3
+    for profile in policy["profiles"].values():
+        assert len(profile["baseline_evidence"]["nomad_sha"]) == 40
+        for name, definition in profile["budgets"].items():
+            assert definition["limit"] > definition["baseline"] >= 0, name
+            assert definition["headroom"] > 0 and definition["rationale"], name
+            if name.startswith("phase_"):
+                assert definition["mode"] == "advisory" and definition["cache_state"], name
 
 
 def test_hosted_resources_retains_separate_linux_and_windows_evidence() -> None:

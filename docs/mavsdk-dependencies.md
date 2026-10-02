@@ -156,10 +156,12 @@ Selected plugin source references establish production use, but archive inputs
 do not measure individual archive-member inclusion or embedded object-code
 bytes. No dynamic-versus-static counterfactual has been measured.
 
-PicoSHA2 and libmavlike are unconditionally staged by the reviewed fork despite
-no direct NOMAD consumer; PicoSHA2 remains a required MAVSDK package. Their
-potential pruning requires a separate fork/configuration review and complete
-qualification, so this slice keeps both. Core server/FTP/mission-transfer
+libmavlike supplies the installed `mav::mav` package and `mav.lib`/`libmav.a`,
+which the SDK core links and uses through `LibmavReceiver`; the vendor project
+name differs from its library name. It is required. PicoSHA2 is header-only and
+remains a required MAVSDK package even though this audit found no direct source
+include. Removing it needs a separate fork review; no compiled-plugin saving
+is established. Core server/FTP/mission-transfer
 translation units are also compiled internally even with the gRPC server off;
 their names alone do not prove removable functionality or executable cost.
 No dependency pin, plugin selection, library composition or safety check was
@@ -177,13 +179,11 @@ drivers, PDBs, or developer archives.
 
 ## Open release blockers
 
-- Collect repeat samples for variance and profile-specific CI time; approve
-  explicit build-tree, executable, runtime memory, startup and CI-time budgets.
 - Re-run the selected dependency and licence audit whenever production parity
   enables another plugin, server, curl or test dependency.
 - Requalify the hosted Linux/Windows, selected ROS and live ArduPilot SITL matrix
   whenever the MAVSDK pin, selected dependency graph or smoke contract changes.
 
-debt: the selected-build graph is published, pinned and hosted-qualified; revisit
-when resource budgets are approved and whenever dependency or MAVSDK plugin
-selection changes.
+debt: resource budgets cover the recorded software workload and toolchains;
+revisit when dependency/plugin selection, toolchain or workload changes; then
+collect a comparable Release baseline and review the policy headroom.

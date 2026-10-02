@@ -92,6 +92,10 @@ and [`config/core-resource-budgets.json`](../config/core-resource-budgets.json).
 The hosted `resources.yml` matrix retains separate Linux/Windows artifacts for
 30 days and prints measured-versus-budget summaries. Download evidence before
 retention expires when comparing release candidates.
+The policy records measured baselines, exact comparable toolchains/configuration,
+engineering headroom and rationale for every limit. Current profiles are hosted
+Linux/GCC 13.3, hosted Windows/MSVC 19.51 and local Windows/MSVC 19.44. Toolchain
+upgrades require a new reviewed baseline; they cannot silently inherit a profile.
 This Release qualification supplements the existing Debug core job so timings
 and peer observations apply to the measured production build; it adds CI work
 deliberately and does not share or restore a CMake build-tree cache.
@@ -105,6 +109,16 @@ timing trends only within the same cache class and toolchain. A hosted fresh
 CMake tree is cold even when Pixi's environment cache is enabled; dependency
 download-cache hits are unknown. Shared-runner phase timings are advisory and
 the 45-minute job timeout guards catastrophic regressions.
+
+Release executables and archives get 25% or 128 KiB headroom, rounded up to
+64 KiB; the core stage gets 25% or 512 KiB. Peak resident memory gets 50% plus
+8 MiB, rounded up to a MiB, to catch gross growth while allowing native allocator
+variation. Startup/restart maxima get at least five extra seconds or five times
+the measured maximum as headroom; these are catastrophic guards. State medians,
+growth, dependency/workspace sizes and timings are advisory. Phase limits are
+twice the measured baseline plus 30 seconds, rounded up to a second. Exact
+per-profile limits and remaining advisory headroom are in the policy, and
+[qualification](qualification.md#software-resource-budgets) records the evidence.
 
 Footprint gates measure the unstripped Linux ELF or Windows PE executable
 without PDBs, the complete core stage, and ZIP/TGZ separately. Intermediate
@@ -134,6 +148,20 @@ post-revocation windows at 256, 278 and 300 operations expose growth after
 response-cache capacity. Total cache warm-up and post-capacity growth are
 separate advisory signals. Small RSS changes or allocator reservation do not
 establish a leak; investigate sustained growth before raising a ceiling.
+
+For a longer Linux diagnostic, reuse the same fixture after the Release build
+(the 180-second operation deadline still applies):
+
+```sh
+cd scripts/dev
+python -c "from pathlib import Path; from runtime_resource_measurement import measure_sample; s=measure_sample(Path('../../build/resources/nomad-runtime').resolve(),1200); print(s['operations']['growth_checkpoints'])"
+```
+
+Inspect `/proc/<pid>/status` and `smaps_rollup` for anonymous/file RSS,
+private-dirty pages and thread count when a resident slope persists. An optional
+`MALLOC_ARENA_MAX=1` environment control can distinguish Linux allocator effects;
+label it separately and never pool it with the default workload/budget profile.
+The diagnostic output is a fixture observation, not a verified policy report.
 
 On regression, reproduce the same profile, inspect the linked-input inventory
 and state windows, then review a baseline/policy change with explicit headroom.

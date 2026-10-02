@@ -58,8 +58,10 @@ in the [historical migration archive](docs/migration.md).
   bounded recovery, health separation and fenced shutdown. See
   [operations](docs/operations.md#lifecycle-recovery-and-health) and the
   software-only persistent-history restart qualification.
-- [ ] Approve measurable build-size, memory, startup and CI-time budgets for
+- [x] Approve measurable build-size, memory, startup and CI-time budgets for
   the pinned MAVSDK dependency and retain comparable qualification artifacts.
+  See the [software resource evidence and limits](docs/qualification.md#software-resource-budgets),
+  versioned policy and separate Linux/Windows hosted artifacts.
 - [ ] Qualify versioned installation, activation and rollback for the core,
   standalone ground router and Mission Planner plugin. Package generation and
   staged-install verification exist; they do not establish a deployed or

@@ -38,6 +38,8 @@ def validate_report(report: dict) -> None:
     missing = METADATA_KEYS - environment.keys()
     if missing:
         raise ValueError(f"missing resource environment metadata: {sorted(missing)}")
+    if not isinstance(environment["cmake"], dict) or not isinstance(environment["compiler"], dict):
+        raise ValueError("CMake configuration and compiler metadata must be objects")
     validate_sections(report)
     for key in ("nomad_sha", "mavsdk_sha"):
         if not re.fullmatch("[a-f0-9]{40}", environment[key]):
@@ -66,27 +68,26 @@ def validate_report(report: dict) -> None:
 
 
 def validate_sections(report: dict) -> None:
-    required = {
-        "composition": {"static_libraries", "linkage"},
-        "runtime": {
-            "samples",
-            "ipc_distribution",
-            "vehicle_distribution",
-            "memory_method",
-            "stabilization_seconds",
-            "poll_seconds",
-            "boundary",
-        },
-        "phases": set(),
-    }
-    for name, keys in required.items():
+    schema = json.loads((ROOT / "config/core-resource-metrics.schema.json").read_text(encoding="utf-8"))
+    for name in ("composition", "runtime", "phases"):
+        keys = set(schema["properties"][name].get("required", []))
         section = report.get(name)
         if not isinstance(section, dict) or not keys.issubset(section):
             raise ValueError(f"missing or incomplete resource section: {name}")
     runtime = report["runtime"]
+    composition = report["composition"]
+    plugins = composition["compiled_plugins"]
+    if plugins != report["environment"]["cmake"].get("plugins") or composition["compiled_plugin_count"] != len(plugins):
+        raise ValueError("compiled plugin inventory disagrees with effective CMake configuration")
     if not isinstance(runtime["samples"], list) or len(runtime["samples"]) != 5:
         raise ValueError("resource protocol requires five runtime samples")
-    for name in ("ipc_distribution", "vehicle_distribution"):
+    validate_workload(runtime, report["phases"])
+    for name in (
+        "ipc_distribution",
+        "vehicle_distribution",
+        "restart_ipc_distribution",
+        "restart_vehicle_distribution",
+    ):
         distribution = runtime[name]
         if not isinstance(distribution, dict) or set(distribution) != {"count", "min", "median", "p95", "max"}:
             raise ValueError(f"incomplete {name}")
@@ -97,12 +98,41 @@ def validate_sections(report: dict) -> None:
             raise ValueError(f"invalid {name} range")
 
 
+def validate_workload(runtime: dict, phases: dict) -> None:
+    for index, sample in enumerate(runtime["samples"]):
+        cycles = 300 if index == 0 else 30
+        if sample.get("operations", {}).get("cycles") != cycles:
+            raise ValueError("incomparable resource operation count")
+        audit = sample.get("audit_counts", {})
+        expected = {
+            "runtime_start": 1,
+            "runtime_shutdown": 1,
+            "mutation_intent": cycles,
+            "mutation_outcome": cycles,
+            "authority_admission": 1,
+            "authority_handback": cycles - 1,
+            "authority_revoke": cycles,
+        }
+        if audit != expected:
+            raise ValueError("resource operation audit counts are incomplete")
+    for name, expected in (("poll_seconds", 0.02), ("stabilization_seconds", 1.0), ("sample_window_seconds", 1.0)):
+        if runtime.get(name) != expected:
+            raise ValueError(f"incomparable runtime {name}")
+    if not phases or any(phase.get("exit_code") != 0 for phase in phases.values()):
+        raise ValueError("resource qualification phases must succeed")
+
+
 def select_profile(report: dict, policy: dict) -> dict:
     environment = report["environment"]
     name = f"{environment['os']}-{environment['architecture']}-{environment['compiler']['id']}"
-    if name not in policy["profiles"]:
+    profiles = [
+        profile
+        for profile in policy["profiles"].values()
+        if all(profile["comparable"].get(key) == environment[key] for key in ("os", "architecture", "compiler"))
+    ]
+    if len(profiles) != 1:
         raise ValueError(f"unapproved resource environment {name}; establish a reviewed baseline")
-    profile = policy["profiles"][name]
+    profile = profiles[0]
     for key, value in profile["comparable"].items():
         if environment.get(key) != value:
             raise ValueError(f"incomparable {key}: measured={environment.get(key)!r}, approved={value!r}")
@@ -145,8 +175,17 @@ def apply_budgets(report: dict, policy: dict) -> list[str]:
     for name, item in report["metrics"].items():
         if name not in profile["budgets"]:
             item.update({"budget": None, "mode": "advisory", "status": "advisory"})
+    annotate_phases(report)
     report["policy_version"] = policy["policy_version"]
     return failures
+
+
+def annotate_phases(report: dict) -> None:
+    for name, phase in report["phases"].items():
+        metric = report["metrics"].get(f"phase_{name}_seconds", {})
+        for key in ("budget", "mode", "status", "baseline", "comparison"):
+            if key in metric:
+                phase[key] = metric[key]
 
 
 def main() -> int:
