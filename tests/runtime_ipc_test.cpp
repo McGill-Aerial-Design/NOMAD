@@ -5,6 +5,7 @@
 #include "../src/runtime/client_auth.hpp"
 #include "../src/runtime/protected_file.hpp"
 #include "support/test_harness.hpp"
+#include "../tools/runtime/lifecycle.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -114,6 +115,7 @@ void wait_until(const std::function<bool()> &predicate) {
 #include "runtime_authority_cases.hpp"
 #include "runtime_security_cases.hpp"
 #include "runtime_security_recovery_cases.hpp"
+#include "runtime_lifecycle_cases.hpp"
 void test_protocol_and_status(std::uint16_t port, FakeConnection &connection) {
     Client client(port);
     const auto hello = client.request(base_request("1", "hello"));
@@ -377,6 +379,11 @@ int main() {
         test_runtime_owns_one_connection_and_releases_port();
         test_runtime_restart_and_missing_key();
         test_restart_rejects_old_request();
+        test_service_stop_closes_admission();
+        test_shutdown_fences_queued_command();
+        test_shutdown_audit_failure(false);
+        test_shutdown_audit_failure(true);
+        test_shutdown_drain_audit_failure();
         test_competing_admission();
         test_client_authentication();
         test_journal_order_and_outcomes();

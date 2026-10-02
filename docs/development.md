@@ -30,6 +30,7 @@ pixi run test-python
 pixi run build-core
 pixi run test-core
 pixi run test-runtime-ipc
+pixi run test-runtime-lifecycle
 ```
 
 `test-python` runs the retained Python tools and regression guards.
@@ -38,6 +39,16 @@ tree. `test-core` configures the C++ test targets and runs CTest.
 `test-runtime-ipc` builds the production executables and exercises the persistent
 runtime against a local fake MAVLink peer. None of these commands contacts an
 aircraft.
+
+`test-runtime-lifecycle` reuses protected files and audit history across real
+process clean/crash restarts against the fake UDP peer. It checks incarnation,
+old-context rejection, fresh authentication/admission, no replay, duplicates,
+permanent configuration errors and link absence/return. Its qualification-only
+supervisor uses shortened bounded delays and is never installed. Artifact tests
+validate actual systemd/SCM settings and PowerShell arguments; Windows CTest
+exercises SCM controls without registering a privileged service. CI runs these
+and archive/staged-install checks on Linux and Windows. Privileged registration
+remains explicit deployment acceptance; ordinary checks never register services.
 
 Use the repository quality checks before review:
 

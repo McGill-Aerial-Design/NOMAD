@@ -53,10 +53,11 @@ in the [historical migration archive](docs/migration.md).
 
 ## Runtime deployment and release
 
-- [ ] Define a supported runtime process supervisor and lifecycle. The
-  `nomad-runtime` binary has no checked-in systemd service; deployments must
-  currently supply process startup, environment loading, restart policy,
-  health monitoring and shutdown behavior.
+- [x] Define supported runtime process supervision and lifecycle: packaged
+  systemd foreground deployment, native Windows SCM, protected configuration,
+  bounded recovery, health separation and fenced shutdown. See
+  [operations](docs/operations.md#lifecycle-recovery-and-health) and the
+  software-only persistent-history restart qualification.
 - [ ] Approve measurable build-size, memory, startup and CI-time budgets for
   the pinned MAVSDK dependency and retain comparable qualification artifacts.
 - [ ] Qualify versioned installation, activation and rollback for the core,

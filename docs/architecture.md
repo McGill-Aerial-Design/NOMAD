@@ -57,6 +57,15 @@ operator CLI.
 
 ## Runtime and authority boundary
 
+OS service managers own process lifecycle: foreground systemd on Linux and native
+SCM on Windows, with console mode retained. Supervisors load protected external
+configuration and apply bounded crash recovery; they never admit clients or
+restore vehicle ownership. Runtime lifecycle projects existing IPC/audit/session/
+heartbeat state. Router ownership remains independent, with no dependency that
+restarts it alongside runtime. Mission Planner's loopback IPC requires a Windows
+runtime on the same host; onboard Linux placement supports local clients. See
+the [deployment matrix](operations.md#supported-deployment-matrix).
+
 `nomad-runtime` owns one long-lived MAVSDK connection and one `Vehicle`. It
 serves versioned JSON Lines IPC on IPv4 loopback, `127.0.0.1:14611` by default.
 The installed `nomad` CLI and the Mission Planner plugin send typed requests to
