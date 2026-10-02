@@ -295,6 +295,67 @@ and review procedure are in
 [development](development.md#software-resource-qualification). These software
 budgets do not prove physical-aircraft startup latency or flight performance.
 
+## Versioned release lifecycle
+
+The release model was audited at `1efaa335833038419b5bdb4f9566bce8ea1b14d8`
+before implementation. The audit and exact operator procedures are in
+[operations](operations.md#versioned-release-deployment). One complete manifest
+binds four independent component packages to a source revision, pinned MAVSDK,
+product version, platform, content digests and protocol expectations. Checksums
+establish integrity and correlation; publisher signing is not implemented.
+
+Local Windows and Linux software qualification exercises distinct compiled core
+A and B through stage A, activate A, stage B with A still admitted/running,
+activate B, and rollback to the exact retained A package. Each transition waits
+for the previous process to exit. B and rollback A report new runtime
+incarnations, no owner, and reject the old authority context; fresh client
+proof and explicit admission are required. The fixture retains external
+configuration, credentials and durable command audit across every transition.
+Failed candidate startup and failed health automatically restore verified A;
+a changed package is rejected before the active process or record changes.
+
+On Windows, compiled standalone router A and B exercise loopback management
+hello/status, expected versions, independent process shutdown and A → B → A.
+The production pointer/supervisor adapter also exercises failed health and
+startup-exit recovery using a test launcher instead of Task Scheduler.
+External topology remains byte-identical. Fake Mission Planner directories
+exercise DLL A → B → A, loaded-file refusal, wrong target/version rejection,
+closed-application enforcement, interrupted recovery and installer argument
+quoting through paths containing spaces. Simulated settings, credentials,
+Mission Planner files and another plugin remain unchanged. Actual Mission
+Planner GUI startup is not part of these tests.
+
+The platform filesystem/transaction tests cover corrupt and incomplete
+manifests, platform/protocol mismatch, unsafe archive paths/links, duplicate
+identities, staging faults, same-version different bytes, active deployment
+drift, stop refusal, commit-record write failure, missing/corrupt rollback
+payload, interrupted recovery and protected cleanup. Linux tests use actual
+atomic symlinks with a modeled systemd runner; Windows tests model SCM calls
+and exercise native DLL sharing locks and deployment ACL validation. They do
+not register services or scheduled tasks on the test host.
+
+Reproduce with `pixi run test-release-lifecycle`,
+`pixi run python scripts/dev/build_release_core_fixtures.py`, then
+`pixi run python scripts/dev/release_process_qualification.py --core-a
+build/release-fixtures/core-A --core-b build/release-fixtures/core-B`.
+For Windows router qualification, first run
+`pwsh -File scripts/build/build_release_router_fixtures.ps1`, then the same
+qualifier with `--router-a build/release-fixtures/router-A --router-b
+build/release-fixtures/router-B`. The core fixtures cannot be installed or
+packaged as production releases. CI runs these checks on their supported
+platforms and aggregates all required release packages before publication.
+
+Privileged real-host acceptance must still verify systemd unit ownership and
+boot/recovery, native SCM registration/account/recovery and path updates,
+Task Scheduler independent router supervision, protected groundstation plugin
+permissions, Mission Planner 1.3.83 loading, and restart after power loss.
+A supervisor crash with an unconfirmed router child requires an operator to
+verify child exit before recovery; the tool fails closed instead of claiming
+rollback. Filesystem pointer/record replacements are atomic individually;
+process activation and multi-host deployment are not atomic. This software
+qualification establishes binary rollback, not aircraft readiness or physical
+flight safety. PR54 remains separate and is not a dependency.
+
 ## Not yet equivalent to qualification
 
 Native GCS

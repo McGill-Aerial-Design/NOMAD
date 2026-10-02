@@ -54,6 +54,14 @@ jobs:
         run: pixi run python scripts/dev/runtime_lifecycle_qualification.py
       - name: Verify service provisioning without privileged installation
         run: pixi run test-runtime-service-artifacts
+      - name: Verify native release transactions and failure paths without privileges
+        run: pixi run test-release-lifecycle
+      - name: Build distinguishable release A and B runtime fixtures
+        run: pixi run python scripts/dev/build_release_core_fixtures.py
+      - name: Qualify binary activation rollback and fresh runtime authority
+        run: >-
+          pixi run python scripts/dev/release_process_qualification.py
+          --core-a build/release-fixtures/core-A --core-b build/release-fixtures/core-B
       - name: Verify production package and staged installation
         run: pixi run verify-core-package && pixi run verify-core-staged-install
 

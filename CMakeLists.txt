@@ -1,8 +1,18 @@
 cmake_minimum_required(VERSION 3.22.1)
 
-project(nomad VERSION 0.1.0 LANGUAGES CXX)
+include(cmake/ReleaseIdentity.cmake)
+project(nomad VERSION ${NOMAD_PROJECT_VERSION} LANGUAGES CXX)
 
 include(CTest)
+set(NOMAD_FIXTURE_VERSION "" CACHE STRING "Test-only distinguishable runtime build identity")
+if(NOMAD_FIXTURE_VERSION)
+    if(NOT BUILD_TESTING OR NOT NOMAD_FIXTURE_VERSION MATCHES "^0\\.0\\.0-fixture\\.[AB]$")
+        message(FATAL_ERROR "NOMAD_FIXTURE_VERSION requires BUILD_TESTING and 0.0.0-fixture.A or B")
+    endif()
+    set(NOMAD_RUNTIME_VERSION "${NOMAD_FIXTURE_VERSION}")
+else()
+    set(NOMAD_RUNTIME_VERSION "${NOMAD_COMPONENT_VERSION}")
+endif()
 find_package(Threads REQUIRED)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -145,7 +155,7 @@ if(PROJECT_IS_TOP_LEVEL)
     target_include_directories(nomad-runtime PRIVATE src/runtime)
     target_include_directories(nomad-runtime PRIVATE "${NOMAD_MAVSDK_INSTALL_DIR}/include")
     target_link_libraries(nomad-runtime PRIVATE nomad_runtime_core nomad_mavsdk_connection)
-    target_compile_definitions(nomad-runtime PRIVATE NOMAD_VERSION="${PROJECT_VERSION}")
+    target_compile_definitions(nomad-runtime PRIVATE NOMAD_VERSION="${NOMAD_RUNTIME_VERSION}")
 
     # Direct vehicle access exists only for SITL and transport qualification.
     # This target is excluded from the default build and is never installed.
@@ -164,6 +174,10 @@ endif()
 
 if(PROJECT_IS_TOP_LEVEL)
     include(GNUInstallDirs)
+    if(NOMAD_FIXTURE_VERSION)
+        install(CODE "message(FATAL_ERROR \"Test fixture runtimes cannot be installed or packaged\")"
+                COMPONENT nomad_runtime)
+    endif()
 
     # The core release is an executable package. Static MAVSDK internals are linked
     # into the runtime, so the staged binaries do not depend on the build tree. Headers,
@@ -181,6 +195,19 @@ if(PROJECT_IS_TOP_LEVEL)
     install(DIRECTORY licenses/mavsdk-phase-a/
             DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad/licenses/mavsdk-phase-a COMPONENT nomad_runtime)
 
+    if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|x64)$")
+        message(FATAL_ERROR "Reviewed NOMAD release packages require x86-64")
+    endif()
+    if(WIN32)
+        set(NOMAD_PACKAGE_PLATFORM windows)
+        set(NOMAD_PACKAGE_REQUIRED "\"bin/nomad.exe\", \"bin/nomad-runtime.exe\"")
+    else()
+        set(NOMAD_PACKAGE_PLATFORM linux)
+        set(NOMAD_PACKAGE_REQUIRED "\"bin/nomad\", \"bin/nomad-runtime\"")
+    endif()
+    configure_file(cmake/package-identity.json.in package-identity.json @ONLY)
+    install(FILES "${CMAKE_BINARY_DIR}/package-identity.json" DESTINATION . COMPONENT nomad_runtime)
+    set(CPACK_PACKAGE_FILE_NAME "nomad-core-${NOMAD_RELEASE_VERSION}-${NOMAD_PACKAGE_PLATFORM}-x86_64")
     set(CPACK_PACKAGE_NAME "nomad-core")
     set(CPACK_PACKAGE_VENDOR "The NOMAD Authors")
     set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "NOMAD C++ vehicle core, runtime and CLI")

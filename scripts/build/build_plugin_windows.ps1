@@ -54,6 +54,13 @@ if ($cleanExitCode -ne 0) {
 Write-Host "  Clean complete" -ForegroundColor Green
 Write-Host ""
 
+# Generate deterministic source identity before compiling the plugin.
+$identityPath = Join-Path $RepoRoot 'build/release/package-identity.json'
+$csharpPath = Join-Path $RepoRoot 'build/release/ReleaseIdentity.cs'
+& python (Join-Path $RepoRoot 'scripts/release/identity.py') component --component plugin `
+    --platform windows --architecture any --output $identityPath --csharp $csharpPath --required NOMADPlugin.dll
+if ($LASTEXITCODE -ne 0) { throw 'Plugin release identity generation failed' }
+
 # Step 3: Build project
 Write-Host "[3/4] Building plugin..." -ForegroundColor Yellow
 & $msbuild $ProjectFile /t:Build /p:Configuration=$Configuration /v:minimal /nologo
