@@ -28,6 +28,7 @@ METADATA_KEYS = {
     "timestamp",
     "protocol",
     "os_release",
+    "source_clean",
 }
 
 
@@ -37,11 +38,11 @@ def validate_report(report: dict) -> None:
     environment = report.get("environment", {})
     if not isinstance(environment, dict):
         raise ValueError("resource environment must be an object")
-    if environment.get("source_clean", True) is not True:
-        raise ValueError("dirty resource source provenance cannot pass")
     missing = METADATA_KEYS - environment.keys()
     if missing:
         raise ValueError(f"missing resource environment metadata: {sorted(missing)}")
+    if environment["source_clean"] is not True:
+        raise ValueError("dirty resource source provenance cannot pass")
     if not isinstance(environment["cmake"], dict) or not isinstance(environment["compiler"], dict):
         raise ValueError("CMake configuration and compiler metadata must be objects")
     validate_sections(report)

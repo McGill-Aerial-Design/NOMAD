@@ -14,7 +14,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts/dev"))
 
-from resource_footprint import collect_footprint, release_binary
+from resource_footprint import collect_footprint, list_release_libraries, release_binary
 from resource_metadata import source_identity
 from runtime_resource_measurement import distribution
 from verify_core_resource_budgets import apply_budgets, validate_report
@@ -35,6 +35,7 @@ def environment_metadata() -> dict:
         "cache_state": "cold-build-tree",
         "timestamp": "2026-10-02T00:00:00+00:00",
         "protocol": "core-resources-v1",
+        "source_clean": True,
     }
 
 
@@ -194,6 +195,19 @@ def test_release_lookup_never_falls_back_to_debug(tmp_path: Path) -> None:
         release_binary(tmp_path, "nomad-runtime")
 
 
+def test_sdk_archive_inventory_uses_release_target_not_stale_configs(tmp_path: Path, monkeypatch) -> None:
+    import resource_footprint
+
+    for configuration in ("Release", "Debug", "RelWithDebInfo", "MinSizeRel"):
+        directory = tmp_path / "mavsdk/src/mavsdk" / configuration
+        directory.mkdir(parents=True)
+        (directory / "mavsdk.lib").write_bytes(configuration.encode())
+    selected = tmp_path / "mavsdk/src/mavsdk/Release/mavsdk.lib"
+    target = {"mavsdk": {"artifacts": [{"path": selected.relative_to(tmp_path).as_posix()}]}}
+    monkeypatch.setattr(resource_footprint, "read_targets", lambda build: target)
+    assert list_release_libraries(tmp_path) == [selected]
+
+
 @pytest.mark.parametrize("finder", ["connectivity", "transport"])
 def test_resource_qualifications_require_release(finder: str, tmp_path: Path, monkeypatch) -> None:
     from mavsdk_connectivity_smoke import find_binary as find_connectivity
@@ -304,6 +318,9 @@ def test_invalid_schema_or_dirty_report_cannot_pass() -> None:
     report, _ = evidence()
     report["environment"]["source_clean"] = False
     with pytest.raises(ValueError, match="dirty resource source provenance"):
+        validate_report(report)
+    del report["environment"]["source_clean"]
+    with pytest.raises(ValueError, match="missing resource environment metadata"):
         validate_report(report)
 
 

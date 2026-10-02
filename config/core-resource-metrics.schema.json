@@ -7,7 +7,7 @@
     "schema_version": {"const": 1},
     "environment": {
       "type": "object",
-      "required": ["nomad_sha", "mavsdk_sha", "os", "os_release", "architecture", "compiler",
+      "required": ["nomad_sha", "mavsdk_sha", "source_clean", "os", "os_release", "architecture", "compiler",
                    "cmake_version", "build_type", "cmake", "binary_format", "cache_state", "timestamp", "protocol"],
       "properties": {
         "nomad_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},

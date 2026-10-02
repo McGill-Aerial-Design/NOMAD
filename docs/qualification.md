@@ -179,6 +179,10 @@ not a passing final policy run. Subsequent resource jobs check out the exact PR
 head and retain its SHA in each report. MAVSDK remains pinned at
 `900fb0fe7fec74608f1911331218557915cc501a` with the unchanged six-plugin static
 [composition](mavsdk-dependencies.md#production-resource-composition).
+Those initial artifacts predate the mandatory `source_clean` field; their clean
+provenance comes from the hosted checkout. Current collector/verifier reports
+require the explicit attestation and reject its omission. Reviewed numeric
+baseline definitions preserve that historical source/run provenance.
 
 Both hosted trees were fresh Release builds, with Pixi caching enabled but hit
 status and dependency download-cache state unknown. Linux used GCC 13.3.0,

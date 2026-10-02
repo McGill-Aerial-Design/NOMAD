@@ -6,7 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from mavsdk_build_metrics import directory_size
-from resource_composition import collect_composition
+from resource_composition import collect_composition, read_targets
 from resource_metadata import ROOT
 
 
@@ -39,17 +39,7 @@ def collect_footprint(build: Path) -> tuple[dict[str, int], dict]:
         "mavsdk_stage_bytes": directory_size(build / "mavsdk-stage"),
         "mavsdk_source_bytes": directory_size(ROOT / "third_party/MAVSDK"),
     }
-    libraries = [
-        item
-        for item in (build / "mavsdk").rglob("*")
-        if item.is_file()
-        and item.suffix in {".a", ".lib"}
-        and "Debug" not in item.parts
-        and (
-            "third_party" not in item.relative_to(build / "mavsdk").parts
-            or "install" in item.relative_to(build / "mavsdk").parts
-        )
-    ]
+    libraries = list_release_libraries(build)
     inventory = {item.relative_to(build).as_posix(): item.stat().st_size for item in sorted(libraries)}
     composition = collect_composition(build, inventory)
     values["built_static_library_bytes"] = sum(inventory.values())
@@ -57,3 +47,14 @@ def collect_footprint(build: Path) -> tuple[dict[str, int], dict]:
         size for name, size in inventory.items() if Path(name).name in composition["runtime_link_archives"]
     )
     return values, composition
+
+
+def list_release_libraries(build: Path) -> list[Path]:
+    target = read_targets(build)["mavsdk"]
+    sdk = [build / item["path"] for item in target["artifacts"] if Path(item["path"]).suffix in {".a", ".lib"}]
+    dependencies = [
+        item
+        for item in (build / "mavsdk/third_party/install").rglob("*")
+        if item.is_file() and item.suffix in {".a", ".lib"}
+    ]
+    return sorted(set(sdk + dependencies))

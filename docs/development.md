@@ -132,6 +132,9 @@ MAVSDK workspace bytes, SDK/dependency stages and static archive input sizes
 are retained separately; none describes bytes embedded by the linker.
 Debug files in the core stage reject collection. Do not compare Linux ELF
 bytes directly with PE, PDB or COFF archive bytes.
+The SDK archive inventory follows the configured Release target artifact,
+so other configuration outputs in a reused multi-config tree cannot inflate
+the linked-library metric.
 
 The fake peer emits telemetry every 200 ms. Five no-peer launches end at a
 usable protocol-v1 HELLO; five independent launch/restart pairs against a
