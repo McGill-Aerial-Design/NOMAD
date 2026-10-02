@@ -1,0 +1,46 @@
+name: resources
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: resources-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-resources:
+    name: Core resources (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          cache: true
+      - name: Measure Release build, qualifications, package and runtime
+        run: pixi run measure-core-resources
+      - name: Verify approved resource budgets
+        run: pixi run verify-core-resource-budgets
+      - name: Retain platform resource evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: core-resource-metrics-${{ matrix.os }}
+          path: |
+            build/resources/metrics.json
+            build/resources/resource-phases.json
+          if-no-files-found: error
+          retention-days: 30

@@ -133,15 +133,57 @@ MAVSDK connect/status sample. The observer was repaired, and merged-main run
 the heartbeat gate. Resource approval, supported-aircraft and release evidence
 remain open.
 
+## Production resource composition
+
+The resource collector audits the unchanged pinned graph through CMake's file
+API. NOMAD selects Action, Geofence, Offboard, Param and Telemetry; the pinned
+MAVSDK CMake also adds MAVLink Passthrough. All six compile into one static
+`mavsdk` archive. Production consumes their APIs in the action, fence,
+velocity, telemetry, parameter, QuadPlane and route transport implementations.
+The runtime links that archive through `nomad_mavsdk_connection`; direct
+qualification tools reuse the same transport. No selected plugin is present
+solely for qualification. The CLI and connectivity observer have build-order
+dependencies on MAVSDK but do not link the vehicle transport.
+
+The child graph disables MAVSDK tests, the gRPC server and curl, uses the
+ArduPilot dialect and static libraries, and enables the superbuild. NOMAD's
+own Release qualification enables CTest separately. The superbuild includes
+fmt, Asio, generated MAVLink, libevents, PicoSHA2, tinyxml2, libmavlike,
+nlohmann JSON and liblzma. Header-only inputs and compiled archives are distinct
+in the evidence. `runtime_link_archives` records actual linker inputs;
+`built_but_not_runtime_link_inputs` exposes archives outside that link line.
+Selected plugin source references establish production use, but archive inputs
+do not measure individual archive-member inclusion or embedded object-code
+bytes. No dynamic-versus-static counterfactual has been measured.
+
+libmavlike supplies the installed `mav::mav` package and `mav.lib`/`libmav.a`,
+which the SDK core links and uses through `LibmavReceiver`; the vendor project
+name differs from its library name. It is required. PicoSHA2 is header-only and
+remains a required MAVSDK package even though this audit found no direct source
+include. Removing it needs a separate fork review; no compiled-plugin saving
+is established. Core server/FTP/mission-transfer
+translation units are also compiled internally even with the gRPC server off;
+their names alone do not prove removable functionality or executable cost.
+No dependency pin, plugin selection, library composition or safety check was
+changed for resource numbers.
+
+See [development](development.md#software-resource-qualification) for repeatable
+production footprint, software runtime and per-phase time collection. Historical
+smoke metrics above remain separate observations of older graphs. Current
+baseline/budget definitions live in the versioned
+[`core-resource-budgets.json`](../config/core-resource-budgets.json), while
+per-run reports remain hosted artifacts. The core payload carries two
+executables, headers, configuration/lifecycle templates and dependency notices;
+it does not ship the separate MAVSDK or superbuild install trees, qualification
+drivers, PDBs, or developer archives.
+
 ## Open release blockers
 
-- Collect repeat samples for variance and profile-specific CI time; approve
-  explicit build-tree, executable, runtime memory, startup and CI-time budgets.
 - Re-run the selected dependency and licence audit whenever production parity
   enables another plugin, server, curl or test dependency.
 - Requalify the hosted Linux/Windows, selected ROS and live ArduPilot SITL matrix
   whenever the MAVSDK pin, selected dependency graph or smoke contract changes.
 
-debt: the selected-build graph is published, pinned and hosted-qualified; revisit
-when resource budgets are approved and whenever dependency or MAVSDK plugin
-selection changes.
+debt: resource budgets cover the recorded software workload and toolchains;
+revisit when dependency/plugin selection, toolchain or workload changes; then
+collect a comparable Release baseline and review the policy headroom.

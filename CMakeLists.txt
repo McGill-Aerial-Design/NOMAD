@@ -32,6 +32,11 @@ function(add_nomad_mavsdk)
     set(ENABLED_PLUGINS telemetry geofence param action offboard)
     set(MAVLINK_DIALECT ardupilotmega)
     add_subdirectory("${NOMAD_MAVSDK_SOURCE_DIR}/cpp" "${CMAKE_BINARY_DIR}/mavsdk")
+    # Record the effective child options for resource evidence without exporting cache defaults.
+    string(JOIN "\",\"" resource_plugins ${ENABLED_PLUGINS} mavlink_passthrough)
+    file(WRITE "${CMAKE_BINARY_DIR}/resource-build-config.json"
+        "{\"shared\":false,\"server\":false,\"curl\":false,\"superbuild\":true,\"mavsdk_build_testing\":false,"
+        "\"dialect\":\"${MAVLINK_DIALECT}\",\"plugins\":[\"${resource_plugins}\"]}\n")
 endfunction()
 
 if(NOT EXISTS "${NOMAD_MAVSDK_SOURCE_DIR}/cpp/CMakeLists.txt")

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NOMAD core resource evidence v1",
+  "type": "object",
+  "required": ["schema_version", "environment", "metrics", "composition", "runtime", "phases"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "environment": {
+      "type": "object",
+      "required": ["nomad_sha", "mavsdk_sha", "source_clean", "os", "os_release", "architecture", "compiler",
+                   "cmake_version", "build_type", "cmake", "binary_format", "cache_state", "timestamp", "protocol"],
+      "properties": {
+        "nomad_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "mavsdk_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "source_clean": {"const": true},
+        "build_type": {"const": "Release"},
+        "compiler": {"type": "object", "required": ["id", "version"]},
+        "cache_state": {"enum": ["cold-build-tree", "incremental", "unknown"]},
+        "protocol": {"const": "core-resources-v1"},
+        "timestamp": {"type": "string", "format": "date-time"}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["value", "unit", "budget", "status"],
+        "properties": {
+          "value": {"type": "number", "minimum": 0},
+          "unit": {"enum": ["bytes", "seconds"]},
+          "budget": {"type": ["number", "null"], "minimum": 0},
+          "status": {"enum": ["unapproved", "pass", "fail", "advisory"]},
+          "mode": {"enum": ["hard", "advisory"]}
+        }
+      }
+    },
+    "composition": {"type": "object", "required": ["static_libraries", "linkage", "compiled_plugins",
+                                                     "compiled_plugin_count", "runtime_link_archives", "cli_link_archives"]},
+    "runtime": {"type": "object", "required": ["samples", "ipc_distribution", "vehicle_distribution",
+                                                 "restart_ipc_distribution", "restart_vehicle_distribution",
+                                                 "memory_method", "stabilization_seconds", "sample_window_seconds",
+                                                 "poll_seconds", "boundary"]},
+    "phases": {"type": "object"}
+  }
+}
