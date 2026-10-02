@@ -65,6 +65,82 @@ pixi run precommit
 changed-file limits. The Python suite checks that documented `pixi run` tasks
 exist and that internal Markdown links resolve.
 
+## Software resource qualification
+
+Run the production Release measurement and budget verifier without hardware:
+
+```sh
+pixi run measure-core-resources
+pixi run verify-core-resource-budgets
+```
+
+The first task uses `build/resources`, builds the pinned MAVSDK and production
+targets, runs the full C++ suite and deterministic connectivity, transport,
+authority-wire, final-send, authenticated IPC and lifecycle qualifications,
+then packages and verifies both archives and the core staged installation.
+It stages MAVSDK separately for dependency-footprint evidence. These stages
+remain inside the build tree; no OS service or production prefix is installed.
+Repeat runs use the same tree and label build timings incremental. Use a new
+`--build-dir` with `python scripts/dev/core_resources.py --qualify --build-dir
+<new-build-tree> --output <metrics.json>` for a cold build-tree sample.
+
+The versioned report is `build/resources/metrics.json`; phase diagnostics are
+`build/resources/resource-phases.json`. Per-run outputs stay outside Git.
+The schema and reviewed policy are
+[`config/core-resource-metrics.schema.json`](../config/core-resource-metrics.schema.json)
+and [`config/core-resource-budgets.json`](../config/core-resource-budgets.json).
+The hosted `resources.yml` matrix retains separate Linux/Windows artifacts for
+30 days and prints measured-versus-budget summaries. Download evidence before
+retention expires when comparing release candidates.
+This Release qualification supplements the existing Debug core job so timings
+and peer observations apply to the measured production build; it adds CI work
+deliberately and does not share or restore a CMake build-tree cache.
+
+The verifier rejects unknown platforms/toolchains and incomparable dependency
+pins, build types, CMake options, binary representations and workload protocols.
+It validates the v1 report structure, units and finite nonnegative values.
+Exit 1 means a hard regression; exit 2 means invalid/incomparable evidence.
+Advisory overages are visible warnings with successful exit status. Compare
+timing trends only within the same cache class and toolchain. A hosted fresh
+CMake tree is cold even when Pixi's environment cache is enabled; dependency
+download-cache hits are unknown. Shared-runner phase timings are advisory and
+the 45-minute job timeout guards catastrophic regressions.
+
+Footprint gates measure the unstripped Linux ELF or Windows PE executable
+without PDBs, the complete core stage, and ZIP/TGZ separately. Intermediate
+MAVSDK workspace bytes, SDK/dependency stages and static archive input sizes
+are retained separately; none describes bytes embedded by the linker.
+Debug files in the core stage reject collection. Do not compare Linux ELF
+bytes directly with PE, PDB or COFF archive bytes.
+
+The fake peer emits telemetry every 200 ms. Five no-peer launches end at a
+usable protocol-v1 HELLO; five independent launch/restart pairs against a
+persistent peer end at an established session plus fresh heartbeat. Clean
+process restarts reuse protected configuration/audit history and require a new
+incarnation with no restored owner. Timing starts immediately before process
+creation with a monotonic high-resolution clock; credential provisioning and
+OS service-manager recovery delays are excluded. Five-sample empirical p95 is
+the observed maximum, not a precise population-tail estimate.
+
+Memory samples cover only the runtime PID (native Linux RSS / Windows working
+set). Each state settles for one second, then reports the median of a separate
+one-second window at a 20 ms polling cadence. States are idle without a peer,
+fresh vehicle session, authenticated admission, and admitted-after-command.
+A continuous sampler retains the peak across startup and the bounded workload.
+The first process performs 300 status/authentication/command/revoke cycles;
+four others perform 30 each. Explicit handback follows every revoke, peer
+command counts and durable intent/outcome records are checked, and indexed
+post-revocation windows at 256, 278 and 300 operations expose growth after
+response-cache capacity. Total cache warm-up and post-capacity growth are
+separate advisory signals. Small RSS changes or allocator reservation do not
+establish a leak; investigate sustained growth before raising a ceiling.
+
+On regression, reproduce the same profile, inspect the linked-input inventory
+and state windows, then review a baseline/policy change with explicit headroom.
+Never weaken authentication, durable audit or final-send fencing to meet a
+resource budget. Software-peer results do not qualify aircraft startup or
+flight performance.
+
 ## MAVSDK transport and authority checks
 
 These checks use deterministic peers and the pinned fork. They do not need a

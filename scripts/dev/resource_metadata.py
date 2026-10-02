@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import platform
 import re
 import subprocess
@@ -46,7 +48,18 @@ def collect_metadata(build: Path, cache_state: str) -> dict:
         raise ValueError("resource footprint requires a Release build")
     configuration = json.loads((build / "resource-build-config.json").read_text(encoding="utf-8"))
     configuration["plugins"] = sorted(configuration["plugins"])
-    configuration.update({"generator": cache["CMAKE_GENERATOR"], "build_testing": cache["BUILD_TESTING"]})
+    configuration.update({"generator": cache["CMAKE_GENERATOR"], "nomad_build_testing": cache["BUILD_TESTING"] == "ON"})
+    flags = {
+        key: cache.get(key, "")
+        for key in (
+            "CMAKE_CXX_FLAGS",
+            "CMAKE_CXX_FLAGS_RELEASE",
+            "CMAKE_EXE_LINKER_FLAGS",
+            "CMAKE_EXE_LINKER_FLAGS_RELEASE",
+            "CPACK_STRIP_FILES",
+        )
+    }
+    configuration["flags_sha256"] = hashlib.sha256(json.dumps(flags, sort_keys=True).encode()).hexdigest()
     return {
         "nomad_sha": git_sha(ROOT),
         "mavsdk_sha": git_sha(ROOT / "third_party/MAVSDK"),
@@ -59,7 +72,27 @@ def collect_metadata(build: Path, cache_state: str) -> dict:
         "cmake": configuration,
         "binary_format": "PE-no-PDB" if platform.system() == "Windows" else "ELF-unstripped",
         "cache_state": cache_state,
+        "pixi_cache": "enabled; hit unknown" if os.environ.get("GITHUB_ACTIONS") else "unknown",
+        "dependency_download_cache": "unknown",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "protocol": "core-resources-v1",
+    }
+
+
+def failure_metadata(cache_state: str) -> dict:
+    return {
+        "nomad_sha": git_sha(ROOT),
+        "mavsdk_sha": git_sha(ROOT / "third_party/MAVSDK"),
+        "os": platform.system(),
+        "os_release": platform.release(),
+        "architecture": platform.machine(),
+        "compiler": {"id": "unknown", "version": "unknown"},
+        "cmake_version": "unknown",
+        "build_type": "Release requested; configure failed",
+        "cmake": {"configuration_status": "unavailable"},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "cache_state": cache_state,
+        "binary_format": "unmeasured",
         "protocol": "core-resources-v1",
     }
 

@@ -17,6 +17,7 @@ def run_phase(name: str, command: list[str], durations: dict, environment: dict 
     print(f"[resource phase] {name}", flush=True)
     result = subprocess.run(command, cwd=ROOT, env=environment, timeout=1800, check=False)
     durations[name] = {"seconds": round(time.perf_counter() - started, 6), "exit_code": result.returncode}
+    durations[name].update({"budget": None, "mode": "advisory", "status": "unapproved"})
     if result.returncode:
         raise subprocess.CalledProcessError(result.returncode, command)
 
@@ -94,9 +95,14 @@ def package_release(build: Path, durations: dict) -> None:
 
 
 def save_phases(build: Path, durations: dict, cache_state: str) -> None:
-    from resource_metadata import collect_metadata
+    from resource_metadata import collect_metadata, failure_metadata
+
+    try:
+        environment = collect_metadata(build, cache_state)
+    except (KeyError, ValueError, OSError):
+        environment = failure_metadata(cache_state)
 
     write_report(
         build / "resource-phases.json",
-        {"schema_version": 1, "environment": collect_metadata(build, cache_state), "phases": durations},
+        {"schema_version": 1, "environment": environment, "phases": durations},
     )

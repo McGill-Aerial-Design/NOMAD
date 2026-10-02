@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import socket
@@ -20,6 +21,7 @@ from runtime_lifecycle_fixture import deployment, wait_for
 from runtime_lifecycle_qualification import execute_servo, status, wait_for_vehicle
 
 STABILIZE_SECONDS = 1.0
+SAMPLE_WINDOW_SECONDS = 1.0
 SAMPLES = 5
 CYCLES = 300
 POLL_SECONDS = 0.02
@@ -45,9 +47,11 @@ def distribution(values: list[float]) -> dict:
 
 
 def wait_for_hello(ipc: int) -> None:
-    wait_for(
-        lambda: request(ipc, "resource-hello", "hello").get("ok") is True, "runtime HELLO not usable without aircraft"
-    )
+    def usable() -> bool:
+        hello = request(ipc, "resource-hello", "hello")
+        return hello.get("ok") is True and hello.get("protocol") == "nomad-core" and hello.get("version") == 1
+
+    wait_for(usable, "runtime protocol-v1 HELLO not usable")
 
 
 def wait_for_session(ipc: int) -> None:
@@ -64,7 +68,11 @@ def launch(binary: Path, config: Path, logs) -> tuple[subprocess.Popen, float]:
 
 
 def sample_stabilized(pid: int) -> dict[str, int]:
-    deadline = time.perf_counter() + STABILIZE_SECONDS
+    settle_deadline = time.perf_counter() + STABILIZE_SECONDS
+    while time.perf_counter() < settle_deadline:
+        memory_bytes(pid)
+        time.sleep(POLL_SECONDS)
+    deadline = time.perf_counter() + SAMPLE_WINDOW_SECONDS
     samples = []
     while time.perf_counter() < deadline:
         samples.append(memory_bytes(pid))
@@ -99,36 +107,30 @@ def observe_peak(pid: int, stopped: threading.Event, readings: list[dict]) -> No
         stopped.wait(POLL_SECONDS)
 
 
-def measure_operations(process: subprocess.Popen, ipc: int, peer: VehiclePeer, cycles: int) -> dict:
-    readings: list[dict] = []
-    stopped = threading.Event()
-    worker = threading.Thread(target=observe_peak, args=(process.pid, stopped, readings))
-    worker.start()
+def measure_operations(process: subprocess.Popen, ipc: int, peer: VehiclePeer, cycles: int, readings: list) -> dict:
     started = time.perf_counter()
-    try:
-        session = sample_stabilized(process.pid)
-        admit_source(ipc, 1)
-        admitted = sample_stabilized(process.pid)
-        execute_servo(ipc, peer, 1, "resource-servo-1")
-        hello = request(ipc, "resource-revoke-first", "hello")
-        if not request(ipc, "resource-revoke-1", "revoke_authority", **authority_fields(hello, "runtime-smoke"))["ok"]:
-            raise AssertionError("first resource cycle revoke failed")
-        first = sample_stabilized(process.pid)
-        checkpoints = [first]
-        for number in range(2, cycles + 1):
-            if time.perf_counter() - started > 180:
-                raise TimeoutError("resource operation interval exceeded 180 seconds")
-            run_cycle(ipc, peer, number)
-            if number % 50 == 0:
-                checkpoints.append(sample_stabilized(process.pid))
-        final = sample_stabilized(process.pid)
-    finally:
-        stopped.set()
-        worker.join(timeout=2)
+    session = sample_stabilized(process.pid)
+    admit_source(ipc, 1)
+    admitted = sample_stabilized(process.pid)
+    execute_servo(ipc, peer, 1, "resource-servo-1")
+    command = sample_stabilized(process.pid)
+    hello = request(ipc, "resource-revoke-first", "hello")
+    if not request(ipc, "resource-revoke-1", "revoke_authority", **authority_fields(hello, "runtime-smoke"))["ok"]:
+        raise AssertionError("first resource cycle revoke failed")
+    first = sample_stabilized(process.pid)
+    checkpoints = [{"completed_cycles": 1, **first}]
+    for number in range(2, cycles + 1):
+        if time.perf_counter() - started > 180:
+            raise TimeoutError("resource operation interval exceeded 180 seconds")
+        run_cycle(ipc, peer, number)
+        if number % 50 == 0 or number in (256, 278):
+            checkpoints.append({"completed_cycles": number, **sample_stabilized(process.pid)})
+    final = sample_stabilized(process.pid)
     return {
         "session": session,
         "admitted": admitted,
-        "command": first,
+        "command": command,
+        "after_first_revoke": first,
         "final": final,
         "growth_checkpoints": checkpoints,
         "cycles": cycles,
@@ -155,14 +157,34 @@ def measure_sample(binary: Path, cycles: int) -> dict:
             idle = sample_stabilized(process.pid)
             peer.start()
             wait_for_session(ipc)
-            operations = measure_operations(process, ipc, peer, cycles)
-            operations["peak"] = {key: max(item[key] for item in readings) for key in idle}
-            return {"ipc_seconds": ipc_seconds, "idle": idle, "operations": operations}
+            operations = measure_operations(process, ipc, peer, cycles, readings)
+            result = {"ipc_seconds": ipc_seconds, "idle": idle, "operations": operations}
         finally:
             stopped.set()
             worker.join(timeout=2)
             stop_runtime(process)
             peer.stop()
+        result["audit_counts"] = validate_cycle_audit(Path(temporary), cycles)
+        return result
+
+
+def validate_cycle_audit(directory: Path, cycles: int) -> dict:
+    records = []
+    for path in (directory / "audit").glob("*.jsonl"):
+        records.extend(json.loads(line) for line in path.read_bytes().splitlines())
+    expected = {
+        "runtime_start": 1,
+        "runtime_shutdown": 1,
+        "mutation_intent": cycles,
+        "mutation_outcome": cycles,
+        "authority_admission": 1,
+        "authority_handback": cycles - 1,
+        "authority_revoke": cycles,
+    }
+    counts = {event: sum(item["event"] == event for item in records) for event in expected}
+    if counts != expected:
+        raise AssertionError(f"resource cycles lack complete durable audit: observed={counts}, expected={expected}")
+    return counts
 
 
 def measure_incarnation(binary: Path, config: Path, ipc: int, logs) -> dict:
@@ -215,8 +237,11 @@ def collect_runtime(binary: Path) -> tuple[dict, dict]:
             (item["idle"] if state == "idle" else item["operations"][state])["resident"] for item in samples
         )
     values["memory_growth_resident_bytes"] = max(
-        max(0, item["operations"]["final"]["resident"] - item["operations"]["command"]["resident"]) for item in samples
+        max(0, item["operations"]["final"]["resident"] - item["operations"]["after_first_revoke"]["resident"])
+        for item in samples
     )
+    late = [item for item in samples[0]["operations"]["growth_checkpoints"] if item["completed_cycles"] >= 256]
+    values["memory_post_capacity_growth_resident_bytes"] = max(0, late[-1]["resident"] - late[0]["resident"])
     detail = {
         "samples": samples,
         "vehicle_ready_launches": pairs,
@@ -224,9 +249,12 @@ def collect_runtime(binary: Path) -> tuple[dict, dict]:
         "vehicle_distribution": distribution([item["initial"]["vehicle_seconds"] for item in pairs]),
         "restart_ipc_distribution": distribution([item["restart"]["ipc_seconds"] for item in pairs]),
         "restart_vehicle_distribution": distribution([item["restart"]["vehicle_seconds"] for item in pairs]),
-        "memory_method": "psutil native Linux RSS / Windows working set; Windows private recorded separately",
+        "memory_method": "psutil native Linux RSS / Windows working set; only the runtime PID",
+        "memory_fields": sorted(samples[0]["idle"]),
+        "post_capacity_windows": late,
         "poll_seconds": POLL_SECONDS,
         "stabilization_seconds": STABILIZE_SECONDS,
+        "sample_window_seconds": SAMPLE_WINDOW_SECONDS,
         "boundary": "software peer; clean process restart with persistent config and peer; excludes OS recovery delay",
     }
     return values, detail

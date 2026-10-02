@@ -10,7 +10,7 @@ from pathlib import Path
 
 from core_resource_phases import build_release, package_release, qualify_release, save_phases
 from resource_footprint import collect_footprint, release_binary
-from resource_metadata import ROOT, collect_metadata, write_report
+from resource_metadata import ROOT, collect_metadata, git_sha, write_report
 from runtime_resource_measurement import collect_runtime
 
 
@@ -26,16 +26,15 @@ def summarize(report: dict) -> None:
 
 
 def measure(build: Path, output: Path, observe: bool, qualify: bool) -> dict:
+    source_sha = git_sha(ROOT)
+    marker = build / "resource-build-sha.txt"
+    if observe and (not marker.is_file() or marker.read_text(encoding="utf-8").strip() != source_sha):
+        raise ValueError("existing build has no matching resource-source marker; rerun the full resource build")
     cache_state = "incremental" if (build / "CMakeCache.txt").exists() else "cold-build-tree"
     durations = {}
     if not observe:
-        try:
-            build_release(build, durations)
-            if qualify:
-                qualify_release(build, durations)
-            package_release(build, durations)
-        finally:
-            save_phases(build, durations, cache_state)
+        build_and_qualify(build, qualify, durations, cache_state)
+        marker.write_text(source_sha + "\n", encoding="utf-8")
     footprint, composition = collect_footprint(build)
     runtime, detail = collect_runtime(release_binary(build, "nomad-runtime"))
     values = {**footprint, **runtime}
@@ -57,8 +56,20 @@ def measure(build: Path, output: Path, observe: bool, qualify: bool) -> dict:
         "phases": durations,
     }
     report["environment"]["phase_cache_state"] = cache_state if durations else "unmeasured"
+    if report["environment"]["nomad_sha"] != source_sha:
+        raise ValueError("NOMAD HEAD changed during collection; discard this sample and rerun")
     write_report(output, report)
     return report
+
+
+def build_and_qualify(build: Path, qualify: bool, durations: dict, cache_state: str) -> None:
+    try:
+        build_release(build, durations)
+        if qualify:
+            qualify_release(build, durations)
+        package_release(build, durations)
+    finally:
+        save_phases(build, durations, cache_state)
 
 
 def main() -> int:

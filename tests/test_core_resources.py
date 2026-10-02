@@ -46,6 +46,7 @@ def evidence() -> tuple[dict, dict]:
             "phase_core_build_seconds": {"value": 5, "unit": "seconds", "budget": None, "status": "unapproved"},
         },
     }
+    report.update(evidence_sections())
     comparable = {
         key: environment[key]
         for key in ("mavsdk_sha", "os", "architecture", "compiler", "build_type", "cmake", "binary_format", "protocol")
@@ -57,12 +58,41 @@ def evidence() -> tuple[dict, dict]:
                 "comparable": comparable,
                 "budgets": {
                     "runtime_binary_bytes": {"baseline": 90, "limit": 120, "mode": "hard"},
-                    "phase_core_build_seconds": {"baseline": 3, "limit": 4, "mode": "advisory"},
+                    "phase_core_build_seconds": {
+                        "baseline": 3,
+                        "limit": 4,
+                        "mode": "advisory",
+                        "cache_state": "cold-build-tree",
+                    },
                 },
             }
         },
     }
     return report, policy
+
+
+def evidence_sections() -> dict:
+    return {
+        "composition": {"static_libraries": {}, "linkage": "static"},
+        "phases": {},
+        "runtime": {
+            "samples": [{}] * 5,
+            "ipc_distribution": distribution([1, 2, 3, 4, 5]),
+            "vehicle_distribution": distribution([1, 2, 3, 4, 5]),
+            "memory_method": "test",
+            "stabilization_seconds": 1,
+            "poll_seconds": 0.02,
+            "boundary": "software test",
+        },
+    }
+
+
+@pytest.mark.parametrize("section", ["composition", "runtime", "phases"])
+def test_schema_sections_are_required(section: str) -> None:
+    report, policy = evidence()
+    del report[section]
+    with pytest.raises(ValueError, match="resource section"):
+        apply_budgets(report, policy)
 
 
 def test_hard_budget_failure_overrides_claimed_pass_and_explains_numbers(capsys) -> None:
@@ -80,6 +110,24 @@ def test_budget_boundary_passes_and_advisory_overage_does_not_fail() -> None:
     report["metrics"]["runtime_binary_bytes"]["value"] = 120
     assert apply_budgets(report, policy) == []
     assert report["metrics"]["phase_core_build_seconds"]["status"] == "advisory"
+
+
+def test_incremental_timing_is_retained_without_comparing_cold_baseline() -> None:
+    report, policy = evidence()
+    report["environment"]["cache_state"] = "incremental"
+    assert apply_budgets(report, policy) == []
+    timing = report["metrics"]["phase_core_build_seconds"]
+    assert timing["status"] == "advisory" and "cache class" in timing["comparison"]
+
+
+def test_configure_failure_still_retains_phase_record(tmp_path: Path) -> None:
+    from core_resource_phases import save_phases
+
+    save_phases(tmp_path, {"configure": {"seconds": 1, "exit_code": 1}}, "cold-build-tree")
+    report = json.loads((tmp_path / "resource-phases.json").read_text(encoding="utf-8"))
+    assert report["phases"]["configure"]["exit_code"] == 1
+    assert report["environment"]["cmake"]["configuration_status"] == "unavailable"
+    assert len(report["environment"]["nomad_sha"]) == 40
 
 
 @pytest.mark.parametrize(
