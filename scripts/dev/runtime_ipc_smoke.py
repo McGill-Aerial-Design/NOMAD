@@ -34,6 +34,10 @@ FIXTURE_CREDENTIALS = {
 
 def find_runtime() -> Path:
     """Find the CMake-built runtime on the current platform."""
+    if os.environ.get("NOMAD_RESOURCE_BUILD_DIR"):
+        from resource_footprint import release_binary
+
+        return release_binary(Path(os.environ["NOMAD_RESOURCE_BUILD_DIR"]), "nomad-runtime")
     names = ("nomad-runtime.exe", "nomad-runtime")
     for directory in (ROOT / "build" / "core" / "Debug", ROOT / "build" / "core" / "Release", ROOT / "build" / "core"):
         for name in names:
@@ -45,6 +49,10 @@ def find_runtime() -> Path:
 
 def find_cli() -> Path:
     """Find the installed-behavior C++ CLI that sends requests to the runtime."""
+    if os.environ.get("NOMAD_RESOURCE_BUILD_DIR"):
+        from resource_footprint import release_binary
+
+        return release_binary(Path(os.environ["NOMAD_RESOURCE_BUILD_DIR"]), "nomad")
     names = ("nomad.exe", "nomad")
     for directory in (ROOT / "build" / "core" / "Debug", ROOT / "build" / "core" / "Release", ROOT / "build" / "core"):
         for name in names:

@@ -42,6 +42,9 @@ default = { features = ["dev"] }
 
 [tasks]
 
+measure-core-resources = "python scripts/dev/core_resources.py --qualify"
+verify-core-resource-budgets = "python scripts/dev/verify_core_resource_budgets.py build/resources/metrics.json"
+
 # Production C++ targets. The compiler is intentionally a host prerequisite;
 # the persistent runtime owns the MAVSDK transport. This task builds only the
 # two installed executables, even when test targets are configured.

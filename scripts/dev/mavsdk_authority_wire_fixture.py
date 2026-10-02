@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import os
 import socket
 import time
 from pathlib import Path
@@ -26,6 +27,10 @@ RETRY_WINDOW_SECONDS = 1.8
 
 def find_runtime() -> Path:
     """Find the release qualification binary or the normal core build."""
+    if os.environ.get("NOMAD_RESOURCE_BUILD_DIR"):
+        from resource_footprint import release_binary
+
+        return release_binary(Path(os.environ["NOMAD_RESOURCE_BUILD_DIR"]), "nomad-runtime")
     names = ("nomad-runtime.exe", "nomad-runtime")
     for base in (ROOT / "build/mavsdk-qualification", ROOT / "build/core"):
         for directory in (base / "Release", base / "Debug", base):
