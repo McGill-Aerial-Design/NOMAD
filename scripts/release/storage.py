@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import hashlib
 import json
 import os
@@ -14,6 +15,10 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 from scripts.release.manifest import parse_json
+
+
+class RecordRecoveryRequired(RuntimeError):
+    """A retained prior record requires explicit storage repair."""
 
 
 def digest(path: Path) -> str:
@@ -53,6 +58,7 @@ def sync_tree(root: Path) -> None:
 
 def write_json(path: Path, value: dict) -> None:
     reject_links(path)
+    require_record_recovery(path, writing=True)
     descriptor, temporary = tempfile.mkstemp(prefix=".record-", dir=path.parent)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
@@ -60,18 +66,85 @@ def write_json(path: Path, value: dict) -> None:
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        replace_record(Path(temporary), path)
         sync_directory(path.parent)
     finally:
         Path(temporary).unlink(missing_ok=True)
 
 
+def replace_record(temporary: Path, path: Path) -> None:
+    if os.name != "nt" or not path.exists():
+        os.replace(temporary, path)
+        return
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    replace = kernel.ReplaceFileW
+    replace.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_wchar_p,
+        ctypes.c_wchar_p,
+        ctypes.c_uint,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    ]
+    replace.restype = ctypes.c_int
+    backup = path.with_name("." + path.name + ".previous")
+    try:
+        if not replace(str(path), str(temporary), str(backup), 0, None, None):
+            error = ctypes.WinError(ctypes.get_last_error())
+            if not path.exists() and backup.exists():
+                os.replace(backup, path)
+            raise error
+    finally:
+        if path.exists():
+            backup.unlink(missing_ok=True)
+
+
 def read_json(path: Path) -> dict:
     reject_links(path)
-    value = parse_json(path.read_text(encoding="utf-8"))
+    require_record_recovery(path)
+    with open_record(path) as stream:
+        value = parse_json(stream.read())
     if not isinstance(value, dict):
         raise ValueError("deployment record must be an object")
     return value
+
+
+def require_record_recovery(path: Path, writing: bool = False) -> None:
+    backup = path.with_name("." + path.name + ".previous")
+    reject_links(backup)
+    if backup.exists() and (writing or not path.exists()):
+        raise RecordRecoveryRequired(f"interrupted record replacement requires operator repair: {backup.name}")
+
+
+def open_record(path: Path):
+    """Readers retain one complete snapshot without blocking Windows atomic replacement."""
+    if os.name != "nt":
+        return path.open("r", encoding="utf-8")
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create.restype = wintypes.HANDLE
+    handle = create(str(path), 0x80000000, 7, None, 3, 0x80, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except Exception:
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle(handle)
+        raise
+    return os.fdopen(descriptor, "r", encoding="utf-8")
 
 
 @contextlib.contextmanager

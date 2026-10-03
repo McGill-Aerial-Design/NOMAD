@@ -167,12 +167,27 @@ release. Temporary `.stage-*` trees left by a staging crash are never active and
 may be removed by an operator after confirming no staging tool is running.
 
 Directory publication, POSIX symlink switches and individual state replacements
-use same-filesystem atomic rename. POSIX writes synchronize files and parent
+use same-filesystem atomic rename. Windows deployment records use `ReplaceFileW`
+with readers permitting delete sharing; a failed replacement attempts to restore
+its retained old record before reporting failure. If that restoration is blocked,
+the deterministic `.deployment.json.previous` backup makes commands fail closed.
+Repair storage permissions, stop the affected deployment tool/supervisor, preserve
+both records as evidence, and restore the backup to `deployment.json` if the target
+is absent; if both exist, inspect them and retain the record with pending intent.
+Remove the backup only after recording that repair, then run `status` and `recover`.
+The same procedure applies to other `.NAME.previous` record backups.
+POSIX writes synchronize files and parent
 directories. Windows uses flushed file writes and atomic replacement, but cannot
 promise directory/power-loss durability equivalent to POSIX fsync. SCM changes,
 process lifecycle and plugin replacement are separate steps guarded by the
 pending record; the overall transaction is recoverable, not one filesystem
 atomic operation. Multi-process and multi-host deployment is not atomic.
+
+The router supervisor retains its lifetime lock after a record-write failure until
+its owned child has exited and the final stopped/failed record can be written.
+If storage remains unavailable or shutdown is refused, activation/rollback times
+out with a pending journal. Repair storage or shutdown on that host, then run
+`recover`; a stale running marker is never accepted as proof of process exit.
 
 Hosted/unprivileged fixtures prove byte identity, state preservation, real child
 runtime/router transitions, authority reset and recovery failures. Privileged

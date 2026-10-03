@@ -28,6 +28,7 @@ class Deployment:
         self.record = self.root / "deployment.json"
 
     def status(self) -> dict:
+        storage.require_record_recovery(self.record)
         if not self.record.exists():
             return {
                 "schema_version": 1,
@@ -66,6 +67,7 @@ class Deployment:
         entry = manifest.select_component(document, self.component, platform, architecture)
         manifest.verify_package(entry, package)
         with storage.lock(self.root):
+            storage.require_record_recovery(self.record, writing=True)
             self.releases.mkdir(exist_ok=True, mode=0o755)
             final = self.release_path(document["release_version"])
             if final.exists():
@@ -114,6 +116,7 @@ class Deployment:
 
     def adopt(self, version: str, adapter) -> dict:
         with storage.lock(self.root):
+            storage.require_record_recovery(self.record, writing=True)
             state = self.status()
             if state.get("active") or state.get("pending"):
                 raise ValueError("adoption requires an unmanaged, idle deployment")
@@ -128,12 +131,14 @@ class Deployment:
 
     def activate(self, version: str, adapter) -> dict:
         with storage.lock(self.root):
+            storage.require_record_recovery(self.record, writing=True)
             state = self.status()
             candidate = self.get_release(version)
             return self.transition(state, candidate, adapter, "active")
 
     def rollback(self, adapter) -> dict:
         with storage.lock(self.root):
+            storage.require_record_recovery(self.record, writing=True)
             state = self.status()
             if not state.get("previous"):
                 raise ValueError("previous release is unavailable")
@@ -202,6 +207,7 @@ class Deployment:
 
     def recover(self, adapter) -> dict:
         with storage.lock(self.root):
+            storage.require_record_recovery(self.record, writing=True)
             state = self.status()
             pending = state.get("pending")
             if not pending:
@@ -210,6 +216,7 @@ class Deployment:
 
     def cleanup(self, version: str) -> None:
         with storage.lock(self.root):
+            storage.require_record_recovery(self.record, writing=True)
             state = self.status()
             protected = [state.get("active"), state.get("previous")]
             if state.get("pending"):

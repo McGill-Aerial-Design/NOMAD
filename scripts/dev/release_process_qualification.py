@@ -296,14 +296,14 @@ def verify_supervisor_start_failure(engine, adapter, records) -> None:
     adapter.fail_start = True
     try:
         engine.activate(records[1]["release_version"], adapter)
-    except TimeoutError:
+    except (TimeoutError, RuntimeError):
         pass
     else:
         raise AssertionError("router candidate that exited during startup was committed")
-    require(engine.status()["active"] == records[0], "startup failure automatically restores exact router A")
     require(engine.status()["pending"] is None, "startup failure restoration completes its journal")
     require(adapter.config.read_bytes() == original, "startup failure preserves external operator topology")
     adapter.health(records[0])
+    require(engine.status()["active"] == records[0], "startup failure restores verified live router A")
 
 
 def main() -> int:

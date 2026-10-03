@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Filesystem deployment failures retain known-good payloads and recovery intent."""
 
+import io
 import json
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 from test_release_windows import fake_install, release_bundle, stage_plugin
 
-from scripts.release import lifecycle, storage
+from scripts.release import lifecycle, router_host, storage
 
 
 @pytest.fixture
@@ -203,3 +205,87 @@ def test_unsupported_native_os_is_rejected_before_staging(tmp_path, monkeypatch)
         deploy.parse_arguments()
     assert error.value.code == 2
     assert not (tmp_path / "core").exists()
+
+
+# A held snapshot must not prevent publishing the next complete deployment record.
+def test_record_reader_allows_atomic_replacement(tmp_path):
+    path = tmp_path / "deployment.json"
+    storage.write_json(path, {"version": "A"})
+    with storage.open_record(path) as reader:
+        storage.write_json(path, {"version": "B"})
+        assert json.loads(reader.read()) == {"version": "A"}
+    assert storage.read_json(path) == {"version": "B"}
+
+
+@pytest.mark.parametrize("failure_at", [1, 2])
+@pytest.mark.parametrize("failure_type", [OSError, storage.RecordRecoveryRequired])
+def test_router_marker_write_failure_reaps_owned_child(tmp_path, monkeypatch, failure_at, failure_type):
+    root = tmp_path / "router"
+    root.mkdir()
+    config = tmp_path / "topology.json"
+    config.write_text("{}")
+    release = {"release_version": "A"}
+    storage.write_json(root / "current.json", release)
+    child = SimpleNamespace(returncode=None, stdin=io.BytesIO())
+    evidence = []
+
+    def reap(timeout):
+        evidence.append(child.stdin.getvalue())
+        child.returncode = 0
+        return 0
+
+    child.poll = lambda: child.returncode
+    child.wait = reap
+    monkeypatch.setattr(
+        router_host, "Deployment", lambda *args: SimpleNamespace(root=root, get_release=lambda version: release)
+    )
+    monkeypatch.setattr(router_host, "executable", lambda candidate: tmp_path / "router.exe")
+    monkeypatch.setattr(router_host.subprocess, "Popen", lambda *args, **kwargs: child)
+    monkeypatch.setattr(router_host, "wait_child", lambda *args: reap(30))
+    write = storage.write_json
+    calls = 0
+
+    def fail_write(*args):
+        nonlocal calls
+        calls += 1
+        if calls == failure_at:
+            raise failure_type("injected marker replacement failure")
+        write(*args)
+
+    monkeypatch.setattr(storage, "write_json", fail_write)
+    with pytest.raises(failure_type, match="marker replacement"):
+        router_host.supervise(tmp_path, config)
+    assert evidence == ([b"stop\n"] if failure_at == 1 else [b""])
+    assert child.returncode == 0
+    assert storage.read_json(root / "process.json")["status"] == "stopped"
+
+
+def test_router_start_requires_fresh_marker(tmp_path, monkeypatch):
+    from scripts.release import router
+
+    adapter = router.RouterAdapter(tmp_path, tmp_path / "topology.json", 1, ["trusted-start"])
+    adapter.root.mkdir()
+    storage.write_json(adapter.current, {"release_version": "A"})
+    storage.write_json(adapter.process, {"release_version": "A", "status": "running"})
+    monkeypatch.setattr(adapter, "stop", lambda: None)
+
+    def start_hook(*args, **kwargs):
+        assert not adapter.process.exists(), "old same-version running marker cannot acknowledge startup"
+        assert not adapter.started("A")
+        storage.write_json(adapter.process, {"release_version": "A", "status": "running"})
+
+    monkeypatch.setattr(router.subprocess, "run", start_hook)
+    adapter.start()
+    assert adapter.started("A")
+
+
+def test_retained_record_backup_cannot_look_like_new_deployment(tmp_path):
+    deployment = lifecycle.Deployment(tmp_path, "router")
+    deployment.root.mkdir()
+    backup = deployment.record.with_name(".deployment.json.previous")
+    backup.write_text(json.dumps({"pending": {"restore": "A"}}))
+    with pytest.raises(RuntimeError, match="operator repair"):
+        deployment.status()
+    with pytest.raises(RuntimeError, match="operator repair"):
+        storage.write_json(deployment.record, {"pending": None})
+    assert json.loads(backup.read_text())["pending"] == {"restore": "A"}

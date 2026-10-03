@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import tempfile
@@ -84,7 +85,11 @@ def qualify_candidate(candidate: dict) -> None:
         path.write_text(json.dumps(config), encoding="utf-8")
         with tempfile.TemporaryFile() as log:
             child = subprocess.Popen(
-                [str(executable(candidate)), str(path)], stdin=subprocess.PIPE, stdout=log, stderr=log
+                [str(executable(candidate)), str(path)],
+                stdin=subprocess.PIPE,
+                stdout=log,
+                stderr=log,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             try:
                 wait(lambda: health(management, candidate), "router candidate loopback health failed", 10)
@@ -109,7 +114,7 @@ class RouterAdapter:
             raise ValueError("router start command requires nonempty JSON argv")
 
     def has_unmanaged(self) -> bool:
-        running = self.process.exists() and storage.read_json(self.process).get("status") != "stopped"
+        running = self.process.exists() and not self.supervisor_stopped()
         return self.current.exists() or running or self.port_open()
 
     def port_open(self) -> bool:
@@ -120,7 +125,9 @@ class RouterAdapter:
             return False
 
     def supervisor_stopped(self) -> bool:
-        if storage.read_json(self.process).get("status") not in {"stopped", "failed"} or self.port_open():
+        if self.process.exists() and storage.read_json(self.process).get("status") not in {"stopped", "failed"}:
+            return False
+        if self.port_open():
             return False
         with storage.lock(self.root / "supervisor"):
             return True
@@ -141,6 +148,7 @@ class RouterAdapter:
         if not self.process.exists():
             if self.port_open():
                 raise RuntimeError("an unmanaged router is listening; adopt or stop it explicitly")
+            wait(self.supervisor_stopped, "router supervisor has not released its lifetime lock")
             return
         if storage.read_json(self.process).get("status") in {"stopped", "failed"}:
             wait(self.supervisor_stopped, "previous router supervisor is still stopping")
@@ -158,7 +166,27 @@ class RouterAdapter:
         storage.write_json(self.current, candidate)
 
     def start(self) -> None:
-        subprocess.run(self.start_command, check=True, timeout=30, capture_output=True)
+        self.stop()
+        self.process.unlink(missing_ok=True)
+        subprocess.run(
+            self.start_command,
+            check=True,
+            timeout=30,
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        expected = storage.read_json(self.current)["release_version"]
+        wait(lambda: self.started(expected), "router supervisor did not acknowledge the candidate startup")
+
+    def started(self, version: str) -> bool:
+        if not self.process.exists():
+            return False
+        state = storage.read_json(self.process)
+        if state.get("release_version") != version:
+            return False
+        if state.get("status") == "failed":
+            raise RuntimeError("router child exited during startup")
+        return state.get("status") == "running"
 
     def health(self, candidate: dict) -> None:
         wait(lambda: health(self.port, candidate), "active router management health failed")

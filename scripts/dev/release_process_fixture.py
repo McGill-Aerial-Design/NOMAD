@@ -125,7 +125,13 @@ class RouterProcess:
         if self.candidate is None:
             return
         command = [str(self.executable(self.candidate)), str(self.config)]
-        self.child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=self.log, stderr=self.log)
+        self.child = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=self.log,
+            stderr=self.log,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
 
     def health(self, candidate: dict) -> None:
         def ready() -> bool:
