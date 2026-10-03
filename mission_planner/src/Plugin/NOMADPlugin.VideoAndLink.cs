@@ -89,7 +89,10 @@ namespace NOMAD.MissionPlanner
             }
             try
             {
-                if (_videoShutdown == null || _videoShutdown.IsCancellationRequested || _hudVideoStarted) { return; }
+                if (_videoShutdown == null || _videoShutdown.IsCancellationRequested || _hudVideoStarted)
+                {
+                    return;
+                }
                 // Preserve the configured HUD pipeline and crop.
                 var streamUrl = _config.VideoUrl;
                 if (string.IsNullOrWhiteSpace(streamUrl))

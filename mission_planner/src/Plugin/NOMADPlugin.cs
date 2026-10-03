@@ -175,14 +175,20 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                if (_videoShutdown == null || _videoShutdown.IsCancellationRequested) { return false; }
+                if (_videoShutdown == null || _videoShutdown.IsCancellationRequested)
+                {
+                    return false;
+                }
                 var videoToken = _videoShutdown.Token;
                 // Ensure UI setup runs on the UI thread
                 if (Host?.MainForm != null && Host.MainForm.InvokeRequired)
                 {
                     Host.MainForm.BeginInvoke((MethodInvoker)delegate
                     {
-                        if (!videoToken.IsCancellationRequested) { Loaded(); }
+                        if (!videoToken.IsCancellationRequested)
+                        {
+                            Loaded();
+                        }
                     });
                     return true;
                 }

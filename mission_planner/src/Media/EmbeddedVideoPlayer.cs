@@ -110,7 +110,13 @@ namespace NOMAD.MissionPlanner
             // Worker cleanup is already complete; the UI releases its controls on its own thread.
             if (IsHandleCreated && !IsDisposed)
             {
-                UiAsync.RunSync(this, () => { if (!IsDisposed) { Dispose(); } }, "video shutdown");
+                UiAsync.RunSync(this, () =>
+                {
+                    if (!IsDisposed)
+                    {
+                        Dispose();
+                    }
+                }, "video shutdown");
             }
         }
 
