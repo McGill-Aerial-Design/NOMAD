@@ -68,9 +68,9 @@ test-mavsdk-connectivity = "pytest tests/test_mavsdk_connectivity_smoke.py tests
 verify-mavsdk-provenance = "python scripts/dev/check_mavsdk_provenance.py"
 # Build the non-installed direct driver and transport tests for deterministic peers.
 build-mavsdk-transport-qualification = """
-cmake -S . -B build/mavsdk-qualification -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON && cmake --build build/mavsdk-qualification --config Release --target nomad nomad-runtime nomad-qualification nomad_mavsdk_connection_tests nomad_mavsdk_zero_delivery_tests nomad_mavsdk_authority_wire_probe
+cmake -S . -B build/mavsdk-qualification -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON && cmake --build build/mavsdk-qualification --config Release --target nomad nomad-runtime nomad-qualification nomad_mavsdk_connection_tests nomad_mavsdk_zero_delivery_tests nomad_mavsdk_authority_wire_probe nomad_mavsdk_lifetime_tests
 """
-test-mavsdk-transport-qualification = "pixi run build-mavsdk-transport-qualification && pytest tests/test_qualification_cli.py tests/test_fence_config_env.py -q && python scripts/dev/mavsdk_connection_fixture.py"
+test-mavsdk-transport-qualification = "pixi run build-mavsdk-transport-qualification && pytest tests/test_qualification_cli.py tests/test_fence_config_env.py -q && python scripts/dev/mavsdk_connection_fixture.py && python scripts/dev/mavsdk_lifetime_fixture.py"
 test-mavsdk-authority-wire = "python scripts/dev/mavsdk_authority_wire_fixture.py && python scripts/dev/mavsdk_authority_probe_fixture.py"
 test-authority-sitl-harness = "pytest tests/test_authority_sitl.py -q"
 

@@ -86,6 +86,26 @@ establish pilot control. External mode changes do not revoke runtime ownership.
   outcomes. See [core safety tests](../tests/safety_test.cpp) and
   [QuadPlane landing tests](../tests/vehicle/quadplane/quadplane_vtol_landing_test.cpp).
 
+## Connection lifetime concurrency
+
+The [connection lifetime fixture](../scripts/dev/mavsdk_lifetime_fixture.py)
+exercises concurrent readers through unpublished candidates, subscription setup,
+publication, retirement, failed setup and repeated connection generations. The
+[runtime lifetime fixture](../scripts/dev/runtime_connection_lifetime_fixture.py)
+keeps four HELLO/STATUS clients active through absent-peer startup, two real
+link-loss/return cycles and shutdown. It checks fresh sessions, no restored
+owner and zero command delivery from retired authority context. These fixtures
+run with the existing Linux/Windows transport and lifecycle qualification jobs;
+they require neither hardware nor SITL.
+
+Deterministic interleavings and source lock reasoning are the evidence for the
+NOMAD resource contract; passing ordinary CI alone is not race-detector proof.
+A local GCC ThreadSanitizer capability probe on WSL failed before application
+execution with `FATAL: ThreadSanitizer: unexpected memory mapping`. The lifetime
+fixture therefore remains dynamically unqualified by TSAN on that platform.
+No suppressions were added. Pinned MAVSDK internal synchronization and callback
+queues are outside the scope of this NOMAD publication fix.
+
 ## SITL and ROS readiness
 
 | Workflow | Trigger and scope | Evidence limit |

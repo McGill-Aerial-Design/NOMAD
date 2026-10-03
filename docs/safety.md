@@ -2,7 +2,9 @@
 
 Baseline: CONOPS v1.0 reconciliation, 2026-09-10. This is a safety argument and
 verification backlog, not a flight authorization. Existing requirement IDs
-remain stable. The current evidence boundary and qualification status are in+[Qualification status](qualification.md); dated source and run reports are in+the [migration evidence archive](migration.md). Proposed requirements below are
+remain stable. The current evidence boundary and qualification status are in
++[Qualification status](qualification.md); dated source and run reports are in
++the [migration evidence archive](migration.md). Proposed requirements below are
 not claimed as implemented.
 
 ## Safety argument and limits
@@ -257,6 +259,7 @@ SR-VIO-01 | src/safety/vio_source.cpp:VioSourceValidator::validate | tests/vio_s
 SR-VIO-02 | src/safety/watchdog.cpp:evaluate_watchdog | tests/safety_test.cpp::test_vehicle_watchdog_stops_for_stale_vio_and_mode_loss
 SR-LNK-01 | src/vehicle/vehicle_velocity.cpp:set_velocity | tests/safety_test.cpp::test_vehicle_watchdog_stops_for_link_loss
 SR-LNK-01 | src/mavlink/mavsdk_mavlink_connection.cpp:wait_for_heartbeat | tests/test_mavsdk_connection.py::test_arm_acknowledgement_paths
+SR-LNK-01 | src/mavlink/mavsdk_connection_resources.cpp:close | tests/mavsdk_lifetime_test.cpp::test_command_retirement
 SR-LNK-02 | src/safety/watchdog.cpp:evaluate_watchdog | tests/safety_test.cpp::test_vehicle_watchdog_stops_for_command_timeout
 SR-LNK-03 | src/mavlink/mavsdk_mavlink_connection.cpp:send_velocity | tests/safety_test.cpp::test_vehicle_stop_velocity_sends_zero
 SR-LNK-03 | src/mavlink/mavsdk_mavlink_connection.cpp:send_velocity | tests/test_mavsdk_connection.py::test_zero_delivery_reaches_the_wire_on_every_stop_path

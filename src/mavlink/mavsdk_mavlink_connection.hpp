@@ -17,6 +17,7 @@
 #include <plugins/param/param.hpp>
 #include <plugins/telemetry/telemetry.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -90,8 +91,39 @@ class MavsdkMavlinkConnection final : public MavlinkConnection {
     bool is_connected_unlocked() const;
     telemetry::VehicleState state_locked() const;
 
-    void subscribe();
-    void unsubscribe();
+    friend struct MavsdkConnectionTestAccess;
+    struct CallbackGate {
+        std::mutex mutex;
+        MavsdkMavlinkConnection *owner{nullptr};
+    };
+    struct ConnectionResources {
+        explicit ConnectionResources(std::shared_ptr<mavsdk::System> selected);
+        ~ConnectionResources();
+        ConnectionResources(const ConnectionResources &) = delete;
+        ConnectionResources &operator=(const ConnectionResources &) = delete;
+
+        std::shared_ptr<mavsdk::System> system;
+        std::unique_ptr<mavsdk::Action> action;
+        std::unique_ptr<mavsdk::Telemetry> telemetry;
+        std::unique_ptr<mavsdk::MavlinkPassthrough> passthrough;
+        std::unique_ptr<mavsdk::Geofence> geofence;
+        std::unique_ptr<mavsdk::Param> param;
+        std::unique_ptr<mavsdk::Offboard> offboard;
+        std::shared_ptr<CallbackGate> callbacks{std::make_shared<CallbackGate>()};
+        std::optional<mavsdk::Telemetry::PositionHandle> position_handle;
+        std::optional<mavsdk::Telemetry::VelocityNedHandle> velocity_handle;
+        std::optional<mavsdk::Telemetry::BatteryHandle> battery_handle;
+        std::optional<mavsdk::Telemetry::GpsInfoHandle> gps_handle;
+        std::optional<mavsdk::Telemetry::AttitudeEulerHandle> attitude_handle;
+        std::optional<mavsdk::Telemetry::VtolStateHandle> vtol_state_handle;
+        std::optional<mavsdk::Telemetry::LandedStateHandle> landed_state_handle;
+        std::optional<mavsdk::MavlinkPassthrough::MessageHandle> heartbeat_handle;
+        std::optional<mavsdk::System::IsConnectedHandle> connection_handle;
+    };
+
+    void subscribe(ConnectionResources &candidate);
+    void publish(std::unique_ptr<ConnectionResources> candidate);
+    void observe_connection_loss();
     void close();
     bool select_system();
     void identify_quadplane_from_parameters(ObservationClock::time_point deadline);
@@ -109,20 +141,20 @@ class MavsdkMavlinkConnection final : public MavlinkConnection {
                                                  const TransmissionAdmission &admission);
     mavsdk::Offboard::Result queue_velocity_setpoint(const VelocitySetpoint &setpoint);
 
-    std::string endpoint_;
-    std::uint8_t expected_system_id_{0};
-    std::chrono::milliseconds discovery_timeout_{0};
-    ConnectFailure connect_failure_{ConnectFailure::None};
+    const std::string endpoint_;
+    const std::uint8_t expected_system_id_{0};
+    const std::chrono::milliseconds discovery_timeout_{0};
+    std::atomic<ConnectFailure> connect_failure_{ConnectFailure::None};
     mavsdk::Mavsdk sdk_;
+    // connect/disconnect serialize SDK handles and candidate setup; status never takes this lock.
+    std::mutex lifecycle_mutex_;
+    // Published bundle reads/command use hold shared; publish/detach hold exclusive.
+    // Order: lifecycle -> lifetime -> callback gate -> observation -> runtime authority -> audit.
+    // Callbacks take only gate -> observation; they never take lifecycle/lifetime.
+    // Discovery, subscription setup, unsubscribe and destruction run outside lifetime/gate locks.
     mutable std::shared_mutex plugin_lifetime_mutex_;
     std::optional<mavsdk::Mavsdk::ConnectionHandle> handle_;
-    std::shared_ptr<mavsdk::System> system_;
-    std::unique_ptr<mavsdk::Action> action_;
-    std::unique_ptr<mavsdk::Telemetry> telemetry_;
-    std::unique_ptr<mavsdk::MavlinkPassthrough> passthrough_;
-    std::unique_ptr<mavsdk::Geofence> geofence_;
-    std::unique_ptr<mavsdk::Param> param_;
-    std::unique_ptr<mavsdk::Offboard> offboard_;
+    std::unique_ptr<ConnectionResources> resources_;
 
     mutable std::mutex observation_mutex_;
     std::condition_variable observation_changed_;
@@ -137,20 +169,6 @@ class MavsdkMavlinkConnection final : public MavlinkConnection {
     bool velocity_active_{false};
     std::optional<Heartbeat> heartbeat_;
     ObservationClock::time_point last_heartbeat_{};
-    std::uint8_t target_system_{0};
-    std::uint8_t target_component_{kAutopilotComponent};
-
-    // Subscription handles, kept so disconnect can stop callbacks before the
-    // owning plugins and system are destroyed.
-    std::optional<mavsdk::Telemetry::PositionHandle> position_handle_;
-    std::optional<mavsdk::Telemetry::VelocityNedHandle> velocity_handle_;
-    std::optional<mavsdk::Telemetry::BatteryHandle> battery_handle_;
-    std::optional<mavsdk::Telemetry::GpsInfoHandle> gps_handle_;
-    std::optional<mavsdk::Telemetry::AttitudeEulerHandle> attitude_handle_;
-    std::optional<mavsdk::Telemetry::VtolStateHandle> vtol_state_handle_;
-    std::optional<mavsdk::Telemetry::LandedStateHandle> landed_state_handle_;
-    std::optional<mavsdk::MavlinkPassthrough::MessageHandle> heartbeat_handle_;
-    std::optional<mavsdk::System::IsConnectedHandle> connection_handle_;
 };
 
 } // namespace nomad::mavlink

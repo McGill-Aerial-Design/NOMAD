@@ -36,7 +36,7 @@ void MavsdkMavlinkConnection::observe_landed_state(mavsdk::Telemetry::LandedStat
 std::optional<AutopilotVersion>
 MavsdkMavlinkConnection::read_autopilot_version(std::chrono::milliseconds timeout) {
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
-    if (!is_connected_unlocked() || !passthrough_ || timeout <= std::chrono::milliseconds::zero()) {
+    if (!is_connected_unlocked() || !resources_->passthrough || timeout <= std::chrono::milliseconds::zero()) {
         return std::nullopt;
     }
 
@@ -46,9 +46,9 @@ MavsdkMavlinkConnection::read_autopilot_version(std::chrono::milliseconds timeou
         std::optional<AutopilotVersion> received;
     };
     const auto version_state = std::make_shared<VersionWaitState>();
-    const auto expected_system_id = target_system_;
-    const auto expected_component_id = target_component_;
-    const auto message_handle = passthrough_->subscribe_message(
+    const auto expected_system_id = expected_system_id_;
+    const auto expected_component_id = kAutopilotComponent;
+    const auto message_handle = resources_->passthrough->subscribe_message(
         MAVLINK_MSG_ID_AUTOPILOT_VERSION,
         [version_state, expected_system_id, expected_component_id](const mavlink_message_t &message) {
             if (message.sysid != expected_system_id || message.compid != expected_component_id) {
@@ -77,14 +77,14 @@ MavsdkMavlinkConnection::read_autopilot_version(std::chrono::milliseconds timeou
     const auto request_budget = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(2));
     const auto request_timeout = (std::min)(timeout, request_budget);
     mavsdk::MavlinkPassthrough::CommandLong request{};
-    request.target_sysid = target_system_;
-    request.target_compid = target_component_;
+    request.target_sysid = expected_system_id_;
+    request.target_compid = kAutopilotComponent;
     request.command = kRequestMessageCommand;
     request.param1 = static_cast<float>(MAVLINK_MSG_ID_AUTOPILOT_VERSION);
-    const auto result = passthrough_->send_command_long(request, mavsdk::OperationOptions{request_timeout});
+    const auto result = resources_->passthrough->send_command_long(request, mavsdk::OperationOptions{request_timeout});
     const auto result_code = mavsdk_command_result_code(result);
     if (!result_code || *result_code != 0) {
-        passthrough_->unsubscribe_message(MAVLINK_MSG_ID_AUTOPILOT_VERSION, message_handle);
+        resources_->passthrough->unsubscribe_message(MAVLINK_MSG_ID_AUTOPILOT_VERSION, message_handle);
         return std::nullopt;
     }
 
@@ -92,7 +92,7 @@ MavsdkMavlinkConnection::read_autopilot_version(std::chrono::milliseconds timeou
         std::unique_lock lock(version_state->mutex);
         version_state->changed.wait_until(lock, deadline, [&] { return version_state->received.has_value(); });
     }
-    passthrough_->unsubscribe_message(MAVLINK_MSG_ID_AUTOPILOT_VERSION, message_handle);
+    resources_->passthrough->unsubscribe_message(MAVLINK_MSG_ID_AUTOPILOT_VERSION, message_handle);
     std::lock_guard lock(version_state->mutex);
     return version_state->received;
 }
@@ -102,7 +102,7 @@ std::optional<CommandAck> MavsdkMavlinkConnection::send_command(const Command &c
                                                                 std::chrono::milliseconds timeout) {
     const auto admission = capture_transmission_admission();
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
-    if (expected_session_id == 0 || !is_connected_unlocked() || !passthrough_ ||
+    if (expected_session_id == 0 || !is_connected_unlocked() || !resources_->passthrough ||
         timeout <= std::chrono::milliseconds::zero()) {
         return std::nullopt;
     }

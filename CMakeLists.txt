@@ -272,6 +272,7 @@ endif()
 # driver and connection tests. The installed `nomad` CLI is not a consumer.
 add_library(nomad_mavsdk_connection
     src/mavlink/mavsdk_action.cpp
+    src/mavlink/mavsdk_connection_resources.cpp
     src/mavlink/mavsdk_connection_state.cpp
     src/mavlink/mavsdk_command_result.cpp
     src/mavlink/mavsdk_fence.cpp
@@ -352,6 +353,13 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     nomad_add_core_test(nomad_operation_capability_tests tests/operation_capability_test.cpp)
     nomad_add_core_test(nomad_velocity_config_tests tests/velocity_config_test.cpp)
     nomad_add_core_test(nomad_fence_config_tests tests/fence_config_test.cpp)
+
+    add_executable(nomad_mavsdk_lifetime_tests tests/mavsdk_lifetime_test.cpp)
+    get_target_property(NOMAD_CONNECTION_INCLUDES nomad_mavsdk_connection INCLUDE_DIRECTORIES)
+    target_include_directories(nomad_mavsdk_lifetime_tests PRIVATE src ${NOMAD_CONNECTION_INCLUDES})
+    target_link_libraries(nomad_mavsdk_lifetime_tests PRIVATE nomad_mavsdk_connection mavsdk nomad_mavsdk_fmt)
+    target_compile_definitions(nomad_mavsdk_lifetime_tests PRIVATE NOMAD_TESTS)
+    add_test(NAME nomad_mavsdk_lifetime_tests COMMAND nomad_mavsdk_lifetime_tests)
 
     add_executable(nomad_mavsdk_connection_tests tests/mavsdk_connection_test.cpp)
     target_link_libraries(nomad_mavsdk_connection_tests PRIVATE nomad_mavsdk_connection nomad_core)

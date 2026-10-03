@@ -103,6 +103,44 @@ setpoints and fence transfers are not runtime-v1 requests and are not covered by
 the final-send guarantee. TCP/serial transport delivery is not a qualified
 integrated command path.
 
+## MAVSDK connection resource lifetime
+
+The persistent connection owns one published bundle: the selected `System`,
+Action, Telemetry, MAVLink Passthrough, Geofence, Param and Offboard plugins,
+and their nine persistent subscription handles. Candidate construction and
+subscription run before publication, outside the resource lifetime lock.
+An exclusive section publishes the complete bundle and establishes its
+vehicle session. Status and command methods hold the shared lifetime lock while
+using resources; command methods retain it through completion as before.
+The immutable configured system ID and autopilot component identify every bundle.
+
+Connect/disconnect writers serialize on a separate lifecycle mutex. Discovery
+and identity waits can delay another lifecycle writer, but never hold the
+resource lifetime lock or prevent startup IPC from answering HELLO/STATUS.
+Retirement takes the exclusive lifetime lock after existing command users finish,
+revokes the bundle's callback gate, detaches the bundle, rolls the session and
+clears observations. Unsubscription, plugin destruction and endpoint removal
+then run outside the lifetime lock. No new reader or command can obtain the
+retired bundle after detachment.
+
+MAVSDK unsubscription does not drain callbacks already copied to its user queue.
+Each persistent callback captures a shared gate, acquires its mutex and checks
+the owner before accessing connection state. Retirement clears that owner under
+the same mutex, waiting for entered callbacks. Late callbacks remain inert even
+after a replacement bundle or connection destruction. Candidate callbacks are
+inactive until publication. Temporary version/fence callbacks already own their
+local result state and do not capture the connection.
+
+Nested locks follow lifecycle -> resource lifetime -> callback gate -> observation
+-> runtime authority -> audit journal. Callbacks never acquire lifecycle/resource
+locks. Runtime copies transport state before acquiring authority locks. Existing
+final-send admission, retry cancellation and session fencing remain in place.
+IPC availability, vehicle readiness and software authority remain distinct
+through discovery, reconnect and shutdown. Publication/retirement retain the
+existing synchronous session notification and audit ordering; callback drainage
+and durable audit latency can delay readers, without discovery or MAVSDK waits
+under the exclusive lifetime lock.
+
 ## Component ownership
 
 | Component | Owns | Does not own |
