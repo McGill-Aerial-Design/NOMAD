@@ -124,13 +124,21 @@ internal static partial class VideoLifetimeTests
     private static void PartialStartupFailure()
     {
         var fake = new FakeVideoPipeline { FailStartup = true };
+        fake.ReleaseStart.Reset();
         using (var session = new VideoSession(() => fake))
         {
             session.Start("fake");
+            Wait(fake.StartEntered, "partial startup");
+            var source = GetField<CancellationTokenSource>(session, "_cancellation");
+            var handle = source.Token.WaitHandle.SafeWaitHandle;
+            fake.ReleaseStart.Set();
             Wait(session.Completion, "failed startup cleanup");
             Check(session.State == VideoState.Stopped, "Failed startup retained active state");
             Check(session.Error == "injected partial startup failure", "Startup failure was not reported");
             CheckClean(fake);
+            Check(handle.IsClosed, "Failed startup retained its cancellation wait handle");
+            Check(GetField<CancellationTokenSource>(session, "_cancellation") == null,
+                "Failed startup retained its cancellation source");
             session.Stop();
             CheckClean(fake);
         }

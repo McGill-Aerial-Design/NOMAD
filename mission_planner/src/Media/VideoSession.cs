@@ -96,6 +96,8 @@ namespace NOMAD.MissionPlanner
                     if (generation == _generation)
                     {
                         ClearPendingFrame();
+                        _cancellation?.Dispose();
+                        _cancellation = null;
                         _state = VideoState.Stopped;
                     }
                 }
