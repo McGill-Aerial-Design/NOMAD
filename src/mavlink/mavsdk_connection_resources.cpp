@@ -89,18 +89,23 @@ void MavsdkMavlinkConnection::subscribe(ConnectionResources &candidate) {
         }
     });
     candidate.heartbeat_handle =
-        candidate.passthrough->subscribe_message(MAVLINK_MSG_ID_HEARTBEAT, [gate](const auto &message) {
-            std::lock_guard lock(gate->mutex);
-            if (gate->owner) {
-                gate->owner->observe_heartbeat(message);
-            }
-        });
+        candidate.passthrough->subscribe_message(MAVLINK_MSG_ID_HEARTBEAT, get_heartbeat_callback(gate));
     candidate.connection_handle = candidate.system->subscribe_is_connected([gate](bool connected) {
         std::lock_guard lock(gate->mutex);
         if (gate->owner && !connected) {
             gate->owner->observe_connection_loss();
         }
     });
+}
+
+mavsdk::MavlinkPassthrough::MessageCallback
+MavsdkMavlinkConnection::get_heartbeat_callback(const std::shared_ptr<CallbackGate> &gate) {
+    return [gate](const auto &message) {
+        std::lock_guard lock(gate->mutex);
+        if (gate->owner) {
+            gate->owner->observe_heartbeat(message);
+        }
+    };
 }
 
 void MavsdkMavlinkConnection::publish(std::unique_ptr<ConnectionResources> candidate) {

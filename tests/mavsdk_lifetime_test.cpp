@@ -53,22 +53,17 @@ struct MavsdkConnectionTestAccess {
         return connection.resources_ != nullptr;
     }
 
-    static std::function<bool()> heartbeat_copy(Resources &resources) {
-        const auto gate = resources.callbacks;
-        return [gate] {
-            std::lock_guard lock(gate->mutex);
-            if (!gate->owner) {
-                return false;
-            }
+    static std::function<void()> heartbeat_copy(Resources &resources) {
+        const auto callback = Connection::get_heartbeat_callback(resources.callbacks);
+        return [callback] {
             mavlink_message_t message{};
             mavlink_msg_heartbeat_pack(1, 1, &message, MAV_TYPE_QUADROTOR, MAV_AUTOPILOT_ARDUPILOTMEGA, 0, 12345,
                                        MAV_STATE_ACTIVE);
-            gate->owner->observe_heartbeat(message);
-            return true;
+            callback(message);
         };
     }
 
-    static std::function<bool()> published_callback(Connection &connection) {
+    static std::function<void()> published_callback(Connection &connection) {
         std::shared_lock lock(connection.plugin_lifetime_mutex_);
         return heartbeat_copy(*connection.resources_);
     }
@@ -155,6 +150,17 @@ class Readers {
     std::vector<std::jthread> workers_;
 };
 
+void check_callback_preserves_state(Connection &connection, const std::function<void()> &callback) {
+    const auto before = connection.get_state();
+    callback();
+    const auto after = connection.get_state();
+    CHECK(after.session_id == before.session_id);
+    CHECK(after.custom_mode == before.custom_mode);
+    CHECK(after.system_id == before.system_id);
+    CHECK(after.component_id == before.component_id);
+    CHECK(after.connected == before.connected);
+}
+
 void test_failed_discovery_retry(const std::string &endpoint) {
     Connection connection(endpoint, 1, 60ms);
     Readers readers(connection);
@@ -185,14 +191,14 @@ void test_subscribed_candidate_retry(Connection &connection, Readers &readers) {
     const auto discarded_callback = Access::heartbeat_copy(*candidate);
     readers.observe_phase();
     CHECK(!connection.is_connected());
-    CHECK(!discarded_callback());
+    check_callback_preserves_state(connection, discarded_callback);
     candidate.reset();
-    CHECK(!discarded_callback());
+    check_callback_preserves_state(connection, discarded_callback);
     candidate = Access::prepare(connection, selected);
     Access::publish(connection, std::move(candidate));
-    CHECK(Access::published_callback(connection)());
+    Access::published_callback(connection)();
     CHECK(connection.get_state().custom_mode == 12345);
-    CHECK(!discarded_callback());
+    check_callback_preserves_state(connection, discarded_callback);
     readers.observe_phase();
     connection.disconnect();
 }
@@ -274,13 +280,13 @@ void test_in_flight_callback_retirement(Connection &connection, Readers &readers
     closing.get();
     CHECK(blocked);
     CHECK(callback_entered);
-    CHECK(!copied_callback());
+    check_callback_preserves_state(connection, copied_callback);
     CHECK(!connection.get_state().position_valid);
     readers.observe_phase();
 }
 
 void test_generations_and_owner_destruction(const std::string &endpoint) {
-    std::function<bool()> retired_callback;
+    std::function<void()> retired_callback;
     {
         Connection connection(endpoint, 1, 3s);
         Readers readers(connection);
@@ -292,12 +298,12 @@ void test_generations_and_owner_destruction(const std::string &endpoint) {
             CHECK(state.session_id > previous_session);
             previous_session = state.session_id;
             if (retired_callback) {
-                CHECK(!retired_callback());
+                check_callback_preserves_state(connection, retired_callback);
             }
             retired_callback = Access::published_callback(connection);
             readers.observe_phase();
             connection.disconnect();
-            CHECK(!retired_callback());
+            check_callback_preserves_state(connection, retired_callback);
             CHECK(!connection.is_connected());
             readers.observe_phase();
         }
@@ -308,7 +314,7 @@ void test_generations_and_owner_destruction(const std::string &endpoint) {
         test_in_flight_callback_retirement(connection, readers);
         readers.observe_phase();
     }
-    CHECK(!retired_callback());
+    retired_callback();
 }
 
 } // namespace

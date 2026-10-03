@@ -121,6 +121,8 @@ class MavsdkMavlinkConnection final : public MavlinkConnection {
         std::optional<mavsdk::System::IsConnectedHandle> connection_handle;
     };
 
+    static mavsdk::MavlinkPassthrough::MessageCallback get_heartbeat_callback(
+        const std::shared_ptr<CallbackGate> &gate);
     void subscribe(ConnectionResources &candidate);
     void publish(std::unique_ptr<ConnectionResources> candidate);
     void observe_connection_loss();
