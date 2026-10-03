@@ -20,7 +20,7 @@ internal static partial class NomadCoreClientTests
         private readonly int _connectionCount;
         private readonly string _incarnation;
         private readonly int _session;
-        private readonly int _generation;
+        private int _generation;
         private readonly bool _delayHello;
         private readonly object _state = new object();
         private readonly List<Thread> _workers = new List<Thread>();
@@ -37,6 +37,16 @@ internal static partial class NomadCoreClientTests
         internal bool OmitSequenceFloor { get; set; }
         internal int StaleRequests { get; private set; }
         internal int ResponseSize { get; set; }
+        internal int AuthorityGeneration
+        {
+            get
+            {
+                lock (_state)
+                {
+                    return _generation;
+                }
+            }
+        }
         internal List<Dictionary<string, object>> Commands { get; } = new List<Dictionary<string, object>>();
 
         internal AsyncRuntime(int count, int port = 0, ulong sequenceFloor = 1,
@@ -99,6 +109,11 @@ internal static partial class NomadCoreClientTests
                     }
                     var command = serializer.Deserialize<Dictionary<string, object>>(line);
                     var accepted = RecordCommand(command);
+                    if (command["type"].ToString() == "revoke_authority")
+                    {
+                        writer.WriteLine(serializer.Serialize(CreateAuthorityResponse(command)));
+                        return;
+                    }
                     var channel = command.ContainsKey("channel") ? Convert.ToInt32(command["channel"]) : 3;
                     if (!_responses[channel].Wait(5000))
                     {
@@ -137,13 +152,15 @@ internal static partial class NomadCoreClientTests
         private Dictionary<string, object> CreateHelloResponse(Dictionary<string, object> hello)
         {
             ulong floor;
+            int generation;
             lock (_state)
             {
                 floor = _nextSequence;
+                generation = _generation;
             }
             var authority = new Dictionary<string, object>
             {
-                ["vehicle_session"] = _session, ["generation"] = _generation,
+                ["vehicle_session"] = _session, ["generation"] = generation,
                 ["next_sequence"] = SequenceFloorOverride ?? floor
             };
             if (OmitSequenceFloor)
@@ -166,6 +183,13 @@ internal static partial class NomadCoreClientTests
             lock (_state)
             {
                 Commands.Add(command);
+                if (command["type"].ToString() == "revoke_authority")
+                {
+                    _generation++;
+                    _nextSequence = 1;
+                    Monitor.PulseAll(_state);
+                    return true;
+                }
                 var sequence = Convert.ToUInt64(command["sequence"]);
                 var accepted = sequence >= _nextSequence;
                 if (accepted)
@@ -181,8 +205,35 @@ internal static partial class NomadCoreClientTests
             }
         }
 
-        private static Dictionary<string, object> CreateCommandResponse(Dictionary<string, object> command, int channel)
+        private Dictionary<string, object> CreateAuthorityResponse(Dictionary<string, object> command)
         {
+            return new Dictionary<string, object>
+            {
+                ["protocol"] = "nomad-core", ["version"] = 1, ["id"] = command["id"],
+                ["ok"] = true, ["type"] = "authority_response",
+                ["authority_generation"] = AuthorityGeneration, ["authority_owner"] = ""
+            };
+        }
+
+        private Dictionary<string, object> CreateCommandResponse(Dictionary<string, object> command, int channel)
+        {
+            if (command.TryGetValue("authority_generation", out var generation) &&
+                Convert.ToInt32(generation) != AuthorityGeneration)
+            {
+                return new Dictionary<string, object>
+                {
+                    ["protocol"] = "nomad-core", ["version"] = 1, ["id"] = command["id"],
+                    ["ok"] = false, ["type"] = "error", ["outcome"] = "interrupted",
+                    ["command_result"] = new Dictionary<string, object>
+                    {
+                        ["success"] = true, ["acknowledged"] = true
+                    },
+                    ["error"] = new Dictionary<string, object>
+                    {
+                        ["code"] = "authority_interrupted", ["message"] = "authority changed during vehicle operation"
+                    }
+                };
+            }
             var outcome = channel == 2 ? "rejected" : channel == 3 ? "interrupted" : "success";
             return new Dictionary<string, object>
             {
@@ -206,7 +257,8 @@ internal static partial class NomadCoreClientTests
                     var remaining = deadline - DateTime.UtcNow;
                     if (remaining <= TimeSpan.Zero || !Monitor.Wait(_state, remaining))
                     {
-                        throw new TimeoutException("Expected " + count + " mutations; observed " + Commands.Count + ".");
+                        throw new TimeoutException(
+                            "Expected " + count + " requests; observed " + Commands.Count + ".");
                     }
                 }
             }

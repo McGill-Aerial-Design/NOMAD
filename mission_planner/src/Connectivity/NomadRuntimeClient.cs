@@ -54,16 +54,21 @@ namespace NOMAD.MissionPlanner.Connectivity
                     "missing_credential", "The NOMAD client credential setting is empty.");
             }
 
+            if (IsAuthorityVerb(verb))
+            {
+                return await SendRequestAsync(command, verb, cancellationToken).ConfigureAwait(false);
+            }
+
             var state = GetRequestState();
             if (!await state.MutationGate.WaitAsync(0).ConfigureAwait(false))
             {
                 return new NomadCoreRequestResult(NomadCoreRequestOutcome.NotAttempted,
-                    "request_in_progress", "Another request for this runtime identity is in progress; "
+                    "request_in_progress", "Another vehicle mutation for this runtime identity is in progress; "
                         + "no request was sent.");
             }
             try
             {
-                return await RunMutationAsync(command, verb, cancellationToken).ConfigureAwait(false);
+                return await SendRequestAsync(command, verb, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -71,7 +76,7 @@ namespace NOMAD.MissionPlanner.Connectivity
             }
         }
 
-        private async Task<NomadCoreRequestResult> RunMutationAsync(Dictionary<string, object> command,
+        private async Task<NomadCoreRequestResult> SendRequestAsync(Dictionary<string, object> command,
             string verb, CancellationToken cancellationToken)
         {
             var commandWriteStarted = false;

@@ -441,10 +441,15 @@ uses the runtime's current lower bound immediately. Runtime restart does not
 reset the local counter; each request still binds fresh incarnation, session and
 generation from its own authenticated handshake. A nonwaiting async mutation gate
 shared by endpoint and identity covers hello, allocation, write and response
-classification. Overlapping requests return `NotAttempted` / `request_in_progress`
-before connecting, so same-process requests cannot overtake one another on
-independent connections. The gate is released on every result, failure and
-cancellation. Separate simultaneous processes sharing an identity remain
+classification for vehicle mutations only (servo, relay, motor-test and gimbal
+configuration/target). Overlapping vehicle mutations return `NotAttempted` /
+`request_in_progress` before connecting, so same-process vehicle mutations cannot
+overtake one another on independent connections. Admit, revoke and handback bypass
+this gate, using the same sequence allocator and their own fresh hello/context.
+An operator revoke can therefore advance runtime authority generation while a
+vehicle mutation is executing; that mutation then reports `authority_interrupted`.
+The gate is released on every result, failure and cancellation. Separate
+simultaneous processes sharing an identity remain
 unsupported and do not coordinate their local allocations.
 Duplicate requests can retrieve a cached response only while the same authority
 is still current. An evicted replay is rejected. In-flight operations return

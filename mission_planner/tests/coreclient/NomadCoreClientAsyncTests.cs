@@ -26,6 +26,7 @@ internal static partial class NomadCoreClientTests
         Output_ConcurrentRequestsUseExactResultsAndRejectOverlap();
         Output_ExplicitStopHasOneBoundedWaiter();
         Runtime_ConcurrentSequencesRespectRuntimeFloor();
+        Runtime_RevokeInterruptsActiveMutation();
         Runtime_MockRejectsReversedSequences();
         Runtime_BufferedResponsesPreserveSizeLimit();
         Runtime_InvalidSequenceFloorsFailBeforeMutation();
@@ -124,6 +125,39 @@ internal static partial class NomadCoreClientTests
             "same-process overlap produces no accidental stale_request or deferred mutation retry");
     }
 
+    private static void Runtime_RevokeInterruptsActiveMutation()
+    {
+        using var runtime = new AsyncRuntime(2, sequenceFloor: 900000, generation: 7);
+        var client = new NomadCoreClient("test-key", runtime.Port);
+        var mutation = client.ServoAsync(8, 1500);
+        runtime.WaitForCommands(1);
+        Expect(!mutation.IsCompleted, "vehicle mutation remains active before operator revoke");
+
+        var revoke = WaitResult(client.RevokeAuthorityAsync());
+        Expect(revoke.Succeeded, "revoke bypasses occupied vehicle gate and reaches runtime");
+        runtime.WaitForCommands(2);
+        Expect(runtime.AuthorityGeneration == 8, "runtime revoke advances authority generation from seven to eight");
+        Expect(!mutation.IsCompleted, "revoke completes while original vehicle response is still delayed");
+        var overlap = WaitResult(new NomadCoreClient("test-key", runtime.Port).ServoAsync(8, 1600));
+        Expect(overlap.Outcome == NomadCoreRequestOutcome.NotAttempted && overlap.ErrorCode == "request_in_progress",
+            "authority bypass does not release the active vehicle mutation gate");
+
+        runtime.ReleaseResponse(8);
+        var interrupted = WaitResult(mutation);
+        Expect(interrupted.Outcome == NomadCoreRequestOutcome.Interrupted &&
+            interrupted.ErrorCode == "authority_interrupted" && interrupted.Acknowledged == true,
+            "original request observes runtime authority interruption despite vehicle acknowledgement");
+        Expect(revoke.Succeeded, "original interruption cannot overwrite the revoke result");
+        runtime.Wait();
+        var commands = runtime.Commands;
+        Expect(commands.Count == 2 && runtime.AcceptedConnections == 2 && runtime.StaleRequests == 0,
+            "one mutation and one revoke are sent with no retry or queued overlap");
+        Expect(commands[1]["type"].ToString() == "revoke_authority" &&
+            Convert.ToInt32(commands[1]["authority_generation"]) == 7 &&
+            Convert.ToUInt64(commands[1]["sequence"]) > Convert.ToUInt64(commands[0]["sequence"]),
+            "revoke uses fresh hello context and the same increasing identity sequence allocator");
+    }
+
     private static void Output_ConcurrentRequestsUseExactResultsAndRejectOverlap()
     {
         using var runtime = new AsyncRuntime(1);
@@ -172,7 +206,7 @@ internal static partial class NomadCoreClientTests
         reader.ReadLine();
         writer.WriteLine(serializer.Serialize(new Dictionary<string, object>
         {
-            ["id"] = Guid.NewGuid().ToString("N"), ["channel"] = 8, ["sequence"] = sequence
+            ["id"] = Guid.NewGuid().ToString("N"), ["type"] = "set_servo", ["channel"] = 8, ["sequence"] = sequence
         }));
         return serializer.Deserialize<Dictionary<string, object>>(reader.ReadLine());
     }
