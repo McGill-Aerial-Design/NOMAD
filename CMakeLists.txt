@@ -174,8 +174,8 @@ endif()
 
 if(PROJECT_IS_TOP_LEVEL)
     include(GNUInstallDirs)
-    if(NOMAD_FIXTURE_VERSION)
-        install(CODE "message(FATAL_ERROR \"Test fixture runtimes cannot be installed or packaged\")"
+    if(NOMAD_FIXTURE_VERSION OR NOMAD_SOURCE_ARCHIVE)
+        install(CODE "message(FATAL_ERROR \"Fixture/source-archive runtimes cannot be installed or packaged\")"
                 COMPONENT nomad_runtime)
     endif()
 

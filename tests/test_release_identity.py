@@ -248,3 +248,24 @@ def test_cmake_uses_requested_tag_when_commit_has_multiple_tags(tmp_path):
     result = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True, env=environment, timeout=10)
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "identity.txt").read_text() == "v2.3.4"
+
+
+@pytest.mark.skipif(not shutil.which("cmake"), reason="CMake source-archive check")
+def test_source_archive_has_honest_nonrelease_identity(tmp_path):
+    cmake = tmp_path / "cmake"
+    cmake.mkdir()
+    shutil.copyfile(identity.ROOT / "cmake/ReleaseIdentity.cmake", cmake / "ReleaseIdentity.cmake")
+    script = cmake / "read.cmake"
+    script.write_text(
+        'include("${CMAKE_CURRENT_LIST_DIR}/ReleaseIdentity.cmake")\n'
+        "if(NOMAD_OFFICIAL OR NOT NOMAD_SOURCE_ARCHIVE)\n"
+        'message(FATAL_ERROR "Source archive impersonates a release")\nendif()\n'
+        'file(WRITE "${CMAKE_CURRENT_LIST_DIR}/../identity.txt" "${NOMAD_COMPONENT_VERSION}")\n'
+    )
+    result = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "identity.txt").read_text() == "0.0.0-development"
+    for name in ("sim-ros", "jetson", "sim-isaac"):
+        dockerfile = (identity.ROOT / "docker" / ("Dockerfile." + name)).read_text(encoding="utf-8")
+        assert "COPY cmake/ /ws/src/nomad/cmake/" in dockerfile
+    assert "NOMAD_FIXTURE_VERSION OR NOMAD_SOURCE_ARCHIVE" in (identity.ROOT / "CMakeLists.txt").read_text()

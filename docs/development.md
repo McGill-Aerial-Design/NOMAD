@@ -65,6 +65,10 @@ pixi run precommit
 changed-file limits. The Python suite checks that documented `pixi run` tasks
 exist and that internal Markdown links resolve.
 
+Source-only ROS container builds omit Git metadata and report
+`0.0.0-development`; they cannot install/package a production core release.
+Release archives are generated from a provenance-bearing Git checkout.
+
 ## Software resource qualification
 
 Run the production Release measurement and budget verifier without hardware:

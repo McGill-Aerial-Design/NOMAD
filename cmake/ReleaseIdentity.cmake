@@ -1,6 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
 # Git supplies release provenance; a development build never impersonates a tag.
+# Source-only ROS images deliberately omit Git and cannot produce release packages.
+if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/../.git")
+    set(NOMAD_SOURCE_ARCHIVE true)
+    set(NOMAD_PROJECT_VERSION "0.0.0")
+    set(NOMAD_RELEASE_VERSION "dev-source-archive")
+    set(NOMAD_COMPONENT_VERSION "0.0.0-development")
+    set(NOMAD_SOURCE_SHA "unknown")
+    set(NOMAD_MAVSDK_SHA "unknown")
+    set(NOMAD_SOURCE_DIRTY true)
+    set(NOMAD_OFFICIAL false)
+    return()
+endif()
 execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/.."
     OUTPUT_VARIABLE NOMAD_SOURCE_SHA OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND git ls-tree HEAD third_party/MAVSDK WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/.."
