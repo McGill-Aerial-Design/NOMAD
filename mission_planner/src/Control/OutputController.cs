@@ -35,7 +35,8 @@ namespace NOMAD.MissionPlanner
         private static void Audit(string command, bool accepted, string detail)
         {
             // Keep the command name aligned with the runtime audit line for correlation.
-            var outcome = accepted ? "accepted" : "failed";
+            var client = CreateCoreClient();
+            var outcome = accepted ? "success" : FormatOutcome(client?.LastOutcome ?? NomadCoreRequestOutcome.NotAttempted);
             Log.Info($"audit command={command} result={outcome} {detail}");
         }
 
@@ -56,7 +57,7 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Drive an ArduPilot servo channel to a PWM value through the core
-        /// (MAV_CMD_DO_SET_SERVO, acknowledged and verified by the core).
+        /// (MAV_CMD_DO_SET_SERVO, acknowledged by the core; physical effect is not verified).
         /// Fails closed on invalid input or an unavailable/refusing core.
         /// </summary>
         public static Task<bool> SendServoPwmAsync(int channel, int pwmUs)
@@ -66,10 +67,6 @@ namespace NOMAD.MissionPlanner
 
         public static bool SendServoPwm(int channel, int pwmUs)
         {
-            if (channel <= 0 || pwmUs < 500 || pwmUs > 2500)
-            {
-                return false;
-            }
             var client = CreateCoreClient();
             if (client == null)
             {
@@ -89,15 +86,11 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Toggle an ArduPilot relay through the core (MAV_CMD_DO_SET_RELAY,
-        /// acknowledged and verified by the core). Fails closed when the core
+        /// acknowledged by the core; physical effect is not verified). Fails closed when the core
         /// is not configured, refuses, or cannot reach the vehicle.
         /// </summary>
         public static bool TrySetRelay(int relayNumber, bool on)
         {
-            if (relayNumber < 0)
-            {
-                return false;
-            }
             var client = CreateCoreClient();
             if (client == null)
             {
@@ -131,14 +124,7 @@ namespace NOMAD.MissionPlanner
                     return true;
                 }
 
-                var detail = string.IsNullOrWhiteSpace(client.LastMessage)
-                    ? client.LastErrorCode
-                    : $"{client.LastErrorCode}: {client.LastMessage}";
-                if (client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome)
-                {
-                    detail += " Do not retry blindly; the vehicle outcome is unknown.";
-                }
-                ReportGimbalFailure(detail);
+                ReportGimbalFailure(DescribeFailure("Gimbal target", client));
                 return false;
             }
         }
@@ -157,7 +143,7 @@ namespace NOMAD.MissionPlanner
                 {
                     return true;
                 }
-                Log.Warn($"Gimbal configure failed: {client.LastErrorCode}: {client.LastMessage}");
+                Log.Warn(DescribeFailure("Gimbal configure", client));
                 return false;
             }
         }
@@ -186,18 +172,45 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private static string DescribeFailure(string action, NomadCoreClient client)
+        internal static string DescribeFailure(string action, NomadCoreClient client)
         {
-            if (client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome)
+            var evidence = client.LastOutcome switch
             {
-                return $"{action}: runtime connection ended after send; vehicle outcome unknown. Do not retry blindly.";
-            }
-            return $"{action}: core refused or could not reach the vehicle.";
+                NomadCoreRequestOutcome.Rejected => "Command was not sent to the vehicle; runtime rejected it.",
+                NomadCoreRequestOutcome.Failed => "Operation was attempted and NOMAD obtained a definite failure.",
+                NomadCoreRequestOutcome.Interrupted => "Authority or session changed during execution; "
+                    + "final vehicle state is unknown. Do not retry blindly.",
+                NomadCoreRequestOutcome.UnknownOutcome => "Request may have been transmitted; "
+                    + "final vehicle state is unknown. Do not retry blindly.",
+                _ => "No runtime mutation request was sent.",
+            };
+            return $"{action}: {evidence} {client.LastErrorCode}: {client.LastMessage}";
+        }
+
+        internal static string DescribeLastFailure(string action)
+        {
+            var client = CreateCoreClient();
+            return client == null ? $"{action}: NOMAD core is not configured; no request was sent."
+                : DescribeFailure(action, client);
+        }
+
+        private static string FormatOutcome(NomadCoreRequestOutcome outcome)
+        {
+            return outcome switch
+            {
+                NomadCoreRequestOutcome.Succeeded => "success",
+                NomadCoreRequestOutcome.Rejected => "rejected",
+                NomadCoreRequestOutcome.Failed => "failed",
+                NomadCoreRequestOutcome.Interrupted => "interrupted",
+                NomadCoreRequestOutcome.UnknownOutcome => "unknown",
+                NomadCoreRequestOutcome.FailedBeforeSend => "failed-before-send",
+                _ => "not-attempted",
+            };
         }
 
         private static string FailureReason(NomadCoreClient client)
         {
-            return client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome ? "unknown_outcome" : "core_refused";
+            return client.LastOutcome.ToString();
         }
 
         /// <summary>
@@ -209,10 +222,6 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static async Task<bool> FireRelayAsync(int relayNumber, int durationMs)
         {
-            if (relayNumber < 0)
-            {
-                return false;
-            }
             durationMs = Math.Max(50, Math.Min(durationMs, 5000));
             if (!TrySetRelay(relayNumber, true))
             {

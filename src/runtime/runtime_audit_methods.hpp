@@ -5,6 +5,10 @@
         auto response = error_response(request.id, "audit_failure",
                                        "durable audit failed; mutations inhibited until restart");
         response["outcome"] = possible_send ? "unknown" : "rejected";
+        if (is_mutating(request.type) && possible_send) {
+            response["command_result"] = {{"success", request.observed_success->load()},
+                                          {"acknowledged", request.ack_observed->load()}};
+        }
         return response;
     }
 
@@ -29,7 +33,11 @@
             identity = authenticated_identity(envelope);
         }
         Json record{{"event", "request_rejected"}, {"client", identity.empty() ? Json(nullptr) : Json(identity)},
-                    {"reason", reason}, {"send_eligible", false}, {"operation", field_string(envelope, "type")}};
+                    {"reason", reason}, {"send_eligible", false},
+                    {"operation", field_string(envelope, "type")}};
+        if (is_mutating(field_string(envelope, "type"))) {
+            record["result"] = "rejected";
+        }
         if (!identity.empty()) {
             record["request_id"] = field_string(envelope, "id");
         }
@@ -120,8 +128,16 @@
         return Json::parse(detail::redact_credentials(record.dump(), config_.client_credentials));
     }
 
-    bool audit_request(const Request &request, const std::string &event, const std::string &result) {
-        auto record = request_record(request, event, result);
+    bool audit_request(const Request &request, const std::string &event, const std::string &result,
+                       const std::string &outcome = "rejected") {
+        const bool rejected_mutation = event == "request_rejected" && is_mutating(request.type);
+        auto record = request_record(request, event, rejected_mutation ? outcome : result);
+        if (rejected_mutation) {
+            record["reason"] = result;
+            if (outcome == "unknown") {
+                record["send_eligible"] = "unknown";
+            }
+        }
         {
             std::shared_lock lock(authority_gate_->mutex);
             record["observed_session"] = authority_gate_->vehicle_session;
@@ -132,6 +148,11 @@
     }
 
     Json finish_operation(const Request &request, Json response, const std::string &outcome) {
+        response["outcome"] = outcome;
+        if (!response.contains("command_result")) {
+            response["command_result"] = {{"success", request.observed_success->load()},
+                                          {"acknowledged", request.ack_observed->load()}};
+        }
         if (!audit_request(request, "mutation_outcome", outcome)) {
             return audit_error(request, request.admission_check_passed->load() || request.ack_observed->load());
         }

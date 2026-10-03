@@ -31,7 +31,8 @@ namespace NOMAD.MissionPlanner
         public static float TargetPitchDeg { get; private set; }
         public static float TargetRollDeg { get; private set; }
 
-        public static MountMode CurrentMode { get; private set; } = MountMode.MavlinkTargeting;
+        // Desired input preset, not an observed or confirmed vehicle mount mode.
+        public static MountMode SelectedMode { get; private set; } = MountMode.MavlinkTargeting;
 
         // Shared rate limit for ALL stick-driven inputs (floating window + physical
         // joystick service). Lives here so changing it in one UI is immediately
@@ -59,7 +60,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static event Action<float, float> TargetChanged;
 
-        /// <summary>Fires when the mount mode preset changes.</summary>
+        /// <summary>Fires when the desired mount mode preset changes; vehicle acceptance is separate.</summary>
         public static event Action<MountMode> ModeChanged;
 
         private static int _inflight; // 0/1 — Interlocked.Exchange guards.
@@ -77,7 +78,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static void NudgeTarget(float pitchDeltaDeg, float rollDeltaDeg)
         {
-            if (CurrentMode != MountMode.MavlinkTargeting)
+            if (SelectedMode != MountMode.MavlinkTargeting)
                 SetMode(MountMode.MavlinkTargeting);
 
             SetTargetAngles(TargetPitchDeg + pitchDeltaDeg, TargetRollDeg + rollDeltaDeg);
@@ -106,7 +107,7 @@ namespace NOMAD.MissionPlanner
 
         public static void SetMode(MountMode mode)
         {
-            CurrentMode = mode;
+            SelectedMode = mode;
             ModeChanged?.Invoke(mode);
             OutputController.ConfigureGimbal((int)mode);
         }

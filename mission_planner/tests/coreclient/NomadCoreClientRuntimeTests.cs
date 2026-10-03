@@ -213,6 +213,11 @@ internal static partial class NomadCoreClientTests
         private readonly bool _wrongAuthorityResponseType;
         private readonly bool _rogueRuntime;
         private readonly bool _auditFailure;
+        private readonly string _outcome;
+        private readonly string _errorCode;
+        private readonly bool _acknowledged;
+        private readonly bool _includeErrorResult;
+        private readonly bool? _resultSuccess;
         private string _owner = "";
         private int _generation;
         private bool _everAdmitted;
@@ -228,7 +233,9 @@ internal static partial class NomadCoreClientTests
 
         public MockRuntime(int expectedConnections, bool dropCommandResponse = false, int helloVersion = 1,
                            int commandResponseVersion = 1, int port = 0, bool enforceAuthority = false,
-                           bool wrongAuthorityResponseType = false, bool rogueRuntime = false, bool auditFailure = false)
+                           bool wrongAuthorityResponseType = false, bool rogueRuntime = false, bool auditFailure = false,
+                           string outcome = "success", string errorCode = null, bool acknowledged = true,
+                           bool includeErrorResult = false, bool? resultSuccess = null)
         {
             _expectedConnections = expectedConnections;
             _dropCommandResponse = dropCommandResponse;
@@ -238,6 +245,11 @@ internal static partial class NomadCoreClientTests
             _wrongAuthorityResponseType = wrongAuthorityResponseType;
             _rogueRuntime = rogueRuntime;
             _auditFailure = auditFailure;
+            _outcome = outcome;
+            _errorCode = errorCode;
+            _acknowledged = acknowledged;
+            _includeErrorResult = includeErrorResult;
+            _resultSuccess = resultSuccess;
             _listener = new TcpListener(IPAddress.Loopback, port);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -304,6 +316,26 @@ internal static partial class NomadCoreClientTests
                 ["protocol"] = "nomad-core", ["version"] = _commandResponseVersion,
                 ["id"] = command["id"], ["ok"] = true
             };
+            if (_errorCode != null)
+            {
+                response["ok"] = false;
+                if (_outcome != null)
+                {
+                    response["outcome"] = _outcome;
+                }
+                if (_includeErrorResult)
+                {
+                    response["command_result"] = new Dictionary<string, object>
+                    {
+                        ["success"] = _resultSuccess ?? false, ["acknowledged"] = _acknowledged
+                    };
+                }
+                response["error"] = new Dictionary<string, object>
+                {
+                    ["code"] = _errorCode, ["message"] = "Controlled runtime error"
+                };
+                return response;
+            }
             if (_auditFailure)
             {
                 response["ok"] = false;
@@ -326,9 +358,14 @@ internal static partial class NomadCoreClientTests
                 return response;
             }
             response["type"] = "command_response";
+            if (_outcome != null)
+            {
+                response["outcome"] = _outcome;
+            }
             response["command_result"] = new Dictionary<string, object>
             {
-                ["success"] = true, ["message"] = "command verified"
+                ["success"] = _resultSuccess ?? (_outcome == "success"), ["acknowledged"] = _acknowledged,
+                ["message"] = "Controlled software result"
             };
             return response;
         }
@@ -377,6 +414,7 @@ internal static partial class NomadCoreClientTests
         private static bool Reject(Dictionary<string, object> response, string code)
         {
             response["ok"] = false;
+            response["outcome"] = "rejected";
             response["error"] = new Dictionary<string, object> { ["code"] = code, ["message"] = code };
             return false;
         }

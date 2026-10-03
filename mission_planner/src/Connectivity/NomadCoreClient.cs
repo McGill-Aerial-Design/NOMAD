@@ -12,7 +12,9 @@ namespace NOMAD.MissionPlanner.Connectivity
         Succeeded,
         Rejected,
         FailedBeforeSend,
-        UnknownOutcome
+        UnknownOutcome,
+        Failed,
+        Interrupted
     }
 
     /// <summary>
@@ -28,6 +30,7 @@ namespace NOMAD.MissionPlanner.Connectivity
         public NomadCoreRequestOutcome LastOutcome { get; private set; }
         public string LastErrorCode { get; private set; } = "";
         public string LastMessage { get; private set; } = "";
+        public bool? LastAcknowledged { get; private set; }
 
         private readonly NomadRuntimeClient _runtimeClient;
 
@@ -56,7 +59,7 @@ namespace NOMAD.MissionPlanner.Connectivity
         {
             if (channel < 1 || pwmUs < 500 || pwmUs > 2500)
             {
-                return false;
+                return RejectLocal("Servo channel and PWM are invalid.");
             }
             return RunCore("servo", channel.ToString(CultureInfo.InvariantCulture),
                            pwmUs.ToString(CultureInfo.InvariantCulture)) == 0;
@@ -69,7 +72,7 @@ namespace NOMAD.MissionPlanner.Connectivity
         {
             if (relayNumber < 0 || relayNumber > 15)
             {
-                return false;
+                return RejectLocal("Relay must be between 0 and 15.");
             }
             return RunCore("relay", relayNumber.ToString(CultureInfo.InvariantCulture), on ? "1" : "0") == 0;
         }
@@ -82,7 +85,7 @@ namespace NOMAD.MissionPlanner.Connectivity
         {
             if (motorInstance < 1 || (pwmUs != 0 && (pwmUs < 500 || pwmUs > 2500)) || !IsFinite(timeoutSeconds))
             {
-                return false;
+                return RejectLocal("Motor instance, PWM or timeout is invalid.");
             }
             var clamped = Math.Max(0.05, Math.Min(timeoutSeconds, 3.0));
             return RunCore(
@@ -99,7 +102,7 @@ namespace NOMAD.MissionPlanner.Connectivity
         {
             if (mountMode < 0 || mountMode > 4)
             {
-                return false;
+                return RejectLocal("Gimbal mount mode must be between 0 and 4.");
             }
             return RunCore("gimbal-config", mountMode.ToString(CultureInfo.InvariantCulture)) == 0;
         }
@@ -111,22 +114,25 @@ namespace NOMAD.MissionPlanner.Connectivity
         {
             if (!IsFinite(pitchDeg) || pitchDeg < -90.0 || pitchDeg > 90.0)
             {
-                LastOutcome = NomadCoreRequestOutcome.Rejected;
-                LastErrorCode = "invalid_argument";
-                LastMessage = "Gimbal pitch must be finite and between -90 and 90 degrees.";
-                return false;
+                return RejectLocal("Gimbal pitch must be finite and between -90 and 90 degrees.");
             }
             if (!IsFinite(rollDeg) || rollDeg < -30.0 || rollDeg > 30.0)
             {
-                LastOutcome = NomadCoreRequestOutcome.Rejected;
-                LastErrorCode = "invalid_argument";
-                LastMessage = "Gimbal roll must be finite and between -30 and 30 degrees.";
-                return false;
+                return RejectLocal("Gimbal roll must be finite and between -30 and 30 degrees.");
             }
             return RunCore(
                 "gimbal-target",
                 pitchDeg.ToString("R", CultureInfo.InvariantCulture),
                 rollDeg.ToString("R", CultureInfo.InvariantCulture)) == 0;
+        }
+
+        private bool RejectLocal(string message)
+        {
+            LastOutcome = NomadCoreRequestOutcome.NotAttempted;
+            LastErrorCode = "invalid_argument";
+            LastMessage = message;
+            LastAcknowledged = null;
+            return false;
         }
 
         private static bool IsFinite(double value)
@@ -146,6 +152,7 @@ namespace NOMAD.MissionPlanner.Connectivity
             LastOutcome = _runtimeClient.LastOutcome;
             LastErrorCode = _runtimeClient.LastErrorCode;
             LastMessage = _runtimeClient.LastMessage;
+            LastAcknowledged = _runtimeClient.LastAcknowledged;
         }
     }
 }

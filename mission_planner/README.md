@@ -46,6 +46,17 @@ Portable profile exports omit this secret. The runtime deployment
 typed runtime requests; maintenance parameter paths and native
 Mission Planner/RC controls remain outside this client boundary. Global authority
 handover is open.
+
+The [runtime outcome contract](../docs/runtime-ipc.md#vehicle-mutation-outcomes)
+preserves success, rejection before eligible send, definite failure,
+interruption and unknown result separately. The client also distinguishes local
+validation from connection failure before request write. ACK evidence remains
+separate from success and physical completion. Release/retract controls display
+commanded payload state and explicitly leave physical state unverified; a
+failed or uncertain request does not change the recorded commanded state.
+Reel messages describe accepted movement/stop commands and local timer expiry,
+without asserting motion or stopping. Gimbal mode readouts say selected mode:
+they show operator intent rather than observed vehicle configuration.
 For CONOPS v1.0, the dedicated GCS display must show live aircraft position and
 competition area (AE27-OPS-004). The LAND-as-termination recipe and descent-speed
 settings are removed. The monitored termination button and hard-boundary request

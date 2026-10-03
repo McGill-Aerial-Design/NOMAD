@@ -171,6 +171,96 @@ runtime outcomes do not trigger a direct MAVLink fallback or replay.
 It does not authenticate identity. Mission Planner's old `CoreApiKey` setting
 is retired and ignored; it is never migrated into an authentication credential.
 
+## Vehicle mutation outcomes
+
+The five vehicle mutations use the existing additive protocol v1 `outcome`
+field on both `command_response` and error envelopes. `ok` describes the
+response envelope, not vehicle success. `error.code` explains why normal
+completion was unavailable; it does not classify transmission. Authority
+admission, revocation and handback are runtime state transitions and retain
+their separate `authority_response` contract.
+
+Protocol v1 already carried `outcome` on vehicle command responses; extending
+it to error envelopes and preserving it in updated clients is additive. No
+version bump or legacy inference fallback is needed. Missing classification
+from an older runtime remains unknown to an updated mutation client.
+
+| `outcome` | What NOMAD knows | Transmission guarantee |
+|---|---|---|
+| `success` | The operation's existing software success criterion was satisfied | A valid command result was obtained; physical effect is not guaranteed |
+| `rejected` | The request never became eligible for vehicle transmission | Definitely no eligible vehicle send for this attempt |
+| `failed` | A legitimate attempt produced a definite unsuccessful result | The command may have been sent; a negative FC ACK proves it was received |
+| `interrupted` | Authority, session or lifecycle changed after possible execution | Specialized unknown: final vehicle effect cannot be asserted |
+| `unknown` | The final result cannot be established | Vehicle transmission is possible; missing evidence is not a rejection |
+
+Current servo, relay, motor-test, gimbal configuration and gimbal target
+operations succeed on command-protocol acceptance. They do not observe servo
+travel, payload release, motor motion or gimbal arrival. `command_result.success`
+retains the Vehicle result and `command_result.acknowledged` independently
+records whether the FC responded, including a negative ACK. Error envelopes
+after execution retain available command evidence as well as `outcome`.
+An interrupted response can therefore retain a successful/acknowledged command
+result while its authoritative request outcome remains `interrupted`.
+
+For example, authority loss after possible transmission returns:
+
+```json
+{
+  "protocol": "nomad-core",
+  "version": 1,
+  "id": "release-request",
+  "ok": false,
+  "error": {
+    "code": "authority_interrupted",
+    "message": "authority changed during vehicle operation"
+  },
+  "outcome": "interrupted"
+}
+```
+
+The durable `mutation_outcome.result` and response `outcome` use the same
+classification. Pre-execution rejection records also expose `result: rejected`
+while retaining the specific rejection reason. An exact request ID still in
+progress reports `request_in_progress` / `unknown`: this duplicate does not
+execute again, but the original operation may already have been transmitted.
+Its journal record retains that uncertainty. If an outcome cannot be durably
+written after a possible send, the response is `audit_failure` / `unknown`;
+the remaining intent is incomplete evidence, interpreted as unknown, rather
+than a fabricated durable outcome. If no send was eligible, audit failure is
+`rejected`. The audit health latch and durable-intent-before-execution rule
+remain in force.
+
+The pinned MAVSDK admission callback runs at preflight as well as send time.
+Cancellation before any admitted callback or ACK is `rejected`. Cancellation
+after admitted preflight alone cannot establish zero transmission and remains
+`unknown`, or `interrupted` if authority changed. Independent zero-wire tests
+do not manufacture stronger evidence inside the runtime.
+
+Mission Planner preserves the five outcomes, plus `NotAttempted` for local
+validation and `FailedBeforeSend` for failure before the mutation request write
+begins. A socket failure after write begins, mismatched response, or absent or
+unrecognized mutation outcome is `UnknownOutcome`; no error-code fallback
+guesses rejection. A nullable acknowledgement property preserves unavailable
+versus observed ACK evidence. Authority responses are interpreted separately.
+
+Cached responses retain their original outcome and command evidence while the
+request context remains current, including after audit health latches false.
+Authority validation still precedes cache retrieval. An interrupted request
+whose generation changed is consequently rejected on a later stale request,
+without executing again. Eviction never clears the sequence high-water mark.
+No mutation outcome authorizes automatic retry without explicit higher-level
+reasoning. In particular:
+
+- success != guaranteed physical effect;
+- acknowledged != physical completion;
+- unknown != failed;
+- unknown != rejected;
+- interrupted != safe to retry automatically.
+
+Debt: mutable last-result properties and synchronous client I/O remain; revisit
+when implementing audit M2; then carry immutable per-request results and modernize
+I/O without changing this outcome vocabulary.
+
 ## Authenticated local clients
 
 The pre-slice implementation checked only self-declared `client_id` and

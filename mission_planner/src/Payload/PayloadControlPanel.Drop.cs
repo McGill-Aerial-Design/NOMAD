@@ -7,7 +7,7 @@
 //   Drop   - three-click-armed drop / retract servo button.
 //   Slider - live PWM slider for an aiming / nozzle servo.
 //   Relay  - GPIO / relay output: momentary "Fire" pulse or latching toggle.
-// Drop state is shared across panel instances (and read by the joystick service).
+// Commanded release state is shared across panel instances (and read by the joystick service).
 //
 // The arm/confirm decision for the release paths (drop + momentary relay fire)
 // lives in the pure, unit-tested PayloadReleaseInterlock (tier SC); this file is
@@ -51,7 +51,7 @@ namespace NOMAD.MissionPlanner
         private readonly Dictionary<int, PayloadControl>           _dropPayloads    = new Dictionary<int, PayloadControl>();
         private readonly Dictionary<int, PayloadReleaseInterlock>  _dropInterlocks  = new Dictionary<int, PayloadReleaseInterlock>();
         private readonly Dictionary<int, Timer>                    _dropResetTimers = new Dictionary<int, Timer>();
-        private readonly Dictionary<int, bool>                     _dropDropped     = new Dictionary<int, bool>();
+        private readonly Dictionary<int, bool>                     _dropReleaseCommanded = new Dictionary<int, bool>();
 
         // Per slider-index settle timers (final send after the slider stops moving).
         private readonly Dictionary<int, Timer> _sliderSettleTimers = new Dictionary<int, Timer>();
@@ -89,22 +89,24 @@ namespace NOMAD.MissionPlanner
         }
 
         // ============================================================
-        // Cross-panel drop-state sync (also read by NomadJoystickService)
+        // Cross-panel commanded-release sync (also read by NomadJoystickService)
         // ============================================================
 
-        public static event Action<int, bool> PayloadDroppedStateChanged;
+        public static event Action<int, bool> PayloadReleaseCommandedStateChanged;
 
-        private static readonly bool[] s_payloadDropped = new bool[NOMADConfig.MaxPayloads];
+        private static readonly bool[] s_payloadReleaseCommanded = new bool[NOMADConfig.MaxPayloads];
 
-        /// <summary>True if drop payload <paramref name="dropIdx0"/> (0-based) is currently dropped.</summary>
-        public static bool IsPayloadDropped(int dropIdx0)
-            => dropIdx0 >= 0 && dropIdx0 < s_payloadDropped.Length && s_payloadDropped[dropIdx0];
+        /// <summary>
+        /// True after a successful release command. Physical payload state is unobserved.
+        /// </summary>
+        public static bool IsPayloadReleaseCommanded(int dropIdx0)
+            => dropIdx0 >= 0 && dropIdx0 < s_payloadReleaseCommanded.Length && s_payloadReleaseCommanded[dropIdx0];
 
-        public static void RaisePayloadDroppedState(int dropIdx0, bool isDropped)
+        public static void RaisePayloadReleaseCommandedState(int dropIdx0, bool releaseCommanded)
         {
-            if (dropIdx0 < 0 || dropIdx0 >= s_payloadDropped.Length) return;
-            s_payloadDropped[dropIdx0] = isDropped;
-            PayloadDroppedStateChanged?.Invoke(dropIdx0, isDropped);
+            if (dropIdx0 < 0 || dropIdx0 >= s_payloadReleaseCommanded.Length) return;
+            s_payloadReleaseCommanded[dropIdx0] = releaseCommanded;
+            PayloadReleaseCommandedStateChanged?.Invoke(dropIdx0, releaseCommanded);
         }
 
         // ============================================================
@@ -161,14 +163,14 @@ namespace NOMAD.MissionPlanner
             _dropButtons[dropIdx]    = btn;
             _dropPayloads[dropIdx]   = p;
             DropInterlock(dropIdx).Reset();
-            _dropDropped[dropIdx]    = IsPayloadDropped(dropIdx);
+            _dropReleaseCommanded[dropIdx]    = IsPayloadReleaseCommanded(dropIdx);
 
             y += ROW_H + ROW_GAP;
         }
 
         private void OnDropClick(int dropIdx)
         {
-            if (_dropDropped.TryGetValue(dropIdx, out bool dropped) && dropped)
+            if (_dropReleaseCommanded.TryGetValue(dropIdx, out bool releaseCommanded) && releaseCommanded)
             {
                 ExecuteRetract(dropIdx);
                 return;
@@ -230,12 +232,12 @@ namespace NOMAD.MissionPlanner
             int pwmDrop = p.Reversed ? p.PwmMin : p.PwmMax;
             if (await OutputController.SendServoPwmAsync(p.Channel, pwmDrop))
             {
-                SetStatus($"{p.Name} dropped  (ch{p.Channel} {pwmDrop}us)", SUCCESS_COLOR);
-                RaisePayloadDroppedState(dropIdx, true);
+                SetStatus($"{p.Name}: release command accepted; physical release unverified", SUCCESS_COLOR);
+                RaisePayloadReleaseCommandedState(dropIdx, true);
             }
             else
             {
-                SetStatus("Drop failed: output command unavailable", ERROR_COLOR);
+                SetStatus(OutputController.DescribeLastFailure("Release command"), ERROR_COLOR);
             }
         }
 
@@ -248,38 +250,42 @@ namespace NOMAD.MissionPlanner
                 return;
             }
 
-            RaisePayloadDroppedState(dropIdx, false);
-
             int pwmRetract = p.Reversed ? p.PwmMax : p.PwmMin;
             if (await OutputController.SendServoPwmAsync(p.Channel, pwmRetract))
-                SetStatus($"{p.Name} retracted  (ch{p.Channel} {pwmRetract}us)", SUCCESS_COLOR);
+            {
+                RaisePayloadReleaseCommandedState(dropIdx, false);
+                SetStatus($"{p.Name}: retract command accepted; physical retraction unverified", SUCCESS_COLOR);
+            }
             else
-                SetStatus("Retract failed: output command unavailable", ERROR_COLOR);
+            {
+                SetStatus(OutputController.DescribeLastFailure("Retract command"), ERROR_COLOR);
+            }
         }
 
-        private void OnPayloadDroppedStateChanged(int dropIdx0, bool isDropped)
+        private void OnPayloadReleaseCommandedStateChanged(int dropIdx0, bool releaseCommanded)
         {
             if (IsDisposed) return;
-            UiAsync.RunSync(this, () => ApplyDropVisual(dropIdx0, isDropped), "OnPayloadDroppedStateChanged");
+            UiAsync.RunSync(this, () => ApplyDropVisual(dropIdx0, releaseCommanded),
+                "OnPayloadReleaseCommandedStateChanged");
         }
 
-        private void ApplyDropVisual(int dropIdx, bool isDropped)
+        private void ApplyDropVisual(int dropIdx, bool releaseCommanded)
         {
             if (!_dropButtons.TryGetValue(dropIdx, out var btn) || btn == null) return;
 
-            _dropDropped[dropIdx] = isDropped;
+            _dropReleaseCommanded[dropIdx] = releaseCommanded;
             ClearDropResetTimer(dropIdx);
             DropInterlock(dropIdx).Reset();
 
             string name = DropName(dropIdx);
-            btn.Text = isDropped ? $"Retract {name}" : $"Drop {name}";
-            btn.BackColor = isDropped ? DROP_COLOR_DROPPED : DROP_COLOR_IDLE;
+            btn.Text = releaseCommanded ? $"Retract {name}" : $"Drop {name}";
+            btn.BackColor = releaseCommanded ? DROP_COLOR_DROPPED : DROP_COLOR_IDLE;
         }
 
         private void SeedDropVisuals()
         {
             foreach (var dropIdx in _dropButtons.Keys)
-                ApplyDropVisual(dropIdx, IsPayloadDropped(dropIdx));
+                ApplyDropVisual(dropIdx, IsPayloadReleaseCommanded(dropIdx));
         }
 
         private string DropName(int dropIdx)
@@ -380,7 +386,7 @@ namespace NOMAD.MissionPlanner
             }
             else
             {
-                var btn = MakeButton($"{p.Name}: OFF", Color.FromArgb(70, 70, 78), 120, ROW_H);
+                var btn = MakeButton($"{p.Name}: no confirmed command", Color.FromArgb(70, 70, 78), 120, ROW_H);
                 btn.Location = new Point(100, y);
                 btn.Click += (s, e) => ToggleRelay(p, btn);
                 Controls.Add(btn);
@@ -445,7 +451,8 @@ namespace NOMAD.MissionPlanner
             SetStatus($"{p.Name} firing  ({p.PulseMs}ms)...", SUCCESS_COLOR);
             bool success = await OutputController.FireRelayAsync(p.Channel, p.PulseMs);
             SetStatus(
-                success ? $"{p.Name} done" : $"{p.Name} failed: relay command unavailable",
+                success ? $"{p.Name}: pulse commands accepted; physical effect unverified"
+                    : OutputController.DescribeLastFailure("Relay pulse"),
                 success ? SUCCESS_COLOR : ERROR_COLOR);
         }
 
@@ -453,14 +460,16 @@ namespace NOMAD.MissionPlanner
         {
             bool current = _relayOn.TryGetValue(p.Channel, out bool on) && on;
             bool next = !current;
-            _relayOn[p.Channel] = next;
-
             bool sent = OutputController.TrySetRelay(p.Channel, next);
-            btn.Text = $"{p.Name}: {(next ? "ON" : "OFF")}";
+            if (!sent)
+            {
+                SetStatus(OutputController.DescribeLastFailure("Relay command"), ERROR_COLOR);
+                return;
+            }
+            _relayOn[p.Channel] = next;
+            btn.Text = $"{p.Name}: commanded {(next ? "ON" : "OFF")}";
             btn.BackColor = next ? RELAY_ON_COLOR : Color.FromArgb(70, 70, 78);
-            SetStatus(
-                sent ? $"{p.Name} relay {(next ? "ON" : "OFF")}" : $"{p.Name}: relay command unavailable",
-                sent ? SUCCESS_COLOR : ERROR_COLOR);
+            SetStatus($"{p.Name}: relay command accepted; physical effect unverified", SUCCESS_COLOR);
         }
     }
 }

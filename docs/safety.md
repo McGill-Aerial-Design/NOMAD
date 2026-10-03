@@ -23,6 +23,17 @@ stabilization, EKF, low-level navigation and its independent failsafes. Loss of
 NOMAD, ROS, perception, video, ground compute or competition connectivity must
 not suppress those failsafes.
 
+Vehicle mutation results distinguish `success`, `rejected`, `failed`,
+`interrupted` and `unknown` according to the available software evidence; see
+the [outcome contract](runtime-ipc.md#vehicle-mutation-outcomes).
+Only `rejected` guarantees no eligible vehicle transmission. A negative FC ACK
+is a failed attempt, and authority interruption after possible execution leaves
+the final vehicle effect uncertain. Success is not guaranteed physical effect;
+acknowledgement is not physical completion. Unknown is neither failed nor
+rejected, and interrupted does not authorize automatic retry. Mission Planner
+payload indicators track commanded release/retract, without asserting observed
+physical state.
+
 There is no universally safe command for every aircraft state. A zero velocity
 attempt can stop a Copter guided stream only when delivered and accepted; it is
 not a fixed-wing abort maneuver. RTL or land must be appropriate to aircraft

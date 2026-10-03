@@ -96,7 +96,9 @@ void test_revoke_during_operation(std::uint16_t port, FakeConnection &connection
     const auto revoked = operator_client.request(authority_request("during-revoke", "revoke_authority", "operator"));
     CHECK(revoked["ok"] == true);
     authority.generation = revoked["authority_generation"].get<std::uint64_t>();
-    CHECK(first.receive()["error"]["code"] == "authority_interrupted");
+    const auto interrupted = first.receive();
+    CHECK(interrupted["error"]["code"] == "authority_interrupted");
+    CHECK(interrupted["outcome"] == "interrupted");
     CHECK(connection.command_count() == before);
     CHECK(operator_client.request(gimbal_target_request("after-gimbal-revoke", 10.0, 5.0))["error"]["code"] ==
           "not_authoritative");

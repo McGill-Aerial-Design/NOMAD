@@ -44,7 +44,7 @@ namespace NOMAD.MissionPlanner
 
         private bool[] _prevButtons = new bool[SLOT_COUNT];
         private bool _prevKillButton;
-        // Drop toggle state lives in PayloadControlPanel.s_payloadDropped so the
+        // Drop toggle state lives in PayloadControlPanel.s_payloadReleaseCommanded so the
         // joystick and UI agree about what the next switch flip should do —
         // dropping from the GUI then flipping the switch retracts, and vice versa.
         private readonly int[] _reelDir = new int[2]; // last commanded direction per reel: 0=stop, +1=in, -1=out
@@ -166,9 +166,9 @@ namespace NOMAD.MissionPlanner
 
         private void ToggleDrop(int payloadIdx)
         {
-            // PayloadActions.Drop / Retract raise PayloadDroppedStateChanged on
+            // PayloadActions.Drop / Retract raise PayloadReleaseCommandedStateChanged on
             // success, which updates the shared state we read here next time.
-            if (PayloadControlPanel.IsPayloadDropped(payloadIdx))
+            if (PayloadControlPanel.IsPayloadReleaseCommanded(payloadIdx))
                 RunPayloadAction(() => PayloadActions.Retract(_config, payloadIdx + 1), $"retract payload {payloadIdx + 1}");
             else
                 RunPayloadAction(() => PayloadActions.Drop(_config, payloadIdx + 1), $"drop payload {payloadIdx + 1}");

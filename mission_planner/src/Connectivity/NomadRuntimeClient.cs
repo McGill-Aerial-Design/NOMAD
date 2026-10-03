@@ -24,6 +24,7 @@ namespace NOMAD.MissionPlanner.Connectivity
         internal NomadCoreRequestOutcome LastOutcome { get; private set; }
         internal string LastErrorCode { get; private set; } = "";
         internal string LastMessage { get; private set; } = "";
+        internal bool? LastAcknowledged { get; private set; }
 
         internal NomadRuntimeClient(int runtimePort, string credential, string clientId)
         {
@@ -37,6 +38,7 @@ namespace NOMAD.MissionPlanner.Connectivity
             LastOutcome = NomadCoreRequestOutcome.NotAttempted;
             LastErrorCode = "";
             LastMessage = "";
+            LastAcknowledged = null;
             return RunRuntime(verb, values);
         }
 
@@ -45,14 +47,14 @@ namespace NOMAD.MissionPlanner.Connectivity
             var command = BuildRuntimeRequest(verb, values);
             if (command == null)
             {
-                LastOutcome = NomadCoreRequestOutcome.Rejected;
+                LastOutcome = NomadCoreRequestOutcome.NotAttempted;
                 LastErrorCode = "unsupported_request";
                 LastMessage = "This operation is not supported by protocol v1.";
                 return -1;
             }
             if (string.IsNullOrWhiteSpace(_credential))
             {
-                LastOutcome = NomadCoreRequestOutcome.Rejected;
+                LastOutcome = NomadCoreRequestOutcome.NotAttempted;
                 LastErrorCode = "missing_credential";
                 LastMessage = "The NOMAD client credential setting is empty.";
                 return -1;
@@ -114,7 +116,8 @@ namespace NOMAD.MissionPlanner.Connectivity
                     : NomadCoreRequestOutcome.FailedBeforeSend;
                 LastErrorCode = commandWriteStarted ? "unknown_outcome" : "runtime_unavailable";
                 LastMessage = commandWriteStarted
-                    ? "The runtime connection ended after the request was sent; the vehicle outcome is unknown."
+                    ? "The runtime connection ended after request transmission began; "
+                        + "the outcome is unknown. Do not retry blindly."
                     : ex.Message;
                 return -1;
             }
@@ -316,34 +319,44 @@ namespace NOMAD.MissionPlanner.Connectivity
             {
                 LastOutcome = NomadCoreRequestOutcome.UnknownOutcome;
                 LastErrorCode = "unknown_outcome";
-                LastMessage = "The runtime response did not match its protocol and ID; "
-                    + "the vehicle outcome is unknown.";
+                LastMessage = "The runtime response did not match its protocol and ID; the outcome is unknown.";
                 return -1;
             }
+            ReadAcknowledgement(response);
             if (TryReadError(response, out var code, out var message))
             {
-                LastOutcome = code == "audit_failure" && GetString(response, "outcome") == "unknown"
-                    ? NomadCoreRequestOutcome.UnknownOutcome : NomadCoreRequestOutcome.Rejected;
+                LastOutcome = IsAuthorityVerb(verb) && !response.ContainsKey("outcome")
+                    ? NomadCoreRequestOutcome.Rejected : ReadOutcome(response);
+                if (LastOutcome == NomadCoreRequestOutcome.Succeeded)
+                {
+                    LastOutcome = NomadCoreRequestOutcome.UnknownOutcome;
+                }
                 LastErrorCode = code;
                 LastMessage = message;
                 return -1;
             }
-            if (IsAuthorityVerb(verb))
+            return IsAuthorityVerb(verb) ? ReadAuthorityResult(response, verb) : ReadVehicleResult(response);
+        }
+
+        private int ReadAuthorityResult(Dictionary<string, object> response, string verb)
+        {
+            if (GetString(response, "type") == "authority_response" &&
+                response.ContainsKey("authority_generation") &&
+                (verb == "revoke" ? GetString(response, "authority_owner") == "" :
+                 GetString(response, "authority_owner") == _clientId))
             {
-                if (GetString(response, "type") == "authority_response" &&
-                    response.ContainsKey("authority_generation") &&
-                    (verb == "revoke" ? GetString(response, "authority_owner") == "" :
-                     GetString(response, "authority_owner") == _clientId))
-                {
-                    LastOutcome = NomadCoreRequestOutcome.Succeeded;
-                    LastMessage = "Runtime authority changed explicitly.";
-                    return 0;
-                }
-                LastOutcome = NomadCoreRequestOutcome.UnknownOutcome;
-                LastErrorCode = "unknown_outcome";
-                LastMessage = "The runtime returned no valid authority result; the outcome is unknown.";
-                return -1;
+                LastOutcome = NomadCoreRequestOutcome.Succeeded;
+                LastMessage = "Runtime authority changed explicitly.";
+                return 0;
             }
+            LastOutcome = NomadCoreRequestOutcome.UnknownOutcome;
+            LastErrorCode = "unknown_outcome";
+            LastMessage = "The runtime returned no valid authority result; the outcome is unknown.";
+            return -1;
+        }
+
+        private int ReadVehicleResult(Dictionary<string, object> response)
+        {
             if (GetString(response, "type") != "command_response" ||
                 !response.TryGetValue("command_result", out var resultObject) ||
                 resultObject is not Dictionary<string, object> result)
@@ -354,11 +367,44 @@ namespace NOMAD.MissionPlanner.Connectivity
                 return -1;
             }
             LastMessage = GetString(result, "message");
-            var success = GetBool(result, "success");
-            LastOutcome = success ? NomadCoreRequestOutcome.Succeeded : GetString(response, "outcome") == "unknown"
-                ? NomadCoreRequestOutcome.UnknownOutcome : NomadCoreRequestOutcome.Rejected;
-            LastErrorCode = success ? "" : "vehicle_rejected";
+            LastOutcome = ReadOutcome(response);
+            var success = LastOutcome == NomadCoreRequestOutcome.Succeeded && GetBool(result, "success");
+            if (LastOutcome == NomadCoreRequestOutcome.Succeeded && !success)
+            {
+                LastOutcome = NomadCoreRequestOutcome.UnknownOutcome;
+            }
+            LastErrorCode = success ? "" : LastOutcome == NomadCoreRequestOutcome.UnknownOutcome
+                ? "unknown_outcome" : "vehicle_" + GetString(response, "outcome");
             return success ? 0 : -1;
+        }
+
+        private void ReadAcknowledgement(Dictionary<string, object> response)
+        {
+            if (response.TryGetValue("command_result", out var rawResult) &&
+                rawResult is Dictionary<string, object> result &&
+                result.TryGetValue("acknowledged", out var value) && value is bool acknowledged)
+            {
+                LastAcknowledged = acknowledged;
+            }
+        }
+
+        private static NomadCoreRequestOutcome ReadOutcome(Dictionary<string, object> response)
+        {
+            if (GetString(response, "outcome") == "rejected" &&
+                response.TryGetValue("command_result", out var rawResult) &&
+                rawResult is Dictionary<string, object> result &&
+                (GetBool(result, "acknowledged") || GetBool(result, "success")))
+            {
+                return NomadCoreRequestOutcome.UnknownOutcome;
+            }
+            return GetString(response, "outcome") switch
+            {
+                "success" => NomadCoreRequestOutcome.Succeeded,
+                "rejected" => NomadCoreRequestOutcome.Rejected,
+                "failed" => NomadCoreRequestOutcome.Failed,
+                "interrupted" => NomadCoreRequestOutcome.Interrupted,
+                _ => NomadCoreRequestOutcome.UnknownOutcome,
+            };
         }
 
         private void SetProtocolFailure(Dictionary<string, object> response)

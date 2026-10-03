@@ -49,14 +49,14 @@ namespace NOMAD.MissionPlanner
                 t.Dispose();
                 _reelSafetyTimers[reelIdx] = null;
                 _reelActive[reelIdx] = false;
-                SendServoNow(ReelChannel(reelIdx), ReelStopPwm(reelIdx));
-                SetStatus($"{ReelName(reelIdx)} stopped  ({safetyS}s safety limit)", WARNING_COLOR);
+                SetReelCommandStatus(SendServoNow(ReelChannel(reelIdx), ReelStopPwm(reelIdx)),
+                    $"{ReelName(reelIdx)}: stop command accepted ({safetyS}s safety limit); physical stop unverified");
             };
             _reelSafetyTimers[reelIdx] = t;
             t.Start();
 
-            SendServoNow(channel, pwmUs);
-            SetStatus($"{ReelName(reelIdx)} ({pwmUs}µs) — hold button...", SUCCESS_COLOR);
+            SetReelCommandStatus(SendServoNow(channel, pwmUs),
+                $"{ReelName(reelIdx)}: command accepted ({pwmUs}µs); physical movement unverified");
         }
 
         private void StopReel(int reelIdx)
@@ -69,8 +69,8 @@ namespace NOMAD.MissionPlanner
             _reelSafetyTimers[reelIdx]?.Dispose();
             _reelSafetyTimers[reelIdx] = null;
 
-            SendServoNow(ReelChannel(reelIdx), ReelStopPwm(reelIdx));
-            SetStatus($"{ReelName(reelIdx)} stopped", TEXT_SECONDARY);
+            SetReelCommandStatus(SendServoNow(ReelChannel(reelIdx), ReelStopPwm(reelIdx)),
+                $"{ReelName(reelIdx)}: stop command accepted; physical stop unverified");
         }
 
         private void CreateFullReelButton(int slot, int x, int y)
@@ -161,8 +161,9 @@ namespace NOMAD.MissionPlanner
             var reel = ReelPayload(reelIdx);
             int pwmUs = FullReelIsIn(slot) ? (reel?.PwmMax ?? 2100) : (reel?.PwmMin ?? 900);
 
-            SendServoNow(channel, pwmUs);
-            SetStatus($"{FullReelFullLabel(slot)} {ReelName(reelIdx)} running for {FormatDuration(durationMs)}  (click to cancel)", SUCCESS_COLOR);
+            SetReelCommandStatus(SendServoNow(channel, pwmUs),
+                $"{ReelName(reelIdx)}: command accepted; timer {FormatDuration(durationMs)}, "
+                    + "physical movement unverified");
 
             _fullReelCountdown[slot]?.Stop();
             _fullReelCountdown[slot]?.Dispose();
@@ -204,10 +205,9 @@ namespace NOMAD.MissionPlanner
 
             if (!wasActive) return;
 
-            SendServoNow(ReelChannel(reelIdx), ReelStopPwm(reelIdx));
-            SetStatus(
-                cancelled ? $"{FullReelFullLabel(slot)} {ReelName(reelIdx)} cancelled" : $"{FullReelFullLabel(slot)} {ReelName(reelIdx)} complete",
-                cancelled ? WARNING_COLOR : SUCCESS_COLOR);
+            var reason = cancelled ? "timer cancelled" : "timer elapsed";
+            SetReelCommandStatus(SendServoNow(ReelChannel(reelIdx), ReelStopPwm(reelIdx)),
+                $"{ReelName(reelIdx)}: {reason}, stop command accepted; physical stop unverified");
         }
 
         private void UpdateFullReelButton(int slot)
@@ -244,12 +244,17 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Fire-and-forget servo command for time-critical paths (reel MouseDown/Up).
+        /// Send one reel command and preserve its result for operator feedback.
         /// </summary>
-        private async void SendServoNow(int channel, int pwmUs)
+        private bool SendServoNow(int channel, int pwmUs)
         {
-            if (channel <= 0) return;
-            await OutputController.SendServoPwmAsync(channel, pwmUs);
+            return OutputController.SendServoPwm(channel, pwmUs);
+        }
+
+        private void SetReelCommandStatus(bool success, string acceptedMessage)
+        {
+            SetStatus(success ? acceptedMessage : OutputController.DescribeLastFailure("Reel command"),
+                success ? SUCCESS_COLOR : ERROR_COLOR);
         }
     }
 }

@@ -15,6 +15,7 @@ internal static partial class NomadCoreClientTests
 {
     private static int _failures;
 
+    [STAThread]
     private static int Main()
     {
         Termination_ReportsUnavailableWithoutVehicleDispatch();
@@ -26,6 +27,16 @@ internal static partial class NomadCoreClientTests
         GimbalConfigure_FailsClosedOnInvalidInput();
         GimbalTarget_FailsClosedOnInvalidInput();
         Runtime_SendsTypedRequestOnce();
+        Runtime_PreservesCommandOutcomeMatrix();
+        Runtime_PreservesErrorOutcomeMatrix();
+        Runtime_ContradictoryRejectionIsUnknown();
+        Runtime_AllMutationsPreserveSuccessAndAcknowledgement();
+        LocalValidation_ClearsPreviousSuccess();
+        Output_ReportsTruthfulOutcomeWording();
+        PayloadPanel_UpdatesOnlySuccessfulCommandedState();
+        PayloadActions_PreserveStateOnUnknownRetract();
+        RelayPanel_PreservesCommandedStateOnFailure();
+        ReelPanel_DoesNotClaimPhysicalMovementOrStop();
         Runtime_RejectsRogueRuntimeWithoutCredentialDisclosure();
         Runtime_AuditFailureAfterSendIsUnknown();
         Runtime_GimbalTarget_UsesTypedRequestAndRequiresAuthority();
@@ -95,7 +106,7 @@ internal static partial class NomadCoreClientTests
         Expect(!client.GimbalTarget(double.PositiveInfinity, 0), "infinite pitch rejected");
         Expect(!client.GimbalTarget(-90.01, 0), "pitch below limit rejected");
         Expect(!client.GimbalTarget(0, 30.01), "roll above limit rejected");
-        Expect(client.LastOutcome == NomadCoreRequestOutcome.Rejected, "invalid target is reported as rejected");
+        Expect(client.LastOutcome == NomadCoreRequestOutcome.NotAttempted, "invalid target is never attempted");
         Expect(client.LastErrorCode == "invalid_argument", "invalid target has a stable error code");
     }
 

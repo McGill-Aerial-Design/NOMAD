@@ -116,6 +116,7 @@ void wait_until(const std::function<bool()> &predicate) {
 #include "runtime_security_cases.hpp"
 #include "runtime_security_recovery_cases.hpp"
 #include "runtime_lifecycle_cases.hpp"
+#include "runtime_outcome_cases.hpp"
 void test_protocol_and_status(std::uint16_t port, FakeConnection &connection) {
     Client client(port);
     const auto hello = client.request(base_request("1", "hello"));
@@ -399,5 +400,12 @@ int main() {
         test_acknowledgement_without_admission_evidence(false);
         test_acknowledgement_without_admission_evidence(true);
         test_session_rollover_revokes_at_admission();
+        test_all_mutation_outcomes();
+        test_authority_interruption_after_delivery();
+        test_in_progress_audit_failure();
+        test_execution_exception(false);
+        test_execution_exception(true);
+        test_admission_cancellation_without_send();
+        test_definite_rejection_outcomes();
     });
 }

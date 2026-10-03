@@ -242,7 +242,7 @@ namespace NOMAD.MissionPlanner
             };
             _lblPitch = MakeReadout("Pitch: +0.0°");
             _lblRoll = MakeReadout("Roll: +0.0°");
-            _lblMode = MakeReadout("Mode: MAVLINK");
+            _lblMode = MakeReadout("Selected mode: MAVLINK");
             readouts.Controls.Add(_lblPitch);
             readouts.Controls.Add(_lblRoll);
             readouts.Controls.Add(_lblMode);
@@ -566,7 +566,7 @@ namespace NOMAD.MissionPlanner
         private void UpdateModeLabel()
         {
             if (_lblMode == null) return;
-            _lblMode.Text = $"Mode: {_modeLabel}";
+            _lblMode.Text = $"Selected mode: {_modeLabel}";
         }
 
         private void SnapAngles(float pitch, float roll)

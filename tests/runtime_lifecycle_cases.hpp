@@ -100,7 +100,9 @@ void test_shutdown_fences_queued_command() {
     wait_until([&] { return observed->command_started.load(); });
     runtime.request_stop();
     release.set_value();
-    CHECK(pending.get()["error"]["code"] == "authority_interrupted");
+    const auto interrupted = pending.get();
+    CHECK(interrupted["error"]["code"] == "authority_interrupted");
+    CHECK(interrupted["outcome"] == "interrupted");
     CHECK(observed->command_count() == 0);
     CHECK(runtime.stop());
     const auto records = read_journal(config.audit_directory);

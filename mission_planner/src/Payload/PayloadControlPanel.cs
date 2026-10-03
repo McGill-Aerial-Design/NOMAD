@@ -114,12 +114,12 @@ namespace NOMAD.MissionPlanner
             InitializeUI();
             CameraTiltChanged          += OnCameraTiltChangedExternally;
             AutonomousModeChanged      += OnAutonomousModeChanged;
-            PayloadDroppedStateChanged += OnPayloadDroppedStateChanged;
+            PayloadReleaseCommandedStateChanged += OnPayloadReleaseCommandedStateChanged;
             this.Disposed += (s, e) =>
             {
                 CameraTiltChanged          -= OnCameraTiltChangedExternally;
                 AutonomousModeChanged      -= OnAutonomousModeChanged;
-                PayloadDroppedStateChanged -= OnPayloadDroppedStateChanged;
+                PayloadReleaseCommandedStateChanged -= OnPayloadReleaseCommandedStateChanged;
                 CleanupTimers();
             };
             ApplyTiltPulseQuietly(s_lastTiltPulseUs);

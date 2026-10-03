@@ -169,9 +169,13 @@ void test_journal_failure(bool after_send) {
     const auto failed = client.request(command);
     CHECK(failed["error"]["code"] == "audit_failure");
     CHECK(failed["outcome"] == (after_send ? "unknown" : "rejected"));
+    if (after_send) {
+        CHECK(failed["command_result"]["acknowledged"] == true);
+        CHECK(failed["command_result"]["success"] == true);
+    }
     CHECK(observed->command_count() == (after_send ? 1U : 0U));
     CHECK(client.request(servo_request("audit-write-inhibited", 1700))["error"]["code"] == "audit_failure");
-    CHECK(client.request(command)["error"]["code"] == "audit_failure");
+    CHECK(client.request(command) == failed);
     CHECK(client.request(base_request("audit-health", "status"))["status"]["audit_healthy"] == false);
     CHECK(observed->command_count() == (after_send ? 1U : 0U));
     runtime.stop();
