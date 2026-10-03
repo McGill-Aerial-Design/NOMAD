@@ -85,11 +85,6 @@
       <HintPath>C:\Program Files (x86)\Mission Planner\MissionPlanner.Utilities.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="MissionPlanner.Drawing">
-      <HintPath>C:\Program Files (x86)\Mission Planner\MissionPlanner.Drawing.dll</HintPath>
-      <Private>False</Private>
-      <Aliases>MPDrawing</Aliases>
-    </Reference>
     <Reference Include="Interfaces">
       <HintPath>C:\Program Files (x86)\Mission Planner\Interfaces.dll</HintPath>
       <Private>False</Private>
@@ -101,11 +96,6 @@
     <!-- Newtonsoft.Json -->
     <Reference Include="Newtonsoft.Json">
       <HintPath>C:\Program Files (x86)\Mission Planner\Newtonsoft.Json.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <!-- SkiaSharp for video frame handling -->
-    <Reference Include="SkiaSharp">
-      <HintPath>C:\Program Files (x86)\Mission Planner\SkiaSharp.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>

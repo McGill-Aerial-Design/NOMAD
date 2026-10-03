@@ -127,21 +127,9 @@ namespace NOMAD.MissionPlanner
                 nomadMenu.DropDownItems.Add(linkStatusItem);
 
                 // HUD Video controls
-                var hudVideoItem = new ToolStripMenuItem("Start HUD Video");
-                hudVideoItem.Click += (s, e) =>
-                {
-                    if (_hudVideoStarted)
-                    {
-                        StopHudVideo();
-                        hudVideoItem.Text = "Start HUD Video";
-                    }
-                    else
-                    {
-                        StartHudVideo();
-                        hudVideoItem.Text = "Stop HUD Video";
-                    }
-                };
-                nomadMenu.DropDownItems.Add(hudVideoItem);
+                _hudVideoMenuItem = new ToolStripMenuItem("Start HUD Video");
+                _hudVideoMenuItem.Click += OnHudVideoMenuClicked;
+                nomadMenu.DropDownItems.Add(_hudVideoMenuItem);
 
                 nomadMenu.DropDownItems.Add(new ToolStripSeparator());
 

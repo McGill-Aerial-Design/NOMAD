@@ -185,6 +185,9 @@ test-plugin-gimbal = "powershell -ExecutionPolicy Bypass -File scripts/build/tes
 # STA WinForms interaction/render smoke for the isolated gimbal joystick pad.
 test-plugin-gimbal-ui = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal_ui.ps1"
 
+# Hardware-free video lifecycle and isolated WinForms ownership checks (requires plugin build).
+test-plugin-video = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_video.ps1"
+
 # Unit tests for the Mission Planner runtime IPC client (Windows only) — compiles
 # the Mission Planner-free client with VS's csc and covers typed requests,
 # fail-closed validation, GuidedGoto unavailability, authority controls,

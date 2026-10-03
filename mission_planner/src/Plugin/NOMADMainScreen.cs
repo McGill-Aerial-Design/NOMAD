@@ -93,6 +93,8 @@ namespace NOMAD.MissionPlanner
         private readonly Dictionary<string, Control> _descriptorViewCache = new Dictionary<string, Control>();
 
         // Static configuration (set by the plugin before this screen is shown)
+        private static System.Threading.CancellationToken _videoShutdown;
+        internal static void SetVideoShutdown(System.Threading.CancellationToken token) => _videoShutdown = token;
         private static NOMADConfig _staticConfig;
         private static MAVLinkConnectionManager _staticConnectionManager;
         private static GeofenceConfig _staticGeofenceConfig;
@@ -311,7 +313,7 @@ namespace NOMAD.MissionPlanner
                     newView = _boundaryView;
                     break;
                 case "Video":
-                    if (_videoView == null) _videoView = new NOMADVideoView(_config);
+                    if (_videoView == null) _videoView = new NOMADVideoView(_config, _videoShutdown);
                     newView = _videoView;
                     break;
                 case "Links":

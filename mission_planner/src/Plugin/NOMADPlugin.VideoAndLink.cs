@@ -82,26 +82,19 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public void StartHudVideo()
         {
+            if (Host?.MainForm != null && Host.MainForm.InvokeRequired)
+            {
+                Host.MainForm.Invoke((Action)StartHudVideo);
+                return;
+            }
             try
             {
-                // Build the GStreamer pipeline using Mission Planner's expected format
+                if (_videoShutdown == null || _videoShutdown.IsCancellationRequested || _hudVideoStarted) { return; }
+                // Preserve the configured HUD pipeline and crop.
                 var streamUrl = _config.VideoUrl;
                 if (string.IsNullOrWhiteSpace(streamUrl))
                 {
                     Log.Info("HUD video: no video URL configured");
-                    return;
-                }
-
-                // Ensure GStreamer is available
-                GStreamer.GstLaunch = GStreamer.LookForGstreamer();
-                if (!GStreamer.GstLaunchExists)
-                {
-                    Log.Warn("GStreamer not found, cannot start HUD video");
-                    CustomMessageBox.Show(
-                        "GStreamer is not installed. The HUD video requires GStreamer.\n\n" +
-                        "You can install it via Tools > GStreamer in Mission Planner.",
-                        "GStreamer Required"
-                    );
                     return;
                 }
 
@@ -132,15 +125,17 @@ namespace NOMAD.MissionPlanner
                                "appsink name=outsink sync=false";
                 }
 
-                Log.Debug($"Starting HUD video with pipeline: {pipeline}");
-
-                global::MissionPlanner.GCSViews.FlightData.hudGStreamer.Start(pipeline);
-                _hudVideoStarted = true;
+                _hudVideo?.Dispose();
+                var hud = global::MissionPlanner.GCSViews.FlightData.myhud;
+                _hudVideo = new HudVideoPlayer((Control)(object)hud, frame => hud.bgimage = frame,
+                    () => hud.bgimage, () => new GStreamerVideoPipeline());
+                _hudVideo.Start(pipeline);
             }
             catch (Exception ex)
             {
                 Log.Error($"HUD video failed to start — {ex.Message}");
-                _hudVideoStarted = false;
+                _hudVideo?.Dispose();
+                _hudVideo = null;
             }
         }
 
@@ -149,10 +144,15 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public void StopHudVideo()
         {
+            if (Host?.MainForm != null && Host.MainForm.InvokeRequired)
+            {
+                Host.MainForm.Invoke((Action)StopHudVideo);
+                return;
+            }
             try
             {
-                global::MissionPlanner.GCSViews.FlightData.hudGStreamer.Stop();
-                _hudVideoStarted = false;
+                _hudVideo?.Dispose();
+                _hudVideo = null;
             }
             catch (Exception ex)
             {

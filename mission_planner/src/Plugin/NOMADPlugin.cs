@@ -44,7 +44,9 @@ namespace NOMAD.MissionPlanner
         private GimbalArrowKeyFilter _gimbalArrowKeyFilter;    // Mission Planner-wide arrow key nudges
         private SerialJoystickBridge _serialBridge;           // Python subprocess: serial → virtual Xbox 360
         private Form _popOutForm;                             // Pop-out window for NOMAD screen
-        private bool _hudVideoStarted = false;
+        private HudVideoPlayer _hudVideo;
+        private bool _hudVideoStarted => _hudVideo?.IsActive == true;
+        private System.Threading.CancellationTokenSource _videoShutdown;
         private bool _screenRegistered = false;               // Track if NOMAD screen is registered with MainSwitcher
         private DateTime _nextBoundaryMapBindUtc = DateTime.MinValue;
 
@@ -59,6 +61,9 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                ShutdownVideo();
+                _videoShutdown = new System.Threading.CancellationTokenSource();
+                NOMADMainScreen.SetVideoShutdown(_videoShutdown.Token);
                 WarnIfUntestedMissionPlannerVersion();
 
                 // Load configuration
@@ -157,6 +162,7 @@ namespace NOMAD.MissionPlanner
             }
             catch (Exception ex)
             {
+                ShutdownVideo();
                 CustomMessageBox.Show($"NOMAD Plugin failed to load: {ex.Message}", "Error");
                 return false;
             }
@@ -169,10 +175,15 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                if (_videoShutdown == null || _videoShutdown.IsCancellationRequested) { return false; }
+                var videoToken = _videoShutdown.Token;
                 // Ensure UI setup runs on the UI thread
                 if (Host?.MainForm != null && Host.MainForm.InvokeRequired)
                 {
-                    Host.MainForm.BeginInvoke((MethodInvoker)delegate { Loaded(); });
+                    Host.MainForm.BeginInvoke((MethodInvoker)delegate
+                    {
+                        if (!videoToken.IsCancellationRequested) { Loaded(); }
+                    });
                     return true;
                 }
 
@@ -186,15 +197,7 @@ namespace NOMAD.MissionPlanner
                 // Auto-start HUD video if configured
                 if (_config.AutoStartHudVideo && !_hudVideoStarted)
                 {
-                    // Delay slightly to ensure FlightData is fully loaded
-                    System.Threading.Tasks.Task.Run(async () =>
-                    {
-                        await System.Threading.Tasks.Task.Delay(2000); // 2 second delay
-                        Host?.MainForm?.BeginInvoke((MethodInvoker)delegate
-                        {
-                            StartHudVideo();
-                        });
-                    });
+                    StartHudVideo();
                 }
 
                 return true;
@@ -234,6 +237,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public override bool Exit()
         {
+            ShutdownVideo();
             try
             {
                 // Unhook the toast overlay before the service goes away
