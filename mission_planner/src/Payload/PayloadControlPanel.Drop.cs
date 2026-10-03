@@ -172,7 +172,7 @@ namespace NOMAD.MissionPlanner
         {
             if (_dropReleaseCommanded.TryGetValue(dropIdx, out bool releaseCommanded) && releaseCommanded)
             {
-                ExecuteRetract(dropIdx);
+                _ = ExecuteRetract(dropIdx);
                 return;
             }
 
@@ -191,7 +191,7 @@ namespace NOMAD.MissionPlanner
             ClearDropResetTimer(dropIdx);
             if (_dropButtons.TryGetValue(dropIdx, out var btn)) btn.BackColor = DROP_COLOR_IDLE;
 
-            ExecuteDrop(dropIdx);
+            _ = ExecuteDrop(dropIdx);
         }
 
         private void RestartDropResetTimer(int dropIdx)
@@ -220,7 +220,7 @@ namespace NOMAD.MissionPlanner
             _dropResetTimers.Remove(dropIdx);
         }
 
-        private async void ExecuteDrop(int dropIdx)
+        private async System.Threading.Tasks.Task ExecuteDrop(int dropIdx)
         {
             if (!_dropPayloads.TryGetValue(dropIdx, out var p) || p == null) return;
             if (p.Channel <= 0)
@@ -230,18 +230,20 @@ namespace NOMAD.MissionPlanner
             }
 
             int pwmDrop = p.Reversed ? p.PwmMin : p.PwmMax;
-            if (await OutputController.SendServoPwmAsync(p.Channel, pwmDrop))
+            var result = await OutputController.SendServoPwmAsync(p.Channel, pwmDrop);
+            if (IsDisposed) return;
+            if (result.Succeeded)
             {
                 SetStatus($"{p.Name}: release command accepted; physical release unverified", SUCCESS_COLOR);
                 RaisePayloadReleaseCommandedState(dropIdx, true);
             }
             else
             {
-                SetStatus(OutputController.DescribeLastFailure("Release command"), ERROR_COLOR);
+                SetStatus(OutputController.DescribeFailure("Release command", result), ERROR_COLOR);
             }
         }
 
-        private async void ExecuteRetract(int dropIdx)
+        private async System.Threading.Tasks.Task ExecuteRetract(int dropIdx)
         {
             if (!_dropPayloads.TryGetValue(dropIdx, out var p) || p == null) return;
             if (p.Channel <= 0)
@@ -251,14 +253,16 @@ namespace NOMAD.MissionPlanner
             }
 
             int pwmRetract = p.Reversed ? p.PwmMax : p.PwmMin;
-            if (await OutputController.SendServoPwmAsync(p.Channel, pwmRetract))
+            var result = await OutputController.SendServoPwmAsync(p.Channel, pwmRetract);
+            if (IsDisposed) return;
+            if (result.Succeeded)
             {
                 RaisePayloadReleaseCommandedState(dropIdx, false);
                 SetStatus($"{p.Name}: retract command accepted; physical retraction unverified", SUCCESS_COLOR);
             }
             else
             {
-                SetStatus(OutputController.DescribeLastFailure("Retract command"), ERROR_COLOR);
+                SetStatus(OutputController.DescribeFailure("Retract command", result), ERROR_COLOR);
             }
         }
 
@@ -388,7 +392,7 @@ namespace NOMAD.MissionPlanner
             {
                 var btn = MakeButton($"{p.Name}: no confirmed command", Color.FromArgb(70, 70, 78), 120, ROW_H);
                 btn.Location = new Point(100, y);
-                btn.Click += (s, e) => ToggleRelay(p, btn);
+                btn.Click += (s, e) => _ = ToggleRelay(p, btn);
                 Controls.Add(btn);
             }
 
@@ -449,21 +453,23 @@ namespace NOMAD.MissionPlanner
         private async void FireRelay(PayloadControl p)
         {
             SetStatus($"{p.Name} firing  ({p.PulseMs}ms)...", SUCCESS_COLOR);
-            bool success = await OutputController.FireRelayAsync(p.Channel, p.PulseMs);
+            var result = await OutputController.FireRelayAsync(p.Channel, p.PulseMs);
+            if (IsDisposed) return;
             SetStatus(
-                success ? $"{p.Name}: pulse commands accepted; physical effect unverified"
-                    : OutputController.DescribeLastFailure("Relay pulse"),
-                success ? SUCCESS_COLOR : ERROR_COLOR);
+                result.Succeeded ? $"{p.Name}: pulse commands accepted; physical effect unverified"
+                    : OutputController.DescribeFailure("Relay pulse", result),
+                result.Succeeded ? SUCCESS_COLOR : ERROR_COLOR);
         }
 
-        private void ToggleRelay(PayloadControl p, Button btn)
+        private async System.Threading.Tasks.Task ToggleRelay(PayloadControl p, Button btn)
         {
             bool current = _relayOn.TryGetValue(p.Channel, out bool on) && on;
             bool next = !current;
-            bool sent = OutputController.TrySetRelay(p.Channel, next);
-            if (!sent)
+            var result = await OutputController.SetRelayAsync(p.Channel, next);
+            if (IsDisposed || btn.IsDisposed) return;
+            if (!result.Succeeded)
             {
-                SetStatus(OutputController.DescribeLastFailure("Relay command"), ERROR_COLOR);
+                SetStatus(OutputController.DescribeFailure("Relay command", result), ERROR_COLOR);
                 return;
             }
             _relayOn[p.Channel] = next;

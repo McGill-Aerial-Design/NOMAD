@@ -16,11 +16,11 @@ namespace NOMAD.MissionPlanner
     internal static class Log
     {
         public static readonly List<string> Messages = new List<string>();
-        public static void Info(string message) => Messages.Add(message);
+        public static void Info(string message) { lock (Messages) { Messages.Add(message); } }
         public static string LastError = "";
         public static string LastWarning = "";
-        public static void Warn(string message) { LastWarning = message; Messages.Add(message); }
-        public static void Error(string message) { LastError = message; Messages.Add(message); }
+        public static void Warn(string message) { lock (Messages) { LastWarning = message; Messages.Add(message); } }
+        public static void Error(string message) { lock (Messages) { LastError = message; Messages.Add(message); } }
     }
 
     public enum PayloadKind { Drop, Slider, Relay }
@@ -95,12 +95,12 @@ namespace NOMAD.MissionPlanner
         }
 
         private void SetStatus(string message, Color color) => TestStatus = message;
-        internal void TestStartReel() => StartReel(0, 2000);
-        internal void TestStopReel() => StopReel(0);
-        internal void TestStartFullReel() => StartFullReel(0);
-        internal void TestStopFullReel() => StopFullReel(0, false);
-        internal void TestDrop() => ExecuteDrop(0);
-        internal void TestRetract() => ExecuteRetract(0);
-        internal void TestToggleRelay(PayloadControl payload, Button button) => ToggleRelay(payload, button);
+        internal System.Threading.Tasks.Task TestStartReel() => StartReel(0, 2000);
+        internal System.Threading.Tasks.Task TestStopReel() => StopReel(0);
+        internal System.Threading.Tasks.Task TestStartFullReel() => StartFullReel(0);
+        internal System.Threading.Tasks.Task TestStopFullReel() => StopFullReel(0, false);
+        internal System.Threading.Tasks.Task TestDrop() => ExecuteDrop(0);
+        internal System.Threading.Tasks.Task TestRetract() => ExecuteRetract(0);
+        internal System.Threading.Tasks.Task TestToggleRelay(PayloadControl payload, Button button) => ToggleRelay(payload, button);
     }
 }

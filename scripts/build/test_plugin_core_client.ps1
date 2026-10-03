@@ -41,11 +41,15 @@ if (-not (Test-Path $csc)) {
 # ---- Compile ----
 $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadCoreClient.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadCoreRequestResult.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Network.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Control\FlightModeController.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\TerminationRequestTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientRuntimeTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientAsyncTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\AsyncRuntimeTestFixture.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientOutcomeTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputOutcomeTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputTestFixtures.cs'),

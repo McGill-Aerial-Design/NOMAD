@@ -1,150 +1,162 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 using System;
+using System.Threading;
 using System.Threading.Tasks;
-using MissionPlanner;
 using NOMAD.MissionPlanner.Connectivity;
 
 namespace NOMAD.MissionPlanner
 {
-    // Sends standard ArduPilot output commands (DO_SET_SERVO / DO_SET_RELAY)
-    // through the C++ core client boundary. These are generic ArduPilot
-    // servo/relay channels that work on any ArduPilot flight controller, with
-    // no board-specific assumptions. Payloads are config-declared client
-    // profiles over these generic outputs (NOMADConfig.Payloads); the core
-    // knows channels, never a specific payload.
-    //
-    // The direct-MAVLink and retired REST fallbacks were
-    // removed in the C++ cutover (2026-09-05): commands that the core did not
-    // acknowledge and verify must fail closed, and the core must not depend on
-    // a GCS link being present.
     internal static class OutputController
     {
         private static NomadCoreClient _coreClient;
-        private static readonly object GimbalRequestLock = new object();
+        private static readonly SemaphoreSlim GimbalRequests = new SemaphoreSlim(1, 1);
+        private static readonly SemaphoreSlim[] PayloadRequests = CreatePayloadGates();
+        private static readonly SemaphoreSlim[] PayloadStops = CreatePayloadGates();
         private static readonly object GimbalFailureLock = new object();
         private static string _lastGimbalFailure = "";
         private static DateTime _lastGimbalFailureAt = DateTime.MinValue;
 
-        /// <summary>
-        /// GCS-side audit record for a runtime-routed actuation command. The
-        /// runtime emits the authoritative machine-readable line on its own stderr; this
-        /// companion Log line records the outcome where the operator and the
-        /// plugin's log adapters can see it.
-        /// </summary>
-        private static void Audit(string command, bool accepted, string detail)
+        private static SemaphoreSlim[] CreatePayloadGates()
         {
-            // Keep the command name aligned with the runtime audit line for correlation.
-            var client = CreateCoreClient();
-            var outcome = accepted ? "success" : FormatOutcome(client?.LastOutcome ?? NomadCoreRequestOutcome.NotAttempted);
-            Log.Info($"audit command={command} result={outcome} {detail}");
+            // Runtime supports 16 servos and 16 relays; the last gate covers invalid inputs.
+            var gates = new SemaphoreSlim[33];
+            for (var index = 0; index < gates.Length; index++)
+            {
+                gates[index] = new SemaphoreSlim(1, 1);
+            }
+            return gates;
         }
-
-        /// <summary>
-        /// Keep one client for output and gimbal callers during the
-        /// current plugin configuration session.
-        /// </summary>
         internal static void Initialize(NOMADConfig config)
         {
             _coreClient = config == null ? null :
                 new NomadCoreClient(config.CoreClientCredential, config.CoreRuntimePort);
         }
 
-        internal static NomadCoreClient CreateCoreClient()
+        internal static NomadCoreClient CreateCoreClient() => _coreClient;
+
+        // Nonwaiting gates reject overlapping input instead of collecting stale commands.
+        private static NomadCoreRequestResult NotSent(string code, string message)
         {
-            return _coreClient;
+            return new NomadCoreRequestResult(NomadCoreRequestOutcome.NotAttempted, code, message);
         }
 
-        /// <summary>
-        /// Drive an ArduPilot servo channel to a PWM value through the core
-        /// (MAV_CMD_DO_SET_SERVO, acknowledged by the core; physical effect is not verified).
-        /// Fails closed on invalid input or an unavailable/refusing core.
-        /// </summary>
-        public static Task<bool> SendServoPwmAsync(int channel, int pwmUs)
+        public static Task<NomadCoreRequestResult> SendServoPwmAsync(int channel, int pwmUs)
         {
-            return Task.FromResult(SendServoPwm(channel, pwmUs));
+            return SendPayloadAsync(GetServoGate(channel), "servo",
+                $"channel={channel} pwm_us={pwmUs}",
+                client => client.ServoAsync(channel, pwmUs));
         }
 
-        public static bool SendServoPwm(int channel, int pwmUs)
+        private static int GetServoGate(int channel) => channel >= 1 && channel <= 16 ? channel - 1 : 32;
+        private static int GetRelayGate(int relay) => relay >= 0 && relay <= 15 ? relay + 16 : 32;
+
+        // Only one explicit stop may wait behind its channel's current command.
+        public static async Task<NomadCoreRequestResult> SendServoStopAsync(int channel, int pwmUs)
         {
-            var client = CreateCoreClient();
-            if (client == null)
+            var gateIndex = GetServoGate(channel);
+            var stopGate = PayloadStops[gateIndex];
+            if (!await stopGate.WaitAsync(0).ConfigureAwait(false))
             {
-                Log.Warn("Servo command: NOMAD core not configured.");
-                Audit("servo", false, "reason=core_not_configured");
-                return false;
+                return NotSent("request_in_progress", "A stop is already pending; no additional request was sent.");
             }
-            if (client.Servo(channel, pwmUs))
+            try
             {
-                Audit("servo", true, $"channel={channel} pwm_us={pwmUs}");
-                return true;
+                return await SendPayloadAsync(gateIndex, "servo", $"channel={channel} pwm_us={pwmUs}",
+                    client => client.ServoAsync(channel, pwmUs), explicitStop: true).ConfigureAwait(false);
             }
-            Log.Warn(DescribeFailure("Servo command", client));
-            Audit("servo", false, $"channel={channel} pwm_us={pwmUs} reason={FailureReason(client)}");
-            return false;
+            finally
+            {
+                stopGate.Release();
+            }
         }
 
-        /// <summary>
-        /// Toggle an ArduPilot relay through the core (MAV_CMD_DO_SET_RELAY,
-        /// acknowledged by the core; physical effect is not verified). Fails closed when the core
-        /// is not configured, refuses, or cannot reach the vehicle.
-        /// </summary>
-        public static bool TrySetRelay(int relayNumber, bool on)
+        public static Task<NomadCoreRequestResult> SetRelayAsync(int relayNumber, bool on)
         {
-            var client = CreateCoreClient();
-            if (client == null)
-            {
-                Log.Warn("Relay command: NOMAD core not configured.");
-                Audit("relay", false, "reason=core_not_configured");
-                return false;
-            }
-            if (client.SetRelay(relayNumber, on))
-            {
-                Audit("relay", true, $"relay={relayNumber} state={(on ? 1 : 0)}");
-                return true;
-            }
-            Log.Warn(DescribeFailure("Relay command", client));
-            Audit("relay", false, $"relay={relayNumber} state={(on ? 1 : 0)} reason={FailureReason(client)}");
-            return false;
+            return SendPayloadAsync(GetRelayGate(relayNumber), "relay", $"relay={relayNumber} state={(on ? 1 : 0)}",
+                client => client.SetRelayAsync(relayNumber, on));
         }
 
-        internal static bool SendGimbalTarget(double pitchDeg, double rollDeg)
+        private static async Task<NomadCoreRequestResult> SendPayloadAsync(int gateIndex, string command, string detail,
+            Func<NomadCoreClient, Task<NomadCoreRequestResult>> send, bool explicitStop = false)
         {
-            lock (GimbalRequestLock)
+            var gate = PayloadRequests[gateIndex];
+            if (!explicitStop && PayloadStops[gateIndex].CurrentCount == 0)
+            {
+                return NotSent("request_in_progress", "An explicit stop is pending; no new command was sent.");
+            }
+            if (explicitStop)
+            {
+                await gate.WaitAsync().ConfigureAwait(false);
+            }
+            else if (!await gate.WaitAsync(0).ConfigureAwait(false))
+            {
+                return NotSent("request_in_progress", "Another payload command is in progress; no request was sent.");
+            }
+            try
             {
                 var client = CreateCoreClient();
-                if (client == null)
-                {
-                    ReportGimbalFailure("NOMAD core client is not configured; no target was sent.");
-                    return false;
-                }
-                if (client.GimbalTarget(pitchDeg, rollDeg))
-                {
-                    ClearGimbalFailure();
-                    return true;
-                }
-
-                ReportGimbalFailure(DescribeFailure("Gimbal target", client));
-                return false;
+                var result = client == null ? NotSent("core_not_configured", "NOMAD core is not configured.")
+                    : await send(client).ConfigureAwait(false);
+                ReportPayloadResult(command, detail, result);
+                return result;
+            }
+            finally
+            {
+                gate.Release();
             }
         }
 
-        internal static bool ConfigureGimbal(int mountMode)
+        private static void ReportPayloadResult(string command, string detail, NomadCoreRequestResult result)
         {
-            lock (GimbalRequestLock)
+            if (!result.Succeeded)
+            {
+                Log.Warn(DescribeFailure(command + " command", result));
+            }
+            Log.Info($"audit command={command} result={FormatOutcome(result.Outcome)} {detail}");
+        }
+
+        internal static async Task<NomadCoreRequestResult> SendGimbalTargetAsync(double pitchDeg, double rollDeg)
+        {
+            var result = await SendGimbalAsync(client => client.GimbalTargetAsync(pitchDeg, rollDeg))
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                ClearGimbalFailure();
+            }
+            else
+            {
+                ReportGimbalFailure(DescribeFailure("Gimbal target", result));
+            }
+            return result;
+        }
+
+        internal static async Task<NomadCoreRequestResult> ConfigureGimbalAsync(int mountMode)
+        {
+            var result = await SendGimbalAsync(client => client.GimbalConfigureAsync(mountMode)).ConfigureAwait(false);
+            if (!result.Succeeded)
+            {
+                Log.Warn(DescribeFailure("Gimbal configure", result));
+            }
+            return result;
+        }
+
+        private static async Task<NomadCoreRequestResult> SendGimbalAsync(
+            Func<NomadCoreClient, Task<NomadCoreRequestResult>> send)
+        {
+            if (!await GimbalRequests.WaitAsync(0).ConfigureAwait(false))
+            {
+                return NotSent("request_in_progress", "Another gimbal request is in progress; no request was sent.");
+            }
+            try
             {
                 var client = CreateCoreClient();
-                if (client == null)
-                {
-                    Log.Warn("Gimbal configure failed: NOMAD core client is not configured.");
-                    return false;
-                }
-                if (client.GimbalConfigure(mountMode))
-                {
-                    return true;
-                }
-                Log.Warn(DescribeFailure("Gimbal configure", client));
-                return false;
+                return client == null ? NotSent("core_not_configured", "NOMAD core is not configured.")
+                    : await send(client).ConfigureAwait(false);
+            }
+            finally
+            {
+                GimbalRequests.Release();
             }
         }
 
@@ -172,9 +184,9 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        internal static string DescribeFailure(string action, NomadCoreClient client)
+        internal static string DescribeFailure(string action, NomadCoreRequestResult result)
         {
-            var evidence = client.LastOutcome switch
+            var evidence = result.Outcome switch
             {
                 NomadCoreRequestOutcome.Rejected => "Command was not sent to the vehicle; runtime rejected it.",
                 NomadCoreRequestOutcome.Failed => "Operation was attempted and NOMAD obtained a definite failure.",
@@ -184,14 +196,7 @@ namespace NOMAD.MissionPlanner
                     + "final vehicle state is unknown. Do not retry blindly.",
                 _ => "No runtime mutation request was sent.",
             };
-            return $"{action}: {evidence} {client.LastErrorCode}: {client.LastMessage}";
-        }
-
-        internal static string DescribeLastFailure(string action)
-        {
-            var client = CreateCoreClient();
-            return client == null ? $"{action}: NOMAD core is not configured; no request was sent."
-                : DescribeFailure(action, client);
+            return $"{action}: {evidence} {result.ErrorCode}: {result.Message}";
         }
 
         private static string FormatOutcome(NomadCoreRequestOutcome outcome)
@@ -208,27 +213,21 @@ namespace NOMAD.MissionPlanner
             };
         }
 
-        private static string FailureReason(NomadCoreClient client)
-        {
-            return client.LastOutcome.ToString();
-        }
-
-        /// <summary>
-        /// Fire a relay pulse through the core: on for the clamped duration,
-        /// then off. SR-PAY-03: direct GCS-to-FC relay output bypasses the
-        /// on-board interlock by design; the panel's armed click or the
-        /// transmitter switch is the operator interlock documented in
-        /// docs/safety.md.
-        /// </summary>
-        public static async Task<bool> FireRelayAsync(int relayNumber, int durationMs)
+        // Hold the payload gate for the whole pulse; neither edge is automatically retried.
+        public static Task<NomadCoreRequestResult> FireRelayAsync(int relayNumber, int durationMs)
         {
             durationMs = Math.Max(50, Math.Min(durationMs, 5000));
-            if (!TrySetRelay(relayNumber, true))
+            return SendPayloadAsync(GetRelayGate(relayNumber), "relay",
+                $"relay={relayNumber} pulse_ms={durationMs}", async client =>
             {
-                return false;
-            }
-            await Task.Delay(durationMs).ConfigureAwait(false);
-            return TrySetRelay(relayNumber, false);
+                var started = await client.SetRelayAsync(relayNumber, true).ConfigureAwait(false);
+                if (!started.Succeeded)
+                {
+                    return started;
+                }
+                await Task.Delay(durationMs).ConfigureAwait(false);
+                return await client.SetRelayAsync(relayNumber, false).ConfigureAwait(false);
+            });
         }
     }
 }

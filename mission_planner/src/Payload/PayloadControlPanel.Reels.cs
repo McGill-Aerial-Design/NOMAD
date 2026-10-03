@@ -13,6 +13,8 @@
 
 using System;
 using System.Drawing;
+using System.Threading.Tasks;
+using NOMAD.MissionPlanner.Connectivity;
 using Timer = System.Windows.Forms.Timer;
 using System.Windows.Forms;
 
@@ -24,17 +26,23 @@ namespace NOMAD.MissionPlanner
         // Strap reel  —  hold-to-reel, per-reel safety cut-off
         // ============================================================
 
+        private readonly Task<NomadCoreRequestResult>[] _reelPending =
+            new Task<NomadCoreRequestResult>[NOMADConfig.MaxPayloads];
+        private readonly bool[] _reelStopping = new bool[NOMADConfig.MaxPayloads];
+
         private int ReelChannel(int reelIdx) => ReelPayload(reelIdx)?.Channel ?? 0;
         private int ReelStopPwm(int reelIdx) => ReelPayload(reelIdx)?.PwmNeutral ?? 1500;
         private int ReelSafetyMs(int reelIdx) => Math.Max(1, ReelPayload(reelIdx)?.HoldSafetyS ?? 10) * 1000;
         private int ReelFullDurationMs(int reelIdx) => Math.Max(1, ReelPayload(reelIdx)?.FullDurationS ?? 80) * 1000;
 
-        private void StartReel(int reelIdx, int pwmUs)
+        private async Task StartReel(int reelIdx, int pwmUs)
         {
             if (reelIdx < 0 || reelIdx >= _reelActive.Length) return;
+            if (_reelPending[reelIdx]?.IsCompleted == false || _reelStopping[reelIdx]) return;
 
-            StopFullReel(reelIdx * 2, true);
-            StopFullReel(reelIdx * 2 + 1, true);
+            await StopFullReel(reelIdx * 2, true);
+            await StopFullReel(reelIdx * 2 + 1, true);
+            if (IsDisposed) return;
 
             int channel = ReelChannel(reelIdx);
             _reelActive[reelIdx] = true;
@@ -43,33 +51,36 @@ namespace NOMAD.MissionPlanner
             _reelSafetyTimers[reelIdx]?.Dispose();
             var t = new Timer { Interval = ReelSafetyMs(reelIdx) };
             int safetyS = ReelSafetyMs(reelIdx) / 1000;
-            t.Tick += (s, e) =>
+            t.Tick += async (s, e) =>
             {
                 t.Stop();
                 t.Dispose();
                 _reelSafetyTimers[reelIdx] = null;
                 _reelActive[reelIdx] = false;
-                SetReelCommandStatus(SendServoNow(ReelChannel(reelIdx), ReelStopPwm(reelIdx)),
+                SetReelCommandStatus(await SendReelStopAsync(reelIdx),
                     $"{ReelName(reelIdx)}: stop command accepted ({safetyS}s safety limit); physical stop unverified");
             };
             _reelSafetyTimers[reelIdx] = t;
             t.Start();
 
-            SetReelCommandStatus(SendServoNow(channel, pwmUs),
+            _reelPending[reelIdx] = SendServoNowAsync(channel, pwmUs);
+            var result = await _reelPending[reelIdx];
+            if (IsDisposed) return;
+            SetReelCommandStatus(result,
                 $"{ReelName(reelIdx)}: command accepted ({pwmUs}µs); physical movement unverified");
         }
 
-        private void StopReel(int reelIdx)
+        private async Task StopReel(int reelIdx)
         {
             if (reelIdx < 0 || reelIdx >= _reelActive.Length) return;
-            if (!_reelActive[reelIdx]) return;
+            if (!_reelActive[reelIdx] || _reelStopping[reelIdx]) return;
             _reelActive[reelIdx] = false;
 
             _reelSafetyTimers[reelIdx]?.Stop();
             _reelSafetyTimers[reelIdx]?.Dispose();
             _reelSafetyTimers[reelIdx] = null;
 
-            SetReelCommandStatus(SendServoNow(ReelChannel(reelIdx), ReelStopPwm(reelIdx)),
+            SetReelCommandStatus(await SendReelStopAsync(reelIdx),
                 $"{ReelName(reelIdx)}: stop command accepted; physical stop unverified");
         }
 
@@ -90,7 +101,7 @@ namespace NOMAD.MissionPlanner
 
             if (_fullReelActive[slot])
             {
-                StopFullReel(slot, true);
+                _ = StopFullReel(slot, true);
                 return;
             }
 
@@ -105,7 +116,7 @@ namespace NOMAD.MissionPlanner
                 return;
             }
 
-            StartFullReel(slot);
+            _ = StartFullReel(slot);
         }
 
         private void StartFullReelClickReset(int slot)
@@ -126,9 +137,10 @@ namespace NOMAD.MissionPlanner
             resetTimer.Start();
         }
 
-        private void StartFullReel(int slot)
+        private async Task StartFullReel(int slot)
         {
             int reelIdx = FullReelIndex(slot);
+            if (_reelPending[reelIdx]?.IsCompleted == false || _reelStopping[reelIdx]) return;
             int oppositeSlot = FullReelOppositeSlot(slot);
             int channel = ReelChannel(reelIdx);
 
@@ -144,9 +156,10 @@ namespace NOMAD.MissionPlanner
             }
 
             if (_fullReelActive[oppositeSlot])
-                StopFullReel(oppositeSlot, false);
+                await StopFullReel(oppositeSlot, false);
             if (_reelActive[reelIdx])
-                StopReel(reelIdx);
+                await StopReel(reelIdx);
+            if (IsDisposed) return;
 
             _fullReelClickReset[slot]?.Stop();
             _fullReelClickReset[slot]?.Dispose();
@@ -161,19 +174,23 @@ namespace NOMAD.MissionPlanner
             var reel = ReelPayload(reelIdx);
             int pwmUs = FullReelIsIn(slot) ? (reel?.PwmMax ?? 2100) : (reel?.PwmMin ?? 900);
 
-            SetReelCommandStatus(SendServoNow(channel, pwmUs),
+            _reelPending[reelIdx] = SendServoNowAsync(channel, pwmUs);
+            var result = await _reelPending[reelIdx];
+            if (IsDisposed) return;
+            SetReelCommandStatus(result,
                 $"{ReelName(reelIdx)}: command accepted; timer {FormatDuration(durationMs)}, "
                     + "physical movement unverified");
 
+            if (!_fullReelActive[slot]) return;
             _fullReelCountdown[slot]?.Stop();
             _fullReelCountdown[slot]?.Dispose();
             var countdown = new Timer { Interval = 1000 };
-            countdown.Tick += (s, e) =>
+            countdown.Tick += async (s, e) =>
             {
                 _fullReelRemainingMs[slot] -= 1000;
                 if (_fullReelRemainingMs[slot] <= 0)
                 {
-                    StopFullReel(slot, false);
+                    await StopFullReel(slot, false);
                     return;
                 }
                 UpdateFullReelButton(slot);
@@ -182,7 +199,7 @@ namespace NOMAD.MissionPlanner
             countdown.Start();
         }
 
-        private void StopFullReel(int slot, bool cancelled)
+        private async Task StopFullReel(int slot, bool cancelled)
         {
             if (slot < 0 || slot >= _fullReelButtons.Length) return;
 
@@ -206,7 +223,7 @@ namespace NOMAD.MissionPlanner
             if (!wasActive) return;
 
             var reason = cancelled ? "timer cancelled" : "timer elapsed";
-            SetReelCommandStatus(SendServoNow(ReelChannel(reelIdx), ReelStopPwm(reelIdx)),
+            SetReelCommandStatus(await SendReelStopAsync(reelIdx),
                 $"{ReelName(reelIdx)}: {reason}, stop command accepted; physical stop unverified");
         }
 
@@ -246,15 +263,33 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Send one reel command and preserve its result for operator feedback.
         /// </summary>
-        private bool SendServoNow(int channel, int pwmUs)
+        private async Task<NomadCoreRequestResult> SendReelStopAsync(int reelIdx)
         {
-            return OutputController.SendServoPwm(channel, pwmUs);
+            if (_reelStopping[reelIdx])
+            {
+                return new NomadCoreRequestResult(NomadCoreRequestOutcome.NotAttempted,
+                    "request_in_progress", "The explicit reel stop is already in progress.");
+            }
+            _reelStopping[reelIdx] = true;
+            try
+            {
+                return await OutputController.SendServoStopAsync(ReelChannel(reelIdx), ReelStopPwm(reelIdx));
+            }
+            finally
+            {
+                _reelStopping[reelIdx] = false;
+            }
+        }
+        private Task<NomadCoreRequestResult> SendServoNowAsync(int channel, int pwmUs)
+        {
+            return OutputController.SendServoPwmAsync(channel, pwmUs);
         }
 
-        private void SetReelCommandStatus(bool success, string acceptedMessage)
+        private void SetReelCommandStatus(NomadCoreRequestResult result, string acceptedMessage)
         {
-            SetStatus(success ? acceptedMessage : OutputController.DescribeLastFailure("Reel command"),
-                success ? SUCCESS_COLOR : ERROR_COLOR);
+            if (IsDisposed) return;
+            SetStatus(result.Succeeded ? acceptedMessage : OutputController.DescribeFailure("Reel command", result),
+                result.Succeeded ? SUCCESS_COLOR : ERROR_COLOR);
         }
     }
 }

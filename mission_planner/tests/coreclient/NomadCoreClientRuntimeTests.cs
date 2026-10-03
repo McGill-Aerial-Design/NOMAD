@@ -281,7 +281,8 @@ internal static partial class NomadCoreClientTests
                             hello["auth_nonce"] + ":mock-runtime-incarnation"),
                         ["authority"] = new Dictionary<string, object>
                         {
-                            ["vehicle_session"] = 1, ["generation"] = _enforceAuthority ? _generation : 1
+                            ["vehicle_session"] = 1, ["generation"] = _enforceAuthority ? _generation : 1,
+                            ["next_sequence"] = _lastSequence + 1
                         }
                     }));
                     if (_helloVersion != 1 || _rogueRuntime)

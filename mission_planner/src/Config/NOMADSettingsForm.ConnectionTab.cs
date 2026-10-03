@@ -67,14 +67,14 @@ namespace NOMAD.MissionPlanner
                 return;
             }
             tab.Enabled = false;
-            bool accepted;
+            Connectivity.NomadCoreRequestResult result;
             try
             {
-                accepted = await Task.Run(() => action switch
+                result = await (action switch
                 {
-                    "admit" => client.AdmitAuthority(),
-                    "revoke" => client.RevokeAuthority(),
-                    _ => client.HandbackAuthority()
+                    "admit" => client.AdmitAuthorityAsync(),
+                    "revoke" => client.RevokeAuthorityAsync(),
+                    _ => client.HandbackAuthorityAsync()
                 });
             }
             finally
@@ -82,9 +82,9 @@ namespace NOMAD.MissionPlanner
                 if (!IsDisposed) tab.Enabled = true;
             }
             if (IsDisposed) return;
-            var message = accepted ? "Runtime authority changed." : client.LastMessage;
+            var message = result.Succeeded ? "Runtime authority changed." : result.Message;
             MessageBox.Show(message, "NOMAD Runtime", MessageBoxButtons.OK,
-                            accepted ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                            result.Succeeded ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
 
         private TabPage CreateDualLinkTab()
