@@ -189,20 +189,33 @@ internal static partial class VideoLifetimeTests
 
     private static void AlreadyCancelledShutdown()
     {
-        int creates = 0;
-        using (var shutdown = new CancellationTokenSource())
+        foreach (bool disposeSource in new[] { false, true })
         {
-            shutdown.Cancel();
-            using (var player = new EmbeddedVideoPlayer("fake", "fake", true, shutdown.Token, () =>
+            using (var shutdown = new CancellationTokenSource())
             {
-                ++creates;
-                return new FakeVideoPipeline();
-            }))
-            {
-                player.StartStream();
-                Check(creates == 0, "Cancelled plugin token allowed pipeline creation");
-                Check(player.IsDisposed, "Cancelled plugin token retained view resources");
+                var token = shutdown.Token;
+                shutdown.Cancel();
+                if (disposeSource)
+                {
+                    shutdown.Dispose();
+                }
+                CheckCancelledView(token);
             }
+        }
+    }
+
+    private static void CheckCancelledView(CancellationToken token)
+    {
+        int creates = 0;
+        using (var player = new EmbeddedVideoPlayer("fake", "fake", true, token, () =>
+        {
+            ++creates;
+            return new FakeVideoPipeline();
+        }))
+        {
+            player.StartStream();
+            Check(creates == 0, "Cancelled plugin token allowed pipeline creation");
+            Check(player.IsDisposed, "Cancelled plugin token retained view resources");
         }
     }
 }

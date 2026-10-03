@@ -37,8 +37,25 @@ namespace NOMAD.MissionPlanner
             _session = new VideoSession(createPipeline);
             _frameTimer = new System.Windows.Forms.Timer { Interval = 33 };
             _frameTimer.Tick += OnFrameTick;
-            InitializeUI();
-            _shutdown = shutdown.Register(OnPluginShutdown);
+            try
+            {
+                InitializeUI();
+                if (shutdown.IsCancellationRequested)
+                {
+                    Dispose();
+                    return;
+                }
+                _shutdown = shutdown.Register(OnPluginShutdown);
+            }
+            catch (ObjectDisposedException) when (shutdown.IsCancellationRequested)
+            {
+                Dispose();
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
         }
 
         protected override void OnHandleCreated(EventArgs e)
