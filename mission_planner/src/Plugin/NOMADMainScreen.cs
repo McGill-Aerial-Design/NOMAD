@@ -300,7 +300,7 @@ namespace NOMAD.MissionPlanner
                 case "Dashboard":
                     if (_dashboardView == null)
                     {
-                        _dashboardView = new NOMADDashboardView(_config, _connectionManager);
+                        _dashboardView = new NOMADDashboardView(_config, _connectionManager, _videoShutdown);
                         if (_boundaryMonitor != null)
                         {
                             _dashboardView.SetBoundaryMonitor(_boundaryMonitor);
