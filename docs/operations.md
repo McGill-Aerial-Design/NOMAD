@@ -1,5 +1,201 @@
 # Operations
 
+## Release deployment audit (base `1efaa335`)
+
+Before the versioned deployment slice, CPack generated core ZIP/TGZ archives
+and the staged verifier checked contents and an offline CLI. The release
+workflow published only separately assembled plugin/router ZIPs and a loose
+plugin DLL. It did not aggregate core packages, bind package digests to one
+source/tag identity, or refuse a partial component set. CMake/runtime used a
+fixed `0.1.0`; plugin/router implementation metadata did not establish the
+same authoritative release identity. A manual workflow run could borrow its
+branch name as a package label.
+
+PR56 systemd/SCM lifecycle provisioning keeps protected configuration,
+credentials and audit journals external, and restart invalidates software
+authority. PR57 records reviewed dependency/build/resource provenance. These
+are useful foundations, but neither is an installation activation journal or
+rollback qualification. Prefix installation could overwrite an existing
+prefix. The plugin installer overwrote `NOMADPlugin.dll` and deleted a legacy
+AppData copy without retaining an immutable previous payload. Router packages
+contained an example configuration; deployed topology remained operator-owned
+but had no versioned activation procedure. No component had a durable pending
+activation record, failed-candidate recovery, or exact previous-version check.
+
+The executable disproof check for this slice is an A → B → A transition through
+the deployment engine, including failed B health, corrupt packages, interrupted
+activation, retained operator state, and real runtime/router processes. A failed
+restoration must remain pending/failed and must never report successful rollback.
+
+## Versioned release deployment
+
+Use Python 3.11 or newer and the reviewed deployment tools from the same release
+set. Verify the downloaded tooling ZIP against `SHA256SUMS` before extracting it;
+verify the manifest checksum too. Obtain both through a trusted operator channel.
+SHA-256 correlates bytes and detects corruption; it does **not** authenticate a
+publisher. No signing-key distribution or release signing is implemented.
+
+`release-manifest.json` identifies one release set, not a distributed transaction.
+It binds the tag/dev identity, full NOMAD/MAVSDK source SHAs, component versions,
+platform/architecture, package hashes, required contents and supported protocols.
+The supported set contains Linux x86-64 core, Windows x86-64 core, Windows
+standalone router and an AnyCPU plugin targeting Mission Planner 1.3.83. Runtime
+IPC v1 and router management v1 remain distinct compatibility contracts. This
+slice permits their reviewed v1 combinations; operators should deploy matching
+release sets and record each host's actual component status. There is no mixed
+version dependency solver or cross-host atomicity claim.
+
+Each component has its own protected deployment root:
+
+```text
+<root>/<core|router|plugin>/
+    deployment.json
+    releases/<release_version>/
+        package             # original verified archive, retained for rollback
+        record.json         # identity and exact extracted file hashes
+        payload/            # immutable release files
+```
+
+`deployment.json` records active/previous releases, source/package identity,
+paths, timestamps and pending activation intent. It contains no credentials and
+is separate from the runtime command audit. POSIX records are mode 0600; release
+files are read-only. Windows tooling protects the root ACL for the operator,
+Administrators and SYSTEM, with LocalService read/execute, and rejects unsafe
+existing ACLs and reparse points. Provision this root beneath an administrator
+controlled parent; ordinary users must not be able to rename its parent.
+
+The common command is `python -m scripts.release.deploy` from the extracted
+tooling directory. Every action takes `--root <absolute-root> --component
+<core|router|plugin>`. These examples use placeholders, not production settings:
+
+```sh
+python -m scripts.release.deploy verify --root <root> --component core --manifest <manifest> --package <core-package>
+python -m scripts.release.deploy stage --root <root> --component core --manifest <manifest> --package <core-package>
+python -m scripts.release.deploy status --root <root> --component core
+python -m scripts.release.deploy activate --root <root> --component core --release <release> --adapter systemd --config <config>
+python -m scripts.release.deploy rollback --root <root> --component core --adapter systemd --config <config>
+python -m scripts.release.deploy recover --root <root> --component core --adapter systemd --config <config>
+python -m scripts.release.deploy cleanup --root <root> --component core --release <unused-release>
+```
+
+`verify` has no deployment side effects. `stage` verifies the full manifest,
+native platform, digest, embedded identity and required files before publishing
+a new release directory. It rejects traversal, links, ambiguous Windows names,
+duplicate names, oversized archives, operator state and qualification executables.
+A version already present with different bytes fails. Staging never stops an
+active process. Cleanup is explicit and refuses active, previous and pending
+versions. It never traverses operator state or deletes audit evidence.
+
+### Linux core
+
+Keep `/etc/nomad/runtime.json`, its credential map and `/var/lib/nomad` audit
+history outside `<root>`. Provision the existing PR56 systemd unit using
+`install_systemd.py install --executable <root>/core/current/bin/nomad-runtime
+--config <config> --state <audit-parent> --user nomad`. The service account must
+be able to traverse the protected program directories. Registration does not
+start or enable the service. Stage A, provision the unit, then explicitly
+activate A. For an existing versioned pointer, stage the exact matching release
+and use `adopt` after checking its running version and health.
+
+Activation stops systemd and verifies its stopped state, atomically replaces
+`core/current` with a symlink to the complete candidate payload, starts systemd
+and checks read-only IPC hello/status, implementation version, readiness and no
+authority owner. PR56 SIGTERM closes final-send admission. Upgrade and rollback
+each start a fresh incarnation; old contexts fail and fresh authentication and
+explicit admission are required. The service never receives authority from the
+deployment tool.
+
+### Windows core
+
+Use `--adapter scm`, with the same stage/status/activate/rollback/recover/cleanup
+actions. No symlink privilege is required. SCM must first be provisioned through
+PR56 `Manage-NomadRuntime.ps1` to point at staged A's absolute
+`payload/bin/nomad-runtime.exe` and external protected configuration. Explicitly
+start that service and `adopt --release <A>` to establish the initial verified
+record. Adoption refuses a different SCM executable/config path. Activation
+stops and waits for SCM STOPPED, changes only the executable command to the
+candidate's complete versioned path, starts and verifies read-only IPC health.
+Service account/recovery policy and external settings are preserved. Rollback
+restores the exact previous executable path and verifies the restarted runtime.
+
+### Router and plugin
+
+The [router deployment guide](../infra/transport/ground_router/README.md) describes
+the independent foreground supervisor and Windows scheduled-task start command.
+Use `--component router --config <external-router.json>
+--router-start-command <operator-owned-argv.json>` for activate/rollback/recover.
+Before stopping the deployed router, candidate preflight runs a separate router
+against loopback-only endpoints and requires hello, management status, expected
+version/protocol and safe shutdown. This test router grants no authority and
+does not connect to physical links. Authoritative endpoints, consumer ports,
+preferred link and topology stay in the unchanged external configuration.
+
+Use `--component plugin --mission-planner <installation>` for activation,
+rollback and recovery. The [plugin packaging guide](../mission_planner/packaging/README.md)
+gives the PowerShell wrapper commands. Mission Planner must be closed; the tool
+never kills it. Only `plugins/NOMADPlugin.dll` is atomically replaced. The target
+Mission Planner version and PE DLL are checked before replacement, and the final
+DLL embedded version/source and final hash are checked. Settings, `CoreClientCredential`, Mission Planner
+configuration, other plugins and legacy AppData files remain untouched. Plugin
+health qualifies replacement bytes, not GUI startup.
+
+On a common Windows groundstation, stage and verify all candidates first. Close
+Mission Planner deliberately, activate core, then router, then plugin, verifying
+each before proceeding. Core can be ready/degraded without a router or vehicle.
+Reopen Mission Planner only after the component statuses match the intended set;
+fresh authentication/admission remains mandatory. On failure, stop the sequence
+and restore affected components individually. Across machines, coordinate this
+same procedure per host and retain each host record; no all-or-nothing operation
+is promised.
+
+### Failure, interruption and host acceptance
+
+The engine durably writes `activating` with candidate and previous records before
+stopping anything. Any ordinary failure after that boundary attempts restoration:
+write `rollback_pending`, stop candidate, validate retained previous bytes,
+restore its pointer/payload, start and health-check previous, then record
+`rolled_back`. If restoration or its record write fails, pending intent remains
+and `recover` deterministically restores the recorded previous version. A missing
+or corrupt previous version fails clearly; restore its reviewed archive before
+retrying. An initial activation failure leaves no committed active release.
+Never interpret a nonzero activation command as success even if A was recovered.
+
+After a host/tool crash during a pending transition, run `status`, then `recover`
+before another activation. Supervision may have restarted a component during
+that interruption; recovery stops it and restores the journal's exact previous
+release. Temporary `.stage-*` trees left by a staging crash are never active and
+may be removed by an operator after confirming no staging tool is running.
+
+Directory publication, POSIX symlink switches and individual state replacements
+use same-filesystem atomic rename. Windows deployment records use `ReplaceFileW`
+with readers permitting delete sharing; a failed replacement attempts to restore
+its retained old record before reporting failure. If that restoration is blocked,
+the deterministic `.deployment.json.previous` backup makes commands fail closed.
+Repair storage permissions, stop the affected deployment tool/supervisor, preserve
+both records as evidence, and restore the backup to `deployment.json` if the target
+is absent; if both exist, inspect them and retain the record with pending intent.
+Remove the backup only after recording that repair, then run `status` and `recover`.
+The same procedure applies to other `.NAME.previous` record backups.
+POSIX writes synchronize files and parent
+directories. Windows uses flushed file writes and atomic replacement, but cannot
+promise directory/power-loss durability equivalent to POSIX fsync. SCM changes,
+process lifecycle and plugin replacement are separate steps guarded by the
+pending record; the overall transaction is recoverable, not one filesystem
+atomic operation. Multi-process and multi-host deployment is not atomic.
+
+The router supervisor retains its lifetime lock after a record-write failure until
+its owned child has exited and the final stopped/failed record can be written.
+If storage remains unavailable or shutdown is refused, activation/rollback times
+out with a pending journal. Repair storage or shutdown on that host, then run
+`recover`; a stale running marker is never accepted as proof of process exit.
+
+Hosted/unprivileged fixtures prove byte identity, state preservation, real child
+runtime/router transitions, authority reset and recovery failures. Privileged
+host acceptance still requires actual systemd/SCM permissions, account access,
+Windows task supervision, protected parent ACLs, stop timeouts, locked DLLs,
+power-loss recovery and operator restart procedures. Software rollback evidence
+does not establish aircraft readiness or physical flight safety.
+
 This guide covers the supported ground deployment. For build and qualification
 workflows, see [Development](development.md) and [Qualification status](qualification.md).
 For the current component boundaries, see [Architecture](architecture.md).

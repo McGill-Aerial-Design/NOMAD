@@ -116,7 +116,7 @@ as `LTE` and `RadioMaster` are ordinary stable IDs, not a transport model.
 and top-level bind-address settings are rejected; move physical links into
 `Links` and local endpoints into `Consumers`.
 
-`Consumers` contains 1–32 entries with unique `Id`, `RouterPort`, and optional
+`Consumers` contains 1â€“32 entries with unique `Id`, `RouterPort`, and optional
 `ClientPort`. `AllowOutbound` defaults to true; false lets a consumer receive
 telemetry while preventing its local MAVLink frames from reaching physical
 links. The exact ID `mission_planner` is reserved as receive-only: an explicit
@@ -197,7 +197,75 @@ This is not request correlation or concurrent-client arbitration. Mission/fence
 and FTP traffic use the active link per frame; no transaction pinning is claimed
 for them. Their callers must detect failure and restart/verify exchanges.
 
-## Limits and next step
+## Versioned Windows supervision
+
+Keep Python 3.11+ and the verified deployment tools in an administrator-controlled
+stable directory. Provision an independent Windows scheduled task named
+`NOMAD Router` to run, under the deployment operator or SYSTEM account:
+
+```powershell
+python.exe <tools>/scripts/release/router_host.py --root <deployment-root> --config <external-router.json>
+```
+
+Use quoted absolute paths in Task Scheduler's executable/argument fields,
+including paths with spaces. Configure one instance, no execution time limit,
+and bounded restart on **failure**; a deliberate exit 0 must remain stopped.
+The task must permit an explicit operator start, and its account must read the
+external config and write the protected router deployment directory. This is
+independent of the runtime SCM service; neither task depends on the other.
+Do not run this host itself as a native SCM executable.
+
+Create an operator-owned `router-start.json` outside release payloads:
+
+```json
+["schtasks.exe", "/Run", "/TN", "NOMAD Router"]
+```
+
+The deployment CLI executes this argv without a shell. It is operator
+supervision configuration, not a script downloaded from a release package.
+From the verified tools directory, use these actions with absolute placeholders:
+
+```powershell
+python -m scripts.release.deploy verify --root <root> --component router --manifest <manifest> --package <router-zip>
+python -m scripts.release.deploy stage --root <root> --component router --manifest <manifest> --package <router-zip>
+python -m scripts.release.deploy activate --root <root> --component router --release <release> --config <router-json> --router-start-command <router-start-json>
+python -m scripts.release.deploy status --root <root> --component router
+python -m scripts.release.deploy rollback --root <root> --component router --config <router-json> --router-start-command <router-start-json>
+python -m scripts.release.deploy recover --root <root> --component router --config <router-json> --router-start-command <router-start-json>
+python -m scripts.release.deploy cleanup --root <root> --component router --release <unused-release>
+```
+
+For first installation, register the task but leave it stopped, then stage and
+activate A. The tool first qualifies A against a temporary loopback topology,
+publishes `router/current.json` and explicitly starts the task. The host verifies
+that pointer against immutable staged bytes before running the router with the
+unchanged external config. Later activation requests graceful child shutdown
+through `stop.request`, verifies the exit marker, released supervisor lock and
+closed management port, replaces the pointer, then starts/checks the candidate.
+The previous immutable payload is retained. Health failure or startup exit
+restores and verifies exact A through the same steps.
+
+Do not start an unmanaged standalone router alongside the task. A loaded
+management port or divergent active pointer causes refusal. After an unexpected
+supervisor/task termination, confirm any orphaned router child has exited before
+restarting the task and invoking `recover`. A stale running marker or occupied
+port is not proof of shutdown; the tool refuses to switch rather than claiming
+recovery. Task Scheduler permissions, restart rules, host shutdown and this
+operator acceptance procedure require a real privileged Windows host check.
+
+Versioned release staging, activation, recovery, and rollback are documented in
+[operations](../../../docs/operations.md). The router remains independently supervised;
+its authoritative `router.json` belongs outside the immutable release payload. Changing
+the router executable must preserve physical endpoints, consumer ports, preferred-link
+settings, and operator topology. Release packages contain only `router.example.json`.
+
+The software process qualification uses two compiled fixture router versions with distinct
+executable bytes. It stages B while A remains running, verifies management `hello` and
+`get_status` across A â†’ B â†’ A, deliberately fails B health and verifies automatic
+restoration of exact A, and compares the external configuration byte for byte. All
+endpoints are loopback UDP and shutdown uses the host's `stop` command. It requires
+neither physical links nor a vehicle. Native supervision and protected directory ACLs
+still require privileged host acceptance; the fixture substitutes the OS supervisor.
 
 The router owns transport selection, not command admission, payload policy,
 aircraft qualification or mission sequencing. MP native controls, pilot/RC and

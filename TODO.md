@@ -62,17 +62,20 @@ in the [historical migration archive](docs/migration.md).
   the pinned MAVSDK dependency and retain comparable qualification artifacts.
   See the [software resource evidence and limits](docs/qualification.md#software-resource-budgets),
   versioned policy and separate Linux/Windows hosted artifacts.
-- [ ] Qualify versioned installation, activation and rollback for the core,
-  standalone ground router and Mission Planner plugin. Package generation and
-  staged-install verification exist; they do not establish a deployed or
-  rollback-tested system.
+- [x] Qualify software-only versioned installation, activation and rollback
+  for the core, standalone ground router and Mission Planner plugin. Exact
+  A → B → A binaries, failed candidates, persistent operator state and fresh
+  runtime authority are exercised without hardware. See
+  [release lifecycle evidence and limits](docs/qualification.md#versioned-release-lifecycle).
+  Privileged systemd/SCM registration and actual groundstation acceptance remain
+  part of deployment-profile qualification below.
 - [ ] Qualify each intended deployment profile with its actual host, endpoint,
   hardware, optional workloads and failure states. Profile tests validate
   templates only. GPU/Jetson images require compatible hardware and base images.
 
 ## Product modules and competition evidence
 
-- [ ] Resolve open organizer decisions Q02–Q09 and assign accountable owners
+- [ ] Resolve open organizer decisions Q02â€“Q09 and assign accountable owners
   for requirements, implementation, safety acceptance and retained evidence.
 - [ ] Implement the required AEAC 2027 server/traffic contract and demonstrate
   telemetry, stale-data behavior, traffic separation and outage/replay handling.

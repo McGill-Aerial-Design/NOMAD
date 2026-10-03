@@ -31,7 +31,7 @@ namespace NOMAD.MissionPlanner
     {
         // Plugin metadata
         public override string Name => "NOMAD Control";
-        public override string Version => "0.2.0";
+        public override string Version => NomadRelease.Version;
         public override string Author => "McGill Aerial Design";
 
         // Plugin state

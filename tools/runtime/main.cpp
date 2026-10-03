@@ -216,6 +216,10 @@ int run_runtime(int argc, char **argv) {
 } // namespace
 
 int main(int argc, char **argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--version") {
+        std::cout << NOMAD_VERSION << '\n';
+        return 0;
+    }
     for (int index = 1; index < argc; ++index) {
         if (std::string_view(argv[index]) == "--service") {
             return nomad::runtime::process::run_service(argc, argv, run_runtime);

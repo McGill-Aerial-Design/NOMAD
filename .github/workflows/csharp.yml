@@ -21,6 +21,8 @@ on:
       - "infra/transport/ground_router/**"
       - "scripts/build/**"
       - "scripts/dev/ground_router_smoke.py"
+      - "scripts/dev/release_process*"
+      - "scripts/release/**"
       - ".github/workflows/csharp.yml"
   pull_request:
     paths:
@@ -28,6 +30,8 @@ on:
       - "infra/transport/ground_router/**"
       - "scripts/build/**"
       - "scripts/dev/ground_router_smoke.py"
+      - "scripts/dev/release_process*"
+      - "scripts/release/**"
       - ".github/workflows/csharp.yml"
   workflow_dispatch:
 
@@ -52,6 +56,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          cache: true
 
       # The plugin's pure SC logic is tested with standalone Roslyn (csc)
       # assertion harnesses — no .NET SDK, NuGet, or staged Mission Planner
@@ -71,6 +78,12 @@ jobs:
 
       - name: Standalone router smoke
         run: python scripts/dev/ground_router_smoke.py
+      - name: Build distinguishable release A and B router fixtures
+        run: pwsh -File scripts/build/build_release_router_fixtures.ps1
+      - name: Qualify router activation health failure and exact binary rollback
+        run: >-
+          pixi run python scripts/dev/release_process_qualification.py
+          --router-a build/release-fixtures/router-A --router-b build/release-fixtures/router-B
 
       - name: Payload-release interlock tests (SR-PAY-03)
         run: pwsh -File scripts/build/test_plugin_interlock.ps1

@@ -7,35 +7,66 @@ controls remain separate paths. For current limits, see
 
 ## Install
 
-1. Build the plugin from the repository root with `pixi run build-plugin-only`.
-   From this folder, stage the built DLL beside the installer:
+The local `pixi run build-plugin-only` task compiles without installing. Use a
+complete release manifest and its plugin archive for deployment. The installer
+now forwards explicit actions to the release deployment tool; a loose DLL is
+not an installable release. Use Python 3.13 and the reviewed deployment tools
+from the release or the corresponding source checkout.
 
-   ```powershell
-   Copy-Item -LiteralPath ..\src\bin\Release\NOMADPlugin.dll -Destination .\NOMADPlugin.dll
-   ```
+```powershell
+$arguments = @{
+    Root = 'C:\ProgramData\NOMAD\deployment'
+    MissionPlanner = 'C:\Program Files (x86)\Mission Planner'
+    DeploymentTool = '.\scripts\release\deploy.py'
+}
+.\mission_planner\packaging\INSTALL.ps1 @arguments -Action verify `
+    -Manifest '.\release-manifest.json' -Package '.\NOMADPlugin.zip'
+.\mission_planner\packaging\INSTALL.ps1 @arguments -Action stage `
+    -Manifest '.\release-manifest.json' -Package '.\NOMADPlugin.zip'
+.\mission_planner\packaging\INSTALL.ps1 @arguments -Action status
+# Close Mission Planner before this explicit activation.
+.\mission_planner\packaging\INSTALL.ps1 @arguments -Action activate -Release 'vX.Y.Z'
+.\mission_planner\packaging\INSTALL.ps1 @arguments -Action rollback
+.\mission_planner\packaging\INSTALL.ps1 @arguments -Action cleanup -Release 'vOLD.VERSION'
+```
 
-2. Close Mission Planner. From this folder, run:
+Use the actual manifest filename and release version. Verification binds package
+SHA-256, component, platform, runtime IPC expectation and Mission Planner target.
+Checksums establish correlation and integrity; they are not publisher signatures.
+Protect the deployment root with administrator-controlled ACLs before use; do not
+put operator state in this directory. Activation refuses an unmanaged existing
+DLL: stage the exact existing release and use `-Action adopt -Release 'vX.Y.Z'`
+to record it only after its deployed bytes match. Otherwise preserve the existing
+installation and obtain its original verified package before upgrade.
 
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File INSTALL.ps1
-   ```
+Staging keeps immutable release payloads without changing the installed DLL.
+Activation and rollback require Mission Planner closed, validate the installed
+Mission Planner version (**1.3.83**), and replace only
+`plugins\NOMADPlugin.dll` using a temporary file and same-directory atomic replace.
+A locked DLL fails clearly. The tool never kills or starts Mission Planner.
+Rollback restores the retained exact previous DLL and checks its digest before
+reporting success. Cleanup refuses the active and rollback releases.
 
-   This copies `NOMADPlugin.dll` into Mission Planner's installation plugins
-   folder (`C:\Program Files (x86)\Mission Planner\plugins`).
-3. Start Mission Planner and open the NOMAD panel from the **Tools** menu.
+The installer preserves Mission Planner settings, other plugins and AppData
+`nomad_config.json`, including `CoreClientCredential`. It does not remove the
+legacy AppData DLL; an operator must resolve duplicate discovery separately.
+AppData is neither a package payload nor rollback storage. Configuration migration
+remains the plugin's existing load behavior when the operator later opens it;
+deployment never rewrites or rolls back configuration files.
 
-The local build task compiles only; it does not make a release archive or install
-the DLL. The repository release workflow packages the plugin and standalone
-ground router separately. A `v*` tag publishes release assets; manual workflow
-dispatch uploads downloadable artifacts. See the [development workflow](../../docs/development.md).
+After an interrupted activation, inspect `status` and explicitly run `recover`
+before another activation. See the canonical [operations guide](../../docs/operations.md)
+for deployment journal states, recovery and activation ordering. Tagged publication
+and manual artifact generation are described in the
+[development workflow](../../docs/development.md).
 
 ## Ground router host
 
 The plugin does not contain or launch the ground router. Download the separate
-`NOMADLinkRouter` release package, edit `router.example.json` for the physical
-links and consumers, then run `nomad-link-router.exe router.example.json` in an
-independently supervised process. Keep `Nomad.LinkRouter.dll` and the example
-configuration beside the executable. The Mission Planner status panel connects
+`NOMADLinkRouter` release package. Keep authoritative router JSON outside the
+versioned programs, derive it once from `router.example.json`, then run
+`nomad-link-router.exe <external-router.json>` in an independently supervised
+process. Keep `Nomad.LinkRouter.dll` beside the executable. The Mission Planner status panel connects
 to loopback TCP `127.0.0.1:14610`; native Mission Planner uses UDPCl to the
 configured `mission_planner` consumer, normally port `14600`.
 
@@ -47,11 +78,14 @@ is removed during config migration and never rewrites host configuration. The
 plugin installer below
 installs only `NOMADPlugin.dll`; it does not install or register a router service.
 
-### Manual install
+### Software qualification
 
-Copy `NOMADPlugin.dll` into
-`C:\Program Files (x86)\Mission Planner\plugins\` yourself, then restart Mission
-Planner.
+CI uses temporary fake Mission Planner installations, including paths with
+spaces and `Program Files (x86)`, to verify exact A → B → A DLL replacement and
+unchanged settings/credentials and unrelated plugins. It checks closed-process,
+unsupported-target and malformed-DLL rejection. It does not start the Mission
+Planner GUI. Real-host acceptance still checks administrator ACLs, loaded DLL
+locking, actual Mission Planner discovery and plugin startup with retained settings.
 
 ## Requirements
 

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # ==============================================================
-# NOMAD Jetson adapter image — Isaac ROS base + generic C++ ROS adapter.
+# NOMAD Jetson adapter image â€” Isaac ROS base + generic C++ ROS adapter.
 #
 # The camera, VIO estimator, mapping, and obstacle-avoidance stacks are not part
 # of the current baseline. This image builds the read-only MAVLink telemetry
@@ -30,6 +30,7 @@ RUN pip3 install --no-cache-dir 'numpy<2'
 # The core's transport is MAVSDK, so its pinned submodule ships with the image;
 # the MAVSDK subbuild fetches its own pinned dependencies at configure time.
 COPY CMakeLists.txt /ws/src/nomad/CMakeLists.txt
+COPY cmake/ /ws/src/nomad/cmake/
 COPY include/ /ws/src/nomad/include/
 COPY src/ /ws/src/nomad/src/
 COPY examples/ /ws/src/nomad/examples/

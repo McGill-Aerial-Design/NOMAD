@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # ==============================================================
-# NOMAD Isaac ROS adapter image — x86_64 + NVIDIA dGPU.
+# NOMAD Isaac ROS adapter image â€” x86_64 + NVIDIA dGPU.
 #
 # This optional image provides the read-only ROS telemetry observer on an Isaac
 # ROS base. It contains no camera SDK, mapping stack, obstacle-avoidance
@@ -13,7 +13,7 @@ FROM ${BASE_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
 
 LABEL maintainer="The NOMAD Authors"
-LABEL description="NOMAD generic Isaac ROS adapter node — x86_64 GPU image"
+LABEL description="NOMAD generic Isaac ROS adapter node â€” x86_64 GPU image"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-rclcpp \
@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # The core's transport is MAVSDK, so its pinned submodule ships with the image;
 # the MAVSDK subbuild fetches its own pinned dependencies at configure time.
 COPY CMakeLists.txt /ws/src/nomad/CMakeLists.txt
+COPY cmake/ /ws/src/nomad/cmake/
 COPY include/ /ws/src/nomad/include/
 COPY src/ /ws/src/nomad/src/
 COPY examples/ /ws/src/nomad/examples/

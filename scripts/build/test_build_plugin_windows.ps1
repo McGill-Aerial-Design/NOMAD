@@ -138,6 +138,7 @@ function New-TestFixture {
         New-Item -ItemType Directory -Path (Split-Path $fixture.LegacyPlugin) -Force | Out-Null
         Copy-Item -LiteralPath $SourceBuildScript -Destination $fixture.Script
         [IO.File]::WriteAllText((Join-Path $fixture.Project 'NOMADPlugin.csproj'), '<Project />')
+        New-ReleaseIdentityFixture -Fixture $fixture -SourceBuildScript $SourceBuildScript
         [IO.File]::WriteAllText((Join-Path $fixture.Install 'MissionPlanner.exe'), 'installation sentinel')
         [IO.File]::WriteAllText((Join-Path $fixture.InstallPlugins 'existing-plugin.txt'), 'preserve this file')
         [IO.File]::WriteAllText($fixture.LegacyPlugin, 'preserve the legacy copy')
@@ -159,6 +160,30 @@ function New-TestFixture {
         Remove-TestFixture -Fixture $fixture
         throw
     }
+}
+
+function Invoke-FixtureGit {
+    param([pscustomobject]$Fixture, [string[]]$GitArguments)
+    & git -C $Fixture.Repo @GitArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Synthetic release identity repository setup failed.'
+    }
+}
+
+function New-ReleaseIdentityFixture {
+    param([pscustomobject]$Fixture, [string]$SourceBuildScript)
+    $sourceRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $SourceBuildScript))
+    $destination = Join-Path $Fixture.Repo 'scripts\release'
+    New-Item -ItemType Directory -Path $destination -Force | Out-Null
+    foreach ($name in @('identity.py', 'manifest.py')) {
+        Copy-Item -LiteralPath (Join-Path $sourceRoot "scripts\release\$name") -Destination $destination
+    }
+    Invoke-FixtureGit $Fixture @('init', '--quiet')
+    Invoke-FixtureGit $Fixture @('add', 'scripts', 'mission_planner')
+    $mavsdkFixtureSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    Invoke-FixtureGit $Fixture @('update-index', '--add', '--cacheinfo', "160000,$mavsdkFixtureSha,third_party/MAVSDK")
+    Invoke-FixtureGit $Fixture @('-c', 'user.name=NOMAD qualification fixture', '-c',
+        'user.email=fixture@example.invalid', 'commit', '--quiet', '--no-gpg-sign', '-m', 'Synthetic fixture source')
 }
 
 function New-NativeMsBuildTestDouble {
@@ -310,6 +335,16 @@ function Test-BuildOnlySuccess {
 
     if (-not (Test-Path -LiteralPath $Fixture.Artifact -PathType Leaf)) {
         throw "Build-only did not produce the expected artifact at $($Fixture.Artifact)"
+    }
+    $identityPath = Join-Path $Fixture.Repo 'build\release\package-identity.json'
+    $identity = Get-Content -LiteralPath $identityPath -Raw | ConvertFrom-Json
+    Assert-Equal $identity.official $false 'Synthetic development build must not claim a tagged release'
+    Assert-Equal $identity.release_version "dev-$($identity.source_sha)" 'Development identity must bind exact source'
+    Assert-Equal $identity.mavsdk_sha 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'Identity omitted fixture MAVSDK pin'
+    Assert-Equal $identity.name 'plugin' 'Build generated the wrong component identity'
+    Assert-Equal $identity.mission_planner_target '1.3.83' 'Build generated an incompatible Mission Planner target'
+    if (-not (Test-Path -LiteralPath (Join-Path $Fixture.Repo 'build\release\ReleaseIdentity.cs'))) {
+        throw 'Plugin build did not generate its C# embedded identity input.'
     }
 }
 

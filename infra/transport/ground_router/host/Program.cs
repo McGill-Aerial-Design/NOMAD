@@ -40,7 +40,7 @@ internal static class Program
                 router,
                 "127.0.0.1",
                 config.ManagementPort,
-                "nomad-link-router-1"))
+                NomadRelease.Version))
             using (var stop = new ManualResetEvent(false))
             {
                 ConsoleCancelEventHandler cancel = (sender, e) => { e.Cancel = true; stop.Set(); };

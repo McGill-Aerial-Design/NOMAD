@@ -65,6 +65,10 @@ pixi run precommit
 changed-file limits. The Python suite checks that documented `pixi run` tasks
 exist and that internal Markdown links resolve.
 
+Source-only ROS container builds omit Git metadata and report
+`0.0.0-development`; they cannot install/package a production core release.
+Release archives are generated from a provenance-bearing Git checkout.
+
 ## Software resource qualification
 
 Run the production Release measurement and budget verifier without hardware:
@@ -327,3 +331,42 @@ Mission Planner installation. Installation uses the separately staged plugin
 ZIP or `mission_planner/packaging/INSTALL.ps1` and changes the local Mission
 Planner deployment. The standalone router is a separate process and package;
 the plugin installer does not install or supervise it.
+
+## Release identity audit (versioned deployment slice)
+
+The pre-slice release workflow published only the Windows plugin and router,
+while CPack produced core ZIP/TGZ archives through a separate local flow. It
+could publish these two components without any core artifact. No manifest bound
+the artifacts to the same source SHA, pinned MAVSDK SHA, platform or digest.
+CMake/runtime used the fixed 0.1.0 project version, the plugin reported 0.2.0,
+and router management reported nomad-link-router-1. A v* workflow trigger did
+not validate a semantic release tag or reconcile these versions. Dispatch used
+the branch name as an artifact version. Staged-install checks validated core
+contents and offline behavior but established neither deployed identity nor
+rollback. PR56 service lifecycle and PR57 resource/provenance checks remain
+required inputs; they do not supply a release-set identity.
+
+The executable disproof check for the new model is release manifest tests:
+aggregation must reject absent components, changed bytes, mismatched embedded
+source identity and unsupported metadata before any publication or activation.
+
+A complete release uses four independently activated component payloads: Linux
+x86-64 core TGZ, Windows x86-64 core ZIP, Windows x86-64 standalone router ZIP,
+and Windows AnyCPU Mission Planner plugin ZIP targeting Mission Planner 1.3.83.
+An additional deployment-tools ZIP contains the reviewed operator CLI and service
+adapter support. The aggregate job requires all four payloads, their embedded
+`package-identity.json`, their real required files and their common source identity
+before writing `release-manifest.json` and `SHA256SUMS`. Only a tag push publishes;
+a dispatch always remains an inspectable workflow artifact, including a dispatch
+against a tag. Checksums correlate bytes; they provide no publisher authentication.
+
+A clean exact `vX.Y.Z` tag supplies the numeric CMake project/CPack version and
+component versions. Runtime, plugin and router management report that component
+version. Otherwise the numeric CMake version is 0.0.0, the component identity is
+`0.0.0-dev.<full source SHA>`, and the release-set identity is `dev-<full source SHA>`.
+`source_dirty` records source modifications and nonignored untracked files in development builds; their
+source SHA identifies the base revision, not uncommitted bytes. Package SHA-256
+always identifies actual archive bytes. Official builds reject tracked source
+modifications and nonignored files. A test-only `NOMAD_FIXTURE_VERSION` permits distinguishable runtime
+A/B builds with `BUILD_TESTING=ON`; it cannot be enabled in production packages.
+The aggregate job never rebuilds components or substitutes a different revision.

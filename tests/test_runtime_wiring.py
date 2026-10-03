@@ -263,7 +263,10 @@ def test_mission_planner_packages_only_current_video_dependencies() -> None:
     assert "GStreamer" in source
     assert "SkiaSharp" in project
     assert "SkiaSharp.SKColorType" in source
-    assert "Copy-Item -Path $dll -Destination $plugins -Force" in installer
+    assert "--component', 'plugin'" in installer
+    assert "ValidateSet('verify', 'stage', 'adopt', 'activate'" in installer
+    assert "& $Python @toolArguments" in installer
+    assert "Copy-Item" not in installer
     assert "path: mission_planner/src/bin/Release/NOMADPlugin.dll" in workflow
     assert "Copy-Item mission_planner/src/bin/Release/NOMADPlugin.dll $stage" in release_workflow
     assert "Copy-Item mission_planner/packaging/libvlc-windows" not in release_workflow

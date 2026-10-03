@@ -3,10 +3,9 @@
   NOMAD Mission Planner Plugin Project
   Target: Mission Planner 1.3.x / .NET Framework 4.8
 
-  Build Instructions:
-  1. Open in Visual Studio 2022
-  2. Build > Build Solution (Ctrl+Shift+B)
-  3. Copy bin\Release\NOMADPlugin.dll to Mission Planner plugins folder
+  Generate source identity with scripts/build/build_plugin_windows.ps1.
+  Use the verified versioned packaging installer for deployment; see
+  mission_planner/packaging/README.md. Direct IDE builds are development inputs.
 -->
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
@@ -123,7 +122,9 @@
     <!-- Mission Planner links only router config/status contracts. The standalone host owns routing. -->
     <Compile Include="..\..\infra\transport\ground_router\RouterConfig.cs" />
     <Compile Include="..\..\infra\transport\ground_router\RouterManagementProtocol.cs" />
-    <Compile Include="**\*.cs" Exclude="obj\**\*.cs;bin\**\*.cs" />
+        <Compile Include="**\*.cs" Exclude="obj\**\*.cs;bin\**\*.cs;Plugin\ReleaseIdentity.cs" />
+    <Compile Include="..\..\build\release\ReleaseIdentity.cs" Condition="Exists('..\..\build\release\ReleaseIdentity.cs')" />
+    <Compile Include="Plugin\ReleaseIdentity.cs" Condition="!Exists('..\..\build\release\ReleaseIdentity.cs')" />
   </ItemGroup>
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
