@@ -29,20 +29,27 @@ namespace NOMAD.MissionPlanner
         private readonly Task<NomadCoreRequestResult>[] _reelPending =
             new Task<NomadCoreRequestResult>[NOMADConfig.MaxPayloads];
         private readonly bool[] _reelStopping = new bool[NOMADConfig.MaxPayloads];
+        private readonly bool[] _reelStarting = new bool[NOMADConfig.MaxPayloads];
+        private readonly bool[] _reelHoldRequested = new bool[NOMADConfig.MaxPayloads];
 
         private int ReelChannel(int reelIdx) => ReelPayload(reelIdx)?.Channel ?? 0;
         private int ReelStopPwm(int reelIdx) => ReelPayload(reelIdx)?.PwmNeutral ?? 1500;
         private int ReelSafetyMs(int reelIdx) => Math.Max(1, ReelPayload(reelIdx)?.HoldSafetyS ?? 10) * 1000;
         private int ReelFullDurationMs(int reelIdx) => Math.Max(1, ReelPayload(reelIdx)?.FullDurationS ?? 80) * 1000;
 
-        private async Task StartReel(int reelIdx, int pwmUs)
+        private Task StartReel(int reelIdx, int pwmUs)
+            => RunReelStartAsync(reelIdx, () => StartReelCoreAsync(reelIdx, pwmUs));
+
+        private async Task StartReelCoreAsync(int reelIdx, int pwmUs)
         {
-            if (reelIdx < 0 || reelIdx >= _reelActive.Length) return;
+            if (IsDisposed || reelIdx < 0 || reelIdx >= _reelActive.Length) return;
             if (_reelPending[reelIdx]?.IsCompleted == false || _reelStopping[reelIdx]) return;
 
+            _reelHoldRequested[reelIdx] = true;
             await StopFullReel(reelIdx * 2, true);
+            if (IsDisposed || !_reelHoldRequested[reelIdx]) return;
             await StopFullReel(reelIdx * 2 + 1, true);
-            if (IsDisposed) return;
+            if (IsDisposed || !_reelHoldRequested[reelIdx]) return;
 
             int channel = ReelChannel(reelIdx);
             _reelActive[reelIdx] = true;
@@ -65,14 +72,15 @@ namespace NOMAD.MissionPlanner
 
             _reelPending[reelIdx] = SendServoNowAsync(channel, pwmUs);
             var result = await _reelPending[reelIdx];
-            if (IsDisposed) return;
+            if (IsDisposed || !_reelHoldRequested[reelIdx]) return;
             SetReelCommandStatus(result,
                 $"{ReelName(reelIdx)}: command accepted ({pwmUs}µs); physical movement unverified");
         }
 
         private async Task StopReel(int reelIdx)
         {
-            if (reelIdx < 0 || reelIdx >= _reelActive.Length) return;
+            if (IsDisposed || reelIdx < 0 || reelIdx >= _reelActive.Length) return;
+            _reelHoldRequested[reelIdx] = false;
             if (!_reelActive[reelIdx] || _reelStopping[reelIdx]) return;
             _reelActive[reelIdx] = false;
 
@@ -137,8 +145,12 @@ namespace NOMAD.MissionPlanner
             resetTimer.Start();
         }
 
-        private async Task StartFullReel(int slot)
+        private Task StartFullReel(int slot)
+            => RunReelStartAsync(FullReelIndex(slot), () => StartFullReelCoreAsync(slot));
+
+        private async Task StartFullReelCoreAsync(int slot)
         {
+            if (IsDisposed || slot < 0 || slot >= _fullReelButtons.Length) return;
             int reelIdx = FullReelIndex(slot);
             if (_reelPending[reelIdx]?.IsCompleted == false || _reelStopping[reelIdx]) return;
             int oppositeSlot = FullReelOppositeSlot(slot);
@@ -156,9 +168,15 @@ namespace NOMAD.MissionPlanner
             }
 
             if (_fullReelActive[oppositeSlot])
+            {
                 await StopFullReel(oppositeSlot, false);
+                if (IsDisposed) return;
+            }
             if (_reelActive[reelIdx])
+            {
                 await StopReel(reelIdx);
+                if (IsDisposed) return;
+            }
             if (IsDisposed) return;
 
             _fullReelClickReset[slot]?.Stop();
@@ -263,6 +281,20 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Send one reel command and preserve its result for operator feedback.
         /// </summary>
+        private async Task RunReelStartAsync(int reelIdx, Func<Task> start)
+        {
+            // Panel handlers and continuations share the UI thread; reject reentrant starts before any await.
+            if (IsDisposed || reelIdx < 0 || reelIdx >= _reelStarting.Length || _reelStarting[reelIdx]) return;
+            _reelStarting[reelIdx] = true;
+            try
+            {
+                await start();
+            }
+            finally
+            {
+                _reelStarting[reelIdx] = false;
+            }
+        }
         private async Task<NomadCoreRequestResult> SendReelStopAsync(int reelIdx)
         {
             if (_reelStopping[reelIdx])

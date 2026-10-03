@@ -93,6 +93,8 @@ internal static partial class NomadCoreClientTests
     }
     private static void ReelPanel_DoesNotClaimPhysicalMovementOrStop()
     {
+        ReelPanel_DisposeDuringPrerequisitePreventsNewStart();
+        ReelPanel_ReleaseDuringPrerequisitePreventsHoldStart();
         foreach (var outcome in new[] { "failed", "interrupted", "unknown", "success" })
         {
             using var runtime = new MockRuntime(4, outcome: outcome);
@@ -112,6 +114,51 @@ internal static partial class NomadCoreClientTests
         }
     }
 
+    private static void ReelPanel_DisposeDuringPrerequisitePreventsNewStart()
+    {
+        for (var kind = 0; kind < 3; kind++)
+        {
+            using var runtime = new AsyncRuntime(1);
+            var config = new NOMADConfig { CoreRuntimePort = runtime.Port };
+            config.Payloads[0].Channel = 1;
+            OutputController.Initialize(config);
+            using var panel = new PayloadControlPanel(config);
+            panel.TestActivateReelPrerequisite(kind);
+            var request = kind == 0 ? panel.TestStartReel() : panel.TestStartFullReel();
+            runtime.WaitForCommands(1);
+            Expect(!request.IsCompleted, "reel start awaits its delayed prerequisite stop");
+            var overlap = kind == 0 ? panel.TestStartReel() : panel.TestStartFullReel();
+            Expect(overlap.IsCompleted, "reentrant reel start is dropped during delayed prerequisite");
+            panel.Dispose();
+            runtime.ReleaseResponse(1);
+            WaitForPanel(request);
+            runtime.Wait();
+            Expect(runtime.Commands.Count == 1, "disposing during prerequisite permits only the explicit stop");
+            Expect(System.Convert.ToInt32(runtime.Commands[0]["pwm_microseconds"]) == 1500,
+                "the only mutation remains the prerequisite neutral stop");
+            Expect(!panel.TestHasReelTimers, "disposed reel panel creates no deferred start timer");
+        }
+    }
+    private static void ReelPanel_ReleaseDuringPrerequisitePreventsHoldStart()
+    {
+        using var runtime = new AsyncRuntime(1);
+        var config = new NOMADConfig { CoreRuntimePort = runtime.Port };
+        config.Payloads[0].Channel = 1;
+        OutputController.Initialize(config);
+        using var panel = new PayloadControlPanel(config);
+        panel.TestActivateReelPrerequisite(0);
+        var start = panel.TestStartReel();
+        runtime.WaitForCommands(1);
+        WaitForPanel(panel.TestStopReel());
+        Expect(!start.IsCompleted, "hold start is still awaiting the prerequisite stop when released");
+        runtime.ReleaseResponse(1);
+        WaitForPanel(start);
+        runtime.Wait();
+        Expect(runtime.Commands.Count == 1, "release during prerequisite prevents a later hold start mutation");
+        Expect(System.Convert.ToInt32(runtime.Commands[0]["pwm_microseconds"]) == 1500,
+            "the only mutation is the already-issued prerequisite neutral stop");
+        Expect(!panel.TestHasReelTimers, "released hold creates no deferred safety or movement timer");
+    }
     private static void CheckReelEvidence(string message, string outcome, string operation)
     {
         Expect(!message.Contains(" stopped") && !message.Contains(" complete"),

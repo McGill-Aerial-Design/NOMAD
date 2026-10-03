@@ -216,7 +216,7 @@ namespace NOMAD.MissionPlanner
             btnIn.Location = new Point(x, y);
             btnIn.MouseDown  += (s, e) => _ = StartReel(reelIdx, pwmIn);
             btnIn.MouseUp    += (s, e) => _ = StopReel(reelIdx);
-            btnIn.MouseLeave += (s, e) => { if (_reelActive[reelIdx]) _ = StopReel(reelIdx); };
+            btnIn.MouseLeave += (s, e) => { if (_reelActive[reelIdx] || _reelHoldRequested[reelIdx]) _ = StopReel(reelIdx); };
             Controls.Add(btnIn);
             x += 89;
 
@@ -224,7 +224,7 @@ namespace NOMAD.MissionPlanner
             btnOut.Location = new Point(x, y);
             btnOut.MouseDown  += (s, e) => _ = StartReel(reelIdx, pwmOut);
             btnOut.MouseUp    += (s, e) => _ = StopReel(reelIdx);
-            btnOut.MouseLeave += (s, e) => { if (_reelActive[reelIdx]) _ = StopReel(reelIdx); };
+            btnOut.MouseLeave += (s, e) => { if (_reelActive[reelIdx] || _reelHoldRequested[reelIdx]) _ = StopReel(reelIdx); };
             Controls.Add(btnOut);
             x += 92;
 

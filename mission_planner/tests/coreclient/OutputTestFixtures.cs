@@ -95,6 +95,25 @@ namespace NOMAD.MissionPlanner
         }
 
         private void SetStatus(string message, Color color) => TestStatus = message;
+        internal void TestActivateReelPrerequisite(int kind)
+        {
+            if (kind == 0)
+            {
+                _fullReelActive[0] = true;
+                _fullReelActive[1] = true;
+            }
+            else if (kind == 1)
+            {
+                _fullReelActive[1] = true;
+                _reelActive[0] = true;
+            }
+            else
+            {
+                _reelActive[0] = true;
+            }
+        }
+
+        internal bool TestHasReelTimers => _reelSafetyTimers[0] != null || _fullReelCountdown[0] != null;
         internal System.Threading.Tasks.Task TestStartReel() => StartReel(0, 2000);
         internal System.Threading.Tasks.Task TestStopReel() => StopReel(0);
         internal System.Threading.Tasks.Task TestStartFullReel() => StartFullReel(0);
