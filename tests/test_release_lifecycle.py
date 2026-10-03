@@ -178,3 +178,17 @@ def test_corrupt_previous_archive_prevents_unverified_rollback(installed):
         deployment.rollback(adapter)
     assert adapter.target.read_bytes() == expected
     assert deployment.status()["active"]["release_version"] == b[2]
+
+
+@pytest.mark.parametrize("key", ["NOMAD_CLIENT_CREDENTIALS_FILE", "NOMAD_AUDIT_DIRECTORY"])
+def test_external_state_cannot_use_dot_paths_into_release_root(tmp_path, key):
+    from scripts.release.deploy import external_config
+
+    root = tmp_path / "deployment"
+    root.mkdir()
+    (tmp_path / "operator").mkdir()
+    config = tmp_path / "operator" / "runtime.json"
+    state = tmp_path / "operator" / ".." / "deployment" / "state"
+    config.write_text(json.dumps({key: str(state)}))
+    with pytest.raises(ValueError, match="outside deployment root"):
+        external_config(root, config)

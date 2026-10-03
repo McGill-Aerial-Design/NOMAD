@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def git(*arguments: str) -> str:
     """Read repository provenance without accepting caller-provided source claims."""
-    return subprocess.check_output(["git", *arguments], cwd=ROOT, text=True).strip()
+    return subprocess.check_output(["git", *arguments], cwd=ROOT, text=True, stderr=subprocess.PIPE).strip()
 
 
 def get_build_tag() -> str:
