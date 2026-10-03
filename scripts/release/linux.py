@@ -36,7 +36,10 @@ class SystemdAdapter:
             raise RuntimeError("systemd runtime did not stop; active pointer unchanged")
 
     def has_unmanaged(self) -> bool:
-        return self.pointer.exists() or self.pointer.is_symlink()
+        if self.pointer.exists() or self.pointer.is_symlink():
+            return True
+        state = self.command("show", "--property=ActiveState", "--value").stdout.strip()
+        return state not in {"inactive", "failed"}
 
     def current_matches(self, candidate: dict) -> bool:
         return self.pointer.is_symlink() and self.pointer.readlink() == Path(candidate["install_path"])

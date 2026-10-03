@@ -108,3 +108,13 @@ def test_extract_rejects_case_collisions_and_links(tmp_path):
         output.writestr(link, "outside")
     with pytest.raises(ValueError, match="links"):
         storage.extract(archive, tmp_path)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX systemd model")
+def test_running_unrecorded_service_requires_deliberate_adoption(tmp_path):
+    def run(arguments, **_):
+        return subprocess.CompletedProcess(arguments, 0, "active\n", "")
+
+    adapter = SystemdAdapter(tmp_path, tmp_path / "runtime.json", 1, runner=run)
+    assert not adapter.pointer.exists()
+    assert adapter.has_unmanaged(), "A running service cannot be overwritten without a retained rollback identity"
