@@ -20,11 +20,13 @@ internal sealed class FakeVideoPipeline : IVideoPipeline
     public int Starts;
     public int Disposals;
     public int Resources;
+    public string Pipeline;
     private CancellationTokenRegistration _cancellation;
 
     public void Start(string pipeline, CancellationToken cancellation)
     {
         Interlocked.Increment(ref Starts);
+        Pipeline = pipeline;
         _cancellation = cancellation.Register(() => Cancelled.Set());
         Resources = 2;
         StartEntered.Set();

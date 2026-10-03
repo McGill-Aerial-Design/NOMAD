@@ -69,7 +69,16 @@ namespace NOMAD.MissionPlanner
 
         private int ExtractUdpPort(string url)
         {
-            var cleaned = (url ?? "").Replace("udp://", "").Replace("@", "").TrimStart(':');
+            if (string.IsNullOrEmpty(url))
+            {
+                return 5600;
+            }
+            var cleaned = url;
+            if (cleaned.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
+            {
+                cleaned = cleaned.Substring(6);
+            }
+            cleaned = cleaned.Replace("@", "").TrimStart(':');
             return int.TryParse(cleaned, out int port) ? port : 5600;
         }
 

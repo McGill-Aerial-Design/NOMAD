@@ -49,6 +49,7 @@ internal static partial class VideoLifetimeTests
             Run("already cancelled plugin token", AlreadyCancelledShutdown);
             Run("borrowed native frame lifetime", BorrowedFrameLifetime);
             Run("dashboard preview reopen and shutdown", DashboardShutdown);
+            Run("existing view API and UDP URL compatibility", VideoCompatibility);
             return 0;
         }
         catch (Exception ex)

@@ -45,8 +45,11 @@ namespace NOMAD.MissionPlanner
             _notificationService?.SetBoundaryMonitor(monitor);
         }
 
-        public NOMADDashboardView(NOMADConfig config, MAVLinkConnectionManager connectionManager = null,
-            System.Threading.CancellationToken videoShutdown = default)
+        public NOMADDashboardView(NOMADConfig config, MAVLinkConnectionManager connectionManager = null)
+            : this(config, connectionManager, System.Threading.CancellationToken.None) { }
+
+        internal NOMADDashboardView(NOMADConfig config, MAVLinkConnectionManager connectionManager,
+            System.Threading.CancellationToken videoShutdown)
             : this(config, connectionManager, videoShutdown, () => new GStreamerVideoPipeline()) { }
 
         internal NOMADDashboardView(NOMADConfig config, MAVLinkConnectionManager connectionManager,
