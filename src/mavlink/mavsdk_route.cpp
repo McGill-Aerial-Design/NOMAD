@@ -18,7 +18,7 @@ std::optional<CommandAck> MavsdkMavlinkConnection::send_fixed_wing_waypoint(
                           CommandAck::Status::AdmissionCancelled};
     }
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
-    if (!is_connected_unlocked() || !passthrough_ || timeout <= std::chrono::milliseconds::zero()) {
+    if (!is_connected_unlocked() || !resources_->passthrough || timeout <= std::chrono::milliseconds::zero()) {
         return std::nullopt;
     }
     if (!std::isfinite(waypoint.latitude_deg) || waypoint.latitude_deg < -90.0 || waypoint.latitude_deg > 90.0 ||
@@ -29,8 +29,8 @@ std::optional<CommandAck> MavsdkMavlinkConnection::send_fixed_wing_waypoint(
     }
 
     mavsdk::MavlinkPassthrough::CommandInt command{};
-    command.target_sysid = target_system_;
-    command.target_compid = target_component_;
+    command.target_sysid = expected_system_id_;
+    command.target_compid = kAutopilotComponent;
     command.command = MAV_CMD_DO_REPOSITION;
     command.frame = MAV_FRAME_GLOBAL_RELATIVE_ALT_INT;
     command.param1 = 0.0F;
@@ -52,7 +52,7 @@ std::optional<CommandAck> MavsdkMavlinkConnection::send_fixed_wing_waypoint(
     }
     mavsdk::OperationOptions options{timeout};
     options.transmission_admission = admission;
-    const auto result = passthrough_->send_command_int(command, options);
+    const auto result = resources_->passthrough->send_command_int(command, options);
     if (result == mavsdk::MavlinkPassthrough::Result::CommandAdmissionCancelled) {
         return CommandAck{static_cast<std::uint16_t>(MAV_CMD_DO_REPOSITION), 0,
                           CommandAck::Status::AdmissionCancelled};

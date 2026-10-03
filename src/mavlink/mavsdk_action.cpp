@@ -14,12 +14,12 @@ bool MavsdkMavlinkConnection::goto_location_relative(double latitude_deg, double
         return false;
     }
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
-    if (!is_connected_unlocked() || !action_ || timeout <= std::chrono::milliseconds::zero()) {
+    if (!is_connected_unlocked() || !resources_->action || timeout <= std::chrono::milliseconds::zero()) {
         return false;
     }
     mavsdk::OperationOptions options{timeout};
     options.transmission_admission = admission;
-    return action_->goto_location_relative(latitude_deg, longitude_deg, relative_altitude_m, NAN, options) ==
+    return resources_->action->goto_location_relative(latitude_deg, longitude_deg, relative_altitude_m, NAN, options) ==
            mavsdk::Action::Result::Success;
 }
 

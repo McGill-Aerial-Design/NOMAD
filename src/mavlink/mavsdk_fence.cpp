@@ -62,7 +62,7 @@ bool MavsdkMavlinkConnection::upload_fence_plan(const std::vector<FencePlanItem>
         return false;
     }
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
-    if (!is_connected_unlocked() || !geofence_ || items.empty()) {
+    if (!is_connected_unlocked() || !resources_->geofence || items.empty()) {
         return false;
     }
     mavsdk::Geofence::Polygon polygon{};
@@ -74,13 +74,13 @@ bool MavsdkMavlinkConnection::upload_fence_plan(const std::vector<FencePlanItem>
     }
     mavsdk::Geofence::GeofenceData data{};
     data.polygons.push_back(std::move(polygon));
-    return geofence_->upload_geofence(data) == mavsdk::Geofence::Result::Success;
+    return resources_->geofence->upload_geofence(data) == mavsdk::Geofence::Result::Success;
 }
 
 std::optional<std::vector<FencePlanItem>>
 MavsdkMavlinkConnection::download_fence_plan(std::chrono::milliseconds timeout) {
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
-    if (!is_connected_unlocked() || !geofence_) {
+    if (!is_connected_unlocked() || !resources_->geofence) {
         return std::nullopt;
     }
     using Transfer = std::pair<mavsdk::Geofence::Result, mavsdk::Geofence::GeofenceData>;
@@ -88,9 +88,10 @@ MavsdkMavlinkConnection::download_fence_plan(std::chrono::milliseconds timeout) 
     auto future = promise->get_future();
     // The callback holds its own reference: a transfer that finishes after this
     // deadline must not write into a frame that has already returned.
-    geofence_->download_geofence_async([promise](mavsdk::Geofence::Result result, mavsdk::Geofence::GeofenceData data) {
-        promise->set_value({result, std::move(data)});
-    });
+    resources_->geofence->download_geofence_async(
+        [promise](mavsdk::Geofence::Result result, mavsdk::Geofence::GeofenceData data) {
+            promise->set_value({result, std::move(data)});
+        });
     if (future.wait_for(timeout) != std::future_status::ready) {
         return std::nullopt;
     }

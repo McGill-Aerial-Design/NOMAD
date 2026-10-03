@@ -23,7 +23,7 @@ bool has_finite_components(const VelocitySetpoint &setpoint) {
 mavsdk::Offboard::Result MavsdkMavlinkConnection::queue_velocity_setpoint(const VelocitySetpoint &setpoint) {
     // The SDK queues one frame; NOMAD owns refresh, freshness and safety zeroes.
     const float yaw_rate_deg_s = setpoint.yaw_rate * (180.0F / std::numbers::pi_v<float>);
-    return offboard_->set_velocity_body_once({setpoint.vx, setpoint.vy, setpoint.vz, yaw_rate_deg_s});
+    return resources_->offboard->set_velocity_body_once({setpoint.vx, setpoint.vy, setpoint.vz, yaw_rate_deg_s});
 }
 
 bool MavsdkMavlinkConnection::send_velocity(const VelocitySetpoint &setpoint) {
@@ -31,7 +31,7 @@ bool MavsdkMavlinkConnection::send_velocity(const VelocitySetpoint &setpoint) {
         return false;
     }
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
-    if (!has_finite_components(setpoint) || !offboard_ || target_system_ == 0) {
+    if (!has_finite_components(setpoint) || !resources_ || !resources_->offboard || expected_system_id_ == 0) {
         return false;
     }
     // A non-zero setpoint needs a live, latched peer. A zero setpoint is the

@@ -11,7 +11,7 @@ bool MavsdkMavlinkConnection::is_connected() const {
 }
 
 bool MavsdkMavlinkConnection::is_connected_unlocked() const {
-    return system_ != nullptr && system_->is_connected();
+    return resources_ != nullptr && resources_->system->is_connected();
 }
 
 } // namespace nomad::mavlink

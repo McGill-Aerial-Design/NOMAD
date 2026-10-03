@@ -17,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -61,6 +62,7 @@ MavsdkMavlinkConnection::~MavsdkMavlinkConnection() {
 }
 
 bool MavsdkMavlinkConnection::connect() {
+    std::lock_guard lifecycle_lock(lifecycle_mutex_);
     if (is_connected()) {
         connect_failure_ = ConnectFailure::None;
         return true;
@@ -92,10 +94,11 @@ bool MavsdkMavlinkConnection::connect() {
 }
 
 ConnectFailure MavsdkMavlinkConnection::get_connect_failure() const {
-    return connect_failure_;
+    return connect_failure_.load();
 }
 
 void MavsdkMavlinkConnection::disconnect() {
+    std::lock_guard lifecycle_lock(lifecycle_mutex_);
     // Zero the vehicle while the target is still latched, then tear the link
     // down: a last setpoint left on the wire would keep steering a vehicle NOMAD
     // has stopped controlling.
@@ -111,19 +114,13 @@ bool MavsdkMavlinkConnection::select_system() {
     if (candidate == nullptr) {
         return false;
     }
-    system_ = candidate;
-    target_system_ = expected_system_id_;
-    target_component_ = kAutopilotComponent;
-    {
-        ObservationUpdate update(observation_mutex_, observation_changed_);
-        ++session_id_counter_;
-        if (session_id_counter_ == 0) {
-            ++session_id_counter_;
-        }
-        notify_vehicle_session_changed(session_id_counter_);
-        state_.session_id = session_id_counter_;
+    try {
+        auto resources = std::make_unique<ConnectionResources>(candidate);
+        subscribe(*resources);
+        publish(std::move(resources));
+    } catch (const std::exception &) {
+        return false;
     }
-    subscribe();
     return true;
 }
 
@@ -156,113 +153,6 @@ void MavsdkMavlinkConnection::identify_quadplane_from_parameters(ObservationCloc
         quadplane_enabled_.reset();
         state_.identity.aircraft_class = telemetry::AircraftClass::Unknown;
     }
-}
-
-void MavsdkMavlinkConnection::subscribe() {
-    action_ = std::make_unique<mavsdk::Action>(system_);
-    telemetry_ = std::make_unique<mavsdk::Telemetry>(system_);
-    passthrough_ = std::make_unique<mavsdk::MavlinkPassthrough>(system_);
-    geofence_ = std::make_unique<mavsdk::Geofence>(system_);
-    param_ = std::make_unique<mavsdk::Param>(system_);
-    offboard_ = std::make_unique<mavsdk::Offboard>(system_);
-    position_handle_ = telemetry_->subscribe_position([this](const auto &value) { observe_position(value); });
-    velocity_handle_ = telemetry_->subscribe_velocity_ned([this](const auto &value) { observe_velocity(value); });
-    battery_handle_ = telemetry_->subscribe_battery([this](const auto &value) { observe_battery(value); });
-    gps_handle_ = telemetry_->subscribe_gps_info([this](const auto &value) { observe_gps(value); });
-    attitude_handle_ = telemetry_->subscribe_attitude_euler([this](const auto &value) { observe_attitude(value); });
-    vtol_state_handle_ = telemetry_->subscribe_vtol_state([this](const auto value) { observe_vtol_state(value); });
-    landed_state_handle_ =
-        telemetry_->subscribe_landed_state([this](const auto value) { observe_landed_state(value); });
-    heartbeat_handle_ = passthrough_->subscribe_message(MAVLINK_MSG_ID_HEARTBEAT,
-                                                        [this](const auto &message) { observe_heartbeat(message); });
-    connection_handle_ = system_->subscribe_is_connected([this](bool connected) {
-        if (connected) {
-            return;
-        }
-        ObservationUpdate update(observation_mutex_, observation_changed_);
-        ++session_id_counter_;
-        if (session_id_counter_ == 0) {
-            ++session_id_counter_;
-        }
-        notify_vehicle_session_changed(session_id_counter_);
-        state_.session_id = session_id_counter_;
-        state_.connected = false;
-        state_.heartbeat_fresh = false;
-    });
-}
-
-void MavsdkMavlinkConnection::unsubscribe() {
-    if (telemetry_) {
-        if (position_handle_) {
-            telemetry_->unsubscribe_position(*position_handle_);
-        }
-        if (velocity_handle_) {
-            telemetry_->unsubscribe_velocity_ned(*velocity_handle_);
-        }
-        if (battery_handle_) {
-            telemetry_->unsubscribe_battery(*battery_handle_);
-        }
-        if (gps_handle_) {
-            telemetry_->unsubscribe_gps_info(*gps_handle_);
-        }
-        if (attitude_handle_) {
-            telemetry_->unsubscribe_attitude_euler(*attitude_handle_);
-        }
-        if (vtol_state_handle_) {
-            telemetry_->unsubscribe_vtol_state(*vtol_state_handle_);
-        }
-        if (landed_state_handle_) {
-            telemetry_->unsubscribe_landed_state(*landed_state_handle_);
-        }
-    }
-    if (passthrough_ && heartbeat_handle_) {
-        passthrough_->unsubscribe_message(MAVLINK_MSG_ID_HEARTBEAT, *heartbeat_handle_);
-    }
-    if (system_ && connection_handle_) {
-        system_->unsubscribe_is_connected(*connection_handle_);
-    }
-    position_handle_.reset();
-    velocity_handle_.reset();
-    battery_handle_.reset();
-    gps_handle_.reset();
-    attitude_handle_.reset();
-    vtol_state_handle_.reset();
-    landed_state_handle_.reset();
-    heartbeat_handle_.reset();
-    connection_handle_.reset();
-}
-
-void MavsdkMavlinkConnection::close() {
-    std::unique_lock lifetime_lock(plugin_lifetime_mutex_);
-    {
-        ObservationUpdate update(observation_mutex_, observation_changed_);
-        ++session_id_counter_;
-        if (session_id_counter_ == 0) {
-            ++session_id_counter_;
-        }
-        notify_vehicle_session_changed(session_id_counter_);
-        state_.session_id = session_id_counter_;
-        state_.connected = false;
-        state_.heartbeat_fresh = false;
-    }
-    unsubscribe();
-    action_.reset();
-    telemetry_.reset();
-    passthrough_.reset();
-    geofence_.reset();
-    param_.reset();
-    offboard_.reset();
-    system_.reset();
-    if (handle_) {
-        sdk_.remove_connection(*handle_);
-        handle_.reset();
-    }
-    std::lock_guard lock(observation_mutex_);
-    state_ = {};
-    quadplane_enabled_.reset();
-    heartbeat_.reset();
-    last_heartbeat_ = {};
-    velocity_active_ = false;
 }
 
 void MavsdkMavlinkConnection::observe_heartbeat(const mavlink_message_t &message) {
@@ -383,8 +273,8 @@ std::optional<telemetry::VehicleState> MavsdkMavlinkConnection::wait_for_state(s
 mavsdk::MavlinkPassthrough::Result MavsdkMavlinkConnection::send_long(
     const Command &command, std::chrono::milliseconds timeout, const TransmissionAdmission &admission) {
     mavsdk::MavlinkPassthrough::CommandLong wire{};
-    wire.target_sysid = target_system_;
-    wire.target_compid = target_component_;
+    wire.target_sysid = expected_system_id_;
+    wire.target_compid = kAutopilotComponent;
     wire.command = command.id;
     wire.param1 = command.parameters[0];
     wire.param2 = command.parameters[1];
@@ -398,13 +288,14 @@ mavsdk::MavlinkPassthrough::Result MavsdkMavlinkConnection::send_long(
     }
     mavsdk::OperationOptions options{timeout};
     options.transmission_admission = admission;
-    return passthrough_->send_command_long(wire, options);
+    return resources_->passthrough->send_command_long(wire, options);
 }
 
 std::optional<float> MavsdkMavlinkConnection::read_param(const std::string &param_id,
                                                          std::chrono::milliseconds timeout) {
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
-    if (!is_connected_unlocked() || !param_ || param_id.empty() || timeout <= std::chrono::milliseconds::zero()) {
+    if (!is_connected_unlocked() || !resources_->param || param_id.empty() ||
+        timeout <= std::chrono::milliseconds::zero()) {
         return std::nullopt;
     }
 
@@ -418,7 +309,7 @@ std::optional<float> MavsdkMavlinkConnection::read_param(const std::string &para
         return std::nullopt;
     }
     const auto [int_result, int_value] =
-        param_->get_param_int(param_id, mavsdk::OperationOptions{*remaining});
+        resources_->param->get_param_int(param_id, mavsdk::OperationOptions{*remaining});
     if (int_result == mavsdk::Param::Result::Success) {
         return static_cast<float>(int_value);
     }
@@ -428,7 +319,7 @@ std::optional<float> MavsdkMavlinkConnection::read_param(const std::string &para
         return std::nullopt;
     }
     const auto [result, value] =
-        param_->get_param_float(param_id, mavsdk::OperationOptions{*remaining});
+        resources_->param->get_param_float(param_id, mavsdk::OperationOptions{*remaining});
     if (result == mavsdk::Param::Result::Success) {
         return value;
     }
@@ -439,7 +330,7 @@ std::optional<CommandAck> MavsdkMavlinkConnection::send_command(const Command &c
                                                                 std::chrono::milliseconds timeout) {
     const auto admission = capture_transmission_admission();
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
-    if (!is_connected_unlocked() || !passthrough_ || timeout <= std::chrono::milliseconds::zero()) {
+    if (!is_connected_unlocked() || !resources_->passthrough || timeout <= std::chrono::milliseconds::zero()) {
         return std::nullopt;
     }
     const auto result = send_long(command, timeout, admission);

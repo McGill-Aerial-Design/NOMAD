@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from mavsdk_peer import COMMAND_DO_SET_SERVO, VehiclePeer
+from runtime_connection_lifetime_fixture import verify_connection_lifetime
 from runtime_ipc_smoke import (
     FIXTURE_CREDENTIALS,
     authority_fields,
@@ -300,6 +301,7 @@ def verify_configuration_parser(binary: Path, directory: Path) -> None:
 
 def main() -> int:
     binary = find_runtime()
+    verify_connection_lifetime(binary)
     with tempfile.TemporaryDirectory(prefix="nomad-lifecycle-") as temporary:
         root = Path(temporary)
         for crash in (False, True):
