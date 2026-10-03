@@ -28,7 +28,8 @@ namespace NOMAD.MissionPlanner
             {
                 var p = DropAt(cfg, payload);
                 if (p == null || p.Channel <= 0) return;
-                if (await OutputController.SendServoPwmAsync(p.Channel, DropPwm(p)).ConfigureAwait(false))
+                var result = await OutputController.SendServoPwmAsync(p.Channel, DropPwm(p)).ConfigureAwait(false);
+                if (result.Succeeded)
                 {
                     PayloadControlPanel.RaisePayloadReleaseCommandedState(payload - 1, true);
                 }
@@ -45,7 +46,8 @@ namespace NOMAD.MissionPlanner
             {
                 var p = DropAt(cfg, payload);
                 if (p == null || p.Channel <= 0) return;
-                if (await OutputController.SendServoPwmAsync(p.Channel, RetractPwm(p)).ConfigureAwait(false))
+                var result = await OutputController.SendServoPwmAsync(p.Channel, RetractPwm(p)).ConfigureAwait(false);
+                if (result.Succeeded)
                 {
                     PayloadControlPanel.RaisePayloadReleaseCommandedState(payload - 1, false);
                 }
@@ -90,7 +92,7 @@ namespace NOMAD.MissionPlanner
             {
                 var reel = cfg?.ReelAt(reelIdx);
                 if (reel == null || reel.Channel <= 0) return;
-                await OutputController.SendServoPwmAsync(reel.Channel, reel.PwmNeutral).ConfigureAwait(false);
+                await OutputController.SendServoStopAsync(reel.Channel, reel.PwmNeutral).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

@@ -2,99 +2,103 @@
 // Copyright 2026 The NOMAD Authors
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Net;
 using System.Net.Sockets;
-using System.Text;
 using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
 namespace NOMAD.MissionPlanner.Connectivity
 {
-    internal sealed class NomadRuntimeClient
+    internal sealed partial class NomadRuntimeClient
     {
-        private static long _nextSequence;
+        private sealed class IdentityRequestState
+        {
+            internal ulong Last;
+            internal readonly SemaphoreSlim MutationGate = new SemaphoreSlim(1, 1);
+        }
+
+        private static readonly ConcurrentDictionary<string, IdentityRequestState> RequestStates =
+            new ConcurrentDictionary<string, IdentityRequestState>();
         private readonly int _runtimePort;
         private readonly string _credential;
         private readonly string _clientId;
+        private readonly int _responseTimeoutMilliseconds;
 
-        internal NomadCoreRequestOutcome LastOutcome { get; private set; }
-        internal string LastErrorCode { get; private set; } = "";
-        internal string LastMessage { get; private set; } = "";
-        internal bool? LastAcknowledged { get; private set; }
-
-        internal NomadRuntimeClient(int runtimePort, string credential, string clientId)
+        internal NomadRuntimeClient(int runtimePort, string credential, string clientId,
+            int responseTimeoutMilliseconds = 120000)
         {
             _runtimePort = runtimePort;
             _credential = credential;
             _clientId = clientId;
+            _responseTimeoutMilliseconds = responseTimeoutMilliseconds;
         }
 
-        internal int Run(string verb, string[] values)
-        {
-            LastOutcome = NomadCoreRequestOutcome.NotAttempted;
-            LastErrorCode = "";
-            LastMessage = "";
-            LastAcknowledged = null;
-            return RunRuntime(verb, values);
-        }
-
-        private int RunRuntime(string verb, string[] values)
+        internal async Task<NomadCoreRequestResult> RunAsync(string verb, string[] values,
+                                                             CancellationToken cancellationToken)
         {
             var command = BuildRuntimeRequest(verb, values);
             if (command == null)
             {
-                LastOutcome = NomadCoreRequestOutcome.NotAttempted;
-                LastErrorCode = "unsupported_request";
-                LastMessage = "This operation is not supported by protocol v1.";
-                return -1;
+                return new NomadCoreRequestResult(NomadCoreRequestOutcome.NotAttempted,
+                    "unsupported_request", "This operation is not supported by protocol v1.");
             }
             if (string.IsNullOrWhiteSpace(_credential))
             {
-                LastOutcome = NomadCoreRequestOutcome.NotAttempted;
-                LastErrorCode = "missing_credential";
-                LastMessage = "The NOMAD client credential setting is empty.";
-                return -1;
+                return new NomadCoreRequestResult(NomadCoreRequestOutcome.NotAttempted,
+                    "missing_credential", "The NOMAD client credential setting is empty.");
             }
 
+            if (IsAuthorityVerb(verb))
+            {
+                return await SendRequestAsync(command, verb, cancellationToken).ConfigureAwait(false);
+            }
+
+            var state = GetRequestState();
+            if (!await state.MutationGate.WaitAsync(0).ConfigureAwait(false))
+            {
+                return new NomadCoreRequestResult(NomadCoreRequestOutcome.NotAttempted,
+                    "request_in_progress", "Another vehicle mutation for this runtime identity is in progress; "
+                        + "no request was sent.");
+            }
+            try
+            {
+                return await SendRequestAsync(command, verb, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                state.MutationGate.Release();
+            }
+        }
+
+        private async Task<NomadCoreRequestResult> SendRequestAsync(Dictionary<string, object> command,
+            string verb, CancellationToken cancellationToken)
+        {
             var commandWriteStarted = false;
             try
             {
-                using var client = ConnectToRuntime();
+                using var client = await ConnectToRuntimeAsync(cancellationToken).ConfigureAwait(false);
+                using var cancellation = cancellationToken.Register(client.Close);
                 using var stream = client.GetStream();
-                stream.ReadTimeout = 120000;
-                stream.WriteTimeout = 3000;
                 var serializer = new JavaScriptSerializer { MaxJsonLength = 65536, RecursionLimit = 16 };
+                var reader = new ResponseBuffer();
                 var hello = BaseRequest(Guid.NewGuid().ToString("N"), "hello");
-                hello["auth_nonce"] = MakeNonce();
-                WriteMessage(stream, serializer.Serialize(hello));
-                var helloResponse = ReadResponse(stream, serializer);
-                if (!HasAcceptedHello(helloResponse, hello["id"].ToString()))
+                var helloResponse = await GetHelloAsync(client, stream, reader, serializer, hello,
+                    cancellationToken).ConfigureAwait(false);
+                var failure = ValidateHello(helloResponse, hello);
+                if (failure != null)
                 {
-                    SetProtocolFailure(helloResponse);
-                    LastOutcome = NomadCoreRequestOutcome.FailedBeforeSend;
-                    return -1;
+                    return failure;
                 }
-                var serverPayload = "nomad-core:server:v1:" + _clientId + ":" + hello["auth_nonce"] + ":"
-                    + GetString(helloResponse, "runtime_incarnation");
-                if (GetString(helloResponse, "client_authentication") != "hmac-sha256-v1" ||
-                    !EqualProof(GetString(helloResponse, "server_proof"), MakeProof(_credential, serverPayload)))
-                {
-                    LastOutcome = NomadCoreRequestOutcome.FailedBeforeSend;
-                    LastErrorCode = "authentication_required";
-                    LastMessage = "Runtime does not support authenticated clients.";
-                    return -1;
-                }
-
                 if (!BindAuthority(command, helloResponse))
                 {
-                    LastOutcome = NomadCoreRequestOutcome.FailedBeforeSend;
-                    LastErrorCode = "invalid_response";
-                    LastMessage = "Runtime did not provide an authority context.";
-                    return -1;
+                    return new NomadCoreRequestResult(NomadCoreRequestOutcome.FailedBeforeSend,
+                        "invalid_response", "Runtime did not provide an authority context.");
                 }
 
                 command["id"] = Guid.NewGuid().ToString("N");
@@ -104,23 +108,51 @@ namespace NOMAD.MissionPlanner.Connectivity
                 var payload = serializer.Serialize(command);
                 command["auth_payload"] = payload;
                 command["auth_proof"] = MakeProof(_credential, "nomad-core:request:v1:" + payload);
-                commandWriteStarted = true;
-                WriteMessage(stream, serializer.Serialize(command));
-                var response = ReadResponse(stream, serializer);
+                var bytes = EncodeMessage(serializer.Serialize(command));
+                await WriteMessageAsync(client, stream, bytes, cancellationToken,
+                    () => commandWriteStarted = true).ConfigureAwait(false);
+                var response = await ReadResponseAsync(client, stream, reader, serializer,
+                    cancellationToken).ConfigureAwait(false);
                 return ReadCommandResult(response, command["id"].ToString(), verb);
             }
             catch (Exception ex)
             {
-                LastOutcome = commandWriteStarted
-                    ? NomadCoreRequestOutcome.UnknownOutcome
-                    : NomadCoreRequestOutcome.FailedBeforeSend;
-                LastErrorCode = commandWriteStarted ? "unknown_outcome" : "runtime_unavailable";
-                LastMessage = commandWriteStarted
-                    ? "The runtime connection ended after request transmission began; "
-                        + "the outcome is unknown. Do not retry blindly."
-                    : ex.Message;
-                return -1;
+                return new NomadCoreRequestResult(commandWriteStarted
+                    ? NomadCoreRequestOutcome.UnknownOutcome : NomadCoreRequestOutcome.FailedBeforeSend,
+                    commandWriteStarted ? "unknown_outcome" : "runtime_unavailable",
+                    commandWriteStarted
+                        ? "The runtime connection ended after request transmission began; "
+                            + "the outcome is unknown. Do not retry blindly."
+                        : ex.Message);
             }
+        }
+
+        private async Task<Dictionary<string, object>> GetHelloAsync(TcpClient client, Stream stream,
+            ResponseBuffer reader, JavaScriptSerializer serializer, Dictionary<string, object> hello,
+            CancellationToken cancellationToken)
+        {
+            hello["auth_nonce"] = MakeNonce();
+            await WriteMessageAsync(client, stream, EncodeMessage(serializer.Serialize(hello)),
+                cancellationToken).ConfigureAwait(false);
+            return await ReadResponseAsync(client, stream, reader, serializer, cancellationToken).ConfigureAwait(false);
+        }
+
+        private NomadCoreRequestResult ValidateHello(Dictionary<string, object> response,
+                                                     Dictionary<string, object> hello)
+        {
+            if (!HasAcceptedHello(response, hello["id"].ToString()))
+            {
+                return ReadProtocolFailure(response);
+            }
+            var payload = "nomad-core:server:v1:" + _clientId + ":" + hello["auth_nonce"] + ":"
+                + GetString(response, "runtime_incarnation");
+            if (GetString(response, "client_authentication") != "hmac-sha256-v1" ||
+                !EqualProof(GetString(response, "server_proof"), MakeProof(_credential, payload)))
+            {
+                return new NomadCoreRequestResult(NomadCoreRequestOutcome.FailedBeforeSend,
+                    "authentication_required", "Runtime does not support authenticated clients.");
+            }
+            return null;
         }
 
         private static string MakeNonce()
@@ -134,7 +166,8 @@ namespace NOMAD.MissionPlanner.Connectivity
         private static string MakeProof(string secret, string payload)
         {
             using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-            return BitConverter.ToString(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload))).Replace("-", "").ToLowerInvariant();
+            return BitConverter.ToString(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload)))
+                .Replace("-", "").ToLowerInvariant();
         }
 
         private static bool EqualProof(string left, string right)
@@ -149,33 +182,6 @@ namespace NOMAD.MissionPlanner.Connectivity
                 difference |= left[index] ^ right[index];
             }
             return difference == 0;
-        }
-
-        private TcpClient ConnectToRuntime()
-        {
-            var client = new TcpClient(AddressFamily.InterNetwork);
-            var pending = client.BeginConnect(IPAddress.Loopback, _runtimePort, null, null);
-            try
-            {
-                if (!pending.AsyncWaitHandle.WaitOne(1500))
-                {
-                    throw new TimeoutException("Timed out connecting to the NOMAD runtime.");
-                }
-                client.EndConnect(pending);
-                client.SendTimeout = 3000;
-                client.ReceiveTimeout = 120000;
-                client.NoDelay = true;
-                return client;
-            }
-            catch
-            {
-                client.Close();
-                throw;
-            }
-            finally
-            {
-                pending.AsyncWaitHandle.Close();
-            }
         }
 
         private Dictionary<string, object> BaseRequest(string id, string type)
@@ -196,7 +202,10 @@ namespace NOMAD.MissionPlanner.Connectivity
                 !hello.TryGetValue("authority", out var rawAuthority) ||
                 !(rawAuthority is Dictionary<string, object> authority) ||
                 !authority.TryGetValue("vehicle_session", out var session) ||
-                !authority.TryGetValue("generation", out var generation))
+                !authority.TryGetValue("generation", out var generation) ||
+                !authority.TryGetValue("next_sequence", out var rawSequence) ||
+                !ulong.TryParse(Convert.ToString(rawSequence, CultureInfo.InvariantCulture),
+                    NumberStyles.None, CultureInfo.InvariantCulture, out var lowerBound) || lowerBound == 0)
             {
                 return false;
             }
@@ -204,9 +213,28 @@ namespace NOMAD.MissionPlanner.Connectivity
             command["vehicle_session"] = session;
             command["authority_generation"] = generation;
             command["command_source"] = _clientId;
-            command["sequence"] = Interlocked.Increment(ref _nextSequence);
+            command["sequence"] = AllocateSequence(lowerBound);
             command["expires_at_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 3000;
             return true;
+        }
+
+        private IdentityRequestState GetRequestState()
+        {
+            return RequestStates.GetOrAdd(_runtimePort + ":" + _clientId, _ => new IdentityRequestState());
+        }
+
+        private ulong AllocateSequence(ulong lowerBound)
+        {
+            var counter = GetRequestState();
+            lock (counter)
+            {
+                if (counter.Last == ulong.MaxValue)
+                {
+                    throw new InvalidDataException("Runtime request sequence is exhausted.");
+                }
+                counter.Last = Math.Max(lowerBound, counter.Last + 1);
+                return counter.Last;
+            }
         }
 
         private Dictionary<string, object> BuildRuntimeRequest(string verb, string[] values)
@@ -273,38 +301,6 @@ namespace NOMAD.MissionPlanner.Connectivity
             return double.Parse(value, NumberStyles.Float, CultureInfo.InvariantCulture);
         }
 
-        private void WriteMessage(Stream stream, string message)
-        {
-            var bytes = Encoding.UTF8.GetBytes(message + "\n");
-            if (bytes.Length > 65537)
-            {
-                throw new InvalidDataException("Runtime request exceeds the 65536-byte limit.");
-            }
-            stream.Write(bytes, 0, bytes.Length);
-            stream.Flush();
-        }
-
-        private static Dictionary<string, object> ReadResponse(Stream stream, JavaScriptSerializer serializer)
-        {
-            using var bytes = new MemoryStream();
-            while (bytes.Length <= 65536)
-            {
-                var value = stream.ReadByte();
-                if (value < 0)
-                {
-                    throw new EndOfStreamException("Runtime closed the connection before its response.");
-                }
-                if (value == '\n')
-                {
-                    var parsed = serializer.DeserializeObject(Encoding.UTF8.GetString(bytes.ToArray()));
-                    return parsed as Dictionary<string, object>
-                        ?? throw new InvalidDataException("Runtime response must be a JSON object.");
-                }
-                bytes.WriteByte((byte)value);
-            }
-            throw new InvalidDataException("Runtime response exceeds the 65536-byte limit.");
-        }
-
         private static bool HasAcceptedHello(Dictionary<string, object> response, string requestId)
         {
             return GetBool(response, "ok") && GetString(response, "protocol") == "nomad-core" &&
@@ -312,80 +308,91 @@ namespace NOMAD.MissionPlanner.Connectivity
                    GetString(response, "type") == "hello_response";
         }
 
-        private int ReadCommandResult(Dictionary<string, object> response, string requestId, string verb)
+        private NomadCoreRequestResult ReadCommandResult(Dictionary<string, object> response,
+            string requestId, string verb)
         {
+            var outcome = NomadCoreRequestOutcome.UnknownOutcome;
+            var errorCode = "";
+            var messageText = "";
             if (GetString(response, "id") != requestId || GetString(response, "protocol") != "nomad-core" ||
                 GetInt(response, "version") != 1)
             {
-                LastOutcome = NomadCoreRequestOutcome.UnknownOutcome;
-                LastErrorCode = "unknown_outcome";
-                LastMessage = "The runtime response did not match its protocol and ID; the outcome is unknown.";
-                return -1;
+                outcome = NomadCoreRequestOutcome.UnknownOutcome;
+                errorCode = "unknown_outcome";
+                messageText = "The runtime response did not match its protocol and ID; the outcome is unknown.";
+                return new NomadCoreRequestResult(outcome, errorCode, messageText);
             }
-            ReadAcknowledgement(response);
+
             if (TryReadError(response, out var code, out var message))
             {
-                LastOutcome = IsAuthorityVerb(verb) && !response.ContainsKey("outcome")
+                outcome = IsAuthorityVerb(verb) && !response.ContainsKey("outcome")
                     ? NomadCoreRequestOutcome.Rejected : ReadOutcome(response);
-                if (LastOutcome == NomadCoreRequestOutcome.Succeeded)
+                if (outcome == NomadCoreRequestOutcome.Succeeded)
                 {
-                    LastOutcome = NomadCoreRequestOutcome.UnknownOutcome;
+                    outcome = NomadCoreRequestOutcome.UnknownOutcome;
                 }
-                LastErrorCode = code;
-                LastMessage = message;
-                return -1;
+                errorCode = code;
+                messageText = message;
+                return new NomadCoreRequestResult(outcome, errorCode, messageText, ReadAcknowledgement(response));
             }
             return IsAuthorityVerb(verb) ? ReadAuthorityResult(response, verb) : ReadVehicleResult(response);
         }
 
-        private int ReadAuthorityResult(Dictionary<string, object> response, string verb)
+        private NomadCoreRequestResult ReadAuthorityResult(Dictionary<string, object> response, string verb)
         {
+            var outcome = NomadCoreRequestOutcome.UnknownOutcome;
+            var errorCode = "";
+            var messageText = "";
             if (GetString(response, "type") == "authority_response" &&
                 response.ContainsKey("authority_generation") &&
                 (verb == "revoke" ? GetString(response, "authority_owner") == "" :
                  GetString(response, "authority_owner") == _clientId))
             {
-                LastOutcome = NomadCoreRequestOutcome.Succeeded;
-                LastMessage = "Runtime authority changed explicitly.";
-                return 0;
+                outcome = NomadCoreRequestOutcome.Succeeded;
+                messageText = "Runtime authority changed explicitly.";
+                return new NomadCoreRequestResult(outcome, errorCode, messageText, ReadAcknowledgement(response));
             }
-            LastOutcome = NomadCoreRequestOutcome.UnknownOutcome;
-            LastErrorCode = "unknown_outcome";
-            LastMessage = "The runtime returned no valid authority result; the outcome is unknown.";
-            return -1;
+            outcome = NomadCoreRequestOutcome.UnknownOutcome;
+            errorCode = "unknown_outcome";
+            messageText = "The runtime returned no valid authority result; the outcome is unknown.";
+            return new NomadCoreRequestResult(outcome, errorCode, messageText, ReadAcknowledgement(response));
         }
 
-        private int ReadVehicleResult(Dictionary<string, object> response)
+        private NomadCoreRequestResult ReadVehicleResult(Dictionary<string, object> response)
         {
+            var outcome = NomadCoreRequestOutcome.UnknownOutcome;
+            var errorCode = "";
+            var messageText = "";
             if (GetString(response, "type") != "command_response" ||
                 !response.TryGetValue("command_result", out var resultObject) ||
                 resultObject is not Dictionary<string, object> result)
             {
-                LastOutcome = NomadCoreRequestOutcome.UnknownOutcome;
-                LastErrorCode = "unknown_outcome";
-                LastMessage = "The runtime returned no command result; the vehicle outcome is unknown.";
-                return -1;
+                outcome = NomadCoreRequestOutcome.UnknownOutcome;
+                errorCode = "unknown_outcome";
+                messageText = "The runtime returned no command result; the vehicle outcome is unknown.";
+                return new NomadCoreRequestResult(outcome, errorCode, messageText, ReadAcknowledgement(response));
             }
-            LastMessage = GetString(result, "message");
-            LastOutcome = ReadOutcome(response);
-            var success = LastOutcome == NomadCoreRequestOutcome.Succeeded && GetBool(result, "success");
-            if (LastOutcome == NomadCoreRequestOutcome.Succeeded && !success)
+            messageText = GetString(result, "message");
+            outcome = ReadOutcome(response);
+            var success = outcome == NomadCoreRequestOutcome.Succeeded && GetBool(result, "success");
+            if (outcome == NomadCoreRequestOutcome.Succeeded && !success)
             {
-                LastOutcome = NomadCoreRequestOutcome.UnknownOutcome;
+                outcome = NomadCoreRequestOutcome.UnknownOutcome;
             }
-            LastErrorCode = success ? "" : LastOutcome == NomadCoreRequestOutcome.UnknownOutcome
+            errorCode = success ? "" : outcome == NomadCoreRequestOutcome.UnknownOutcome
                 ? "unknown_outcome" : "vehicle_" + GetString(response, "outcome");
-            return success ? 0 : -1;
+            return new NomadCoreRequestResult(outcome, errorCode, messageText, ReadAcknowledgement(response));
         }
 
-        private void ReadAcknowledgement(Dictionary<string, object> response)
+        private static bool? ReadAcknowledgement(Dictionary<string, object> response)
         {
             if (response.TryGetValue("command_result", out var rawResult) &&
                 rawResult is Dictionary<string, object> result &&
                 result.TryGetValue("acknowledged", out var value) && value is bool acknowledged)
             {
-                LastAcknowledged = acknowledged;
+                return acknowledged;
             }
+            return null;
         }
 
         private static NomadCoreRequestOutcome ReadOutcome(Dictionary<string, object> response)
@@ -407,22 +414,25 @@ namespace NOMAD.MissionPlanner.Connectivity
             };
         }
 
-        private void SetProtocolFailure(Dictionary<string, object> response)
+        private static NomadCoreRequestResult ReadProtocolFailure(Dictionary<string, object> response)
         {
+            var errorCode = "";
+            var messageText = "";
             if (TryReadError(response, out var code, out var message))
             {
-                LastErrorCode = string.IsNullOrEmpty(code) ? "incompatible_protocol" : code;
-                LastMessage = string.IsNullOrEmpty(message) ? "Runtime protocol negotiation failed." : message;
-                return;
+                errorCode = string.IsNullOrEmpty(code) ? "incompatible_protocol" : code;
+                messageText = string.IsNullOrEmpty(message) ? "Runtime protocol negotiation failed." : message;
+                return new NomadCoreRequestResult(NomadCoreRequestOutcome.FailedBeforeSend, errorCode, messageText);
             }
             if (GetString(response, "protocol") != "nomad-core")
             {
-                LastErrorCode = "incompatible_protocol";
-                LastMessage = "The runtime uses an incompatible protocol name.";
-                return;
+                errorCode = "incompatible_protocol";
+                messageText = "The runtime uses an incompatible protocol name.";
+                return new NomadCoreRequestResult(NomadCoreRequestOutcome.FailedBeforeSend, errorCode, messageText);
             }
-            LastErrorCode = "incompatible_version";
-            LastMessage = "The runtime protocol version is not supported.";
+            errorCode = "incompatible_version";
+            messageText = "The runtime protocol version is not supported.";
+            return new NomadCoreRequestResult(NomadCoreRequestOutcome.FailedBeforeSend, errorCode, messageText);
         }
 
         private static bool TryReadError(Dictionary<string, object> response, out string code, out string message)

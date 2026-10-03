@@ -257,9 +257,26 @@ reasoning. In particular:
 - unknown != rejected;
 - interrupted != safe to retry automatically.
 
-Debt: mutable last-result properties and synchronous client I/O remain; revisit
-when implementing audit M2; then carry immutable per-request results and modernize
-I/O without changing this outcome vocabulary.
+Mission Planner's asynchronous request API returns an immutable
+`NomadCoreRequestResult` containing `Outcome`, `ErrorCode`, `Message` and nullable
+`Acknowledged`; `Succeeded` means only software success. Production callers use
+the result of their own request, including when responses finish out of order.
+The synchronous bool API and mutable `Last*` properties remain compatibility
+wrappers only; asynchronous requests do not update those properties.
+
+Runtime networking uses .NET Framework 4.8 asynchronous TCP connect, stream
+write and stream read operations. Cancellation closes the request's socket.
+Connect, write and read-idle deadlines remain 1500 ms, 3000 ms and 120000 ms.
+Buffered reads retain unconsumed bytes between frames and use one cancellation
+source per response, resetting its idle deadline for each network read.
+Cancellation or failure before mutation write begins is `FailedBeforeSend`;
+once write begins it is `UnknownOutcome`. Neither uncertain nor stale mutations
+are retried automatically. UI callers await on the WinForms context, and gimbal
+and payload callers reject concurrent work with nonwaiting async gates so stale
+commands cannot accumulate. One explicit servo stop per channel may wait for that
+channel's current request; duplicate stops and new starts are declined while it
+is pending. Payload commanded state changes only on software
+success; physical effects remain unverified.
 
 ## Authenticated local clients
 
@@ -414,9 +431,26 @@ Each typed mutation echoes the incarnation, vehicle session, generation and
 source, supplies a positive monotonically increasing `sequence`, and an absolute
 `expires_at_ms` no more than five seconds ahead. The runtime reserves each
 sequence before dispatch and keeps the high-water mark after response eviction.
-`hello` includes the next sequence for each short-lived `nomad` invocation;
-Mission Planner uses a process-lifetime counter and stable logical source across
-its client instances.
+`hello` includes the next sequence for each short-lived `nomad` invocation.
+Mission Planner allocates at least the authenticated
+`hello.authority.next_sequence`, sharing a counter by runtime loopback port and
+client identity across client instances in its process. A short lock allocates
+the greater of this lower bound and the previous allocation plus one, without
+holding a lock across network awaits. A restarted Mission Planner therefore
+uses the runtime's current lower bound immediately. Runtime restart does not
+reset the local counter; each request still binds fresh incarnation, session and
+generation from its own authenticated handshake. A nonwaiting async mutation gate
+shared by endpoint and identity covers hello, allocation, write and response
+classification for vehicle mutations only (servo, relay, motor-test and gimbal
+configuration/target). Overlapping vehicle mutations return `NotAttempted` /
+`request_in_progress` before connecting, so same-process vehicle mutations cannot
+overtake one another on independent connections. Admit, revoke and handback bypass
+this gate, using the same sequence allocator and their own fresh hello/context.
+An operator revoke can therefore advance runtime authority generation while a
+vehicle mutation is executing; that mutation then reports `authority_interrupted`.
+The gate is released on every result, failure and cancellation. Separate
+simultaneous processes sharing an identity remain
+unsupported and do not coordinate their local allocations.
 Duplicate requests can retrieve a cached response only while the same authority
 is still current. An evicted replay is rejected. In-flight operations return
 `authority_interrupted` if authority changes before completion. The runtime

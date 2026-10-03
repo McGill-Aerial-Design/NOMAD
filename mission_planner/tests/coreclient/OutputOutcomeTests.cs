@@ -17,9 +17,10 @@ internal static partial class NomadCoreClientTests
             using var runtime = new MockRuntime(1, outcome: outcomes[index],
                 acknowledged: outcomes[index] != "rejected");
             OutputController.Initialize(new NOMADConfig { CoreRuntimePort = runtime.Port });
-            Expect(!OutputController.SendServoPwm(8, 1500), "non-success output preserves false convenience result");
+            var result = OutputController.SendServoPwmAsync(8, 1500).GetAwaiter().GetResult();
+            Expect(!result.Succeeded, "non-success output preserves exact request result");
             runtime.Wait();
-            var message = OutputController.DescribeLastFailure("Release");
+            var message = OutputController.DescribeFailure("Release", result);
             Expect(message.Contains(wording[index]), $"operator sees truthful {outcomes[index]} disposition");
             Expect(Log.Messages[Log.Messages.Count - 1].Contains("result=" + outcomes[index]),
                 "companion output audit preserves normalized classification");
@@ -39,7 +40,7 @@ internal static partial class NomadCoreClientTests
             OutputController.Initialize(config);
             using var panel = new PayloadControlPanel(config);
             PayloadControlPanel.RaisePayloadReleaseCommandedState(0, false);
-            panel.TestDrop();
+            WaitForPanel(panel.TestDrop());
             Expect(PayloadControlPanel.IsPayloadReleaseCommanded(0) == (outcome == "success"),
                 $"{outcome} release changes commanded state only on software success");
             if (outcome == "success")
@@ -48,7 +49,7 @@ internal static partial class NomadCoreClientTests
                     "release status makes evidence limit explicit");
             }
             PayloadControlPanel.RaisePayloadReleaseCommandedState(0, true);
-            panel.TestRetract();
+            WaitForPanel(panel.TestRetract());
             Expect(PayloadControlPanel.IsPayloadReleaseCommanded(0) == (outcome != "success"),
                 $"{outcome} retract cannot clear previous commanded release before success");
             if (outcome == "success")
@@ -72,8 +73,7 @@ internal static partial class NomadCoreClientTests
         runtime.Wait();
         Expect(PayloadControlPanel.IsPayloadReleaseCommanded(0),
             "headless unknown retract preserves previous commanded state");
-        Expect(OutputController.CreateCoreClient().LastOutcome == NomadCoreRequestOutcome.UnknownOutcome,
-            "headless socket loss remains unknown");
+
         Expect(runtime.CommandCount == 1, "headless unknown retract is not replayed");
         PayloadControlPanel.RaisePayloadReleaseCommandedState(0, false);
     }
@@ -85,37 +85,96 @@ internal static partial class NomadCoreClientTests
         OutputController.Initialize(config);
         using var panel = new PayloadControlPanel(config);
         using var button = new Button { Text = "No confirmed command" };
-        panel.TestToggleRelay(new PayloadControl { Kind = PayloadKind.Relay, Channel = 3 }, button);
+        button.CreateControl();
+        WaitForPanel(panel.TestToggleRelay(new PayloadControl { Kind = PayloadKind.Relay, Channel = 3 }, button));
         runtime.Wait();
         Expect(button.Text == "No confirmed command", "failed relay cannot assert a commanded ON state");
         Expect(panel.TestStatus.Contains("definite failure"), "relay panel preserves definite failed category");
     }
     private static void ReelPanel_DoesNotClaimPhysicalMovementOrStop()
     {
+        ReelPanel_DisposeDuringPrerequisitePreventsNewStart();
+        ReelPanel_ReleaseDuringPrerequisitePreventsHoldStart();
         foreach (var outcome in new[] { "failed", "interrupted", "unknown", "success" })
         {
             using var runtime = new MockRuntime(4, outcome: outcome);
             var config = new NOMADConfig { CoreRuntimePort = runtime.Port };
             OutputController.Initialize(config);
             using var panel = new PayloadControlPanel(config);
-            panel.TestStartReel();
+            WaitForPanel(panel.TestStartReel());
             CheckReelEvidence(panel.TestStatus, outcome, "start");
-            panel.TestStopReel();
+            WaitForPanel(panel.TestStopReel());
             CheckReelEvidence(panel.TestStatus, outcome, "stop");
-            panel.TestStartFullReel();
+            WaitForPanel(panel.TestStartFullReel());
             CheckReelEvidence(panel.TestStatus, outcome, "timed start");
-            panel.TestStopFullReel();
+            WaitForPanel(panel.TestStopFullReel());
             CheckReelEvidence(panel.TestStatus, outcome, "timed stop");
             runtime.Wait();
             Expect(runtime.CommandCount == 4, "reel requests are sent exactly once without uncertain retry");
         }
     }
 
+    private static void ReelPanel_DisposeDuringPrerequisitePreventsNewStart()
+    {
+        for (var kind = 0; kind < 3; kind++)
+        {
+            using var runtime = new AsyncRuntime(1);
+            var config = new NOMADConfig { CoreRuntimePort = runtime.Port };
+            config.Payloads[0].Channel = 1;
+            OutputController.Initialize(config);
+            using var panel = new PayloadControlPanel(config);
+            panel.TestActivateReelPrerequisite(kind);
+            var request = kind == 0 ? panel.TestStartReel() : panel.TestStartFullReel();
+            runtime.WaitForCommands(1);
+            Expect(!request.IsCompleted, "reel start awaits its delayed prerequisite stop");
+            var overlap = kind == 0 ? panel.TestStartReel() : panel.TestStartFullReel();
+            Expect(overlap.IsCompleted, "reentrant reel start is dropped during delayed prerequisite");
+            panel.Dispose();
+            runtime.ReleaseResponse(1);
+            WaitForPanel(request);
+            runtime.Wait();
+            Expect(runtime.Commands.Count == 1, "disposing during prerequisite permits only the explicit stop");
+            Expect(System.Convert.ToInt32(runtime.Commands[0]["pwm_microseconds"]) == 1500,
+                "the only mutation remains the prerequisite neutral stop");
+            Expect(!panel.TestHasReelTimers, "disposed reel panel creates no deferred start timer");
+        }
+    }
+    private static void ReelPanel_ReleaseDuringPrerequisitePreventsHoldStart()
+    {
+        using var runtime = new AsyncRuntime(1);
+        var config = new NOMADConfig { CoreRuntimePort = runtime.Port };
+        config.Payloads[0].Channel = 1;
+        OutputController.Initialize(config);
+        using var panel = new PayloadControlPanel(config);
+        panel.TestActivateReelPrerequisite(0);
+        var start = panel.TestStartReel();
+        runtime.WaitForCommands(1);
+        WaitForPanel(panel.TestStopReel());
+        Expect(!start.IsCompleted, "hold start is still awaiting the prerequisite stop when released");
+        runtime.ReleaseResponse(1);
+        WaitForPanel(start);
+        runtime.Wait();
+        Expect(runtime.Commands.Count == 1, "release during prerequisite prevents a later hold start mutation");
+        Expect(System.Convert.ToInt32(runtime.Commands[0]["pwm_microseconds"]) == 1500,
+            "the only mutation is the already-issued prerequisite neutral stop");
+        Expect(!panel.TestHasReelTimers, "released hold creates no deferred safety or movement timer");
+    }
     private static void CheckReelEvidence(string message, string outcome, string operation)
     {
         Expect(!message.Contains(" stopped") && !message.Contains(" complete"),
             $"{operation} cannot claim physical stop or completion");
         var evidence = outcome == "success" ? "unverified" : outcome == "failed" ? "definite failure" : "unknown";
         Expect(message.Contains(evidence), $"reel {operation} reports {outcome} software evidence");
+    }
+    private static void WaitForPanel(System.Threading.Tasks.Task request)
+    {
+        var deadline = System.DateTime.UtcNow.AddSeconds(10);
+        while (!request.IsCompleted && System.DateTime.UtcNow < deadline)
+        {
+            Application.DoEvents();
+            System.Threading.Thread.Sleep(1);
+        }
+        Expect(request.IsCompleted, "panel request completes while its UI context is pumped");
+        request.GetAwaiter().GetResult();
     }
 }

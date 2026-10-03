@@ -109,7 +109,7 @@ namespace NOMAD.MissionPlanner
         {
             SelectedMode = mode;
             ModeChanged?.Invoke(mode);
-            OutputController.ConfigureGimbal((int)mode);
+            _ = ConfigureModeAsync(mode);
         }
 
         /// <summary>
@@ -120,21 +120,35 @@ namespace NOMAD.MissionPlanner
         {
             if (System.Threading.Interlocked.Exchange(ref _inflight, 1) == 1) return;
 
-            Task.Run(() =>
+            _ = SendTargetAsync(pitchDeg, rollDeg);
+        }
+
+        private static async Task ConfigureModeAsync(MountMode mode)
+        {
+            try
             {
-                try
-                {
-                    OutputController.SendGimbalTarget(pitchDeg, rollDeg);
-                }
-                catch (Exception error)
-                {
-                    Log.Warn($"Gimbal target request failed: {error.Message}; target was not confirmed.");
-                }
-                finally
-                {
-                    System.Threading.Interlocked.Exchange(ref _inflight, 0);
-                }
-            });
+                await OutputController.ConfigureGimbalAsync((int)mode).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                Log.Warn($"Gimbal configure failed: {error.Message}; mode was not confirmed.");
+            }
+        }
+
+        private static async Task SendTargetAsync(float pitchDeg, float rollDeg)
+        {
+            try
+            {
+                await OutputController.SendGimbalTargetAsync(pitchDeg, rollDeg).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                Log.Warn($"Gimbal target request failed: {error.Message}; target was not confirmed.");
+            }
+            finally
+            {
+                System.Threading.Interlocked.Exchange(ref _inflight, 0);
+            }
         }
     }
 }

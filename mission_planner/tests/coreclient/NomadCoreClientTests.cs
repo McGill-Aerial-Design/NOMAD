@@ -16,8 +16,14 @@ internal static partial class NomadCoreClientTests
     private static int _failures;
 
     [STAThread]
-    private static int Main()
+    private static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--async-restart-child")
+        {
+            return RunAsyncRestartChild(int.Parse(args[1]));
+        }
+        System.Windows.Forms.Control.CheckForIllegalCrossThreadCalls = true;
+        Runtime_AsyncTests();
         Termination_ReportsUnavailableWithoutVehicleDispatch();
         GuidedGoto_ReportsUnavailableWithoutDispatch();
         RuntimeUnavailable_FailsClosedBeforeSend();

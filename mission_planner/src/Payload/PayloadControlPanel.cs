@@ -214,17 +214,17 @@ namespace NOMAD.MissionPlanner
 
             var btnIn = MakeButton("⬆ Reel In", Color.FromArgb(50, 100, 50), 85, ROW_H);
             btnIn.Location = new Point(x, y);
-            btnIn.MouseDown  += (s, e) => StartReel(reelIdx, pwmIn);
-            btnIn.MouseUp    += (s, e) => StopReel(reelIdx);
-            btnIn.MouseLeave += (s, e) => { if (_reelActive[reelIdx]) StopReel(reelIdx); };
+            btnIn.MouseDown  += (s, e) => _ = StartReel(reelIdx, pwmIn);
+            btnIn.MouseUp    += (s, e) => _ = StopReel(reelIdx);
+            btnIn.MouseLeave += (s, e) => { if (_reelActive[reelIdx] || _reelHoldRequested[reelIdx]) _ = StopReel(reelIdx); };
             Controls.Add(btnIn);
             x += 89;
 
             var btnOut = MakeButton("⬇ Reel Out", Color.FromArgb(50, 50, 100), 88, ROW_H);
             btnOut.Location = new Point(x, y);
-            btnOut.MouseDown  += (s, e) => StartReel(reelIdx, pwmOut);
-            btnOut.MouseUp    += (s, e) => StopReel(reelIdx);
-            btnOut.MouseLeave += (s, e) => { if (_reelActive[reelIdx]) StopReel(reelIdx); };
+            btnOut.MouseDown  += (s, e) => _ = StartReel(reelIdx, pwmOut);
+            btnOut.MouseUp    += (s, e) => _ = StopReel(reelIdx);
+            btnOut.MouseLeave += (s, e) => { if (_reelActive[reelIdx] || _reelHoldRequested[reelIdx]) _ = StopReel(reelIdx); };
             Controls.Add(btnOut);
             x += 92;
 
