@@ -30,7 +30,7 @@ namespace NOMAD.MissionPlanner
                 if (p == null || p.Channel <= 0) return;
                 if (await OutputController.SendServoPwmAsync(p.Channel, DropPwm(p)).ConfigureAwait(false))
                 {
-                    PayloadControlPanel.RaisePayloadDroppedState(payload - 1, true);
+                    PayloadControlPanel.RaisePayloadReleaseCommandedState(payload - 1, true);
                 }
             }
             catch (Exception ex)
@@ -47,7 +47,7 @@ namespace NOMAD.MissionPlanner
                 if (p == null || p.Channel <= 0) return;
                 if (await OutputController.SendServoPwmAsync(p.Channel, RetractPwm(p)).ConfigureAwait(false))
                 {
-                    PayloadControlPanel.RaisePayloadDroppedState(payload - 1, false);
+                    PayloadControlPanel.RaisePayloadReleaseCommandedState(payload - 1, false);
                 }
             }
             catch (Exception ex)

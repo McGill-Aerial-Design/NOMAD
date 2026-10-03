@@ -421,6 +421,15 @@ Keep these states separate: actuation enabled; client authenticated; client
 admitted as software authority; command eligible for final send; vehicle command
 accepted by an observed response; physical outcome. None implies the next.
 
+Mission Planner reports vehicle mutations using the
+[runtime outcome contract](runtime-ipc.md#vehicle-mutation-outcomes).
+Rejected means no eligible vehicle send; failed means a definite unsuccessful
+attempt; interrupted and unknown mean the final vehicle effect is uncertain.
+Do not retry an uncertain release or retract automatically. Observe the payload
+and follow the reviewed procedure before deciding on another action. Payload
+indicators record commanded state only; successful release/retract commands do
+not verify physical release or retraction.
+
 ## Managed runtime configuration
 
 Copy the packaged `share/nomad/lifecycle/runtime.example.json` outside the

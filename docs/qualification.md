@@ -186,6 +186,48 @@ durable intent ordering, native protected-file failure/locking and corrupt-histo
 recovery are software-only checks. Validation results for this slice are reported
 against its PR head; the prior SITL run above is baseline evidence only.
 
+## Mutation outcome correctness slice (H2)
+
+This slice starts from PR59/main
+`11dec219583d30b63f4e5efe744ad6213d49a268` and excludes PR54.
+The base runtime already journaled interrupted/internal-error outcomes more
+accurately than its error JSON, while Mission Planner collapsed definite failure
+and most runtime errors into rejection. The
+[protocol outcome contract](runtime-ipc.md#vehicle-mutation-outcomes) now carries
+the evidence through runtime JSON, C# client diagnostics and operator display.
+
+| Evidence path | Deterministic check | Required classification |
+|---|---|---|
+| Authentication, authority, expiry, replay, malformed request | Runtime CTest and real runtime peer smoke | `rejected`, no eligible send |
+| Final admission denied before eligibility | Runtime fake admission and existing independent authority-wire probes | `rejected`; admitted preflight without delivery certainty remains uncertain |
+| Negative FC ACK | Real deterministic MAVSDK peer and C# envelope harness | `failed`, acknowledged, never rejected |
+| Authority change after actual command delivery | Runtime completion gate and real peer withholding ACK until revoke | `authority_interrupted` / `interrupted`, journal agreement, no replay |
+| Internal exception after possible execution | Runtime fake transport fault | `unknown`, journal agreement |
+| Durable outcome write failure | Existing injected journal failure with cache regression | `unknown` after possible send, health latch retained; incomplete intent stays unknown |
+| Connection loss before/after request write | C# loopback harness | `FailedBeforeSend` / `UnknownOutcome`, no automatic retry |
+| All five supported successful mutations | Runtime fake matrix, real peer and C# harness | `success`, ACK preserved independently |
+| Payload release/retract | Mission Planner output/payload harness | Commanded state changes only on software success; physical state unverified |
+
+The real peer counts MAVLink deliveries independently of runtime responses and
+compares response outcomes/ACK evidence with committed journal records. Cached
+unknown responses remain identical and cause no new delivery. After authority
+changes, the old context is rejected before cache lookup without re-execution.
+These are software-only checks; they do not prove physical release, servo travel
+or gimbal arrival. This section describes the checks, not a claim that every
+hosted run has passed; final PR validation records the exact head and run links.
+
+Local Windows/MSVC validation passed all 22 CTest executables, the real-runtime
+H2 peer matrix, clean/crash and session/reconnect lifecycle qualification, the
+expanded Mission Planner core-client/output/payload/reel harness, gimbal and
+payload interlock checks, plugin build and dead-code lint. Lint, format,
+changed-file complexity, strict docs and changed-file pre-commit passed.
+Hosted Linux, Windows and C# conclusions are recorded against the PR head
+in its validation report, rather than inferred from this local evidence.
+
+The broader audit M2 immutable result and async/concurrency cleanup, audit M1
+sequence resume, physical arbitration and aircraft-operation changes remain
+outside this slice.
+
 ## Software resource budgets
 
 The software-only resource slice starts from merged PR56/main

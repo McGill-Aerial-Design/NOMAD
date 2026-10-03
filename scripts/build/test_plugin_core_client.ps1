@@ -45,7 +45,15 @@ $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Control\FlightModeController.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\TerminationRequestTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientTests.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientRuntimeTests.cs')
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientRuntimeTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientOutcomeTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputOutcomeTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputTestFixtures.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Control\OutputController.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Payload\PayloadActions.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Payload\PayloadControlPanel.Drop.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Payload\PayloadControlPanel.Reels.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Payload\PayloadReleaseInterlock.cs')
 )
 $outDir = Join-Path $repoRoot 'mission_planner\tests\coreclient\bin'
 New-Item -ItemType Directory -Force $outDir | Out-Null
@@ -58,7 +66,7 @@ if (-not (Test-Path $systemWebExtensions)) {
     Write-Host "ERROR: .NET Framework 4.8 reference assembly not found at $systemWebExtensions" -ForegroundColor Red
     exit 1
 }
-& $csc /nologo /target:exe /langversion:latest "/reference:$systemWebExtensions" "/out:$exe" @sources
+& $csc /nologo /target:exe /langversion:latest /reference:System.Drawing.dll /reference:System.Windows.Forms.dll "/reference:$systemWebExtensions" "/out:$exe" @sources
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Compile FAILED." -ForegroundColor Red
     exit 1

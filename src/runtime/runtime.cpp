@@ -207,10 +207,14 @@ struct Runtime::Implementation {
                                        type == "revoke_authority" || type == "handback_authority";
         if (protected_request && !authenticate_request(envelope)) {
             const auto id = field_string(envelope, "id");
-            return journal_->healthy() ?
+            auto response = journal_->healthy() ?
                 error_response(id.size() <= 64 ? id : "", "authentication_failed",
                                "valid credential proof and matching client identity required") :
                 rejected_audit_error(id);
+            if (is_mutating(type)) {
+                response["outcome"] = "rejected";
+            }
+            return response;
         }
         const auto authenticated_client = protected_request ? field_string(envelope, "client_id") : "";
         if (envelope.is_object()) {
@@ -224,6 +228,9 @@ struct Runtime::Implementation {
                 if (!audit_rejection(envelope, "invalid_request", authenticated_client)) {
                     return rejected_audit_error(field_string(envelope, "id"));
                 }
+            }
+            if (is_mutating(type)) {
+                parsed.error["outcome"] = "rejected";
             }
             return parsed.error;
         }
@@ -245,20 +252,20 @@ struct Runtime::Implementation {
     }
 
     Json handle_mutating_request(const Request &request) {
-        const auto response = process_mutating_request(request);
+        auto response = process_mutating_request(request);
+        if (!response.contains("outcome")) {
+            response["outcome"] = "rejected";
+        }
         if (!response.value("ok", false) && response["error"]["code"] != "authority_interrupted" &&
             response["error"]["code"] != "internal_error" && response["error"]["code"] != "audit_failure") {
-            if (!audit_request(request, "request_rejected", response["error"]["code"])) {
-                return audit_error(request);
+            if (!audit_request(request, "request_rejected", response["error"]["code"], response["outcome"])) {
+                return audit_error(request, response["outcome"] != "rejected");
             }
         }
         return response;
     }
 
     Json process_mutating_request(const Request &request) {
-        if (!journal_->healthy()) {
-            return audit_error(request);
-        }
         if (!config_.actuation_enabled) {
             return error_response(request.id, "missing_api_key", "NOMAD_API_KEY is not set for the runtime");
         }
@@ -277,11 +284,17 @@ struct Runtime::Implementation {
                 }
                 return cached->second.response;
             }
+            if (in_flight_.contains(key)) {
+                auto response = error_response(request.id, "request_in_progress",
+                                               "request with this ID is still running");
+                response["outcome"] = "unknown";
+                return response;
+            }
+            if (!journal_->healthy()) {
+                return audit_error(request);
+            }
             if (const auto expired = check_request_authority(request); expired.has_value()) {
                 return *expired;
-            }
-            if (in_flight_.contains(key)) {
-                return error_response(request.id, "request_in_progress", "request with this ID is still running");
             }
             if (!reserve_sequence(request)) {
                 return error_response(request.id, "stale_request", "request sequence was already consumed");
@@ -294,7 +307,9 @@ struct Runtime::Implementation {
             response = execute_mutating_request(request);
         } catch (...) {
             response = error_response(request.id, "internal_error", "vehicle request failed internally");
-            response = finish_operation(request, response, "unknown");
+            const auto outcome = request.admission_check_passed->load() || request.ack_observed->load() ?
+                                 "unknown" : "rejected";
+            response = finish_operation(request, response, outcome);
         }
         remember_response(key, fingerprint, response);
         return response;

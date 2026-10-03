@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from mavsdk_authority_peer import AuthorityPeer
 from mavsdk_peer import COMMAND_DO_MOUNT_CONTROL, COMMAND_DO_SET_SERVO, VehiclePeer
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -364,7 +365,7 @@ def verify_gimbal_target(ipc_port: int, peer: VehiclePeer) -> None:
     )
 
 
-def verify_runtime(binary: Path, peer: VehiclePeer, udp_port: int, ipc_port: int) -> None:
+def verify_runtime(binary: Path, peer: AuthorityPeer, udp_port: int, ipc_port: int) -> None:
     """Check handshake, status, typed dispatch, reconnect and client isolation."""
     process, stdout, stderr = start_runtime(binary, udp_port, ipc_port)
     try:
@@ -374,6 +375,9 @@ def verify_runtime(binary: Path, peer: VehiclePeer, udp_port: int, ipc_port: int
         verify_navigation_rejected(find_cli(), peer, cli_environment)
         verify_runtime_reconnect(ipc_port, peer, find_cli(), cli_environment)
         verify_gimbal_target(ipc_port, peer)
+        from runtime_outcome_fixture import verify_outcomes
+
+        verify_outcomes(ipc_port, peer, Path(process._nomad_test_storage.name) / "audit")
     except Exception:
         if process.poll() is None:
             stop_runtime(process)
@@ -404,7 +408,7 @@ def main() -> int:
     binary = find_runtime()
     udp_port = free_port(socket.SOCK_DGRAM)
     ipc_port = free_port(socket.SOCK_STREAM)
-    peer = VehiclePeer(udp_port, 1)
+    peer = AuthorityPeer(udp_port, 1)
     verify_invalid_runtime_endpoint(binary)
     peer.start()
     try:
@@ -417,8 +421,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    from runtime_ipc_smoke import main as run_main
+
     try:
-        raise SystemExit(main())
+        raise SystemExit(run_main())
     except Exception as error:
         print(f"runtime IPC smoke failed: {error}", file=sys.stderr)
         raise SystemExit(1)

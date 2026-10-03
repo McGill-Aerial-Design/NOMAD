@@ -17,7 +17,7 @@ internal static partial class NomadCoreClientTests
 
     private static void GuidedGoto_ReportsUnavailableWithoutDispatch()
     {
-        OutputController.CreateClientCalls = 0;
+        OutputController.Initialize(null);
         Log.LastWarning = "";
 
         Expect(!FlightModeController.GuidedGoto(45.0, 9.0, 5.0), "GuidedGoto remains unavailable");
@@ -25,29 +25,6 @@ internal static partial class NomadCoreClientTests
             "operator feedback names the missing runtime capability");
         Expect(Log.LastWarning.Contains("No vehicle command was sent"),
             "operator feedback confirms that no command was sent");
-        Expect(OutputController.CreateClientCalls == 0, "unavailable GuidedGoto does not create a runtime client");
-    }
-}
-
-// Deliberately no Mission Planner transport assembly: direct mode/parameter writes cannot compile here.
-namespace NOMAD.MissionPlanner
-{
-    internal static class OutputController
-    {
-        internal static int CreateClientCalls;
-
-        internal static Connectivity.NomadCoreClient CreateCoreClient()
-        {
-            CreateClientCalls++;
-            return null;
-        }
-    }
-
-    public static class Log
-    {
-        public static string LastError = "";
-        public static string LastWarning = "";
-        public static void Error(string message) { LastError = message; }
-        public static void Warn(string message) { LastWarning = message; }
+        Expect(OutputController.CreateCoreClient() == null, "unavailable GuidedGoto does not create a runtime client");
     }
 }
