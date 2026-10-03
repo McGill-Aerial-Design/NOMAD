@@ -357,7 +357,7 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     add_executable(nomad_mavsdk_lifetime_tests tests/mavsdk_lifetime_test.cpp)
     get_target_property(NOMAD_CONNECTION_INCLUDES nomad_mavsdk_connection INCLUDE_DIRECTORIES)
     target_include_directories(nomad_mavsdk_lifetime_tests PRIVATE src ${NOMAD_CONNECTION_INCLUDES})
-    target_link_libraries(nomad_mavsdk_lifetime_tests PRIVATE nomad_mavsdk_connection mavsdk nomad_mavsdk_fmt)
+    target_link_libraries(nomad_mavsdk_lifetime_tests PRIVATE nomad_mavsdk_connection nomad_core mavsdk nomad_mavsdk_fmt)
     target_compile_definitions(nomad_mavsdk_lifetime_tests PRIVATE NOMAD_TESTS)
     add_test(NAME nomad_mavsdk_lifetime_tests COMMAND nomad_mavsdk_lifetime_tests)
 
