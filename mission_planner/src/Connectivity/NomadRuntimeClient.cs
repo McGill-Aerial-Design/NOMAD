@@ -17,13 +17,14 @@ namespace NOMAD.MissionPlanner.Connectivity
 {
     internal sealed partial class NomadRuntimeClient
     {
-        private sealed class SequenceCounter
+        private sealed class IdentityRequestState
         {
             internal ulong Last;
+            internal readonly SemaphoreSlim MutationGate = new SemaphoreSlim(1, 1);
         }
 
-        private static readonly ConcurrentDictionary<string, SequenceCounter> Sequences =
-            new ConcurrentDictionary<string, SequenceCounter>();
+        private static readonly ConcurrentDictionary<string, IdentityRequestState> RequestStates =
+            new ConcurrentDictionary<string, IdentityRequestState>();
         private readonly int _runtimePort;
         private readonly string _credential;
         private readonly string _clientId;
@@ -53,6 +54,26 @@ namespace NOMAD.MissionPlanner.Connectivity
                     "missing_credential", "The NOMAD client credential setting is empty.");
             }
 
+            var state = GetRequestState();
+            if (!await state.MutationGate.WaitAsync(0).ConfigureAwait(false))
+            {
+                return new NomadCoreRequestResult(NomadCoreRequestOutcome.NotAttempted,
+                    "request_in_progress", "Another request for this runtime identity is in progress; "
+                        + "no request was sent.");
+            }
+            try
+            {
+                return await RunMutationAsync(command, verb, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                state.MutationGate.Release();
+            }
+        }
+
+        private async Task<NomadCoreRequestResult> RunMutationAsync(Dictionary<string, object> command,
+            string verb, CancellationToken cancellationToken)
+        {
             var commandWriteStarted = false;
             try
             {
@@ -60,8 +81,9 @@ namespace NOMAD.MissionPlanner.Connectivity
                 using var cancellation = cancellationToken.Register(client.Close);
                 using var stream = client.GetStream();
                 var serializer = new JavaScriptSerializer { MaxJsonLength = 65536, RecursionLimit = 16 };
+                var reader = new ResponseBuffer();
                 var hello = BaseRequest(Guid.NewGuid().ToString("N"), "hello");
-                var helloResponse = await GetHelloAsync(client, stream, serializer, hello,
+                var helloResponse = await GetHelloAsync(client, stream, reader, serializer, hello,
                     cancellationToken).ConfigureAwait(false);
                 var failure = ValidateHello(helloResponse, hello);
                 if (failure != null)
@@ -84,7 +106,8 @@ namespace NOMAD.MissionPlanner.Connectivity
                 var bytes = EncodeMessage(serializer.Serialize(command));
                 await WriteMessageAsync(client, stream, bytes, cancellationToken,
                     () => commandWriteStarted = true).ConfigureAwait(false);
-                var response = await ReadResponseAsync(client, stream, serializer, cancellationToken).ConfigureAwait(false);
+                var response = await ReadResponseAsync(client, stream, reader, serializer,
+                    cancellationToken).ConfigureAwait(false);
                 return ReadCommandResult(response, command["id"].ToString(), verb);
             }
             catch (Exception ex)
@@ -100,12 +123,13 @@ namespace NOMAD.MissionPlanner.Connectivity
         }
 
         private async Task<Dictionary<string, object>> GetHelloAsync(TcpClient client, Stream stream,
-            JavaScriptSerializer serializer, Dictionary<string, object> hello, CancellationToken cancellationToken)
+            ResponseBuffer reader, JavaScriptSerializer serializer, Dictionary<string, object> hello,
+            CancellationToken cancellationToken)
         {
             hello["auth_nonce"] = MakeNonce();
             await WriteMessageAsync(client, stream, EncodeMessage(serializer.Serialize(hello)),
                 cancellationToken).ConfigureAwait(false);
-            return await ReadResponseAsync(client, stream, serializer, cancellationToken).ConfigureAwait(false);
+            return await ReadResponseAsync(client, stream, reader, serializer, cancellationToken).ConfigureAwait(false);
         }
 
         private NomadCoreRequestResult ValidateHello(Dictionary<string, object> response,
@@ -137,7 +161,8 @@ namespace NOMAD.MissionPlanner.Connectivity
         private static string MakeProof(string secret, string payload)
         {
             using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-            return BitConverter.ToString(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload))).Replace("-", "").ToLowerInvariant();
+            return BitConverter.ToString(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload)))
+                .Replace("-", "").ToLowerInvariant();
         }
 
         private static bool EqualProof(string left, string right)
@@ -188,9 +213,14 @@ namespace NOMAD.MissionPlanner.Connectivity
             return true;
         }
 
+        private IdentityRequestState GetRequestState()
+        {
+            return RequestStates.GetOrAdd(_runtimePort + ":" + _clientId, _ => new IdentityRequestState());
+        }
+
         private ulong AllocateSequence(ulong lowerBound)
         {
-            var counter = Sequences.GetOrAdd(_runtimePort + ":" + _clientId, _ => new SequenceCounter());
+            var counter = GetRequestState();
             lock (counter)
             {
                 if (counter.Last == ulong.MaxValue)
@@ -273,7 +303,8 @@ namespace NOMAD.MissionPlanner.Connectivity
                    GetString(response, "type") == "hello_response";
         }
 
-        private NomadCoreRequestResult ReadCommandResult(Dictionary<string, object> response, string requestId, string verb)
+        private NomadCoreRequestResult ReadCommandResult(Dictionary<string, object> response,
+            string requestId, string verb)
         {
             var outcome = NomadCoreRequestOutcome.UnknownOutcome;
             var errorCode = "";

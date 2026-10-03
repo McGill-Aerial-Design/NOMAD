@@ -35,6 +35,8 @@ internal static partial class NomadCoreClientTests
         internal int AcceptedConnections { get; private set; }
         internal object SequenceFloorOverride { get; set; }
         internal bool OmitSequenceFloor { get; set; }
+        internal int StaleRequests { get; private set; }
+        internal int ResponseSize { get; set; }
         internal List<Dictionary<string, object>> Commands { get; } = new List<Dictionary<string, object>>();
 
         internal AsyncRuntime(int count, int port = 0, ulong sequenceFloor = 1,
@@ -79,7 +81,8 @@ internal static partial class NomadCoreClientTests
                 using (connection)
                 using (var stream = connection.GetStream())
                 using (var reader = new StreamReader(stream, Encoding.UTF8, false, 4096, true))
-                using (var writer = new StreamWriter(stream, new UTF8Encoding(false), 4096, true) { AutoFlush = true })
+                using (var writer = new StreamWriter(stream, new UTF8Encoding(false), 4096, true)
+                    { AutoFlush = true, NewLine = "\n" })
                 {
                     var serializer = new JavaScriptSerializer();
                     var hello = serializer.Deserialize<Dictionary<string, object>>(reader.ReadLine());
@@ -95,13 +98,30 @@ internal static partial class NomadCoreClientTests
                         return;
                     }
                     var command = serializer.Deserialize<Dictionary<string, object>>(line);
-                    RecordCommand(command);
+                    var accepted = RecordCommand(command);
                     var channel = command.ContainsKey("channel") ? Convert.ToInt32(command["channel"]) : 3;
                     if (!_responses[channel].Wait(5000))
                     {
                         throw new TimeoutException("Test did not release command response.");
                     }
-                    writer.WriteLine(serializer.Serialize(CreateCommandResponse(command, channel)));
+                    var response = CreateCommandResponse(command, channel);
+                    if (ResponseSize > 0)
+                    {
+                        var result = (Dictionary<string, object>)response["command_result"];
+                        result["message"] = "";
+                        result["message"] = new string('x', ResponseSize - serializer.Serialize(response).Length);
+                    }
+                    if (!accepted)
+                    {
+                        response["ok"] = false;
+                        response["outcome"] = "rejected";
+                        response.Remove("command_result");
+                        response["error"] = new Dictionary<string, object>
+                        {
+                            ["code"] = "stale_request", ["message"] = "sequence was already consumed"
+                        };
+                    }
+                    writer.WriteLine(serializer.Serialize(response));
                 }
             }
             catch (IOException)
@@ -141,13 +161,23 @@ internal static partial class NomadCoreClientTests
             };
         }
 
-        private void RecordCommand(Dictionary<string, object> command)
+        private bool RecordCommand(Dictionary<string, object> command)
         {
             lock (_state)
             {
                 Commands.Add(command);
-                _nextSequence = Math.Max(_nextSequence, Convert.ToUInt64(command["sequence"]) + 1);
+                var sequence = Convert.ToUInt64(command["sequence"]);
+                var accepted = sequence >= _nextSequence;
+                if (accepted)
+                {
+                    _nextSequence = sequence + 1;
+                }
+                else
+                {
+                    StaleRequests++;
+                }
                 Monitor.PulseAll(_state);
+                return accepted;
             }
         }
 

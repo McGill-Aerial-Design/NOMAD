@@ -15,6 +15,12 @@ namespace NOMAD.MissionPlanner.Connectivity
 {
     internal sealed partial class NomadRuntimeClient
     {
+        private sealed class ResponseBuffer
+        {
+            internal readonly byte[] Bytes = new byte[4096];
+            internal int Offset;
+            internal int Count;
+        }
         private async Task<TcpClient> ConnectToRuntimeAsync(CancellationToken cancellationToken)
         {
             var client = new TcpClient(AddressFamily.InterNetwork);
@@ -59,30 +65,42 @@ namespace NOMAD.MissionPlanner.Connectivity
         }
 
         private async Task<Dictionary<string, object>> ReadResponseAsync(TcpClient client, Stream stream,
-            JavaScriptSerializer serializer, CancellationToken cancellationToken)
+            ResponseBuffer reader, JavaScriptSerializer serializer, CancellationToken cancellationToken)
         {
             using var bytes = new MemoryStream();
-            var buffer = new byte[1];
-            while (bytes.Length <= 65536)
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var cancellation = timeout.Token.Register(client.Close);
+            while (true)
             {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeout.CancelAfter(_responseTimeoutMilliseconds);
-                using var cancellation = timeout.Token.Register(client.Close);
-                var count = await stream.ReadAsync(buffer, 0, 1, timeout.Token).ConfigureAwait(false);
                 timeout.Token.ThrowIfCancellationRequested();
-                if (count == 0)
+                if (reader.Offset == reader.Count)
                 {
-                    throw new EndOfStreamException("Runtime closed the connection before its response.");
+                    timeout.CancelAfter(_responseTimeoutMilliseconds);
+                    reader.Count = await stream.ReadAsync(reader.Bytes, 0, reader.Bytes.Length, timeout.Token)
+                        .ConfigureAwait(false);
+                    timeout.Token.ThrowIfCancellationRequested();
+                    timeout.CancelAfter(Timeout.Infinite);
+                    reader.Offset = 0;
+                    if (reader.Count == 0)
+                    {
+                        throw new EndOfStreamException("Runtime closed the connection before its response.");
+                    }
                 }
-                if (buffer[0] == '\n')
+                var newline = Array.IndexOf(reader.Bytes, (byte)'\n', reader.Offset, reader.Count - reader.Offset);
+                var end = newline >= 0 ? newline : reader.Count;
+                if (bytes.Length + end - reader.Offset > 65536)
+                {
+                    throw new InvalidDataException("Runtime response exceeds the 65536-byte limit.");
+                }
+                bytes.Write(reader.Bytes, reader.Offset, end - reader.Offset);
+                reader.Offset = newline >= 0 ? end + 1 : end;
+                if (newline >= 0)
                 {
                     var parsed = serializer.DeserializeObject(Encoding.UTF8.GetString(bytes.ToArray()));
                     return parsed as Dictionary<string, object>
                         ?? throw new InvalidDataException("Runtime response must be a JSON object.");
                 }
-                bytes.WriteByte(buffer[0]);
             }
-            throw new InvalidDataException("Runtime response exceeds the 65536-byte limit.");
         }
     }
 }

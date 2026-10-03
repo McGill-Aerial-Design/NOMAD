@@ -267,6 +267,8 @@ wrappers only; asynchronous requests do not update those properties.
 Runtime networking uses .NET Framework 4.8 asynchronous TCP connect, stream
 write and stream read operations. Cancellation closes the request's socket.
 Connect, write and read-idle deadlines remain 1500 ms, 3000 ms and 120000 ms.
+Buffered reads retain unconsumed bytes between frames and use one cancellation
+source per response, resetting its idle deadline for each network read.
 Cancellation or failure before mutation write begins is `FailedBeforeSend`;
 once write begins it is `UnknownOutcome`. Neither uncertain nor stale mutations
 are retried automatically. UI callers await on the WinForms context, and gimbal
@@ -437,10 +439,13 @@ the greater of this lower bound and the previous allocation plus one, without
 holding a lock across network awaits. A restarted Mission Planner therefore
 uses the runtime's current lower bound immediately. Runtime restart does not
 reset the local counter; each request still binds fresh incarnation, session and
-generation from its own authenticated handshake. Concurrent network arrival can
-reject a lower sequence that arrives after a higher sequence; the client reports
-that rejection without retrying the mutation. Separate processes sharing an
-identity do not coordinate their local allocations.
+generation from its own authenticated handshake. A nonwaiting async mutation gate
+shared by endpoint and identity covers hello, allocation, write and response
+classification. Overlapping requests return `NotAttempted` / `request_in_progress`
+before connecting, so same-process requests cannot overtake one another on
+independent connections. The gate is released on every result, failure and
+cancellation. Separate simultaneous processes sharing an identity remain
+unsupported and do not coordinate their local allocations.
 Duplicate requests can retrieve a cached response only while the same authority
 is still current. An evicted replay is rejected. In-flight operations return
 `authority_interrupted` if authority changes before completion. The runtime

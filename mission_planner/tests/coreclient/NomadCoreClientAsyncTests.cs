@@ -4,10 +4,16 @@
 using System;
 using System.Diagnostics;
 using System.Globalization;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text;
+using System.Web.Script.Serialization;
 using NOMAD.MissionPlanner;
 using NOMAD.MissionPlanner.Connectivity;
 
@@ -20,6 +26,8 @@ internal static partial class NomadCoreClientTests
         Output_ConcurrentRequestsUseExactResultsAndRejectOverlap();
         Output_ExplicitStopHasOneBoundedWaiter();
         Runtime_ConcurrentSequencesRespectRuntimeFloor();
+        Runtime_MockRejectsReversedSequences();
+        Runtime_BufferedResponsesPreserveSizeLimit();
         Runtime_InvalidSequenceFloorsFailBeforeMutation();
         Runtime_StaleMutationIsNotRetried();
         Runtime_FreshProcessUsesConsumedSequenceFloor();
@@ -49,20 +57,25 @@ internal static partial class NomadCoreClientTests
 
     private static void Runtime_ConcurrentResultsStayIsolated()
     {
-        using var runtime = new AsyncRuntime(3);
+        using var runtime = new AsyncRuntime(1);
+        using var rejectionRuntime = new AsyncRuntime(1);
+        using var interruptionRuntime = new AsyncRuntime(1);
         var first = new NomadCoreClient("test-key", runtime.Port);
-        var second = new NomadCoreClient("test-key", runtime.Port);
         var success = first.ServoAsync(1, 1500);
         runtime.WaitForCommands(1);
-        var rejected = first.ServoAsync(2, 1500);
-        runtime.WaitForCommands(2);
-        var interrupted = second.ServoAsync(3, 1500);
-        runtime.WaitForCommands(3);
+        var overlap = first.ServoAsync(2, 1500);
+        var overlapResult = WaitResult(overlap);
+        Expect(overlapResult.Outcome == NomadCoreRequestOutcome.NotAttempted &&
+            overlapResult.ErrorCode == "request_in_progress", "same client overlap returns its own local result");
+        var rejected = new NomadCoreClient("test-key", rejectionRuntime.Port).ServoAsync(2, 1500);
+        rejectionRuntime.WaitForCommands(1);
+        var interrupted = new NomadCoreClient("test-key", interruptionRuntime.Port).ServoAsync(3, 1500);
+        interruptionRuntime.WaitForCommands(1);
 
-        runtime.ReleaseResponse(3);
+        interruptionRuntime.ReleaseResponse(3);
         var interruptedResult = WaitResult(interrupted);
         Expect(!success.IsCompleted && !rejected.IsCompleted, "third request completes before earlier requests");
-        runtime.ReleaseResponse(2);
+        rejectionRuntime.ReleaseResponse(2);
         var rejectedResult = WaitResult(rejected);
         Expect(!success.IsCompleted, "second request completes before the first request");
         runtime.ReleaseResponse(1);
@@ -84,57 +97,98 @@ internal static partial class NomadCoreClientTests
     private static void Runtime_ConcurrentSequencesRespectRuntimeFloor()
     {
         const int count = 16;
-        using var runtime = new AsyncRuntime(count, sequenceFloor: 900000);
+        using var runtime = new AsyncRuntime(2, sequenceFloor: 900000);
         var first = new NomadCoreClient("test-key", runtime.Port);
         var second = new NomadCoreClient("test-key", runtime.Port);
-        var requests = Enumerable.Range(0, count)
-            .Select(index => (index % 2 == 0 ? first : second).ServoAsync(8, 1500)).ToArray();
-        runtime.WaitForCommands(count);
-        runtime.ReleaseResponses();
-        foreach (var request in requests)
+        var active = first.ServoAsync(8, 1500);
+        runtime.WaitForCommands(1);
+        var overlaps = Enumerable.Range(0, count).Select(index => Task.Run(() =>
+            (index % 2 == 0 ? first : second).ServoAsync(8, 1500))).ToArray();
+        foreach (var request in overlaps)
         {
-            Expect(WaitResult(request).Succeeded, "concurrent client request receives software success");
+            var result = WaitResult(request);
+            Expect(result.Outcome == NomadCoreRequestOutcome.NotAttempted &&
+                result.ErrorCode == "request_in_progress", "identity overlap is declined locally without queueing");
         }
+        Expect(runtime.AcceptedConnections == 1 && runtime.Commands.Count == 1,
+            "overlaps cannot connect, allocate or overtake the delayed active request");
+        runtime.ReleaseResponses();
+        Expect(WaitResult(active).Succeeded, "active request succeeds against real high-water enforcement");
+        Expect(WaitResult(second.ServoAsync(8, 1500)).Succeeded,
+            "gate is released after result so another client can issue the next request");
         runtime.Wait();
         var sequences = runtime.Commands.Select(command => Convert.ToUInt64(command["sequence"])).ToArray();
-        Expect(sequences.Distinct().Count() == count, "same identity has no duplicate concurrent sequence allocations");
-        Expect(sequences.All(sequence => sequence >= 900000), "no allocation regresses below hello next_sequence");
-        Expect(sequences.Max() - sequences.Min() == count - 1, "concurrent allocations form one shared sequence range");
-        Expect(runtime.Commands.Select(command => command["id"].ToString()).Distinct().Count() == count,
-            "concurrent requests retain independent request IDs");
+        Expect(sequences[0] >= 900000 && sequences[1] > sequences[0],
+            "accepted requests use unique increasing allocations above authenticated runtime floor");
+        Expect(runtime.StaleRequests == 0 && runtime.AcceptedConnections == 2,
+            "same-process overlap produces no accidental stale_request or deferred mutation retry");
     }
 
     private static void Output_ConcurrentRequestsUseExactResultsAndRejectOverlap()
     {
-        using var runtime = new AsyncRuntime(3);
+        using var runtime = new AsyncRuntime(1);
         OutputController.Initialize(new NOMADConfig { CoreRuntimePort = runtime.Port });
         var payloadSuccess = OutputController.SendServoPwmAsync(1, 1500);
         runtime.WaitForCommands(1);
-        var payloadRejected = OutputController.SendServoPwmAsync(2, 1500);
-        runtime.WaitForCommands(2);
-        var gimbalInterrupted = OutputController.SendGimbalTargetAsync(0, 0);
-        runtime.WaitForCommands(3);
-        var payloadOverlap = WaitResult(OutputController.SendServoPwmAsync(1, 1600));
-        var gimbalOverlap = WaitResult(OutputController.SendGimbalTargetAsync(10, 0));
+        var payloadOverlap = WaitResult(OutputController.SendServoPwmAsync(2, 1500));
+        var gimbalOverlap = WaitResult(OutputController.SendGimbalTargetAsync(0, 0));
         Expect(payloadOverlap.Outcome == NomadCoreRequestOutcome.NotAttempted &&
-            payloadOverlap.ErrorCode == "request_in_progress", "overlapping payload input is rejected without queueing");
+            payloadOverlap.ErrorCode == "request_in_progress", "different payload channel respects identity gate");
         Expect(gimbalOverlap.Outcome == NomadCoreRequestOutcome.NotAttempted &&
-            gimbalOverlap.ErrorCode == "request_in_progress", "overlapping gimbal input is rejected without queueing");
-        runtime.ReleaseResponse(3);
-        var gimbalResult = WaitResult(gimbalInterrupted);
-        runtime.ReleaseResponse(2);
-        var rejectedResult = WaitResult(payloadRejected);
-        runtime.ReleaseResponse(1);
-        var successResult = WaitResult(payloadSuccess);
-        Expect(successResult.Succeeded && successResult.Message == "request-1",
-            "payload caller uses success from its exact request despite later competing failure");
-        Expect(rejectedResult.Outcome == NomadCoreRequestOutcome.Rejected && rejectedResult.Message == "request-2",
-            "concurrent payload caller receives its exact rejection");
-        Expect(gimbalResult.Outcome == NomadCoreRequestOutcome.Interrupted && gimbalResult.Message == "request-3",
-            "concurrent gimbal caller receives its exact interruption");
+            gimbalOverlap.ErrorCode == "request_in_progress", "gimbal respects shared payload identity gate");
+        runtime.ReleaseResponses();
+        var result = WaitResult(payloadSuccess);
+        Expect(result.Succeeded && result.Message == "request-1",
+            "active payload caller retains its exact result despite overlapping local failures");
         runtime.Wait();
-        Expect(runtime.Commands.Count == 3 && runtime.AcceptedConnections == 3,
-            "rejected overlaps produce no extra IPC mutation or delayed retry");
+        Expect(runtime.Commands.Count == 1 && runtime.AcceptedConnections == 1 && runtime.StaleRequests == 0,
+            "overlapping production callers generate no stale IPC mutation or retry");
+    }
+
+    private static void Runtime_MockRejectsReversedSequences()
+    {
+        using var runtime = new AsyncRuntime(2, sequenceFloor: 1000);
+        runtime.ReleaseResponses();
+        var higher = SendRawSequence(runtime.Port, 1001);
+        var lower = SendRawSequence(runtime.Port, 1000);
+        runtime.Wait();
+        Expect((bool)higher["ok"], "mock accepts the higher sequence arriving first");
+        var error = (Dictionary<string, object>)lower["error"];
+        Expect(!(bool)lower["ok"] && error["code"].ToString() == "stale_request" && runtime.StaleRequests == 1,
+            "mock applies real high-water rule and rejects the later lower sequence");
+    }
+
+    private static Dictionary<string, object> SendRawSequence(int port, ulong sequence)
+    {
+        using var client = new TcpClient();
+        client.Connect(IPAddress.Loopback, port);
+        using var stream = client.GetStream();
+        stream.ReadTimeout = 5000;
+        using var reader = new StreamReader(stream, Encoding.UTF8, false, 4096, true);
+        using var writer = new StreamWriter(stream, new UTF8Encoding(false), 4096, true) { AutoFlush = true };
+        var serializer = new JavaScriptSerializer();
+        writer.WriteLine(serializer.Serialize(new Dictionary<string, object>
+            { ["id"] = "hello", ["auth_nonce"] = "test" }));
+        reader.ReadLine();
+        writer.WriteLine(serializer.Serialize(new Dictionary<string, object>
+        {
+            ["id"] = Guid.NewGuid().ToString("N"), ["channel"] = 8, ["sequence"] = sequence
+        }));
+        return serializer.Deserialize<Dictionary<string, object>>(reader.ReadLine());
+    }
+
+    private static void Runtime_BufferedResponsesPreserveSizeLimit()
+    {
+        foreach (var size in new[] { 4096, 9000, 65536, 65537 })
+        {
+            using var runtime = new AsyncRuntime(1) { ResponseSize = size };
+            runtime.ReleaseResponses();
+            var result = WaitResult(new NomadCoreClient("test-key", runtime.Port).ServoAsync(8, 1500));
+            runtime.Wait();
+            Expect(size <= 65536 ? result.Succeeded : result.Outcome == NomadCoreRequestOutcome.UnknownOutcome,
+                "buffered response of " + size + " bytes preserves framing and 65536-byte limit");
+            Expect(runtime.Commands.Count == 1, "response size failure cannot replay a mutation");
+        }
     }
 
     private static void Runtime_FreshProcessUsesConsumedSequenceFloor()
@@ -247,6 +301,9 @@ internal static partial class NomadCoreClientTests
         using var duringHello = new CancellationTokenSource();
         var request = new NomadCoreClient("test-key", runtime.Port).ServoAsync(8, 1500, duringHello.Token);
         runtime.WaitForHello();
+        var overlap = WaitResult(new NomadCoreClient("test-key", runtime.Port).GimbalTargetAsync(0, 0));
+        Expect(overlap.Outcome == NomadCoreRequestOutcome.NotAttempted && overlap.ErrorCode == "request_in_progress",
+            "identity gate already excludes other mutations while the first request awaits hello");
         duringHello.Cancel();
         Expect(WaitResult(request).Outcome == NomadCoreRequestOutcome.FailedBeforeSend,
             "cancellation waiting for authenticated hello fails before mutation write");
@@ -257,17 +314,28 @@ internal static partial class NomadCoreClientTests
 
     private static void Runtime_CancellationAfterWriteIsUnknown()
     {
-        using var runtime = new AsyncRuntime(1);
-        using var cancellation = new CancellationTokenSource();
-        var request = new NomadCoreClient("test-key", runtime.Port).ServoAsync(8, 1500, cancellation.Token);
-        runtime.WaitForCommands(1);
-        cancellation.Cancel();
-        Expect(WaitResult(request).Outcome == NomadCoreRequestOutcome.UnknownOutcome,
-            "cancellation after observed mutation write preserves unknown outcome");
-        runtime.ReleaseResponses();
-        runtime.Wait();
-        Expect(runtime.Commands.Count == 1 && runtime.AcceptedConnections == 1,
-            "uncertain cancelled mutation has no automatic retry");
+        var port = ReservePort();
+        var client = new NomadCoreClient("test-key", port);
+        using (var runtime = new AsyncRuntime(1, port))
+        {
+            using var cancellation = new CancellationTokenSource();
+            var request = client.ServoAsync(8, 1500, cancellation.Token);
+            runtime.WaitForCommands(1);
+            cancellation.Cancel();
+            Expect(WaitResult(request).Outcome == NomadCoreRequestOutcome.UnknownOutcome,
+                "cancellation after observed mutation write preserves unknown outcome");
+            runtime.ReleaseResponses();
+            runtime.Wait();
+            Expect(runtime.Commands.Count == 1 && runtime.AcceptedConnections == 1,
+                "uncertain cancelled mutation has no automatic retry");
+        }
+        using (var runtime = new AsyncRuntime(1, port))
+        {
+            runtime.ReleaseResponses();
+            Expect(WaitResult(client.ServoAsync(8, 1500)).Succeeded,
+                "unknown cancellation releases the gate for a later explicit request");
+            runtime.Wait();
+        }
     }
 
     private static void Runtime_ResponseTimeoutAfterWriteIsUnknown()
