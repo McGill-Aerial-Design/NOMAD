@@ -116,7 +116,7 @@ The immutable configured system ID and autopilot component identify every bundle
 
 Connect/disconnect writers serialize on a separate lifecycle mutex. Discovery
 and identity waits can delay another lifecycle writer, but never hold the
-resource lifetime lock or prevent startup IPC from answering HELLO/STATUS.
+exclusive resource lifetime lock or prevent startup IPC from answering HELLO/STATUS.
 Retirement takes the exclusive lifetime lock after existing command users finish,
 revokes the bundle's callback gate, detaches the bundle, rolls the session and
 clears observations. Unsubscription, plugin destruction and endpoint removal
