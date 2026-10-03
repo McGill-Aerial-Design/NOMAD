@@ -24,11 +24,24 @@ def git(*arguments: str) -> str:
     return subprocess.check_output(["git", *arguments], cwd=ROOT, text=True).strip()
 
 
+def get_build_tag() -> str:
+    """Use the same explicit CI ref or exact local tag as CMake."""
+    if "GITHUB_REF_TYPE" in os.environ:
+        return os.environ.get("GITHUB_REF_NAME", "") if os.environ["GITHUB_REF_TYPE"] == "tag" else ""
+    try:
+        value = git("describe", "--tags", "--exact-match", "HEAD")
+        return value if TAG.fullmatch(value) else ""
+    except subprocess.CalledProcessError:
+        return ""
+
+
 def get_identity(tag: str = "") -> dict:
     """Only an exact clean tag checkout can identify an official release."""
     source = git("rev-parse", "HEAD")
     mavsdk = git("ls-tree", "HEAD", "third_party/MAVSDK").split()[2]
     dirty = bool(git("status", "--porcelain", "--untracked-files=normal"))
+    if not tag and not dirty:
+        tag = get_build_tag()
     if tag:
         if not TAG.fullmatch(tag) or git("rev-parse", tag + "^{commit}") != source:
             raise ValueError("release tag must be vX.Y.Z at the checked-out source")

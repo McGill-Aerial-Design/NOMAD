@@ -216,7 +216,7 @@ def test_protocol_version_has_strict_integer_type(tmp_path, monkeypatch, value):
 
 
 @pytest.mark.skipif(not shutil.which("cmake") or not shutil.which("git"), reason="CMake/Git identity check")
-def test_cmake_uses_requested_tag_when_commit_has_multiple_tags(tmp_path):
+def test_cmake_uses_requested_tag_when_commit_has_multiple_tags(tmp_path, monkeypatch):
     cmake = tmp_path / "cmake"
     cmake.mkdir()
     shutil.copyfile(identity.ROOT / "cmake/ReleaseIdentity.cmake", cmake / "ReleaseIdentity.cmake")
@@ -248,6 +248,14 @@ def test_cmake_uses_requested_tag_when_commit_has_multiple_tags(tmp_path):
     result = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True, env=environment, timeout=10)
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "identity.txt").read_text() == "v2.3.4"
+    monkeypatch.setattr(identity, "ROOT", tmp_path)
+    monkeypatch.setenv("GITHUB_REF_TYPE", "tag")
+    monkeypatch.setenv("GITHUB_REF_NAME", "v2.3.4")
+    assert identity.get_identity()["release_version"] == "v2.3.4"
+    monkeypatch.setenv("GITHUB_REF_TYPE", "branch")
+    assert identity.get_identity()["official"] is False
+    monkeypatch.delenv("GITHUB_REF_TYPE")
+    assert identity.get_identity()["official"] is True
 
 
 @pytest.mark.skipif(not shutil.which("cmake"), reason="CMake source-archive check")
