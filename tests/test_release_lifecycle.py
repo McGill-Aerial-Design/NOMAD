@@ -192,3 +192,14 @@ def test_external_state_cannot_use_dot_paths_into_release_root(tmp_path, key):
     config.write_text(json.dumps({key: str(state)}))
     with pytest.raises(ValueError, match="outside deployment root"):
         external_config(root, config)
+
+
+def test_unsupported_native_os_is_rejected_before_staging(tmp_path, monkeypatch):
+    from scripts.release import deploy
+
+    monkeypatch.setattr(deploy.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(deploy.sys, "argv", ["deploy", "stage", "--root", str(tmp_path), "--component", "core"])
+    with pytest.raises(SystemExit) as error:
+        deploy.parse_arguments()
+    assert error.value.code == 2
+    assert not (tmp_path / "core").exists()

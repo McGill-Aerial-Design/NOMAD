@@ -117,7 +117,10 @@ def parse_arguments():
     parser.add_argument("--router-start-command", type=Path)
     arguments = parser.parse_args()
     arguments.root = arguments.root.absolute()
-    expected_platform = "windows" if os.name == "nt" else "linux"
+    systems = {"Windows": "windows", "Linux": "linux"}
+    if platform.system() not in systems:
+        parser.error("NOMAD release deployment supports only Linux and Windows x86-64")
+    expected_platform = systems[platform.system()]
     arguments.platform = arguments.platform or expected_platform
     arguments.architecture = arguments.architecture or ("any" if arguments.component == "plugin" else "x86_64")
     if arguments.platform != expected_platform or platform.machine().lower() not in {"amd64", "x86_64"}:
