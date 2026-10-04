@@ -32,14 +32,19 @@ namespace NOMAD.MissionPlanner
         private TcpClient _connection;
         private bool _connected;
         private bool _stale = true;
-        private DateTime _lastStatus;
+        private readonly RouterClock _clock;
+        private double _lastStatus = RouterClock.Unset;
         private string _activeLink = "";
         private string _manualOverride = "";
         private string _lastUnavailableMessage;
         private int _nextRequestId;
 
         public StandaloneRouterClient(MAVLinkConnectionManager.ConnectionConfig config)
+            : this(config, new RouterClock()) { }
+
+        internal StandaloneRouterClient(MAVLinkConnectionManager.ConnectionConfig config, RouterClock clock)
         {
+            _clock = clock;
             _config = config ?? throw new ArgumentNullException(nameof(config));
         }
 
@@ -179,17 +184,17 @@ namespace NOMAD.MissionPlanner
                 SendHello(stream);
                 SendRequest(stream, "subscribe", null);
                 stream.ReadTimeout = ReadTimeoutMs;
-                var nextStatus = DateTime.MinValue;
+                var nextStatus = RouterClock.Unset;
                 var statusPending = false;
                 var statusRequest = 0;
                 while (!stop.IsCancellationRequested)
                 {
-                    var now = DateTime.UtcNow;
+                    var now = _clock.Seconds();
                     if (!statusPending && now >= nextStatus)
                     {
                         statusRequest = SendRequest(stream, "get_status", null);
                         statusPending = true;
-                        nextStatus = now.AddMilliseconds(StatusIntervalMs);
+                        nextStatus = now + StatusIntervalMs / 1000.0;
                     }
 
                     string line;
@@ -414,8 +419,8 @@ namespace NOMAD.MissionPlanner
 
         private bool IsFreshStatusLocked()
         {
-            return _lastStatus != DateTime.MinValue &&
-                (DateTime.UtcNow - _lastStatus).TotalMilliseconds <= StaleAfterMs;
+            return _lastStatus != RouterClock.Unset &&
+                (_clock.Seconds() - _lastStatus) * 1000 <= StaleAfterMs;
         }
 
     }

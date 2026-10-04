@@ -13,8 +13,9 @@ namespace NOMAD.MissionPlanner
         private UdpClient _socket;
         private IPEndPoint _client;
         private MavlinkFrameParser _parser;
-        private DateTime _lastClientPacket;
-        internal LocalConsumer(ConsumerConfig config) { Config = config; }
+        private double _lastClientPacket = RouterClock.Unset;
+        private readonly RouterClock _clock;
+        internal LocalConsumer(ConsumerConfig config, RouterClock clock) { Config = config; _clock = clock; }
         internal void Open()
         {
             _socket = PhysicalLink.OpenUdp(IPAddress.Loopback, Config.RouterPort);
@@ -33,14 +34,14 @@ namespace NOMAD.MissionPlanner
                 }
                 if (_client != null && !_client.Equals(sender))
                 {
-                    if (Config.ClientPort != 0 || (DateTime.UtcNow - _lastClientPacket).TotalSeconds < 3)
+                    if (Config.ClientPort != 0 || (_clock.Seconds() - _lastClientPacket) < 3)
                     {
                         continue;
                     }
                     _parser = new MavlinkFrameParser();
                 }
                 _client = sender;
-                _lastClientPacket = DateTime.UtcNow;
+                _lastClientPacket = _clock.Seconds();
                 _parser.Push(bytes, bytes.Length, receive);
             }
         }

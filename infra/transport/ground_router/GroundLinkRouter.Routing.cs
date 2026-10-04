@@ -10,12 +10,12 @@ namespace NOMAD.MissionPlanner
     public partial class GroundLinkRouter
     {
         // Only delivered frames enter this bounded window: a standby copy cannot suppress the active copy.
-        private readonly Dictionary<string, Tuple<string, DateTime>> _forwarded =
-            new Dictionary<string, Tuple<string, DateTime>>();
-        private DateTime _nextSweep;
+        private readonly Dictionary<string, Tuple<string, double>> _forwarded =
+            new Dictionary<string, Tuple<string, double>>();
+        private double _nextSweep;
         private string _paramLink;
-        private DateTime _paramActivity;
-        private static readonly TimeSpan ParamTimeout = TimeSpan.FromSeconds(4);
+        private double _paramActivity = RouterClock.Unset;
+        private const double ParamTimeout = 4;
 
         private void ProcessIncoming(PhysicalLink link, byte[] bytes, int count)
         {
@@ -26,30 +26,33 @@ namespace NOMAD.MissionPlanner
 
         private void ProcessFrame(PhysicalLink link, MavlinkFrame frame)
         {
-            var now = DateTime.UtcNow;
+            var now = _clock.Seconds();
             var s = link.Stats;
             if (!Usable(link, now))
             {
-                link.HealthySince = DateTime.MinValue;
+                link.HealthySince = RouterClock.Unset;
             }
-            s.LastPacketTime = now;
+            s.LastPacketTime = _clock.UtcNow();
+            link.LastPacket = now;
             s.IsConnected = true;
             s.FramesReceived++;
             UpdateSequence(link, frame);
-            UpdateFrameMetrics(s, frame, now);
+            UpdateFrameMetrics(link, frame, now);
             ForwardInbound(link, frame, now);
         }
 
-        private static void UpdateFrameMetrics(LinkSourceStats s, MavlinkFrame frame, DateTime now)
+        private void UpdateFrameMetrics(PhysicalLink link, MavlinkFrame frame, double now)
         {
+            var s = link.Stats;
             if (frame.IsHeartbeat)
             {
-                if (s.LastHeartbeatTime != DateTime.MinValue)
+                if (link.LastHeartbeat != RouterClock.Unset)
                 {
-                    double jitter = Math.Abs((now - s.LastHeartbeatTime).TotalMilliseconds - 1000);
+                    double jitter = Math.Abs((now - link.LastHeartbeat) * 1000 - 1000);
                     s.LatencyMs = s.LatencyMs * 0.7 + jitter * 0.3;
                 }
-                s.LastHeartbeatTime = now;
+                s.LastHeartbeatTime = s.LastPacketTime;
+                link.LastHeartbeat = now;
                 s.HeartbeatCount++;
             }
             if (frame.IsRadioStatus && frame.PayloadLength >= 6)
@@ -60,7 +63,7 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private void ForwardInbound(PhysicalLink link, MavlinkFrame frame, DateTime now)
+        private void ForwardInbound(PhysicalLink link, MavlinkFrame frame, double now)
         {
             var s = link.Stats;
             SelectLink(now);
@@ -100,30 +103,30 @@ namespace NOMAD.MissionPlanner
             Sweep(now);
         }
 
-        private bool CountDuplicate(PhysicalLink link, MavlinkFrame frame, DateTime now)
+        private bool CountDuplicate(PhysicalLink link, MavlinkFrame frame, double now)
         {
             if (!_cfg.DedupEnabled)
             {
                 return false;
             }
             if (_forwarded.TryGetValue(Convert.ToBase64String(frame.Raw), out var seen) &&
-                seen.Item1 != link.Config.Id && (now - seen.Item2).TotalMilliseconds < 750)
+                seen.Item1 != link.Config.Id && (now - seen.Item2) * 1000 < 750)
             {
                 link.Stats.FramesDuplicate++; return true;
             }
             return false;
         }
 
-        private void Sweep(DateTime now)
+        private void Sweep(double now)
         {
             if (now < _nextSweep && _forwarded.Count < 16384)
             {
                 return;
             }
-            foreach (var key in _forwarded.Where(p => (now - p.Value.Item2).TotalMilliseconds >= 750)
+            foreach (var key in _forwarded.Where(p => (now - p.Value.Item2) * 1000 >= 750)
                 .Select(p => p.Key).ToList()) { _forwarded.Remove(key); }
             // Fail closed on overflow: drop new unseen telemetry until entries age out.
-            _nextSweep = now.AddMilliseconds(250);
+            _nextSweep = now + .250;
         }
 
         private static void UpdateSequence(PhysicalLink link, MavlinkFrame frame)
@@ -153,9 +156,9 @@ namespace NOMAD.MissionPlanner
             {
                 return;
             }
-            var now = DateTime.UtcNow;
+            var now = _clock.Seconds();
             if (_forwarded.TryGetValue(Convert.ToBase64String(frame.Raw), out var echo) &&
-                (now - echo.Item2).TotalMilliseconds < 750) { return; }
+                (now - echo.Item2) * 1000 < 750) { return; }
             SelectLink(now);
             string selected = SelectOutboundLink();
             if (IsParameter(frame))
@@ -207,25 +210,25 @@ namespace NOMAD.MissionPlanner
             return ActiveLink;
         }
 
-        private bool Usable(PhysicalLink link, DateTime now) => link != null && link.Config.Enabled &&
-            link.Stats.IsOpen && (now - link.Stats.LastPacketTime).TotalSeconds < _cfg.HeartbeatTimeoutSec;
+        private bool Usable(PhysicalLink link, double now) => link != null && link.Config.Enabled &&
+            link.Stats.IsOpen && (now - link.LastPacket) < _cfg.HeartbeatTimeoutSec;
 
-        private void Tick(DateTime now)
+        private void Tick(double now)
         {
             foreach (var link in _links)
             {
                 var s = link.Stats;
-                double rate = (s.BytesReceived - link.PreviousBytes) / Math.Max(.001, (now - _lastTick).TotalSeconds);
+                double rate = (s.BytesReceived - link.PreviousBytes) / Math.Max(.001, (now - _lastTick));
                 s.DataRateBps = s.DataRateBps * .6 + rate * .4;
                 link.PreviousBytes = s.BytesReceived;
                 s.IsConnected = Usable(link, now);
-                ClassifyHealth(s, now);
+                ClassifyHealth(s, now - link.LastPacket, now - link.LastHeartbeat);
                 bool healthy = s.IsConnected && s.Health <= LinkHealth.Fair;
                 if (!healthy)
                 {
-                    link.HealthySince = DateTime.MinValue;
+                    link.HealthySince = RouterClock.Unset;
                 }
-                else if (link.HealthySince == DateTime.MinValue)
+                else if (link.HealthySince == RouterClock.Unset)
                 {
                     link.HealthySince = now;
                 }
@@ -235,7 +238,7 @@ namespace NOMAD.MissionPlanner
             EnqueueNotification(() => StatsUpdated?.Invoke(this, EventArgs.Empty));
         }
 
-        private void SelectLink(DateTime now)
+        private void SelectLink(double now)
         {
             if (ManualOverride != LinkType.None || !_cfg.AutoFailoverEnabled)
             {
@@ -259,12 +262,12 @@ namespace NOMAD.MissionPlanner
             {
                 return;
             }
-            if ((now - _lastSwitch).TotalSeconds < _cfg.FailoverCooldownSec)
+            if ((now - _lastSwitch) < _cfg.FailoverCooldownSec)
             {
                 return;
             }
-            if (best.HealthySince != DateTime.MinValue &&
-                (now - best.HealthySince).TotalSeconds >= _cfg.PreferredLinkReconnectDelaySec)
+            if (best.HealthySince != RouterClock.Unset &&
+                (now - best.HealthySince) >= _cfg.PreferredLinkReconnectDelaySec)
             {
                 SetActiveLink(best.Config.Id, "preferred priority link recovered");
             }

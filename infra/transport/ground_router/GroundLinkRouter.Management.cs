@@ -13,7 +13,7 @@ namespace NOMAD.MissionPlanner
         {
             lock (_gate)
             {
-                var now = DateTime.UtcNow;
+                var now = _clock.Seconds();
                 var snapshot = new RouterStatusSnapshot
                 {
                     Running = _running,
@@ -23,7 +23,7 @@ namespace NOMAD.MissionPlanner
                     ManualOverrideId = ManualOverride ?? "",
                     AutomaticFailoverEnabled = _cfg.AutoFailoverEnabled,
                     PreferredLinkId = _cfg.PreferredLink ?? "",
-                    TimestampUtc = now.ToString("O", CultureInfo.InvariantCulture),
+                    TimestampUtc = _clock.UtcNow().ToString("O", CultureInfo.InvariantCulture),
                 };
 
                 foreach (var link in _links)
@@ -40,7 +40,7 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private static RouterLinkStatusSnapshot BuildLinkStatus(PhysicalLink link, DateTime now)
+        private static RouterLinkStatusSnapshot BuildLinkStatus(PhysicalLink link, double now)
         {
             var stats = link.Stats;
             return new RouterLinkStatusSnapshot
@@ -53,8 +53,8 @@ namespace NOMAD.MissionPlanner
                 IsOpen = stats.IsOpen,
                 IsConnected = stats.IsConnected,
                 Health = stats.Health.ToString(),
-                LastPacketAgeMs = AgeMilliseconds(stats.LastPacketTime, now),
-                LastHeartbeatAgeMs = AgeMilliseconds(stats.LastHeartbeatTime, now),
+                LastPacketAgeMs = AgeMilliseconds(link.LastPacket, now),
+                LastHeartbeatAgeMs = AgeMilliseconds(link.LastHeartbeat, now),
                 PacketLossEstimate = stats.PacketLossPercent,
                 DataRateBytesPerSecond = stats.DataRateBps,
                 HeartbeatJitterMs = stats.LatencyMs,
@@ -67,14 +67,14 @@ namespace NOMAD.MissionPlanner
             };
         }
 
-        private static double? AgeMilliseconds(DateTime timestamp, DateTime now)
+        private static double? AgeMilliseconds(double timestamp, double now)
         {
-            if (timestamp == DateTime.MinValue)
+            if (timestamp == RouterClock.Unset)
             {
                 return null;
             }
 
-            return Math.Max(0, (now - timestamp).TotalMilliseconds);
+            return Math.Max(0, (now - timestamp) * 1000);
         }
     }
 }

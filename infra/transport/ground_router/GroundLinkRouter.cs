@@ -21,7 +21,8 @@ namespace NOMAD.MissionPlanner
         private Thread _worker;
         private CancellationTokenSource _stop;
         private volatile bool _running;
-        private DateTime _lastTick, _lastSwitch;
+        private readonly RouterClock _clock;
+        private double _lastTick, _lastSwitch = RouterClock.Unset;
         public string ActiveLink { get; private set; } = LinkType.None;
         public string ManualOverride { get; private set; } = LinkType.None;
         public bool IsRunning => _running;
@@ -39,8 +40,11 @@ namespace NOMAD.MissionPlanner
         public event EventHandler StatsUpdated;
         public event EventHandler<string> LogMessage;
 
-        public GroundLinkRouter(RouterConfig config)
+        public GroundLinkRouter(RouterConfig config) : this(config, new RouterClock()) { }
+
+        internal GroundLinkRouter(RouterConfig config, RouterClock clock)
         {
+            _clock = clock;
             _cfg = config ?? throw new ArgumentNullException(nameof(config));
             var links = TranslateLinks(config);
             var consumers = config.Consumers;
@@ -49,7 +53,7 @@ namespace NOMAD.MissionPlanner
                 .Select(l => l.Port).Concat(consumers.Select(c => c.RouterPort))
                 .Concat(consumers.Where(c => c.ClientPort != 0).Select(c => c.ClientPort)));
             _links = links.Select(l => new PhysicalLink(l.Snapshot(), localPorts)).ToList();
-            _consumers = consumers.Select(c => new LocalConsumer(c.Snapshot())).ToList();
+            _consumers = consumers.Select(c => new LocalConsumer(c.Snapshot(), _clock)).ToList();
         }
 
         private LinkSourceStats GetStats(string id)
@@ -75,15 +79,15 @@ namespace NOMAD.MissionPlanner
                     }
                     foreach (var link in _links.Where(l => l.Config.Enabled))
                     {
-                        TryOpen(link, DateTime.UtcNow);
+                        TryOpen(link, _clock.Seconds());
                     }
                     ActiveLink = string.IsNullOrEmpty(_cfg.PreferredLink)
                         ? _links.Where(l => l.Config.Enabled).OrderByDescending(l => l.Config.Priority)
                             .ThenBy(l => l.Config.Id, StringComparer.Ordinal).First().Config.Id
                         : _cfg.PreferredLink;
                     ManualOverride = LinkType.None;
-                    _lastTick = DateTime.UtcNow;
-                    _lastSwitch = DateTime.MinValue;
+                    _lastTick = _clock.Seconds();
+                    _lastSwitch = RouterClock.Unset;
                     _running = true;
                     _stop = new CancellationTokenSource();
                     var token = _stop.Token;
@@ -183,13 +187,13 @@ namespace NOMAD.MissionPlanner
 
         private void Poll()
         {
-            var now = DateTime.UtcNow;
+            var now = _clock.Seconds();
             foreach (var link in _links.Where(l => l.Config.Enabled))
             {
                 try
                 {
                     if (!link.Stats.IsOpen && !link.Opening &&
-                        (now - link.LastAttempt).TotalSeconds >= link.Config.ReconnectSeconds) { TryOpen(link, now); }
+                        (now - link.LastAttempt) >= link.Config.ReconnectSeconds) { TryOpen(link, now); }
                     link.Poll((bytes, count) => ProcessIncoming(link, bytes, count), now);
                 }
                 catch (Exception ex)
@@ -197,7 +201,7 @@ namespace NOMAD.MissionPlanner
                     link.Dispose(); EmitLog(link.Config.Id + ": " + ex.Message);
                 }
             }
-            if ((now - _lastTick).TotalMilliseconds >= _cfg.StatsTickMs)
+            if ((now - _lastTick) * 1000 >= _cfg.StatsTickMs)
             {
                 Tick(now);
             }
@@ -211,7 +215,7 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private void TryOpen(PhysicalLink link, DateTime now)
+        private void TryOpen(PhysicalLink link, double now)
         {
             try { link.Open(now); }
             catch (Exception ex)
@@ -266,7 +270,7 @@ namespace NOMAD.MissionPlanner
                 }
                 else
                 {
-                    SelectLink(DateTime.UtcNow);
+                    SelectLink(_clock.Seconds());
                 }
                 return true;
             }
@@ -279,9 +283,9 @@ namespace NOMAD.MissionPlanner
                 return;
             }
             var change = new FailoverEventArgs { FromLink = ActiveLink, ToLink = id,
-                Reason = reason, Timestamp = DateTime.UtcNow };
+                Reason = reason, Timestamp = _clock.UtcNow() };
             ActiveLink = id;
-            _lastSwitch = change.Timestamp;
+            _lastSwitch = _clock.Seconds();
             _failovers.Enqueue(change);
             while (_failovers.Count > 50)
             {
@@ -303,7 +307,7 @@ namespace NOMAD.MissionPlanner
                     s.PacketLossPercent = s.DataRateBps = 0;
                     link.Sequences.Clear();
                 }
-                _forwarded.Clear(); _paramLink = null; _paramActivity = DateTime.MinValue;
+                _forwarded.Clear(); _paramLink = null; _paramActivity = RouterClock.Unset;
             }
         }
         public string GetStatusSummary() => "Active: " + ActiveLink + " | " +
