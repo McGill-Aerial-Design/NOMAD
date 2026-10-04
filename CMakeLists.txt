@@ -56,6 +56,7 @@ endif()
 add_nomad_mavsdk()
 
 set(NOMAD_MAVSDK_INSTALL_DIR "${CMAKE_BINARY_DIR}/mavsdk/third_party/install")
+include(cmake/NomadJson.cmake)
 
 add_library(nomad_mavsdk_validation src/mavlink/mavsdk_validation.cpp)
 target_include_directories(nomad_mavsdk_validation PUBLIC include)
@@ -115,10 +116,8 @@ add_executable(nomad
     src/runtime/cli_client.cpp
     src/cli_arguments.cpp
     src/cli_command_table.cpp)
-# The CLI uses the pinned JSON headers but does not link the MAVSDK vehicle transport.
-target_include_directories(nomad PRIVATE "${NOMAD_MAVSDK_INSTALL_DIR}/include")
-add_dependencies(nomad mavsdk)
-target_link_libraries(nomad PRIVATE nomad_core)
+# The CLI owns only local IPC and JSON dependencies.
+target_link_libraries(nomad PRIVATE nomad_core nlohmann_json::nlohmann_json)
 
 add_library(nomad_local_crypto src/runtime/auth_proof.cpp)
 target_compile_features(nomad_local_crypto PUBLIC cxx_std_20)
@@ -141,11 +140,9 @@ add_library(nomad_runtime_core
     src/runtime/runtime_audit.cpp
     src/runtime/runtime_status.cpp
     src/runtime/runtime_mutation.cpp)
-target_include_directories(nomad_runtime_core PUBLIC include PRIVATE
-    "${NOMAD_MAVSDK_INSTALL_DIR}/include")
+target_include_directories(nomad_runtime_core PUBLIC include)
 target_compile_features(nomad_runtime_core PUBLIC cxx_std_20)
-add_dependencies(nomad_runtime_core mavsdk)
-target_link_libraries(nomad_runtime_core PUBLIC nomad_core PRIVATE nomad_local_crypto)
+target_link_libraries(nomad_runtime_core PUBLIC nomad_core PRIVATE nomad_local_crypto nlohmann_json::nlohmann_json)
 if(WIN32)
     target_link_libraries(nomad_runtime_core PUBLIC ws2_32 advapi32)
 endif()
@@ -173,8 +170,9 @@ if(PROJECT_IS_TOP_LEVEL)
         src/runtime/cli_client.cpp
         src/cli_arguments.cpp
         src/cli_command_table.cpp)
-    target_include_directories(nomad-qualification PRIVATE src "${NOMAD_MAVSDK_INSTALL_DIR}/include")
-    target_link_libraries(nomad-qualification PRIVATE nomad_core nomad_mavsdk_connection nomad_local_crypto)
+    target_include_directories(nomad-qualification PRIVATE src)
+    target_link_libraries(nomad-qualification PRIVATE
+        nomad_core nomad_mavsdk_connection nomad_local_crypto nlohmann_json::nlohmann_json)
 endif()
 
 if(PROJECT_IS_TOP_LEVEL)
@@ -318,8 +316,7 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
 
     if(PROJECT_IS_TOP_LEVEL)
         add_executable(nomad_runtime_tests tests/runtime_ipc_test.cpp tools/runtime/lifecycle.cpp)
-        target_include_directories(nomad_runtime_tests PRIVATE "${NOMAD_MAVSDK_INSTALL_DIR}/include")
-        target_link_libraries(nomad_runtime_tests PRIVATE nomad_runtime_core)
+        target_link_libraries(nomad_runtime_tests PRIVATE nomad_runtime_core nlohmann_json::nlohmann_json)
         target_compile_definitions(nomad_runtime_tests PRIVATE NOMAD_TESTS)
         if(WIN32)
             target_compile_definitions(nomad_runtime_tests PRIVATE NOMAD_SERVICE_TEST)

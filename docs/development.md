@@ -218,8 +218,10 @@ The second task also runs loopback routing and socket checks. The ground router
 build does not install or start a service; its process/configuration contract is
 in the [router README](../infra/transport/ground_router/README.md).
 
-The Mission Planner plugin targets Windows, Mission Planner 1.3.83 reference
-assemblies and .NET Framework 4.8:
+The Mission Planner plugin targets Windows, the reference-assembly version in
+[`mission-planner-target.json`](../scripts/release/mission-planner-target.json),
+and .NET Framework 4.8. CI downloads, release identities and deployment checks
+all derive their target from that file:
 
 ```powershell
 pixi run build-plugin-only

@@ -107,7 +107,6 @@ namespace NOMAD.MissionPlanner
             // We have to copy the raw frame because the parser reuses _buf.
             var raw = new byte[_expected];
             Buffer.BlockCopy(_buf, 0, raw, 0, _expected);
-            uint rawHash = ComputeFnv1a(raw, _expected);
 
             onFrame(new MavlinkFrame
             {
@@ -118,24 +117,9 @@ namespace NOMAD.MissionPlanner
                 Compid = compid,
                 Msgid = msgid,
                 Seq = seq,
-                RawHash = rawHash,
                 PayloadOffset = payloadOffset,
                 PayloadLength = payloadLen,
             });
-        }
-
-        private static uint ComputeFnv1a(byte[] data, int length)
-        {
-            unchecked
-            {
-                uint hash = 2166136261u;
-                for (int i = 0; i < length; i++)
-                {
-                    hash ^= data[i];
-                    hash *= 16777619u;
-                }
-                return hash;
-            }
         }
     }
 
@@ -148,7 +132,6 @@ namespace NOMAD.MissionPlanner
         public byte Compid;
         public uint Msgid;
         public byte Seq;
-        public uint RawHash;
         public int PayloadOffset;
         public int PayloadLength;
 

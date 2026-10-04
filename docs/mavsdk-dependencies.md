@@ -38,6 +38,12 @@ are in `licenses/mavsdk-phase-a/`. Recursive checkouts fetch MAVSDK-Proto, but i
 is not compiled or linked while the server remains disabled; enabling it requires
 a new audit.
 
+NOMAD's `cmake/NomadJson.cmake` explicitly requires the reviewed nlohmann JSON
+3.12.0 CMake package installed by that same superbuild. Runtime, CLI and their
+JSON-consuming tests link `nlohmann_json::nlohmann_json`; they do not acquire JSON
+through a MAVSDK include path or transport dependency. This adds no download
+path and keeps the existing archive hash and MAVSDK pin unchanged.
+
 ## Command admission fork update - 2026-09-28
 
 The NOMAD gitlink advances from `3f85f6f808b617c736316d7da5f51f3d3eba1737`

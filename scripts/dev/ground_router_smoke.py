@@ -12,6 +12,8 @@ import threading
 import time
 from pathlib import Path
 
+from ground_router_fixture_support import config_for, management_request
+
 
 def peer():
     result = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -90,22 +92,6 @@ def check_invalid_configs(config, directory):
         assert expected in result.stderr, f"Missing migration error {expected!r}: {result.stderr}"
 
 
-def management_request(port, message):
-    message = dict(message)
-    message.setdefault("protocol", "nomad-link-router")
-    message.setdefault("version", 1)
-    with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
-        client.settimeout(2)
-        client.sendall((json.dumps(message) + "\n").encode("utf-8"))
-        response = b""
-        while not response.endswith(b"\n"):
-            chunk = client.recv(4096)
-            if not chunk:
-                raise AssertionError("management endpoint closed before its response")
-            response += chunk
-        return json.loads(response.decode("utf-8"))
-
-
 def wait_status(port, predicate, timeout=3):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -125,28 +111,6 @@ def wait_output(output, expected):
         except queue.Empty:
             pass
     raise AssertionError(f"Standalone host did not report {expected}")
-
-
-def config_for(ports, consumer_ports, management_port):
-    return {
-        "PreferredLink": "a",
-        "ManagementPort": management_port,
-        "HeartbeatTimeoutSec": 0.3,
-        "StatsTickMs": 20,
-        "Links": [
-            {"Id": name, "Port": port, "Priority": 100 - i}
-            for i, (name, port) in enumerate(zip(("a", "b", "c"), ports[:3], strict=True))
-        ],
-        "Consumers": [
-            {
-                "Id": name,
-                "RouterPort": port,
-                "ClientPort": consumer_ports[i],
-                "AllowOutbound": i != 0,
-            }
-            for i, (name, port) in enumerate(zip(("mission_planner", "nomad_core"), ports[3:5], strict=True))
-        ],
-    }
 
 
 def start_pumps(ports, physical, stops, workers):

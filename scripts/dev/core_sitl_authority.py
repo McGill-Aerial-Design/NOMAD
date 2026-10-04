@@ -22,7 +22,7 @@ from authority_sitl_observer import (
 from authority_sitl_relay import AuthorityRelay, runtime_source_id
 from mavsdk_authority_wire_fixture import SOURCE, bound_request, current_context
 from pymavlink import mavutil
-from runtime_ipc_smoke import find_runtime, free_port, request, start_runtime, stop_runtime, wait_for_listener
+from runtime_fixture_support import find_runtime, free_port, request, start_runtime, stop_runtime, wait_for_listener
 
 CHANNEL = 5
 SET_SERVO = mavutil.mavlink.MAV_CMD_DO_SET_SERVO

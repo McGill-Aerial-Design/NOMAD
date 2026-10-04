@@ -175,7 +175,7 @@ function New-ReleaseIdentityFixture {
     $sourceRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $SourceBuildScript))
     $destination = Join-Path $Fixture.Repo 'scripts\release'
     New-Item -ItemType Directory -Path $destination -Force | Out-Null
-    foreach ($name in @('identity.py', 'manifest.py')) {
+    foreach ($name in @('identity.py', 'manifest.py', 'mission_planner_target.py', 'mission-planner-target.json')) {
         Copy-Item -LiteralPath (Join-Path $sourceRoot "scripts\release\$name") -Destination $destination
     }
     Invoke-FixtureGit $Fixture @('init', '--quiet')
@@ -342,7 +342,9 @@ function Test-BuildOnlySuccess {
     Assert-Equal $identity.release_version "dev-$($identity.source_sha)" 'Development identity must bind exact source'
     Assert-Equal $identity.mavsdk_sha 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'Identity omitted fixture MAVSDK pin'
     Assert-Equal $identity.name 'plugin' 'Build generated the wrong component identity'
-    Assert-Equal $identity.mission_planner_target '1.3.83' 'Build generated an incompatible Mission Planner target'
+    $targetPath = Join-Path $Fixture.Repo 'scripts/release/mission-planner-target.json'
+    $targetVersion = (Get-Content $targetPath -Raw | ConvertFrom-Json).version
+    Assert-Equal $identity.mission_planner_target $targetVersion 'Build generated an incompatible Mission Planner target'
     if (-not (Test-Path -LiteralPath (Join-Path $Fixture.Repo 'build\release\ReleaseIdentity.cs'))) {
         throw 'Plugin build did not generate its C# embedded identity input.'
     }

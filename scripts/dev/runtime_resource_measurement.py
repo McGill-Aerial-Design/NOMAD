@@ -16,9 +16,9 @@ from pathlib import Path
 
 import psutil
 from mavsdk_peer import VehiclePeer
-from runtime_ipc_smoke import authority_fields, free_port, request, stop_runtime
+from runtime_fixture_support import authority_fields, free_port, request, stop_runtime
 from runtime_lifecycle_fixture import deployment, wait_for
-from runtime_lifecycle_qualification import execute_servo, status, wait_for_vehicle
+from runtime_qualification_support import execute_servo, status, wait_for_vehicle
 
 STABILIZE_SECONDS = 1.0
 SAMPLE_WINDOW_SECONDS = 1.0

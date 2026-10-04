@@ -12,6 +12,11 @@ import zipfile
 from pathlib import Path
 
 try:
+    from .mission_planner_target import VERSION as MP_VERSION
+except ImportError:
+    from mission_planner_target import VERSION as MP_VERSION
+
+try:
     from .manifest import EXPECTED, TAG, digest_file, load_manifest, read_package_identity, verify_package
 except ImportError:
     from manifest import EXPECTED, TAG, digest_file, load_manifest, read_package_identity, verify_package
@@ -65,7 +70,7 @@ def component_identity(identity: dict, name: str, platform: str, architecture: s
     result = dict(identity, name=name, platform=platform, architecture=architecture, version=version)
     result["protocol_versions"] = {"router_management": 1} if name == "router" else {"runtime_ipc": 1}
     if name == "plugin":
-        result["mission_planner_target"] = "1.3.83"
+        result["mission_planner_target"] = MP_VERSION
     return result
 
 
@@ -99,6 +104,7 @@ def create_deployment_tools(directory: Path, identity: dict) -> dict:
     package = directory / filename
     paths = sorted((ROOT / "scripts/release").glob("*.py"))
     paths.extend([ROOT / "infra/runtime/install_systemd.py", ROOT / "infra/runtime/nomad-runtime.service.in"])
+    paths.append(ROOT / "scripts/release/mission-planner-target.json")
     with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("scripts/__init__.py", "")
         archive.writestr("scripts/release/__init__.py", "")

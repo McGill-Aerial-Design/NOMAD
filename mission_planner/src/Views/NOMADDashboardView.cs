@@ -213,7 +213,7 @@ namespace NOMAD.MissionPlanner
         {
             if (_connectionManager == null)
             {
-                _lblLinks.Text = "Direct MAVLink";
+                _lblLinks.Text = "Router unavailable";
                 _lblLinks.ForeColor = NOMADTheme.TEXT_SECONDARY;
                 return;
             }

@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from scripts.release import identity, manifest
+from scripts.release.mission_planner_target import VERSION as MP_VERSION
 
 SOURCE = "a" * 40
 MAVSDK = "b" * 40
@@ -70,6 +71,29 @@ def test_complete_set_correlates_every_package_and_tools(tmp_path, monkeypatch):
     assert manifest.load_manifest(output) == loaded
 
 
+def test_deployment_tools_load_target_without_source_checkout(tmp_path):
+    tools = identity.create_deployment_tools(tmp_path, release_identity())
+    extracted = tmp_path / "extracted"
+    with zipfile.ZipFile(tmp_path / tools["filename"]) as archive:
+        archive.extractall(extracted)
+    result = subprocess.run(
+        [
+            os.sys.executable,
+            "-c",
+            "from scripts.release import manifest, plugin; "
+            "from scripts.release.mission_planner_target import VERSION; "
+            "assert manifest.MP_VERSION == VERSION; "
+            "assert plugin.PluginAdapter.__init__.__defaults__[0] == VERSION; print(VERSION)",
+        ],
+        cwd=extracted,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    assert result.stdout.strip() == MP_VERSION
+
+
 def test_missing_component_cannot_be_published(tmp_path, monkeypatch):
     monkeypatch.setattr(identity, "get_identity", lambda tag="": release_identity())
     create_package(tmp_path, "plugin", "windows", "any")
@@ -119,7 +143,7 @@ def test_unsupported_platform_protocol_and_target_are_rejected(tmp_path, monkeyp
         output.write_text(json.dumps(altered))
         with pytest.raises(ValueError):
             manifest.load_manifest(output)
-    assert plugin["mission_planner_target"] == "1.3.83"
+    assert plugin["mission_planner_target"] == MP_VERSION
 
 
 @pytest.mark.parametrize("filename", ["../escape", "/absolute", "C:/absolute", "directory\\escape"])
