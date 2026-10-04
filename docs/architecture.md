@@ -69,6 +69,33 @@ operator CLI.
 
 ## Runtime and authority boundary
 
+The private `Runtime::Implementation` declaration and owned state live in
+`src/runtime/runtime_implementation.hpp`, next to its lock/ownership table.
+Member definitions use ordinary source files:
+
+| Source in `src/runtime/` | Responsibility |
+|---|---|
+| `runtime.cpp` | Lifecycle, callback wiring, IPC dispatch and public forwarding |
+| `runtime_authority.cpp` | Authority admission/revocation and vehicle-session fencing |
+| `runtime_mutation.cpp` | Mutation execution, deduplication and response caching |
+| `runtime_audit.cpp` | Authentication, audit records and persisted outcomes |
+| `runtime_status.cpp` | Read requests and status projection |
+| `runtime_detail.cpp` | Protocol parsing and shared helper definitions |
+
+The authority gate protects its session, generation, owner and sequence. Vehicle
+mutations use the command mutex; response deduplication uses the cache mutex and
+releases it before command execution. Nested locks run from command or cache to
+authority to the journal's internal mutex. Final-send admission holds authority
+and journal locks through the send. Callback captures retain a weak authority
+gate and shared journal, while the request context has one thread-local
+definition shared by execution and admission. Shutdown fences authority, drains
+IPC, joins the connection worker, disconnects, then closes the journal.
+
+debt: two session-loss record constructions and existing function spans up to
+53 lines remain; revisit when the session-loss schema changes or request dispatch
+grows; then consolidate record formatting and extract focused helpers while
+preserving lock scopes and callback captures.
+
 OS service managers own process lifecycle: foreground systemd on Linux and native
 SCM on Windows, with console mode retained. Supervisors load protected external
 configuration and apply bounded crash recovery; they never admit clients or
