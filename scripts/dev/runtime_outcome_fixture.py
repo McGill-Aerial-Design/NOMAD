@@ -19,7 +19,7 @@ from mavsdk_peer import (
     COMMAND_DO_SET_SERVO,
     DENIED,
 )
-from runtime_ipc_smoke import FIXTURE_CREDENTIALS, authority_fields, request, require, send_request
+from runtime_fixture_support import FIXTURE_CREDENTIALS, authority_fields, request, require, send_request
 
 
 def mutation(port: int, identifier: str, operation: str = "set_servo", **fields: object) -> dict[str, Any]:

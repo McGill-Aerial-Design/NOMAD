@@ -11,6 +11,11 @@ import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
+try:
+    from .mission_planner_target import VERSION as MP_VERSION
+except ImportError:
+    from mission_planner_target import VERSION as MP_VERSION
+
 EXPECTED = {
     ("core", "linux", "x86_64"),
     ("core", "windows", "x86_64"),
@@ -156,7 +161,7 @@ def validate_protocols(entry: dict) -> None:
     actual_protocols = entry.get("protocol_versions")
     if actual_protocols != protocols or any(type(value) is not int for value in actual_protocols.values()):
         raise ValueError("unsupported component protocol")
-    if entry["name"] == "plugin" and entry.get("mission_planner_target") != "1.3.83":
+    if entry["name"] == "plugin" and entry.get("mission_planner_target") != MP_VERSION:
         raise ValueError("unsupported Mission Planner target")
 
 

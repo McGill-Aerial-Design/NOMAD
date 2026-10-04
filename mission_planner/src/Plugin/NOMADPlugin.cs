@@ -9,7 +9,7 @@
 // - Full-page NOMAD control interface with tabs
 // - Embedded video streaming
 // - C++ core command boundary
-// - Direct MAVLink dual-link routing
+// - Standalone ground-router management
 // - Configurable payload controls
 // ============================================================
 
@@ -299,7 +299,7 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Shared module context so the NOMADMainScreen pop-out and any registered
-        /// modules can re-use plugin-level config (theme, API key, etc.) without
+        /// modules can re-use plugin-level config (theme, runtime client credential, etc.) without
         /// requiring a full NOMADConfig instance. Built and cached on first read,
         /// with <see cref="EnvFlag"/> resolving module enable flags.
         /// </summary>

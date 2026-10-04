@@ -18,13 +18,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from ground_router_smoke import config_for
+from ground_router_fixture_support import config_for
 from mavsdk_peer import VehiclePeer
 from release_process_fixture import RouterProcess, RuntimeProcess
 from release_supervisor_fixture import FixtureSupervisor
-from runtime_ipc_smoke import free_port, require
+from runtime_fixture_support import free_port, require
 from runtime_lifecycle_fixture import deployment
-from runtime_lifecycle_qualification import (
+from runtime_qualification_support import (
     admit,
     execute_servo,
     reject_old_context,
@@ -36,6 +36,7 @@ from verify_core_package import REQUIRED_FILES
 
 from scripts.release.lifecycle import Deployment
 from scripts.release.manifest import EXPECTED, digest_file
+from scripts.release.mission_planner_target import VERSION as MP_VERSION
 
 
 def create_component(directory: Path, payload: Path | None, key: tuple, shared: dict, label: str) -> dict:
@@ -50,7 +51,7 @@ def create_component(directory: Path, payload: Path | None, key: tuple, shared: 
         "protocol_versions": {"router_management": 1} if name == "router" else {"runtime_ipc": 1},
     }
     if name == "plugin":
-        entry["mission_planner_target"] = "1.3.83"
+        entry["mission_planner_target"] = MP_VERSION
     package = directory / entry["filename"]
     files = (
         sorted(path for path in payload.rglob("*") if path.is_file() and path.name != "package-identity.json")

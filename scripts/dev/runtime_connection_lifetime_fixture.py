@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from mavsdk_peer import COMMAND_DO_SET_SERVO, VehiclePeer
-from runtime_ipc_smoke import (
+from runtime_fixture_support import (
     authority_fields,
     free_port,
     request,

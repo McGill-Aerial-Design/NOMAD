@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from runtime_ipc_smoke import stop_runtime, write_fixture_credentials
+from runtime_fixture_support import stop_runtime, write_fixture_credentials
 
 
 def write_private_json(path: Path, value: object) -> None:

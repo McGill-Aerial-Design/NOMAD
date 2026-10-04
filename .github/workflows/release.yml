@@ -9,7 +9,6 @@ permissions:
   contents: read
 
 env:
-  MP_VERSION: "1.3.83"
   MP_DIR: 'C:\Program Files (x86)\Mission Planner'
 
 jobs:
@@ -74,6 +73,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      - name: Read reviewed Mission Planner target
+        run: |
+          $version = (Get-Content scripts/release/mission-planner-target.json -Raw | ConvertFrom-Json).version
+          "MP_VERSION=$version" >> $env:GITHUB_ENV
+
       - name: Cache Mission Planner
         id: mp-cache
         uses: actions/cache@v5

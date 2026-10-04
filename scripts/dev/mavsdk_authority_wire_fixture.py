@@ -11,7 +11,7 @@ from pathlib import Path
 
 from mavsdk_authority_peer import AuthorityPeer
 from mavsdk_peer import ACCEPTED, COMMAND_DO_SET_SERVO
-from runtime_ipc_smoke import (
+from runtime_fixture_support import (
     ROOT,
     free_port,
     read_logs,

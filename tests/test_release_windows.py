@@ -15,11 +15,12 @@ from types import SimpleNamespace
 import pytest
 
 from scripts.release import deploy, lifecycle, manifest, storage
+from scripts.release.mission_planner_target import VERSION as MP_VERSION
 
 
 def load_module(name):
     path = Path(__file__).resolve().parents[1] / "scripts" / "release" / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(name, path)
+    spec = importlib.util.spec_from_file_location("scripts.release." + name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -58,7 +59,7 @@ def fake_install(directory):
     return plugin.PluginAdapter(
         directory,
         process_check=lambda: None,
-        version_reader=lambda _: "1.3.83.0",
+        version_reader=lambda _: MP_VERSION + ".0",
         payload_version_reader=lambda path: path.read_bytes()[88:].decode(),
     )
 
@@ -161,7 +162,7 @@ def fixture_entry(name, platform, architecture, version):
         "required_files": ["package-identity.json", *required],
     }
     if name == "plugin":
-        entry["mission_planner_target"] = "1.3.83"
+        entry["mission_planner_target"] = MP_VERSION
     return entry
 
 

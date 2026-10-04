@@ -11,6 +11,11 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+try:
+    from .mission_planner_target import VERSION as MP_VERSION
+except ImportError:
+    from mission_planner_target import VERSION as MP_VERSION
+
 
 def run_powershell(script: str, environment=None) -> str:
     """Use positional arguments; never interpolate operator paths into code."""
@@ -76,7 +81,7 @@ class PluginAdapter:
     def __init__(
         self,
         mission_planner: Path,
-        target_version="1.3.83",
+        target_version=MP_VERSION,
         process_check=None,
         version_reader=None,
         payload_version_reader=None,

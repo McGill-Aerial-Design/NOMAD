@@ -10,26 +10,35 @@ name: csharp
 # HintPaths resolve unchanged, then run MSBuild. No .NET SDK is required (the
 # project is a plain MSBuild/.NET Framework project, not SDK-style).
 #
-# Pin MP_VERSION to the version the plugin is developed against; bump it
-# deliberately when the local Mission Planner is upgraded.
+# The reviewed target is owned by scripts/release/mission-planner-target.json.
 
 on:
   push:
     branches: [main]
     paths:
+      - "pixi.toml"
+      - "pixi.lock"
       - "mission_planner/**"
       - "infra/transport/ground_router/**"
       - "scripts/build/**"
       - "scripts/dev/ground_router_smoke.py"
+      - "scripts/dev/ground_router_fixture_support.py"
+      - "scripts/dev/runtime_*support.py"
+      - "scripts/dev/runtime_lifecycle_fixture.py"
       - "scripts/dev/release_process*"
       - "scripts/release/**"
       - ".github/workflows/csharp.yml"
   pull_request:
     paths:
+      - "pixi.toml"
+      - "pixi.lock"
       - "mission_planner/**"
       - "infra/transport/ground_router/**"
       - "scripts/build/**"
       - "scripts/dev/ground_router_smoke.py"
+      - "scripts/dev/ground_router_fixture_support.py"
+      - "scripts/dev/runtime_*support.py"
+      - "scripts/dev/runtime_lifecycle_fixture.py"
       - "scripts/dev/release_process*"
       - "scripts/release/**"
       - ".github/workflows/csharp.yml"
@@ -43,7 +52,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MP_VERSION: "1.3.83"
   MP_DIR: 'C:\Program Files (x86)\Mission Planner'
 
 defaults:
@@ -129,6 +137,11 @@ jobs:
 
       - name: Build-only dispatch tests (isolated installation)
         run: pwsh -File scripts/build/test_build_plugin_windows.ps1
+
+      - name: Read reviewed Mission Planner target
+        run: |
+          $version = (Get-Content scripts/release/mission-planner-target.json -Raw | ConvertFrom-Json).version
+          "MP_VERSION=$version" >> $env:GITHUB_ENV
 
       # Cache the 116 MB portable zip keyed on the pinned version so it is
       # downloaded once and restored on subsequent runs.

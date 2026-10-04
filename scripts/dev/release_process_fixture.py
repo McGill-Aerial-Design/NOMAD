@@ -7,8 +7,8 @@ import os
 import subprocess
 from pathlib import Path
 
-from ground_router_smoke import management_request
-from runtime_ipc_smoke import request, require, stop_runtime
+from ground_router_fixture_support import management_request
+from runtime_fixture_support import request, require, stop_runtime
 from runtime_lifecycle_fixture import wait_for
 
 
