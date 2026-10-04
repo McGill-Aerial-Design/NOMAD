@@ -389,7 +389,7 @@ def test_sync_mission_planner_migrates_router_enabled_to_client_setting(tmp_path
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("RouterMode", "Embedded", "RouterMode 'Embedded' is unsupported"),
+        ("RouterMode", "Embedded", "RouterMode is unsupported"),
         ("RouterBindAddress", "0.0.0.0", "RouterBindAddress must be 127.0.0.1"),
         ("ManagementBindAddress", "0.0.0.0", "ManagementBindAddress must be 127.0.0.1"),
     ],
@@ -427,6 +427,7 @@ def test_sync_mission_planner_preserves_invalid_existing_config(content: str, tm
     monkeypatch.setenv("NOMAD_MP_CONFIG", str(cfg_file))
 
     env = _parse_env(PROFILES_DIR / "groundstation_minimal.env")
-    sync_mission_planner("groundstation_minimal", env)
+    with pytest.raises(ValueError):
+        sync_mission_planner("groundstation_minimal", env)
 
     assert cfg_file.read_text(encoding="utf-8") == content

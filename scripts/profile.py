@@ -28,15 +28,17 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
-import shutil
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
 if __package__:
+    from .profile_application import apply_targets
+    from .profile_mission_planner import prepare_config
     from .profile_mission_planner import sync_config as _sync_mission_planner_config
 else:
+    from profile_application import apply_targets
+    from profile_mission_planner import prepare_config
     from profile_mission_planner import sync_config as _sync_mission_planner_config
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -166,9 +168,9 @@ def _parse_env(path: Path) -> dict[str, str]:
     return read_env_file(path)
 
 
-def sync_mission_planner(name: str, env: dict[str, str]) -> None:
+def sync_mission_planner(name: str, env: dict[str, str]) -> str:
     """Merge profile-controlled settings into the Mission Planner plugin config."""
-    _sync_mission_planner_config(name, _validated_profile_env(name, env))
+    return _sync_mission_planner_config(name, _validated_profile_env(name, env))
 
 
 def cmd_list() -> None:
@@ -220,40 +222,58 @@ def _print_next_steps(settings: dict) -> None:
         print("  2. Deploy to Jetson:                 nomad start all")
 
 
+def _prepare_env_content(content: str, profile_env: dict[str, str]) -> bytes:
+    canonical = profile_env["NOMAD_MAVLINK_ENDPOINT"]
+    content = re.sub(r"^NOMAD_MAVLINK_ENDPOINT=.*$", f"NOMAD_MAVLINK_ENDPOINT={canonical}", content, flags=re.MULTILINE)
+    current = ENV_FILE.read_text(encoding="utf-8") if ENV_FILE.exists() else ""
+    credentials = {}
+    for line in current.splitlines():
+        key, separator, _ = line.partition("=")
+        if separator and key.strip() in _UNSAVED_SECRET_KEYS:
+            credentials[key.strip()] = line
+    for key, line in sorted(credentials.items()):
+        pattern = rf"^[ \t]*{key}[ \t]*=.*$"
+        if re.search(pattern, content, flags=re.MULTILINE):
+            content = re.sub(pattern, lambda _, line=line: line, content, flags=re.MULTILINE)
+        else:
+            content = content.rstrip("\n") + f"\n{line}\n"
+    return content.encode("utf-8")
+
+
+def _apply_profile(name: str, src: Path) -> bool:
+    try:
+        content = src.read_text(encoding="utf-8")
+        profile_env = _validated_profile_env(name, read_env_text(content))
+        env_content = _prepare_env_content(content, profile_env)
+    except (OSError, UnicodeError, ValueError):
+        print("[FAILED] env: profile or current env is unreadable or invalid; unchanged")
+        print("[SKIPPED] mission_planner: application aborted; unchanged")
+        return False
+    try:
+        mp_config = prepare_config(name, profile_env)
+    except (OSError, UnicodeError, ValueError) as exc:
+        print("[SKIPPED] env: Mission Planner preflight failed; unchanged")
+        print(f"[FAILED] mission_planner: {exc}")
+        return False
+    return apply_targets(ENV_FILE, env_content, mp_config)
+
+
 def cmd_load(name: str) -> None:
     src = PROFILES_DIR / f"{name}.env"
     if name not in PROFILES or not src.exists():
         print(f"[FAIL] Profile not found: {src}")
+        print("[FAILED] env: profile not found; unchanged")
+        print("[SKIPPED] mission_planner: application aborted; unchanged")
         print("Available profiles:")
         for profile_name in sorted(PROFILES):
             if (PROFILES_DIR / f"{profile_name}.env").exists():
                 print(f"  {profile_name}")
         sys.exit(1)
 
-    try:
-        profile_env = _validated_profile_env(name, _parse_env(src))
-    except ValueError as exc:
-        print(f"[FAIL] Invalid profile {name}: {exc}")
+    if not _apply_profile(name, src):
+        print(f"[FAILED] Profile load: {name}")
         sys.exit(1)
-
-    if ENV_FILE.exists():
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup = ENV_FILE.parent / f"nomad.env.bak.{ts}"
-        shutil.copy2(ENV_FILE, backup)
-        print(f"[INFO] Backed up current config to {backup.name}")
-
-    content = src.read_text(encoding="utf-8")
-    canonical = profile_env["NOMAD_MAVLINK_ENDPOINT"]
-    content = re.sub(r"^NOMAD_MAVLINK_ENDPOINT=.*$", f"NOMAD_MAVLINK_ENDPOINT={canonical}", content, flags=re.MULTILINE)
-    ENV_FILE.write_text(content, encoding="utf-8")
-    print(f"[OK] Loaded profile: {name}")
-
-    # Sync the client profile without copying the runtime gate or client credentials.
-    try:
-        sync_mission_planner(name, profile_env)
-    except ValueError as exc:
-        print(f"[FAIL] Mission Planner config migration was not applied: {exc}")
-        sys.exit(1)
+    print(f"[OK] Profile load completed: {name} (see target results above)")
 
     settings = _key_settings(src)
     _print_load_summary(settings)
