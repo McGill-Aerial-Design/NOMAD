@@ -305,6 +305,24 @@ Keep scenarios serial because they share vehicle state. See the
 interpreting results. A configured workflow is not a passed run; live SITL is
 not hardware qualification.
 
+`test.yml` separates Linux/Windows core tests, runtime IPC smoke and runtime
+lifecycle qualification (`core`) from service-artifact checks, release transaction
+failure paths, A/B runtime fixtures, activation/rollback and package/staged-install
+verification (`core-release`). Each job builds its own inputs. MAVSDK peer and wire
+qualification remains in its own Linux/Windows matrix. The Python job runs tools
+and regression guards; service and release pytest suites belong to `core-release`.
+
+`csharp.yml` separates pure plugin logic (`plugin-tests`), standalone router build,
+dual-link/process tests and release rollback qualification (`router-tests`), and
+Mission Planner reference staging, plugin build, build dispatch and UI/video/log
+adapter integration (`plugin-build`). Router and plugin artifacts stay with their
+owning jobs. Existing path triggers apply to all three jobs.
+
+`lint.yml` owns static and quality checks; native core tests belong to `test.yml`.
+Resource measurement, budget checks and retained evidence stay together in
+`resources.yml`. `release.yml` intentionally repeats qualification before packaging
+and verifying the complete release set.
+
 Hosted `test.yml`, `lint.yml`, `ros-sim.yml` and `csharp.yml` run pull-request
 checks for their configured scopes. `sitl.yml` runs a path-triggered reduced
 connectivity smoke on selected pushes to `main`; its full Copter and QuadPlane
