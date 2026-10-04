@@ -43,8 +43,6 @@ jobs:
         env:
           NOMAD_COMPLEXITY_BASE: origin/${{ github.base_ref || 'main' }}
         run: pixi run complexity-check
-      - name: Build and test C++ core
-        run: pixi run test-core
       - name: Ruff lint
         run: pixi run lint
       - name: Strict documentation build

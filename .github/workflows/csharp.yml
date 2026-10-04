@@ -52,7 +52,7 @@ defaults:
 
 jobs:
   plugin-tests:
-    name: test plugin SC logic (Windows)
+    name: Plugin logic tests (Windows)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -66,24 +66,6 @@ jobs:
       # to it. This matches the repo's existing test-plugin-* idiom.
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v3
-
-      - name: Build-only dispatch tests (isolated installation)
-        run: pwsh -File scripts/build/test_build_plugin_windows.ps1
-
-      - name: Build standalone ground router
-        run: pwsh -File scripts/build/build_ground_router.ps1
-
-      - name: Standalone router and management-client tests
-        run: pwsh -File scripts/build/test_plugin_duallink.ps1
-
-      - name: Standalone router smoke
-        run: python scripts/dev/ground_router_smoke.py
-      - name: Build distinguishable release A and B router fixtures
-        run: pwsh -File scripts/build/build_release_router_fixtures.ps1
-      - name: Qualify router activation health failure and exact binary rollback
-        run: >-
-          pixi run python scripts/dev/release_process_qualification.py
-          --router-a build/release-fixtures/router-A --router-b build/release-fixtures/router-B
 
       - name: Payload-release interlock tests (SR-PAY-03)
         run: pwsh -File scripts/build/test_plugin_interlock.ps1
@@ -103,14 +85,50 @@ jobs:
       - name: Core client boundary tests
         run: pwsh -File scripts/build/test_plugin_core_client.ps1
 
+  router-tests:
+    name: Router tests and release qualification (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          cache: true
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Build standalone ground router
+        run: pwsh -File scripts/build/build_ground_router.ps1
+
+      - name: Standalone router and management-client tests
+        run: pwsh -File scripts/build/test_plugin_duallink.ps1
+
+      - name: Standalone router smoke
+        run: python scripts/dev/ground_router_smoke.py
+      - name: Build distinguishable release A and B router fixtures
+        run: pwsh -File scripts/build/build_release_router_fixtures.ps1
+      - name: Qualify router activation health failure and exact binary rollback
+        run: >-
+          pixi run python scripts/dev/release_process_qualification.py
+          --router-a build/release-fixtures/router-A --router-b build/release-fixtures/router-B
+
+      - name: Upload standalone ground router artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: NOMADLinkRouter
+          path: build/ground-router/*
+          if-no-files-found: error
+
   plugin-build:
-    name: build MP plugin (Windows)
+    name: Plugin build and integration (Windows)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
 
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v3
+
+      - name: Build-only dispatch tests (isolated installation)
+        run: pwsh -File scripts/build/test_build_plugin_windows.ps1
 
       # Cache the 116 MB portable zip keyed on the pinned version so it is
       # downloaded once and restored on subsequent runs.
@@ -160,14 +178,4 @@ jobs:
         with:
           name: NOMADPlugin
           path: mission_planner/src/bin/Release/NOMADPlugin.dll
-          if-no-files-found: error
-
-      - name: Build standalone ground router package
-        run: pwsh -File scripts/build/build_ground_router.ps1
-
-      - name: Upload standalone ground router artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: NOMADLinkRouter
-          path: build/ground-router/*
           if-no-files-found: error
