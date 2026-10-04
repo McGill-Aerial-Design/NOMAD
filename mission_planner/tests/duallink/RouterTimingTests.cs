@@ -48,7 +48,10 @@ internal static partial class DualLinkStressTests
             {
                 consumer.Open();
             }
-            foreach (var link in Links) { link.Open(Clock.Seconds); }
+            foreach (var link in Links)
+            {
+                link.Open(Clock.Seconds);
+            }
             TimingCall(Router, "SetActiveLink", "cell", "timing fixture");
         }
 
@@ -362,7 +365,10 @@ internal static partial class DualLinkStressTests
                     var id = RouterManagementProtocol.GetValue(request, "id");
                     var response = type == "hello" ? RouterManagementProtocol.HelloResponse(id, "timing-test")
                         : RouterManagementProtocol.StatusResponse(id, new RouterStatusSnapshot { Running = true });
-                    if (type == "get_status") { observedStatus(); }
+                    if (type == "get_status")
+                    {
+                        observedStatus();
+                    }
                     var bytes = RouterManagementProtocol.EncodeLine(response);
                     stream.Write(bytes, 0, bytes.Length);
                 }
