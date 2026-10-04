@@ -326,8 +326,45 @@ pixi run profile-diff <profile>
 pixi run profile-load <profile>
 ```
 
-Loading a profile updates the local `config/nomad.env` and Mission Planner
-configuration. It does not start processes, prove that hardware is present, or
+Loading a profile identifies the intended file paths and reports a final result
+for each target before the overall completion message:
+
+| Target result | Meaning |
+|---|---|
+| `[APPLIED] env` | `config/nomad.env` was atomically replaced with the selected template and canonical MAVLink endpoint; existing `NOMAD_API_KEY` and `NOMAD_CLIENT_CREDENTIAL` values were preserved. |
+| `[APPLIED] mission_planner` | Profile-owned MP settings were synced: `ActiveProfile`, `VideoUrl`, and supported legacy migration. Unrelated settings and the separately provisioned `CoreClientCredential` remain. Retired settings, including `CoreApiKey`, are removed. |
+| `[SKIPPED] mission_planner: config path unavailable` | MP sync is optional when neither `NOMAD_MP_CONFIG` nor `LOCALAPPDATA` supplies a path. Only env was applied; exit status is 0. Set `NOMAD_MP_CONFIG` to require a specific MP target. |
+| `[SKIPPED] ... unchanged` or `... rolled back` | That target was not applied because another target failed, or its change was restored. |
+| `[FAILED] ...` | The requested load failed; exit status is 1 and no overall success message is printed. Read both target results before using the configuration. |
+
+A known MP path is an intended target even if the file does not exist yet; the
+loader creates its parent directory and config. Unreadable, malformed/non-object
+JSON and unsupported legacy settings fail preflight instead of silently skipping
+MP. Both outputs and the original env restoration copy are staged in private,
+unique sibling files before either config changes. Existing permission bits are
+retained. A timestamped `nomad.env.bak.*` backup is kept before env replacement.
+If env replacement fails, MP remains unchanged. If MP replacement fails after
+env replacement, env is restored atomically (or removed if it was newly created).
+Temporary files are cleaned up on handled failures. Backups contain credentials;
+keep them private as you would `nomad.env`.
+
+For example, an env-only load reports `[APPLIED] env`, `[SKIPPED] mission_planner`,
+then `[OK] Profile load completed` and exits 0. Invalid MP JSON reports
+`[SKIPPED] env: Mission Planner preflight failed; unchanged`,
+`[FAILED] mission_planner`, then `[FAILED] Profile load` and exits 1. An MP commit
+failure reports `[SKIPPED] env: rolled back` and `[FAILED] mission_planner`.
+If rollback itself fails, `[FAILED] env: changed; rollback failed` explicitly
+requires restoring the reported backup before use (or removing a newly created
+env manually). The env backup remains available.
+
+Run `load` while configuration editors and other loaders are stopped. The two
+files do not form a crash-atomic transaction: process termination, power loss,
+concurrent edits, or a second filesystem failure during rollback can require
+manual recovery. Newly created parent directories may remain after a failed
+load. Replacement files belong to the invoking user and inherit directory ACLs;
+the loader preserves permission bits but does not provision ownership or ACLs.
+
+Loading does not start processes, prove that hardware is present, or
 qualify the resulting deployment. Review every endpoint and device setting.
 The installed CLI/runtime IPC v1 does not expose mission upload, navigation,
 geofence, or payload request paths; profile text must not be read as evidence
