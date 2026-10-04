@@ -48,7 +48,7 @@ namespace NOMAD.MissionPlanner
                 _manualOverride = statusRunning ? status.ManualOverrideId ?? "" : "";
                 _links.Clear();
                 _links.AddRange(next);
-                _lastStatus = DateTime.UtcNow;
+                _lastStatus = _clock.Seconds();
                 _stale = !statusRunning;
                 _connected = true;
                 _lastUnavailableMessage = null;
@@ -70,7 +70,7 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private static LinkStatistics ToStatistics(RouterLinkStatusSnapshot link)
+        private LinkStatistics ToStatistics(RouterLinkStatusSnapshot link)
         {
             return new LinkStatistics
             {
@@ -100,9 +100,9 @@ namespace NOMAD.MissionPlanner
             return Enum.TryParse(value, true, out LinkHealth health) ? health : LinkHealth.Disconnected;
         }
 
-        private static DateTime TimestampFromAge(double? age)
+        private DateTime TimestampFromAge(double? age)
         {
-            return age.HasValue ? DateTime.UtcNow.AddMilliseconds(-Math.Max(0, age.Value)) : DateTime.MinValue;
+            return age.HasValue ? _clock.UtcNow().AddMilliseconds(-Math.Max(0, age.Value)) : DateTime.MinValue;
         }
 
         private static LinkStatistics Clone(LinkStatistics source)
@@ -144,11 +144,11 @@ namespace NOMAD.MissionPlanner
             };
         }
 
-        private static DateTime ParseTimestamp(string value)
+        private DateTime ParseTimestamp(string value)
         {
             return DateTime.TryParse(value, null, DateTimeStyles.RoundtripKind, out var parsed)
                 ? parsed.ToUniversalTime()
-                : DateTime.UtcNow;
+                : _clock.UtcNow();
         }
 
         private static bool IsOk(IDictionary<string, object> message)

@@ -49,6 +49,16 @@ internal static partial class DualLinkStressTests
 
     private static async Task RunAll()
     {
+        await RunAsync("timing: management polling across UTC jumps", ManagementPollingClockJumps);
+        await RunAsync("timing: learned consumer endpoint across UTC jumps", ConsumerEndpointClockJumps);
+        Run("timing: management freshness across UTC jumps", ManagementClockJumps);
+        Run("timing: physical freshness, health and jitter across UTC jumps", PhysicalFreshnessClockJumps);
+        Run("timing: periodic stats and rate windows across UTC jumps", StatsClockJumps);
+        Run("timing: reconnect boundary across UTC jumps", ReconnectClockJumps);
+        Run("timing: TCP and DNS opening deadlines across UTC jumps", OpeningClockJumps);
+        Run("timing: failover cooldown and recovery dwell across UTC jumps", FailoverClockJumps);
+        Run("timing: echo prevention across UTC jumps", EchoClockJumps);
+        Run("timing: duplicate sweep and parameter expiry across UTC jumps", ExpiryClockJumps);
         await RunAsync("multi-link: one, two and four enabled links", LinkCollectionSizes);
         Run("review: local address and topology guard", LocalAddressGuardChecks);
         Run("review: generic link status and membership", LinkStatusDisplayChecks);
@@ -236,7 +246,8 @@ internal static partial class DualLinkStressTests
                 LatencyMs = 0,
             };
             set(s);
-            mi.Invoke(null, new object[] { s, now });
+            mi.Invoke(null, new object[] { s, (now - s.LastPacketTime).TotalSeconds,
+                (now - s.LastHeartbeatTime).TotalSeconds });
             return s.Health;
         }
 

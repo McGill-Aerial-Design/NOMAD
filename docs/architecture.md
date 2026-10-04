@@ -43,6 +43,18 @@ for the other. The ground router's `mission_planner` consumer is receive-only,
 but its local consumer ID is not authenticated identity and does not arbitrate
 other network sources.
 
+The ground router and Mission Planner management client use process-local
+`Stopwatch` time for elapsed durations: physical reconnect/opening deadlines,
+packet and heartbeat freshness, heartbeat jitter, health, stats/rate windows,
+failover cooldown and preferred-link recovery dwell, duplicate/echo expiry,
+parameter pinning, learned consumer endpoints, and management polling/freshness.
+UTC remains the source for public packet/heartbeat observations, failover events,
+management protocol timestamps and operator-visible timestamp projections. Those
+UTC fields are presentation/record data and do not drive local timeout decisions.
+The clock is injectable internally for deterministic jump and boundary tests;
+its monotonic values never cross the management protocol. Existing worker ticks,
+socket timeouts and OS scheduling still bound when a deadline is observed.
+
 ROS 2 is an observation-only adapter. It receives a separate MAVLink telemetry
 feed because runtime IPC v1 does not expose the source measurements needed for
 its GPS and battery messages. It has no command topics or services, no VIO

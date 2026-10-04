@@ -52,6 +52,7 @@ $sources = @(
 $sources += Get-ChildItem (Join-Path $repoRoot 'infra\transport\ground_router\*.cs') | ForEach-Object FullName
 $sources += Join-Path $repoRoot 'mission_planner/tests/duallink/MultiLinkTests.cs'
 $sources += Join-Path $repoRoot 'mission_planner/tests/duallink/RouterReviewTests.cs'
+$sources += Join-Path $repoRoot 'mission_planner/tests/duallink/RouterTimingTests.cs'
 $sources += Join-Path $repoRoot 'mission_planner/tests/duallink/RouterManagementTests.cs'
 $sources += Join-Path $repoRoot 'mission_planner/src/Panels/LinkStatusDisplay.cs'
 $outDir = Join-Path $repoRoot 'mission_planner\tests\duallink\bin'

@@ -19,7 +19,8 @@ namespace NOMAD.MissionPlanner
         internal readonly System.Collections.Generic.Dictionary<int, byte> Sequences =
             new System.Collections.Generic.Dictionary<int, byte>();
         internal long Seen, Lost, PreviousBytes;
-        internal DateTime HealthySince, LastAttempt;
+        internal double HealthySince = RouterClock.Unset, LastAttempt = RouterClock.Unset;
+        internal double LastPacket = RouterClock.Unset, LastHeartbeat = RouterClock.Unset;
         private UdpClient _udp;
         private TcpClient _tcp;
         private Task _connecting;
@@ -38,7 +39,7 @@ namespace NOMAD.MissionPlanner
                 Endpoint = config.Transport == "COM" ? config.Device : config.Transport + ":" + config.Port };
         }
 
-        internal void Open(DateTime now)
+        internal void Open(double now)
         {
             LastAttempt = now;
             Dispose();
@@ -94,7 +95,7 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        internal void Poll(Action<byte[], int> receive, DateTime now)
+        internal void Poll(Action<byte[], int> receive, double now)
         {
             if (!ResolveRemote(now))
             {
@@ -102,7 +103,7 @@ namespace NOMAD.MissionPlanner
             }
             if (_connecting != null)
             {
-                if (!_connecting.IsCompleted && (now - LastAttempt).TotalSeconds < 2)
+                if (!_connecting.IsCompleted && (now - LastAttempt) < 2)
                 {
                     return;
                 }
@@ -150,7 +151,7 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private bool ResolveRemote(DateTime now)
+        private bool ResolveRemote(double now)
         {
             if (_resolving == null)
             {
@@ -158,7 +159,7 @@ namespace NOMAD.MissionPlanner
             }
             if (!_resolving.IsCompleted)
             {
-                if ((now - LastAttempt).TotalSeconds >= 2)
+                if ((now - LastAttempt) >= 2)
                 {
                     throw new TimeoutException("UDP peer lookup timeout");
                 }
@@ -208,7 +209,7 @@ namespace NOMAD.MissionPlanner
             Stats.BytesSentOutbound += bytes.Length;
         }
 
-        internal bool CanAnnounce => Stats.IsOpen && Stats.LastPacketTime == DateTime.MinValue &&
+        internal bool CanAnnounce => Stats.IsOpen && LastPacket == RouterClock.Unset &&
             (Config.Transport != "UDP" || _remote != null);
 
         internal bool Opening => _connecting != null || _resolving != null;
@@ -218,7 +219,8 @@ namespace NOMAD.MissionPlanner
             _udp = null; _tcp = null; _serial = null; _connecting = null; _resolving = null; _remote = null;
             Stats.IsOpen = false; Stats.IsConnected = false; Stats.Health = LinkHealth.Disconnected;
             Stats.LastRemote = null; Stats.LastPacketTime = DateTime.MinValue;
-            Stats.LastHeartbeatTime = DateTime.MinValue; HealthySince = DateTime.MinValue;
+            Stats.LastHeartbeatTime = DateTime.MinValue; HealthySince = RouterClock.Unset;
+            LastPacket = LastHeartbeat = RouterClock.Unset;
         }
     }
 }

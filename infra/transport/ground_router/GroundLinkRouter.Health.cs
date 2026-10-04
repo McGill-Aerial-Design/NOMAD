@@ -1,21 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 
-using System;
 namespace NOMAD.MissionPlanner
 {
  public partial class GroundLinkRouter
  {
-        private static void ClassifyHealth(LinkSourceStats s, DateTime now)
+        private static void ClassifyHealth(LinkSourceStats s, double packetAge, double hbAge)
         {
             if (!s.IsOpen || !s.IsConnected) { s.Health = LinkHealth.Disconnected; return; }
 
-            double packetAge = s.LastPacketTime == DateTime.MinValue
-                ? double.PositiveInfinity
-                : (now - s.LastPacketTime).TotalSeconds;
-            double hbAge = s.LastHeartbeatTime == DateTime.MinValue
-                ? double.PositiveInfinity
-                : (now - s.LastHeartbeatTime).TotalSeconds;
             double loss = s.PacketLossPercent;
             double jitter = s.LatencyMs;
             double rate = s.DataRateBps;
