@@ -135,7 +135,12 @@ add_library(nomad_runtime_core
     src/runtime/protected_file.cpp
     src/runtime/audit_journal.cpp
     src/runtime/ipc_server.cpp
-    src/runtime/runtime.cpp)
+    src/runtime/runtime.cpp
+    src/runtime/runtime_detail.cpp
+    src/runtime/runtime_authority.cpp
+    src/runtime/runtime_audit.cpp
+    src/runtime/runtime_status.cpp
+    src/runtime/runtime_mutation.cpp)
 target_include_directories(nomad_runtime_core PUBLIC include PRIVATE
     "${NOMAD_MAVSDK_INSTALL_DIR}/include")
 target_compile_features(nomad_runtime_core PUBLIC cxx_std_20)
