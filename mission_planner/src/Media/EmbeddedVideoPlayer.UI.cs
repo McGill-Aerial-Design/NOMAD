@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
-extern alias MPDrawing;
 
 // ============================================================
 // NOMAD Embedded Video Player - UI partial
@@ -30,7 +29,7 @@ namespace NOMAD.MissionPlanner
 
             _lblStatus = new Label
             {
-                Text = TryInitializeGStreamer() ? "Ready - Click Play" : "GStreamer not found",
+                Text = "Ready - Click Play",
                 Dock = DockStyle.Bottom,
                 Height = 22,
                 ForeColor = Color.Gray,
@@ -107,22 +106,8 @@ namespace NOMAD.MissionPlanner
                     return;
                 }
 
-                btnApplyLatency.Enabled = false;
-                btnApplyLatency.Text = "...";
-                UiAsync.Run(this, async () =>
-                {
-                    try
-                    {
-                        await RestartStreamAsync();
-                        _lblStatus.Text = $"Latency: {_latencyMs}ms";
-                        _lblStatus.ForeColor = Color.Cyan;
-                    }
-                    finally
-                    {
-                        btnApplyLatency.Enabled = true;
-                        btnApplyLatency.Text = "Apply";
-                    }
-                }, "ApplyVideoLatency");
+                StopStream();
+                StartStream();
             };
 
             ctrlPanel.Controls.AddRange(new Control[]
@@ -132,11 +117,10 @@ namespace NOMAD.MissionPlanner
             });
 
             Controls.Add(_videoBox);
-            if (_showControls)
-            {
-                Controls.Add(_lblStatus);
-                Controls.Add(ctrlPanel);
-            }
+            Controls.Add(_lblStatus);
+            Controls.Add(ctrlPanel);
+            _lblStatus.Visible = _showControls;
+            ctrlPanel.Visible = _showControls;
         }
 
         private Button CreateButton(string text, int x, int y, int width, Color color)
@@ -181,6 +165,11 @@ namespace NOMAD.MissionPlanner
 
         public void ToggleFullscreen()
         {
+            ValidateUiThread();
+            if (IsDisposed)
+            {
+                return;
+            }
             if (_fullscreenForm != null && !_fullscreenForm.IsDisposed)
             {
                 if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
@@ -216,15 +205,7 @@ namespace NOMAD.MissionPlanner
             };
             _fullscreenBox.DoubleClick += (s, e) => ToggleFullscreen();
 
-            lock (_frameBufferLock)
-            {
-                if (_frameBuffers != null &&
-                    _displayBufferIndex >= 0 &&
-                    _displayBufferIndex < _frameBuffers.Length)
-                {
-                    _fullscreenBox.Image = _frameBuffers[_displayBufferIndex];
-                }
-            }
+            _fullscreenBox.Image = _displayFrame;
 
             _fullscreenForm.Controls.Add(_fullscreenBox);
             _fullscreenForm.Show();
@@ -232,59 +213,26 @@ namespace NOMAD.MissionPlanner
 
         public void OpenExternal()
         {
-            string vlcArgs = _streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase)
-                ? BuildUdpVlcArguments()
-                : $"--network-caching={_latencyMs} --rtsp-tcp \"{_streamUrl}\"";
-
-            var vlcPaths = new[]
+            ValidateUiThread();
+            if (_session.State == VideoState.Disposed)
             {
-                "vlc",
-                @"C:\Program Files\VideoLAN\VLC\vlc.exe",
-                @"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
-            };
-            foreach (var path in vlcPaths)
-            {
-                try
-                {
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = path,
-                        Arguments = vlcArgs,
-                        UseShellExecute = true,
-                    });
-                    _lblStatus.Text = "Opened in VLC";
-                    return;
-                }
-                catch
-                {
-                }
+                return;
             }
-
-            MessageBox.Show($"VLC not found.\n\nStream URL: {_streamUrl}", "VLC Not Found", MessageBoxButtons.OK);
-        }
-
-        private string BuildUdpVlcArguments()
-        {
-            var port = ExtractUdpPort(_streamUrl);
-            var sdp = $"v=0\no=- 0 0 IN IP4 127.0.0.1\ns=Stream\nc=IN IP4 127.0.0.1\nt=0 0\n" +
-                $"m=video {port} RTP/AVP 96\na=rtpmap:96 H264/90000";
-            var sdpPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "nomad_stream.sdp");
-            System.IO.File.WriteAllText(sdpPath, sdp);
-            return $"--network-caching={_latencyMs} \"{sdpPath}\"";
+            try
+            {
+                _external.Start(_streamUrl, _latencyMs, ExtractUdpPort(_streamUrl));
+                _lblStatus.Text = "Opened in VLC";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "VLC Not Found", MessageBoxButtons.OK);
+            }
         }
 
         public void TakeSnapshot()
         {
-            Bitmap source = null;
-            lock (_frameBufferLock)
-            {
-                if (_frameBuffers != null &&
-                    _displayBufferIndex >= 0 &&
-                    _displayBufferIndex < _frameBuffers.Length)
-                {
-                    source = _frameBuffers[_displayBufferIndex];
-                }
-            }
+            ValidateUiThread();
+            var source = _displayFrame;
             if (source == null)
             {
                 _lblStatus.Text = "No frame available";
@@ -304,6 +252,7 @@ namespace NOMAD.MissionPlanner
 
         public void UpdateStreamUrl(string newUrl)
         {
+            ValidateUiThread();
             var wasPlaying = _isPlaying;
             StopStream();
             _streamUrl = newUrl ?? "";

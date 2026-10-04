@@ -12,12 +12,23 @@ namespace NOMAD.MissionPlanner
 {
     public class NOMADVideoView : NOMADViewBase, IUpdatableView
     {
+        private readonly System.Threading.CancellationToken _shutdown;
+        private readonly Func<IVideoPipeline> _createPipeline;
         private readonly NOMADConfig _config;
         private EmbeddedVideoPlayer _videoPlayer;
         private PayloadControlPanel _payloadPanel;
 
         public NOMADVideoView(NOMADConfig config)
+            : this(config, System.Threading.CancellationToken.None) { }
+
+        internal NOMADVideoView(NOMADConfig config, System.Threading.CancellationToken shutdown)
+            : this(config, shutdown, () => new GStreamerVideoPipeline()) { }
+
+        internal NOMADVideoView(NOMADConfig config, System.Threading.CancellationToken shutdown,
+            Func<IVideoPipeline> createPipeline)
         {
+            _createPipeline = createPipeline;
+            _shutdown = shutdown;
             _config = config ?? new NOMADConfig();
             InitializeUI();
         }
@@ -45,7 +56,7 @@ namespace NOMAD.MissionPlanner
                 : _config.VideoUrl.Trim();
             try
             {
-                _videoPlayer = new EmbeddedVideoPlayer("Video Feed", rtspUrl, showControls: true)
+                _videoPlayer = new EmbeddedVideoPlayer("Video Feed", rtspUrl, true, _shutdown, _createPipeline)
                 {
                     Dock = DockStyle.Fill,
                 };

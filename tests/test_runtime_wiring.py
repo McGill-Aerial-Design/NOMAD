@@ -261,8 +261,8 @@ def test_mission_planner_packages_only_current_video_dependencies() -> None:
 
     assert '<Reference Include="System.Memory">' in project
     assert "GStreamer" in source
-    assert "SkiaSharp" in project
-    assert "SkiaSharp.SKColorType" in source
+    assert '<Reference Include="SkiaSharp">' not in project
+    assert '<Reference Include="MissionPlanner.Drawing">' not in project
     assert "--component', 'plugin'" in installer
     assert "ValidateSet('verify', 'stage', 'adopt', 'activate'" in installer
     assert "& $Python @toolArguments" in installer

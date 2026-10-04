@@ -1,265 +1,58 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
-extern alias MPDrawing;
-
-// ============================================================
-// NOMAD Embedded Video Player - Frame buffer partial
-// ============================================================
-// Double-buffered frame handling for the GStreamer callback:
-// buffer allocation/recycling, the new-image handler, and pushing
-// frames to the PictureBox.
-// ============================================================
-
 using System;
 using System.Drawing;
-using System.Drawing.Imaging;
-using System.Windows.Forms;
-using MPBitmap = MPDrawing::System.Drawing.Bitmap;
 
 namespace NOMAD.MissionPlanner
 {
     public partial class EmbeddedVideoPlayer
     {
-        private void EnsureFrameBuffers(int width, int height)
+        private void OnFrameTick(object sender, EventArgs e)
         {
-            Bitmap[] oldBuffers = null;
-            lock (_frameBufferLock)
+            if (IsDisposed)
             {
-                if (_frameBuffers != null && _frameBufferWidth == width && _frameBufferHeight == height)
-                    return;
-
-                oldBuffers = _frameBuffers;
-                _frameBuffers = new Bitmap[FrameBufferCount];
-                for (int i = 0; i < _frameBuffers.Length; i++)
+                return;
+            }
+            if (_session.State == VideoState.Disposed)
+            {
+                Dispose();
+                return;
+            }
+            var frame = _session.TakeFrame();
+            if (frame != null)
+            {
+                var old = _displayFrame;
+                _displayFrame = frame;
+                _videoBox.Image = frame;
+                if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
                 {
-                    _frameBuffers[i] = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
+                    _fullscreenBox.Image = frame;
                 }
-                _frameBufferWidth = width;
-                _frameBufferHeight = height;
-                _displayBufferIndex = -1;
-                _pendingBufferIndex = -1;
-                _nextBufferIndex = 0;
+                old?.Dispose();
+                _lblStatus.Text = $"Streaming {frame.Width}x{frame.Height}";
+                _lblStatus.ForeColor = Color.LimeGreen;
             }
-
-            if (oldBuffers != null)
+            if (_session.State == VideoState.Stopped)
             {
-                DisposeOldFrameBuffersOnUi(oldBuffers);
+                ClearVideoDisplayAndDisposeBuffers();
+                _frameTimer.Stop();
+                _lblStatus.Text = _session.Error == null ? "Stopped" : $"Error: {_session.Error}";
+                _lblStatus.ForeColor = _session.Error == null ? Color.Gray : Color.Red;
             }
-        }
-
-        private bool TryAcquireFrameBuffer(int width, int height, out Bitmap bitmap, out int bufferIndex)
-        {
-            EnsureFrameBuffers(width, height);
-
-            lock (_frameBufferLock)
-            {
-                bitmap = null;
-                bufferIndex = -1;
-
-                if (_frameBuffers == null || _pendingBufferIndex >= 0)
-                    return false;
-
-                for (int offset = 0; offset < _frameBuffers.Length; offset++)
-                {
-                    int candidate = (_nextBufferIndex + offset) % _frameBuffers.Length;
-                    if (candidate == _displayBufferIndex)
-                        continue;
-
-                    _pendingBufferIndex = candidate;
-                    _nextBufferIndex = (candidate + 1) % _frameBuffers.Length;
-                    bitmap = _frameBuffers[candidate];
-                    bufferIndex = candidate;
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private void ReleasePendingFrameBuffer(int bufferIndex)
-        {
-            lock (_frameBufferLock)
-            {
-                if (_pendingBufferIndex == bufferIndex)
-                    _pendingBufferIndex = -1;
-            }
-        }
-
-        private void DisposeOldFrameBuffersOnUi(Bitmap[] oldBuffers)
-        {
-            void DisposeNow()
-            {
-                try
-                {
-                    if (_fullscreenBox != null && !_fullscreenBox.IsDisposed &&
-                        Array.IndexOf(oldBuffers, _fullscreenBox.Image as Bitmap) >= 0)
-                    {
-                        _fullscreenBox.Image = null;
-                    }
-                    if (_videoBox != null && !_videoBox.IsDisposed &&
-                        Array.IndexOf(oldBuffers, _videoBox.Image as Bitmap) >= 0)
-                    {
-                        _videoBox.Image = null;
-                    }
-                    foreach (var old in oldBuffers)
-                    {
-                        old?.Dispose();
-                    }
-                }
-                catch { }
-            }
-
-            UiAsync.RunSync(this, DisposeNow, "DisposeOldFrameBuffersOnUi");
         }
 
         private void ClearVideoDisplayAndDisposeBuffers()
         {
-            UiAsync.RunSync(this, () =>
+            if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
             {
-                Bitmap[] buffers;
-                lock (_frameBufferLock)
-                {
-                    buffers = _frameBuffers;
-                    _frameBuffers = null;
-                    _frameBufferWidth = 0;
-                    _frameBufferHeight = 0;
-                    _displayBufferIndex = -1;
-                    _pendingBufferIndex = -1;
-                    _nextBufferIndex = 0;
-                }
-
-                try
-                {
-                    if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
-                        _fullscreenBox.Image = null;
-                    if (_videoBox != null && !_videoBox.IsDisposed)
-                        _videoBox.Image = null;
-                    if (buffers != null)
-                    {
-                        foreach (var buffer in buffers)
-                            buffer?.Dispose();
-                    }
-                }
-                catch { }
-            }, "ClearVideoDisplayAndDisposeBuffers");
-        }
-
-        private void OnGstNewImage(object sender, MPBitmap frame)
-        {
-            if (frame == null || frame.Width <= 0 || frame.Height <= 0) return;
-            if (_stopping) return;
-
-            var generation = _streamGeneration;
-            _frameCount++;
-            if (_frameCount % 30 == 1)
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame #{_frameCount} - {frame.Width}x{frame.Height}");
-
-            if (!TryAcquireFrameBuffer(frame.Width, frame.Height, out var displayBitmap, out var bufferIndex))
-                return;
-
-            try
-            {
-                var lockData = frame.LockBits(Rectangle.Empty, null, SkiaSharp.SKColorType.Bgra8888);
-                try
-                {
-                    var bmpData = displayBitmap.LockBits(
-                        new Rectangle(0, 0, frame.Width, frame.Height),
-                        System.Drawing.Imaging.ImageLockMode.WriteOnly,
-                        PixelFormat.Format32bppPArgb);
-                    try
-                    {
-                        var srcStride = 4 * frame.Width;
-                        var dstStride = bmpData.Stride;
-                        var rowBytes = Math.Min(srcStride, dstStride);
-                        unsafe
-                        {
-                            byte* src = (byte*)lockData.Scan0;
-                            byte* dst = (byte*)bmpData.Scan0;
-                            for (int y = 0; y < frame.Height; y++)
-                            {
-                                Buffer.MemoryCopy(src + y * srcStride, dst + y * dstStride, dstStride, rowBytes);
-                            }
-                        }
-                    }
-                    finally
-                    {
-                        displayBitmap.UnlockBits(bmpData);
-                    }
-                }
-                finally
-                {
-                    try { frame.UnlockBits(lockData); } catch { }
-                }
+                _fullscreenBox.Image = null;
             }
-            catch
+            if (_videoBox != null && !_videoBox.IsDisposed)
             {
-                ReleasePendingFrameBuffer(bufferIndex);
-                return;
+                _videoBox.Image = null;
             }
-
-            var width = frame.Width;
-            var height = frame.Height;
-
-            UiAsync.RunSync(this, () => UpdateVideoDisplay(bufferIndex, width, height, generation), "OnGstNewImage");
-        }
-
-        private void UpdateVideoDisplay(int bufferIndex, int width, int height, int generation)
-        {
-            if (IsDisposed || _videoBox == null || generation != _streamGeneration || _stopping)
-            {
-                ReleasePendingFrameBuffer(bufferIndex);
-                return;
-            }
-
-            Bitmap displayBitmap;
-            lock (_frameBufferLock)
-            {
-                if (_frameBuffers == null ||
-                    bufferIndex < 0 ||
-                    bufferIndex >= _frameBuffers.Length ||
-                    _frameBuffers[bufferIndex] == null)
-                {
-                    if (_pendingBufferIndex == bufferIndex)
-                        _pendingBufferIndex = -1;
-                    return;
-                }
-
-                displayBitmap = _frameBuffers[bufferIndex];
-            }
-
-            try
-            {
-                _videoBox.Image = displayBitmap;
-
-                if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
-                {
-                    _fullscreenBox.Image = displayBitmap;
-                }
-
-                lock (_frameBufferLock)
-                {
-                    _displayBufferIndex = bufferIndex;
-                    if (_pendingBufferIndex == bufferIndex)
-                        _pendingBufferIndex = -1;
-                }
-
-                if (_frameCount % 30 == 1)
-                {
-                    _lblStatus.Text = $"Streaming {width}x{height}";
-                    _lblStatus.ForeColor = Color.LimeGreen;
-                }
-            }
-            catch (Exception ex)
-            {
-                lock (_frameBufferLock)
-                {
-                    if (_displayBufferIndex == bufferIndex)
-                        _displayBufferIndex = -1;
-                    if (_pendingBufferIndex == bufferIndex)
-                        _pendingBufferIndex = -1;
-                }
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame error - {ex.Message}");
-            }
+            _displayFrame?.Dispose();
+            _displayFrame = null;
         }
     }
 }

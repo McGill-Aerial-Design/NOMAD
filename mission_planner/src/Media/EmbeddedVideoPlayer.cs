@@ -1,97 +1,154 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
-extern alias MPDrawing;
-
-// ============================================================
-// NOMAD Embedded Video Player - GStreamer Implementation
-// ============================================================
-// Uses Mission Planner's built-in GStreamer for direct RTSP/UDP video.
-// Topic and overlay controls belonged to the removed Python REST service and
-// are intentionally not part of this player.
-// ============================================================
-
 using System;
 using System.Drawing;
 using System.Threading;
 using System.Windows.Forms;
-using MissionPlanner.Utilities;
-using MPBitmap = MPDrawing::System.Drawing.Bitmap;
 
 namespace NOMAD.MissionPlanner
 {
-    /// <summary>
-    /// Embedded video player using Mission Planner's GStreamer wrapper.
-    /// </summary>
     public partial class EmbeddedVideoPlayer : UserControl
     {
         private string _streamUrl;
         private int _latencyMs = 100;
-        private bool _isPlaying;
-
-        private GStreamer _gst;
+        private readonly VideoSession _session;
+        private readonly OwnedVideoProcess _external = new OwnedVideoProcess();
+        private readonly System.Windows.Forms.Timer _frameTimer;
+        private CancellationTokenRegistration _shutdown;
+        private Bitmap _displayFrame;
         private PictureBox _videoBox;
         private Label _lblStatus;
         private TrackBar _trkLatency;
         private Label _lblLatencyValue;
         private Form _fullscreenForm;
         private PictureBox _fullscreenBox;
-
-        private readonly SemaphoreSlim _lifecycleLock = new SemaphoreSlim(1, 1);
-        private int _streamGeneration;
-        private volatile bool _stopping;
-
-        private const int FrameBufferCount = 3;
-        private readonly object _frameBufferLock = new object();
-        private Bitmap[] _frameBuffers;
-        private int _frameBufferWidth;
-        private int _frameBufferHeight;
-        private int _displayBufferIndex = -1;
-        private int _pendingBufferIndex = -1;
-        private int _nextBufferIndex;
-        private int _frameCount;
-
         private readonly bool _showControls;
+        private readonly int _uiThread = Thread.CurrentThread.ManagedThreadId;
+        private bool _isPlaying => _session.IsActive;
 
-        /// <summary>
-        /// Creates an embedded player for a direct RTSP or UDP stream.
-        /// </summary>
         public EmbeddedVideoPlayer(string title, string streamUrl, bool showControls = true)
+            : this(title, streamUrl, showControls, CancellationToken.None, () => new GStreamerVideoPipeline()) { }
+
+        internal EmbeddedVideoPlayer(string title, string streamUrl, bool showControls,
+            CancellationToken shutdown, Func<IVideoPipeline> createPipeline)
         {
             _streamUrl = streamUrl ?? "";
             _showControls = showControls;
-            InitializeUI();
-
-            this.HandleCreated += (s, e) => UiAsync.Run(this, async () =>
+            _session = new VideoSession(createPipeline);
+            _frameTimer = new System.Windows.Forms.Timer { Interval = 33 };
+            _frameTimer.Tick += OnFrameTick;
+            try
             {
-                if (!_showControls && !_isPlaying && !IsDisposed)
+                InitializeUI();
+                if (shutdown.IsCancellationRequested)
                 {
-                    StartStream();
+                    Dispose();
+                    return;
                 }
-                await System.Threading.Tasks.Task.CompletedTask;
-            }, "EmbeddedVideoHandleCreated");
+                _shutdown = shutdown.Register(OnPluginShutdown);
+            }
+            catch (ObjectDisposedException) when (shutdown.IsCancellationRequested)
+            {
+                Dispose();
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            if (!_showControls)
+            {
+                StartStream();
+            }
         }
 
         private int ExtractUdpPort(string url)
         {
-            if (string.IsNullOrEmpty(url)) return 5600;
-            string cleaned = url;
+            if (string.IsNullOrEmpty(url))
+            {
+                return 5600;
+            }
+            var cleaned = url;
             if (cleaned.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
+            {
                 cleaned = cleaned.Substring(6);
+            }
             cleaned = cleaned.Replace("@", "").TrimStart(':');
             return int.TryParse(cleaned, out int port) ? port : 5600;
         }
 
+        private void ShutdownVideo()
+        {
+            _session.Dispose();
+            try
+            {
+                _external.Dispose();
+            }
+            finally
+            {
+                _frameTimer.Stop();
+                _frameTimer.Tick -= OnFrameTick;
+                _frameTimer.Dispose();
+                ClearVideoDisplayAndDisposeBuffers();
+            }
+        }
+
+        private void OnPluginShutdown()
+        {
+            _session.Dispose();
+            _external.Dispose();
+            if (Thread.CurrentThread.ManagedThreadId == _uiThread)
+            {
+                Dispose();
+                return;
+            }
+            // Worker cleanup is already complete; the UI releases its controls on its own thread.
+            if (IsHandleCreated && !IsDisposed)
+            {
+                UiAsync.RunSync(this, () =>
+                {
+                    if (!IsDisposed)
+                    {
+                        Dispose();
+                    }
+                }, "video shutdown");
+            }
+        }
+
+        private void ValidateUiThread()
+        {
+            if (Thread.CurrentThread.ManagedThreadId != _uiThread)
+            {
+                throw new InvalidOperationException("Video controls must be used on their UI thread");
+            }
+        }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
+            try
             {
-                StopStream();
-                _lifecycleLock.Dispose();
-                if (_fullscreenForm != null && !_fullscreenForm.IsDisposed)
-                    _fullscreenForm.Close();
+                if (disposing)
+                {
+                    _shutdown.Dispose();
+                    try
+                    {
+                        ShutdownVideo();
+                    }
+                    finally
+                    {
+                        _fullscreenForm?.Dispose();
+                    }
+                }
             }
-            base.Dispose(disposing);
+            finally
+            {
+                base.Dispose(disposing);
+            }
         }
     }
 }

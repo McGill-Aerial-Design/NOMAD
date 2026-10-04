@@ -149,6 +149,9 @@ jobs:
       - name: Gimbal joystick UI smoke
         run: pwsh -File scripts/build/test_plugin_gimbal_ui.ps1
 
+      - name: Video lifetime and cleanup tests
+        run: pwsh -File scripts/build/test_plugin_video.ps1
+
       - name: Flight log adapter smoke test
         run: pwsh -File scripts/build/test_plugin_log_adapters.ps1
 

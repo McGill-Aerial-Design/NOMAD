@@ -154,6 +154,33 @@ under the exclusive lifetime lock.
 | Aircraft-side router (`infra/transport/mavlink_router/`) | Serial/IP forwarding on the aircraft-side host | The standalone ground router's multi-link selection or NOMAD policy |
 | Qualification tooling (`tests/`, `scripts/dev/`) | Fake peers, deterministic wire fixtures and isolated SITL scenarios | Installed production operation or evidence beyond each test's declared scope |
 
+## Mission Planner video lifetime
+
+Each embedded player and the plugin's HUD player owns one `VideoSession`. The
+session owns the worker task, cancellation source, generation and pending frame.
+Its states are stopped, starting, streaming, stopping and terminal disposal.
+Duplicate starts are rejected while active or stopping. Stop invalidates the
+generation, cancels and joins the worker; restart first completes that cleanup.
+The worker exclusively owns its disposable native GStreamer pipeline, appsink,
+bus and borrowed sample/map lifetimes, including partial startup failures.
+NOMAD does not start Mission Planner's shared static GStreamer worker.
+
+Frames are copied before native samples are released. A UI timer takes the
+latest owned frame; workers never queue callbacks into controls or wait for the
+UI thread. Old generations cannot publish into a new session. The UI owns its
+display image, timer, fullscreen controls and any separately launched VLC
+process/temporary SDP file. Stop and disposal release those resources. Plugin
+exit cancels video views and disposes the HUD owner/subscriptions before other
+plugin cleanup. Reinitialization uses a fresh shutdown token; queued load work
+checks the token it captured before starting video.
+
+Video control operations run on the creating UI thread. Cancellation can arrive
+from another thread: pipeline/process cleanup joins immediately and control
+disposal runs on the UI thread. The bounded native sample read observes
+cancellation; an in-progress native initialization/state-change call must return
+before its worker can finish cleanup. Software tests do not qualify native
+decoder performance, a real stream or an OS/native library that never returns.
+
 ## Where a change belongs
 
 - Put reusable aircraft behavior, validation and safety policy in the C++ core;

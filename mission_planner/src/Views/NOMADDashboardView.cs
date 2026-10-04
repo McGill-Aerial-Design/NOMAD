@@ -17,6 +17,8 @@ namespace NOMAD.MissionPlanner
     {
         private readonly MAVLinkConnectionManager _connectionManager;
         private readonly NOMADConfig _config;
+        private readonly System.Threading.CancellationToken _videoShutdown;
+        private readonly Func<IVideoPipeline> _createPipeline;
         private readonly bool _ownsNotificationService;
 
         private Label _lblFlightMode;
@@ -30,7 +32,6 @@ namespace NOMAD.MissionPlanner
         private Panel _videoPlaceholder;
         private Label _lblVideoStatus;
         private EmbeddedVideoPlayer _videoPlayer;
-        private bool _videoInitialized;
 
         private BoundaryMonitor _boundaryMonitor;
         private NotificationService _notificationService;
@@ -45,7 +46,17 @@ namespace NOMAD.MissionPlanner
         }
 
         public NOMADDashboardView(NOMADConfig config, MAVLinkConnectionManager connectionManager = null)
+            : this(config, connectionManager, System.Threading.CancellationToken.None) { }
+
+        internal NOMADDashboardView(NOMADConfig config, MAVLinkConnectionManager connectionManager,
+            System.Threading.CancellationToken videoShutdown)
+            : this(config, connectionManager, videoShutdown, () => new GStreamerVideoPipeline()) { }
+
+        internal NOMADDashboardView(NOMADConfig config, MAVLinkConnectionManager connectionManager,
+            System.Threading.CancellationToken videoShutdown, Func<IVideoPipeline> createPipeline)
         {
+            _videoShutdown = videoShutdown;
+            _createPipeline = createPipeline;
             _config = config ?? new NOMADConfig();
             _connectionManager = connectionManager;
             _notificationService = NotificationService.Shared;
@@ -62,22 +73,28 @@ namespace NOMAD.MissionPlanner
 
         private void InitializeVideoIfConfigured()
         {
-            if (_videoInitialized || string.IsNullOrWhiteSpace(_config.VideoUrl))
+            if (string.IsNullOrWhiteSpace(_config.VideoUrl))
+            {
                 return;
+            }
 
             try
             {
-                _videoPlaceholder.Controls.Clear();
-                _videoPlayer = new EmbeddedVideoPlayer("Video Feed", _config.VideoUrl, showControls: false)
+                _videoPlayer = new EmbeddedVideoPlayer("Video Feed", _config.VideoUrl, false,
+                    _videoShutdown, _createPipeline)
                 {
                     Dock = DockStyle.Fill,
                 };
                 _videoPlaceholder.Controls.Add(_videoPlayer);
-                _videoInitialized = true;
+                _lblVideoStatus.Visible = false;
+                _videoPlayer.BringToFront();
                 _lblVideoStatus.Text = "Video: connecting";
             }
             catch (Exception ex)
             {
+                _videoPlayer?.Dispose();
+                _videoPlayer = null;
+                _lblVideoStatus.Visible = true;
                 _lblVideoStatus.Text = $"Video unavailable: {ex.Message}";
                 _lblVideoStatus.ForeColor = NOMADTheme.ERROR;
             }

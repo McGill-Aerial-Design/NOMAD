@@ -226,6 +226,7 @@ pixi run build-plugin-only
 pixi run test-plugin-build-only
 pixi run lint-plugin
 pixi run test-plugin-core-client
+pixi run test-plugin-video
 ```
 
 The build writes `mission_planner/src/bin/Release/NOMADPlugin.dll`; it does not
@@ -236,6 +237,12 @@ and its [packaging guide](../mission_planner/packaging/README.md). Tagged
 releases use `.github/workflows/release.yml` to assemble separate plugin and
 router ZIP files; a manual workflow dispatch uploads artifacts without
 publishing a release.
+
+`test-plugin-video` requires the plugin build and runs fake pipeline lifecycle,
+isolated WinForms view/HUD disposal, plugin exit, and owned child-process checks.
+It needs no camera, GStreamer installation, hardware or network stream. The
+hosted C# build job runs this harness against the built plugin and pinned
+Mission Planner references.
 
 ## ROS integration
 
