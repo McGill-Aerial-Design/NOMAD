@@ -28,8 +28,7 @@ class Deployment:
         self.record = self.root / "deployment.json"
 
     def status(self) -> dict:
-        storage.require_record_recovery(self.record)
-        if not self.record.exists():
+        if not storage.record_exists(self.record):
             return {
                 "schema_version": 1,
                 "component": self.component,

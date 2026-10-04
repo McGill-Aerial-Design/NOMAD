@@ -114,8 +114,8 @@ class RouterAdapter:
             raise ValueError("router start command requires nonempty JSON argv")
 
     def has_unmanaged(self) -> bool:
-        running = self.process.exists() and not self.supervisor_stopped()
-        return self.current.exists() or running or self.port_open()
+        running = storage.record_exists(self.process) and not self.supervisor_stopped()
+        return storage.record_exists(self.current) or running or self.port_open()
 
     def port_open(self) -> bool:
         try:
@@ -125,7 +125,10 @@ class RouterAdapter:
             return False
 
     def supervisor_stopped(self) -> bool:
-        if self.process.exists() and storage.read_json(self.process).get("status") not in {"stopped", "failed"}:
+        if storage.record_exists(self.process) and storage.read_json(self.process).get("status") not in {
+            "stopped",
+            "failed",
+        }:
             return False
         if self.port_open():
             return False
@@ -133,7 +136,7 @@ class RouterAdapter:
             return True
 
     def current_matches(self, candidate: dict) -> bool:
-        return self.current.exists() and storage.read_json(self.current) == candidate
+        return storage.record_exists(self.current) and storage.read_json(self.current) == candidate
 
     def preflight(self, candidate: dict) -> None:
         storage.reject_links(self.config)
@@ -145,7 +148,7 @@ class RouterAdapter:
         qualify_candidate(candidate)
 
     def stop(self) -> None:
-        if not self.process.exists():
+        if not storage.record_exists(self.process):
             if self.port_open():
                 raise RuntimeError("an unmanaged router is listening; adopt or stop it explicitly")
             wait(self.supervisor_stopped, "router supervisor has not released its lifetime lock")
@@ -179,7 +182,7 @@ class RouterAdapter:
         wait(lambda: self.started(expected), "router supervisor did not acknowledge the candidate startup")
 
     def started(self, version: str) -> bool:
-        if not self.process.exists():
+        if not storage.record_exists(self.process):
             return False
         state = storage.read_json(self.process)
         if state.get("release_version") != version:
