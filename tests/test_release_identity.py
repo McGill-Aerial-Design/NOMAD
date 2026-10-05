@@ -71,6 +71,19 @@ def test_complete_set_correlates_every_package_and_tools(tmp_path, monkeypatch):
     assert manifest.load_manifest(output) == loaded
 
 
+def test_deployment_tools_checksum_does_not_depend_on_clock(tmp_path, monkeypatch):
+    monkeypatch.setattr(zipfile.time, "localtime", lambda seconds=None: (2020, 1, 1, 0, 0, 0, 2, 1, -1))
+    first = identity.create_deployment_tools(tmp_path, release_identity())
+    original = (tmp_path / first["filename"]).read_bytes()
+    monkeypatch.setattr(zipfile.time, "localtime", lambda seconds=None: (2040, 1, 1, 0, 0, 0, 6, 1, -1))
+    second = identity.create_deployment_tools(tmp_path, release_identity())
+    assert second == first
+    assert (tmp_path / second["filename"]).read_bytes() == original
+    with zipfile.ZipFile(tmp_path / first["filename"]) as archive:
+        assert all(entry.date_time == (1980, 1, 1, 0, 0, 0) for entry in archive.infolist())
+        assert all(entry.external_attr >> 16 == 0o100644 for entry in archive.infolist())
+
+
 def test_deployment_tools_load_target_without_source_checkout(tmp_path):
     tools = identity.create_deployment_tools(tmp_path, release_identity())
     extracted = tmp_path / "extracted"

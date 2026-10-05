@@ -524,12 +524,19 @@ actuator mappings when enabled; it still reports termination as unavailable.
 Provision an absolute protected `NOMAD_ACTUATORS_FILE` outside the installation
 tree. A blank path configures no outputs. Begin with
 [`actuators.example.json`](../config/actuators.example.json), review every physical
-channel, value, label and hazard classification, and protect the file with the same
-ownership/permissions as runtime credentials. Validate without any vehicle connection:
+channel, value, label and hazard classification. The package includes the example at
+`share/nomad/config/actuators.example.json` and the standalone Python 3 migration tool
+at `share/nomad/lifecycle/migrate_actuators.py`. Put the actuator file in its own private
+directory: atomic replacement requires create/delete access to that directory. Protect
+the file and directory for the runtime account as described below. Validate without any vehicle connection:
 
 ```sh
 nomad-runtime --validate-actuators <absolute-protected-actuators.json>
 ```
+
+The offline validator must run as the file owner. On Windows, validate the reviewed
+export under the operator account before `Protect` transfers backend ownership to
+LocalService; service startup then validates it again under LocalService.
 
 Actuator configuration uses `configure_actuators` under ordinary admitted authority
 and requires fresh disarmed state, no active/pending/recovery output, and a configured
@@ -542,7 +549,7 @@ Old nonempty Mission Planner `Payloads`/`Actuators` settings fail visibly and le
 the original file unchanged. Export a supported legacy configuration to two new files:
 
 ```sh
-python scripts/migrate_actuators.py <old-mp.json> <new-backend.json> <new-private-mp.json> --runtime <nomad-runtime>
+python <prefix>/share/nomad/lifecycle/migrate_actuators.py <old-mp.json> <new-backend.json> <new-private-mp.json> --runtime <nomad-runtime>
 ```
 
 The converter preserves exact channels, endpoints, reversal, pulse values, names and
@@ -562,7 +569,7 @@ No value is silently clamped or remapped. Review both exports before provisionin
 
 Copy the packaged `share/nomad/lifecycle/runtime.example.json` outside the
 installation tree. Values are strings: set the endpoint, IPC port, absolute
-credential-file and audit-directory paths, and independent API gate. The protected
+credential-file and audit-directory paths, optional `NOMAD_ACTUATORS_FILE`, and independent API gate. The protected
 `--config` loader rejects unknown/duplicate keys, non-string values and missing
 required settings. It replaces inherited runtime settings, so a missing API gate
 stays disabled. Optional fence/velocity settings use their console environment
@@ -570,7 +577,7 @@ names. JSON is data, never shell code. Keep per-client tokens in the separate
 protected identity/token map; both files load once per process.
 
 The stable service account must own configuration, credential file and audit
-directory. Linux files require mode 0600 and state directories 0700. Windows
+directory, actuator file and its private parent. Linux files require mode 0600 and state directories 0700. Windows
 uses `NT AUTHORITY\LocalService`, with owner/DACL restricted to that account,
 SYSTEM and administrators. Protect parent directories against untrusted replacement
 as well. Keep binaries administrator-owned but readable/executable by the service
@@ -594,7 +601,19 @@ Generate a separate `/etc/nomad/clients.json` identity/token map using independe
 `secrets.token_hex(32)` credentials in a secure provisioning tool/editor, without
 printing them. Set owner `nomad:nomad` and mode 0600. Provision each client's token
 separately. Edit the protected runtime JSON to reference that file and
-`/var/lib/nomad/audit`. For the onboard profile, review its
+`/var/lib/nomad/audit`. For actuator deployments, review an example or migrated file,
+then provision it without changing the private Mission Planner settings export:
+
+```sh
+sudo install -d -o nomad -g nomad -m 0700 /var/lib/nomad/actuators
+sudo install -o nomad -g nomad -m 0600 <reviewed-backend.json> /var/lib/nomad/actuators/actuators.json
+```
+
+Set `NOMAD_ACTUATORS_FILE` to `/var/lib/nomad/actuators/actuators.json`. Do not put
+it in `/etc/nomad`: the hardened service cannot replace files there. Validate the
+protected file under the service account with `sudo -u nomad /opt/nomad/bin/nomad-runtime
+--validate-actuators /var/lib/nomad/actuators/actuators.json`.
+For the onboard profile, review its
 `NOMAD_MAVLINK_ENDPOINT` (`udpin:0.0.0.0:14550`) and the separately supervised
 aircraft-side router's output; the example's ground loopback port is not an
 onboard deployment default. Keep IPC loopback-only and deliberately set the API gate if
@@ -602,7 +621,7 @@ actuation is wanted. The account must traverse all these paths. `ProtectHome=yes
 intentionally excludes home directories. Render for review, then register:
 
 ```sh
-python3 /opt/nomad/share/nomad/lifecycle/install_systemd.py render --executable /opt/nomad/bin/nomad-runtime --config /etc/nomad/runtime.json --state /var/lib/nomad --user nomad
+sudo -u nomad python3 /opt/nomad/share/nomad/lifecycle/install_systemd.py render --executable /opt/nomad/bin/nomad-runtime --config /etc/nomad/runtime.json --state /var/lib/nomad --user nomad
 sudo python3 /opt/nomad/share/nomad/lifecycle/install_systemd.py install --executable /opt/nomad/bin/nomad-runtime --config /etc/nomad/runtime.json --state /var/lib/nomad --user nomad
 sudo systemctl start nomad-runtime.service
 systemctl status nomad-runtime.service
@@ -615,7 +634,8 @@ sudo systemctl restart nomad-runtime.service
 Configure the client's IPC port when it differs from default. The foreground unit
 has no router dependency or network-online readiness assertion. Hardening removes
 capabilities, isolates temporary files/devices and restricts writes to `--state`.
-Put audit beneath that path, with credentials elsewhere. Custom users require a
+Put audit and actuator state beneath that path, with credentials elsewhere. The renderer
+and installer reject writable state paths outside `--state` and symbolic links. Custom users require a
 matching primary group. Registration does not enable boot startup; explicitly run
 `sudo systemctl enable nomad-runtime.service` only after provisioning if desired.
 
@@ -658,8 +678,19 @@ Stop-Service nomad-runtime
 Restart-Service nomad-runtime
 ```
 
-`Protect` explicitly provisions owner/DACL for config, credentials and audit
-directory, refusing reparse points. Run it before first start. It does not
+For actuator deployments, create a dedicated directory such as
+`C:\ProgramData\NOMAD\actuators`, put only the reviewed backend JSON there, and set
+`NOMAD_ACTUATORS_FILE` to its absolute path in the runtime JSON. Keep the migrated
+private Mission Planner settings under the operator account. Leave the runtime field
+blank only when no configured outputs are wanted.
+Use fully qualified paths; drive-relative forms such as `C:runtime.json` or
+`\NOMAD\runtime.json` depend on the caller's current drive/directory and are rejected.
+
+`Protect` explicitly provisions owner/DACL for config, credentials, audit directory,
+and the optional actuator file and its dedicated parent. It refuses reparse points,
+including in ancestor directories, and refuses a shared actuator directory. This
+transfers a migrated backend file from the operator to LocalService and grants the
+create/delete access required for atomic runtime replacement. Run it before first start. It does not
 recursively rewrite prior journals; retain the same identity on upgrade.
 Give LocalService read/execute access to the binary prefix; avoid user-profile
 paths. Configure Mission Planner's `CoreClientCredential` separately under the

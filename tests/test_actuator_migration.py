@@ -2,6 +2,7 @@
 """Migration preserves exact output identity or fails without changing saved settings."""
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -139,12 +140,33 @@ def test_legacy_relay_toggle_without_pulse_shortcut_retains_behavior():
 
 
 def runtime_binary() -> Path:
+    resource = os.environ.get("NOMAD_RESOURCE_BUILD_DIR")
+    if resource:
+        for folder in (Path(resource) / "Release", Path(resource)):
+            for name in ("nomad-runtime.exe", "nomad-runtime"):
+                path = folder / name
+                if path.is_file():
+                    return path
+        raise FileNotFoundError("configured resource build has no Release backend validator")
     for folder in (ROOT / "build/core/Debug", ROOT / "build/core", ROOT / "build/core/Release"):
         for name in ("nomad-runtime.exe", "nomad-runtime"):
             path = folder / name
             if path.is_file():
                 return path
     pytest.skip("build-core supplies the native backend validator")
+
+
+def test_resource_validation_requires_its_release_binary(tmp_path, monkeypatch):
+    monkeypatch.setenv("NOMAD_RESOURCE_BUILD_DIR", str(tmp_path))
+    (tmp_path / "Debug").mkdir()
+    (tmp_path / "Debug/nomad-runtime.exe").touch()
+    with pytest.raises(FileNotFoundError, match="Release backend validator"):
+        runtime_binary()
+    release = tmp_path / "Release"
+    release.mkdir()
+    binary = release / "nomad-runtime.exe"
+    binary.touch()
+    assert runtime_binary() == binary
 
 
 def test_native_validated_export_is_private_deterministic_and_keeps_original(tmp_path):

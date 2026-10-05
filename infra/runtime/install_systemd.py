@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -29,6 +30,25 @@ def render_unit(executable: Path, config: Path, state: Path, user: str) -> str:
     return template
 
 
+def validate_state_paths(config: Path, state: Path) -> None:
+    """Atomic actuator replacement and audit writes must remain in the writable state tree."""
+    settings = json.loads(config.read_text(encoding="utf-8"))
+    state_root = state.resolve()
+    for key in ("NOMAD_AUDIT_DIRECTORY", "NOMAD_ACTUATORS_FILE"):
+        value = settings.get(key, "")
+        if key == "NOMAD_ACTUATORS_FILE" and value == "":
+            continue
+        if not isinstance(value, str) or not value or not Path(value).is_absolute():
+            raise ValueError(f"{key} requires an absolute path")
+        path = Path(value)
+        resolved = path.resolve()
+        if not resolved.is_relative_to(state_root) or (key == "NOMAD_ACTUATORS_FILE" and resolved == state_root):
+            raise ValueError(f"{key} must be beneath --state for systemd write access")
+        for parent in (path, *path.parents, state, *state.parents):
+            if parent.is_symlink():
+                raise ValueError("state paths must not contain symbolic links")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("render", "install", "uninstall"))
@@ -45,6 +65,7 @@ def main() -> int:
         if None in (arguments.executable, arguments.config, arguments.state):
             parser.error("--executable, --config and --state are required")
         unit = render_unit(arguments.executable, arguments.config, arguments.state, arguments.user)
+        validate_state_paths(arguments.config, arguments.state)
         if arguments.action == "render":
             print(unit, end="")
             return 0

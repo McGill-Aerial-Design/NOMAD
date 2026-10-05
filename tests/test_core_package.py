@@ -33,6 +33,15 @@ def test_valid_install_tree_has_no_content_errors(tmp_path: Path) -> None:
     assert verify_core_package.validate_install_root(tmp_path) == []
 
 
+@pytest.mark.parametrize("name", ["config/actuators.example.json", "lifecycle/migrate_actuators.py"])
+def test_package_requires_actuator_provisioning_assets(tmp_path: Path, name: str) -> None:
+    make_install_tree(tmp_path)
+    relative = Path("share/nomad") / name
+    (tmp_path / relative).unlink()
+
+    assert f"missing {relative}" in verify_core_package.validate_install_root(tmp_path)
+
+
 def test_install_tree_rejects_live_configuration(tmp_path: Path) -> None:
     make_install_tree(tmp_path)
     live_config = tmp_path / "share/nomad/config/nomad.env"
@@ -77,6 +86,28 @@ def test_find_install_root_accepts_cpack_top_level_directory(tmp_path: Path) -> 
     (nested / "bin").mkdir(parents=True)
 
     assert verify_core_package.find_install_root(tmp_path) == nested
+
+
+def test_cpack_directory_selects_current_archives_and_requires_both(tmp_path: Path) -> None:
+    (tmp_path / "CPackConfig.cmake").write_text(
+        'set(CPACK_PACKAGE_DIRECTORY "/tmp/\u5047")\nset(CPACK_PACKAGE_FILE_NAME "nomad-core-current")\n',
+        encoding="utf-8",
+    )
+    archives = [tmp_path / ("nomad-core-current" + suffix) for suffix in (".zip", ".tar.gz")]
+    for archive in archives:
+        archive.write_bytes(b"test archive")
+    (tmp_path / "nomad-core-old.zip").write_bytes(b"stale archive")
+    assert verify_core_package.package_inputs(tmp_path) == archives
+    archives[1].unlink()
+    with pytest.raises(ValueError, match="missing configured CPack archives"):
+        verify_core_package.package_inputs(tmp_path)
+
+
+@pytest.mark.parametrize("name", ["../outside", "bad/name", "..", ""])
+def test_cpack_directory_rejects_unsafe_output_name(tmp_path: Path, name: str) -> None:
+    (tmp_path / "CPackConfig.cmake").write_text(f'set(CPACK_PACKAGE_FILE_NAME "{name}")\n')
+    with pytest.raises(ValueError, match="safe package filename"):
+        verify_core_package.package_inputs(tmp_path)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Unix executable permissions")

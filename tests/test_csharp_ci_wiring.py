@@ -104,3 +104,12 @@ def test_plugin_settings_stop_old_joystick_before_replacing_output_transport():
     assert settings.index("OutputController.Initialize(_config)") < settings.index(
         "_joystickService?.UpdateConfig(_config)"
     )
+
+
+def test_dead_code_and_local_notification_checks_run_in_ci():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    build = workflow.split("  plugin-build:", maxsplit=1)[1]
+    assert build.index("Stage Mission Planner reference assemblies") < build.index("lint_plugin_deadcode.ps1")
+    assert "test_plugin_local_messages.ps1" in workflow
+    lint = (ROOT / "scripts/build/lint_plugin_deadcode.ps1").read_text(encoding="utf-8")
+    assert "/t:Rebuild" in lint and "/warnaserror:$deadCodeWarnings" in lint

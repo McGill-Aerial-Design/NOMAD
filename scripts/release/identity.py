@@ -100,6 +100,15 @@ def write_csharp(path: Path, identity: dict) -> None:
     )
 
 
+def write_tool_member(archive: zipfile.ZipFile, name: str, data: bytes) -> None:
+    """Keep release checksums independent of wall time, checkout timestamps and OS file modes."""
+    entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    entry.create_system = 3
+    entry.external_attr = 0o100644 << 16
+    entry.compress_type = zipfile.ZIP_DEFLATED
+    archive.writestr(entry, data.replace(b"\r\n", b"\n"))
+
+
 def create_deployment_tools(directory: Path, identity: dict) -> dict:
     """Publish operator-reviewed tooling separately from component payloads."""
     filename = "NOMAD-deployment-tools-" + identity["release_version"] + ".zip"
@@ -108,10 +117,10 @@ def create_deployment_tools(directory: Path, identity: dict) -> dict:
     paths.extend([ROOT / "infra/runtime/install_systemd.py", ROOT / "infra/runtime/nomad-runtime.service.in"])
     paths.append(ROOT / "scripts/release/mission-planner-target.json")
     with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("scripts/__init__.py", "")
-        archive.writestr("scripts/release/__init__.py", "")
+        write_tool_member(archive, "scripts/__init__.py", b"")
+        write_tool_member(archive, "scripts/release/__init__.py", b"")
         for path in paths:
-            archive.write(path, path.relative_to(ROOT).as_posix())
+            write_tool_member(archive, path.relative_to(ROOT).as_posix(), path.read_bytes())
     return {"filename": filename, "sha256": digest_file(package), "source_sha": identity["source_sha"]}
 
 

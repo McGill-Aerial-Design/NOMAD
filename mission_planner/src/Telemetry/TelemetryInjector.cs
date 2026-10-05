@@ -1,79 +1,32 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 using System;
-using System.Threading.Tasks;
 using MissionPlanner;
-using MissionPlanner.Utilities;
 
 namespace NOMAD.MissionPlanner
 {
-    /// <summary>
-    /// Telemetry Injection for NOMAD Mission Planner Plugin.
-    ///
-    /// Injects local NOMAD status updates into the Mission Planner HUD
-    /// using MAVLink STATUSTEXT messages.
-    ///
-    /// Example messages:
-    /// - "Vision: OK"
-    /// - "Target: Locked"
-    /// - "Status: Snapshot Captured"
-    /// </summary>
+    /// <summary>Present NOMAD notifications in Mission Planner's local message list.</summary>
     public class TelemetryInjector
     {
-        private readonly MAVLink.MavlinkParse _mavlink;
-
-        public TelemetryInjector(MAVLink.MavlinkParse mavlink = null)
-        {
-            // Accept null gracefully - mavlink parameter is optional.
-            // When null, status messages are still sent via MainV2 fallback path.
-            _mavlink = mavlink;
-        }
-
-        /// <summary>
-        /// Inject a status text message into the Mission Planner HUD.
-        /// </summary>
-        /// <param name="message">Message text (max 50 chars)</param>
-        /// <param name="severity">Severity level (INFO, WARNING, ERROR, CRITICAL)</param>
+        /// <summary>Append a local notification; this does not transmit MAVLink.</summary>
         public void InjectStatusText(string message, MAVLink.MAV_SEVERITY severity = MAVLink.MAV_SEVERITY.INFO)
         {
-            if (string.IsNullOrEmpty(message))
+            if (string.IsNullOrWhiteSpace(message))
+            {
                 return;
-
-            // Truncate message to MAVLink limit
-            if (message.Length > 50)
-                message = message.Substring(0, 50);
-
-            try
-            {
-                // Create STATUSTEXT message
-                var statusText = new MAVLink.mavlink_statustext_t
-                {
-                    severity = (byte)severity,
-                    text = System.Text.Encoding.ASCII.GetBytes(message.PadRight(50, '\0'))
-                };
-
-                // Send to Mission Planner for HUD display
-                // Note: This is a simplified version. In production, you would send
-                // this through the MAVLink connection to ensure proper routing.
-
-                // For now, log to Mission Planner console
-                UiAsync.RunSync(MainV2.instance, () =>
-                {
-                    try
-                    {
-                        MainV2.comPort.MAV.cs.messages.Add((DateTime.Now, $"NOMAD: {message}"));
-                    }
-                    catch
-                    {
-                        // Fallback: try alternate method
-                        System.Diagnostics.Debug.WriteLine($"NOMAD: {message}");
-                    }
-                }, "InjectStatusText");
             }
-            catch (Exception ex)
+            var notification = $"NOMAD [{severity}]: {message}";
+            UiAsync.RunSync(MainV2.instance, () =>
             {
-                System.Diagnostics.Debug.WriteLine($"TelemetryInjector error: {ex.Message}");
-            }
+                try
+                {
+                    MainV2.comPort.MAV.cs.messages.Add((DateTime.Now, notification));
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"{notification} (local display unavailable: {ex.Message})");
+                }
+            }, "InjectStatusText");
         }
 
         /// <summary>
@@ -110,7 +63,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public void SendCustomStatus(string status)
         {
-            InjectStatusText($"NOMAD: {status}");
+            InjectStatusText(status);
         }
     }
 }

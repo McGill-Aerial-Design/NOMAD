@@ -166,6 +166,7 @@ test-plugin-version = "powershell -ExecutionPolicy Bypass -File scripts/build/te
 # Dead-code lint for the plugin (Windows only) — fails on unused fields/locals,
 # unreachable code, etc. (C# compiler diagnostics promoted to errors).
 lint-plugin = "powershell -ExecutionPolicy Bypass -File scripts/build/lint_plugin_deadcode.ps1"
+test-plugin-local-messages = "powershell -NoProfile -File scripts/build/test_plugin_local_messages.ps1"
 
 # Unit tests for the plugin's geofence geometry (Windows only) — compiles the
 # Mission Planner-free GeoMath/GeofenceTypes with VS's csc and runs assertions
