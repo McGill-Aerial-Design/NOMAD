@@ -30,7 +30,7 @@ namespace NOMAD.MissionPlanner
             string[] deviceList = BuildDeviceComboList(devices);
 
             // Gimbal channel
-            AddSectionLabel(tab, "Gimbal (CADDx)", ref y);
+            AddSectionLabel(tab, "Gimbal", ref y);
 
             _chkJoyGimbalEnabled = AddCheckBox(tab, "Enable", 20, y, Color.LimeGreen);
             y += 28;
@@ -67,7 +67,7 @@ namespace NOMAD.MissionPlanner
             _cmbJoyPositionDevice = AddComboBox(tab, 90, y, 290, deviceList);
             y += 28;
 
-            AddLabel(tab, "Tilt axis:", 20, y);
+            AddLabel(tab, "Position axis:", 20, y);
             _cmbJoyPositionAxis = AddComboBox(tab, 95, y, 80, axes);
             _chkJoyPositionInvert = AddCheckBox(tab, "invert", 185, y, Color.White);
             y += 28;
