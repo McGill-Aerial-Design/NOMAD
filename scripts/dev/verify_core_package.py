@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -210,6 +211,9 @@ def package_inputs(path: Path) -> list[Path]:
     """Resolve an install tree, archive, or CPack output directory."""
     if path.is_file() or (path.is_dir() and (path / "bin").is_dir()):
         return [path]
+    config = path / "CPackConfig.cmake"
+    if config.is_file():
+        return get_cpack_archives(path, config)
     archives = sorted(
         item
         for item in path.iterdir()
@@ -217,6 +221,18 @@ def package_inputs(path: Path) -> list[Path]:
     )
     if not archives:
         raise ValueError(f"no install tree or CPack archive found at {path}")
+    return archives
+
+
+def get_cpack_archives(path: Path, config: Path) -> list[Path]:
+    """Verify this configured build's two outputs, even when older release archives remain."""
+    names = re.findall(r'^set\(CPACK_PACKAGE_FILE_NAME "([A-Za-z0-9_.-]+)"\)$', config.read_text(), re.MULTILINE)
+    if len(names) != 1 or names[0] in {".", ".."}:
+        raise ValueError("CPack configuration requires one safe package filename")
+    archives = [path / (names[0] + suffix) for suffix in (".zip", ".tar.gz")]
+    missing = [archive.name for archive in archives if not archive.is_file()]
+    if missing:
+        raise ValueError("missing configured CPack archives: " + ", ".join(missing))
     return archives
 
 
