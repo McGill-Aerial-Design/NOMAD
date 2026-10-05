@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// NOMAD Mission Planner Plugin — Video & Dual Link
+// NOMAD Mission Planner Plugin — Video & Standalone Router
 // ============================================================
 // Target: Mission Planner 1.3.x
 //
@@ -24,13 +24,13 @@ namespace NOMAD.MissionPlanner
     public partial class NOMADPlugin
     {
         // ============================================================
-        // Dual Link Settings
+        // Router Client Settings
         // ============================================================
 
         /// <summary>
         /// Bring the local status client in sync with the saved connection settings.
         /// </summary>
-        private void ApplyDualLinkSettings()
+        private void ApplyRouterClientSettings()
         {
             try
             {
@@ -59,7 +59,7 @@ namespace NOMAD.MissionPlanner
             }
             catch (Exception ex)
             {
-                Log.Error($"Failed to apply dual link settings — {ex.Message}");
+                Log.Error($"Failed to apply router client settings — {ex.Message}");
             }
             finally
             {
@@ -191,7 +191,10 @@ namespace NOMAD.MissionPlanner
                     return port;
                 }
             }
-            catch { }
+            catch
+            {
+
+            }
             return 5600; // Default port
         }
 
@@ -228,7 +231,10 @@ namespace NOMAD.MissionPlanner
                         MainV2.comPort?.MAV?.cs?.messages?.Add((DateTime.Now,
                             $"NOMAD: Failover to {e.ToLink} - {e.Reason}"));
                     }
-                    catch { }
+                    catch
+                    {
+
+                    }
                 };
 
                 _connectionManager.ActiveLinkChanged += (s, newLink) =>
@@ -260,8 +266,8 @@ namespace NOMAD.MissionPlanner
                 if (_connectionManager == null)
                 {
                     CustomMessageBox.Show(
-                        "Dual link management is not enabled.\n\n" +
-                        "Enable it in NOMAD Settings → Connection → Enable Dual Link.",
+                        "Standalone router status is not enabled.\n\n" +
+                        "Enable it in NOMAD Settings → Connection → Connect to router status and controls.",
                         "Link Manager Not Available"
                     );
                     return;

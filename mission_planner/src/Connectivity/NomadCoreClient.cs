@@ -8,21 +8,10 @@ using System.Threading.Tasks;
 
 namespace NOMAD.MissionPlanner.Connectivity
 {
-    public enum NomadCoreRequestOutcome
-    {
-        NotAttempted,
-        Succeeded,
-        Rejected,
-        FailedBeforeSend,
-        UnknownOutcome,
-        Failed,
-        Interrupted
-    }
-
     /// <summary>
     /// Sends typed requests to the persistent NOMAD runtime over local IPC.
     /// </summary>
-    public sealed class NomadCoreClient
+    public sealed partial class NomadCoreClient
     {
         private const string ProcessSource = "mission-planner";
 
@@ -37,6 +26,7 @@ namespace NOMAD.MissionPlanner.Connectivity
 
         private readonly NomadRuntimeClient _runtimeClient;
 
+        // apiKey retains named-call compatibility; it is the runtime client credential, not NOMAD_API_KEY.
         public NomadCoreClient(string apiKey, int runtimePort = DefaultRuntimePort)
         {
             RuntimePort = runtimePort >= 1 && runtimePort <= 65535 ? runtimePort : DefaultRuntimePort;

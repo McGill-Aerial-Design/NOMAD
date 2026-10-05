@@ -8,7 +8,9 @@ Requires=tailscaled.service
 [Service]
 Type=simple
 User=root
-ExecStart=__NOMAD_ROOT__/infra/tailscale/scripts/watchdog.sh
+Environment="TS_HOSTNAME=__TS_HOSTNAME__"
+Environment="TS_OPERATOR=__TS_OPERATOR__"
+ExecStart="__WATCHDOG_SCRIPT__"
 Restart=always
 RestartSec=10
 

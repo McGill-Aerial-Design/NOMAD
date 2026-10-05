@@ -6,9 +6,12 @@
 
 #include "nomad/mission/executor.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <thread>
 #include <vector>
 
 int run_mission_demo(nomad::vehicle::Vehicle &vehicle) {
@@ -48,11 +51,15 @@ int run_fence_demo(nomad::vehicle::Vehicle &vehicle) {
     return verification.success ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+// Legacy test-driver verb; production actuator behavior is owned by runtime IPC.
 int run_payload_demo(nomad::vehicle::Vehicle &vehicle, int relay_number, float duration_seconds) {
-    const auto armed = vehicle.arm_payload();
-    if (!armed.success) {
-        std::cerr << armed.message << '\n';
-        return EXIT_FAILURE;
+    if (!std::isfinite(duration_seconds)) {
+        return print_result({false, "pulse duration must be finite"});
     }
-    return print_result(vehicle.release_payload(relay_number, duration_seconds));
+    const auto on = vehicle.set_relay(relay_number, true);
+    if (!on.success) {
+        return print_result(on);
+    }
+    std::this_thread::sleep_for(std::chrono::duration<float>(std::clamp(duration_seconds, 0.05F, 5.0F)));
+    return print_result(vehicle.set_relay(relay_number, false));
 }

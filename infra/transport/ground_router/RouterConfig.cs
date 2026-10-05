@@ -100,6 +100,7 @@ namespace NOMAD.MissionPlanner
             public int PreferredLinkReconnectDelaySec = 10;
 
             public int StatsTickMs = 250;
+            // Serialized compatibility name: complete-frame silence timeout, not heartbeat age.
             public double HeartbeatTimeoutSec = 3.0;
             public double FailoverCooldownSec = 2.0;
 

@@ -218,6 +218,7 @@ internal static partial class NomadCoreClientTests
         private readonly bool _acknowledged;
         private readonly bool _includeErrorResult;
         private readonly bool? _resultSuccess;
+        private readonly Func<Dictionary<string, object>, Dictionary<string, object>> _semanticResponse;
         private string _owner = "";
         private int _generation;
         private bool _everAdmitted;
@@ -236,7 +237,8 @@ internal static partial class NomadCoreClientTests
                            int commandResponseVersion = 1, int port = 0, bool enforceAuthority = false,
                            bool wrongAuthorityResponseType = false, bool rogueRuntime = false, bool auditFailure = false,
                            string outcome = "success", string errorCode = null, bool acknowledged = true,
-                           bool includeErrorResult = false, bool? resultSuccess = null)
+                           bool includeErrorResult = false, bool? resultSuccess = null,
+                           Func<Dictionary<string, object>, Dictionary<string, object>> semanticResponse = null)
         {
             _expectedConnections = expectedConnections;
             _dropCommandResponse = dropCommandResponse;
@@ -251,6 +253,7 @@ internal static partial class NomadCoreClientTests
             _acknowledged = acknowledged;
             _includeErrorResult = includeErrorResult;
             _resultSuccess = resultSuccess;
+            _semanticResponse = semanticResponse;
             _listener = new TcpListener(IPAddress.Loopback, port);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -314,6 +317,10 @@ internal static partial class NomadCoreClientTests
 
         private Dictionary<string, object> CreateResponse(Dictionary<string, object> command)
         {
+            if (_semanticResponse != null)
+            {
+                return _semanticResponse(command);
+            }
             var response = new Dictionary<string, object>
             {
                 ["protocol"] = "nomad-core", ["version"] = _commandResponseVersion,

@@ -4,6 +4,9 @@
 #include "../src/runtime/auth_proof.hpp"
 #include "../src/runtime/client_auth.hpp"
 #include "../src/runtime/protected_file.hpp"
+#include "../src/runtime/actuator_config.hpp"
+#include "../src/runtime/actuator_storage.hpp"
+#include "../src/runtime/runtime_detail.hpp"
 #include "support/test_harness.hpp"
 #include "../tools/runtime/lifecycle.hpp"
 
@@ -120,6 +123,7 @@ void wait_until(const std::function<bool()> &predicate) {
 #include "runtime_lifecycle_cases.hpp"
 #include "runtime_outcome_cases.hpp"
 #include "runtime_client_cases.hpp"
+#include "runtime_actuator_cases.hpp"
 void test_protocol_and_status(std::uint16_t port, FakeConnection &connection) {
     Client client(port);
     const auto hello = client.request(base_request("1", "hello"));
@@ -381,6 +385,20 @@ void test_competing_admission() {
 void run_runtime_scenarios() {
     using nomad::test::run_scenario;
     run_scenario("socket_failure_classification", test_socket_failure_classification);
+    run_scenario("backend_actuator_authorization", test_backend_actuator_authorization_and_raw_boundary);
+    run_scenario("backend_pulse_recovery", test_backend_pulse_failure_and_explicit_recovery);
+    run_scenario("backend_actuator_configuration_uncertainty", test_backend_configuration_persistence_uncertainty);
+    run_scenario("backend_pending_neutral_and_safe_interrupt", test_backend_pending_neutral_and_safe_interrupt);
+    run_scenario("backend_configuration_authority_recovery", test_configuration_requires_current_authority_recovery);
+    run_scenario("backend_configuration_revocation_after_save", test_configuration_revocation_after_native_save);
+    run_scenario("backend_configuration_audit_failure_after_save", [] {
+        test_configuration_audit_failure_after_native_save();
+    });
+    run_scenario("backend_configuration_sync_and_audit_failure", [] {
+        test_configuration_audit_failure_after_native_save(true);
+    });
+    run_scenario("backend_configuration_arming_after_save", test_configuration_arming_after_native_save);
+    run_scenario("backend_hid_direction_release", test_hid_bidirectional_release_preserves_confirmations_and_stops);
     run_scenario("idle_observer_authority_phase", test_idle_observer_during_independent_authority_phase);
     run_scenario("response_timeout_without_resend", test_response_timeout_does_not_resend_mutation);
     run_scenario("one_connection_and_released_port", test_runtime_owns_one_connection_and_releases_port);
@@ -417,6 +435,19 @@ void run_runtime_scenarios() {
 
 int main(int argc, char **argv) {
     return nomad::test::run_tests([argc, argv] {
+        if (argc == 2 && std::string_view(argv[1]) == "--actuator-tests") {
+            test_backend_actuator_authorization_and_raw_boundary();
+            test_backend_pulse_failure_and_explicit_recovery();
+            test_backend_configuration_persistence_uncertainty();
+            test_backend_pending_neutral_and_safe_interrupt();
+            test_configuration_requires_current_authority_recovery();
+            test_configuration_revocation_after_native_save();
+            test_configuration_audit_failure_after_native_save();
+            test_configuration_audit_failure_after_native_save(true);
+            test_configuration_arming_after_native_save();
+            test_hid_bidirectional_release_preserves_confirmations_and_stops();
+            return;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--authority-events-stress") {
             for (int iteration = 1; iteration <= 50; ++iteration) {
                 nomad::test::run_scenario("authority_events_iteration_" + std::to_string(iteration),

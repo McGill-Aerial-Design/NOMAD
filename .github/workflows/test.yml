@@ -55,6 +55,8 @@ jobs:
           cache: true
       - name: Build and test C++ core
         run: pixi run test-core
+      - name: Validate legacy actuator exports through the native backend
+        run: pixi run python -m pytest tests/test_actuator_migration.py
       - name: Exercise authenticated runtime and installed CLI against a deterministic peer
         run: pixi run python scripts/dev/runtime_ipc_smoke.py
       - name: Qualify clean/crash restart and persistent audit history without hardware

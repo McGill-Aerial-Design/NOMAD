@@ -145,8 +145,6 @@ void test_unqualified_aircraft_reject_outputs_before_transmission() {
         CHECK(!vehicle.motor_test(1, 1200, 1.0F).success);
         CHECK(!vehicle.configure_gimbal(2).success);
         CHECK(!vehicle.set_gimbal_target(0.0, 0.0).success);
-        CHECK(vehicle.arm_payload().success);
-        CHECK(!vehicle.release_payload(2, 0.05F).success);
         CHECK(connection.command_history.empty());
     }
 }

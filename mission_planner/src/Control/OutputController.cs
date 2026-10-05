@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using NOMAD.MissionPlanner.Connectivity;
@@ -11,24 +12,20 @@ namespace NOMAD.MissionPlanner
     {
         private static NomadCoreClient _coreClient;
         private static readonly SemaphoreSlim GimbalRequests = new SemaphoreSlim(1, 1);
-        private static readonly SemaphoreSlim[] PayloadRequests = CreatePayloadGates();
-        private static readonly SemaphoreSlim[] PayloadStops = CreatePayloadGates();
         private static readonly object GimbalFailureLock = new object();
         private static string _lastGimbalFailure = "";
         private static DateTime _lastGimbalFailureAt = DateTime.MinValue;
 
-        private static SemaphoreSlim[] CreatePayloadGates()
-        {
-            // Runtime supports 16 servos and 16 relays; the last gate covers invalid inputs.
-            var gates = new SemaphoreSlim[33];
-            for (var index = 0; index < gates.Length; index++)
-            {
-                gates[index] = new SemaphoreSlim(1, 1);
-            }
-            return gates;
-        }
         internal static void Initialize(NOMADConfig config)
         {
+            lock (ProjectionGate)
+            {
+                DisplayStates.Clear();
+                ReleaseOperations.Clear();
+                _displayIncarnation = "";
+                _displaySequence = 0;
+                RetiredIncarnations.Clear();
+            }
             _coreClient = config == null ? null :
                 new NomadCoreClient(config.CoreClientCredential, config.CoreRuntimePort);
         }
@@ -41,81 +38,125 @@ namespace NOMAD.MissionPlanner
             return new NomadCoreRequestResult(NomadCoreRequestOutcome.NotAttempted, code, message);
         }
 
-        public static Task<NomadCoreRequestResult> SendServoPwmAsync(int channel, int pwmUs)
-        {
-            return SendPayloadAsync(CreateCoreClient(), GetServoGate(channel), "servo",
-                $"channel={channel} pwm_us={pwmUs}",
-                client => client.ServoAsync(channel, pwmUs));
-        }
+        private static readonly object ProjectionGate = new object();
+        private static readonly Dictionary<string, NomadActuatorState> DisplayStates = new Dictionary<string, NomadActuatorState>();
+        private static readonly Dictionary<string, string> ReleaseOperations = new Dictionary<string, string>();
+        private static readonly HashSet<string> RetiredIncarnations = new HashSet<string>();
+        private static ulong _displaySequence;
+        private static string _displayIncarnation = "";
+        internal static event Action<NomadActuatorState> ActuatorStateChanged;
 
-        private static int GetServoGate(int channel) => channel >= 1 && channel <= 16 ? channel - 1 : 32;
-        private static int GetRelayGate(int relay) => relay >= 0 && relay <= 15 ? relay + 16 : 32;
+        internal static Task<NomadCoreRequestResult> GetActuatorsAsync() =>
+            SendSemanticAsync(client => client.GetActuatorsAsync());
+        internal static Task<NomadCoreRequestResult> ConfigureActuatorsAsync(string json) =>
+            SendSemanticAsync(client => client.ConfigureActuatorsAsync(json), configuration: true);
+        internal static Task<NomadCoreRequestResult> ActuatorActionAsync(string id, string operation,
+            string source = "ui", int? slot = null, double? value = null, Func<bool> inputStillCurrent = null) =>
+            SendSemanticAsync(client => client.ActuatorActionAsync(id, operation, source, slot, value,
+                inputStillCurrent: inputStillCurrent));
 
-        // Only one explicit stop may wait behind its channel's current command.
-        public static async Task<NomadCoreRequestResult> SendServoStopAsync(int channel, int pwmUs)
+        private static async Task<NomadCoreRequestResult> SendSemanticAsync(
+            Func<NomadCoreClient, Task<NomadCoreRequestResult>> send, bool configuration = false)
         {
-            var capturedClient = CreateCoreClient();
-            var gateIndex = GetServoGate(channel);
-            var stopGate = PayloadStops[gateIndex];
-            if (!await stopGate.WaitAsync(0).ConfigureAwait(false))
+            var client = CreateCoreClient();
+            var result = client == null ? NotSent("runtime_not_configured", "NOMAD runtime is not configured.") :
+                await send(client).ConfigureAwait(false);
+            if (client != CreateCoreClient())
             {
-                return NotSent("request_in_progress", "A stop is already pending; no additional request was sent.");
+                result.PresentationCurrent = false; return result;
             }
-            try
+            if (result.RuntimeIncarnation != "" && !ObserveIncarnation(result.RuntimeIncarnation, result.RequestSequence))
+            { result.PresentationCurrent = false; return result; }
+            foreach (var actuator in result.Actuators)
             {
-                return await SendPayloadAsync(capturedClient, gateIndex, "servo", $"channel={channel} pwm_us={pwmUs}",
-                    client => client.ServoAsync(channel, pwmUs), explicitStop: true).ConfigureAwait(false);
+                if (!PublishState(result.RuntimeIncarnation, actuator.State, result.RequestSequence))
+                {
+                    continue;
+                }
+                lock (ProjectionGate)
+                {
+                    foreach (var action in actuator.Actions)
+                    { ReleaseOperations[actuator.Id + ":" + action.Operation] = action.ReleaseOperation; }
+                }
             }
-            finally
+            if (result.ActuatorState != null)
             {
-                stopGate.Release();
+                PublishState(result.RuntimeIncarnation, result.ActuatorState, result.RequestSequence);
             }
-        }
-
-        public static Task<NomadCoreRequestResult> SetRelayAsync(int relayNumber, bool on)
-        {
-            return SendPayloadAsync(CreateCoreClient(), GetRelayGate(relayNumber), "relay",
-                $"relay={relayNumber} state={(on ? 1 : 0)}",
-                client => client.SetRelayAsync(relayNumber, on));
-        }
-
-        private static async Task<NomadCoreRequestResult> SendPayloadAsync(NomadCoreClient client,
-            int gateIndex, string command, string detail,
-            Func<NomadCoreClient, Task<NomadCoreRequestResult>> send, bool explicitStop = false)
-        {
-            var gate = PayloadRequests[gateIndex];
-            if (!explicitStop && PayloadStops[gateIndex].CurrentCount == 0)
-            {
-                return NotSent("request_in_progress", "An explicit stop is pending; no new command was sent.");
-            }
-            if (explicitStop)
-            {
-                await gate.WaitAsync().ConfigureAwait(false);
-            }
-            else if (!await gate.WaitAsync(0).ConfigureAwait(false))
-            {
-                return NotSent("request_in_progress", "Another payload command is in progress; no request was sent.");
-            }
-            try
-            {
-                var result = client == null ? NotSent("core_not_configured", "NOMAD core is not configured.")
-                    : await send(client).ConfigureAwait(false);
-                ReportPayloadResult(command, detail, result);
-                return result;
-            }
-            finally
-            {
-                gate.Release();
-            }
-        }
-
-        private static void ReportPayloadResult(string command, string detail, NomadCoreRequestResult result)
-        {
             if (!result.Succeeded)
             {
-                Log.Warn(DescribeFailure(command + " command", result));
+                Log.Warn(configuration ? DescribeConfigurationResult(result) : DescribeFailure("Actuator request", result));
             }
-            Log.Info($"audit command={command} result={FormatOutcome(result.Outcome)} {detail}");
+            return result;
+        }
+
+        internal static string GetReleaseOperation(string binding)
+        {
+            lock (ProjectionGate)
+            {
+                return ReleaseOperations.TryGetValue(binding, out var release) ? release : "";
+            }
+        }
+        internal static NomadActuatorState GetDisplayState(string id)
+        {
+            lock (ProjectionGate)
+            {
+                return DisplayStates.TryGetValue(id, out var state) ? state : null;
+            }
+        }
+        internal static bool ObserveIncarnation(string incarnation, ulong sequence)
+        {
+            lock (ProjectionGate)
+            {
+                if (_displayIncarnation != incarnation)
+                {
+                    if (sequence < _displaySequence || RetiredIncarnations.Contains(incarnation))
+                    {
+                        return false;
+                    }
+                    if (_displayIncarnation != "")
+                    {
+                        RetiredIncarnations.Add(_displayIncarnation);
+                    }
+                    DisplayStates.Clear();
+                    ReleaseOperations.Clear();
+                    _displayIncarnation = incarnation;
+                }
+                _displaySequence = Math.Max(_displaySequence, sequence);
+                return true;
+            }
+        }
+        internal static bool PublishState(string incarnation, NomadActuatorState state, ulong sequence = 0)
+        {
+            lock (ProjectionGate)
+            {
+                if (!ObserveIncarnation(incarnation, sequence))
+                {
+                    return false;
+                }
+                if (DisplayStates.TryGetValue(state.Id, out var old) && old.Revision > state.Revision)
+                {
+                    return false;
+                }
+                DisplayStates[state.Id] = state;
+            }
+            var handlers = ActuatorStateChanged;
+            if (handlers == null)
+            {
+                return true;
+            }
+            foreach (Action<NomadActuatorState> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(state);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("Actuator display update failed: " + ex.Message);
+                }
+            }
+            return true;
         }
 
         internal static async Task<NomadCoreRequestResult> SendGimbalTargetAsync(double pitchDeg, double rollDeg)
@@ -186,6 +227,23 @@ namespace NOMAD.MissionPlanner
             }
         }
 
+        internal static string DescribeConfigurationResult(NomadCoreRequestResult result)
+        {
+            if (result.ConfigurationChanged || result.ConfigurationRecoveryRequired)
+            {
+                return "Runtime configuration changed or may have changed. Restart and review the persisted configuration before further operation. " + result.Message;
+            }
+            if (result.Succeeded)
+            {
+                return result.Message;
+            }
+            string evidence = result.Outcome == NomadCoreRequestOutcome.UnknownOutcome || result.Outcome == NomadCoreRequestOutcome.Interrupted ?
+                "Configuration request disposition is uncertain; inspect runtime configuration before submitting again. " :
+                result.Outcome == NomadCoreRequestOutcome.NotAttempted || result.Outcome == NomadCoreRequestOutcome.FailedBeforeSend ?
+                "Configuration request was not sent. " : "Runtime configuration request failed. ";
+            return evidence + result.ErrorCode + ": " + result.Message;
+        }
+
         internal static string DescribeFailure(string action, NomadCoreRequestResult result)
         {
             var evidence = result.Outcome switch
@@ -215,21 +273,5 @@ namespace NOMAD.MissionPlanner
             };
         }
 
-        // Hold the payload gate for the whole pulse; neither edge is automatically retried.
-        public static Task<NomadCoreRequestResult> FireRelayAsync(int relayNumber, int durationMs)
-        {
-            durationMs = Math.Max(50, Math.Min(durationMs, 5000));
-            return SendPayloadAsync(CreateCoreClient(), GetRelayGate(relayNumber), "relay",
-                $"relay={relayNumber} pulse_ms={durationMs}", async client =>
-            {
-                var started = await client.SetRelayAsync(relayNumber, true).ConfigureAwait(false);
-                if (!started.Succeeded)
-                {
-                    return started;
-                }
-                await Task.Delay(durationMs).ConfigureAwait(false);
-                return await client.SetRelayAsync(relayNumber, false).ConfigureAwait(false);
-            });
-        }
     }
 }

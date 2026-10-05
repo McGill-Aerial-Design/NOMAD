@@ -7,6 +7,7 @@
 #include "audit_journal.hpp"
 #include "ipc_server.hpp"
 #include "runtime_detail.hpp"
+#include "actuator_state.hpp"
 
 #include <deque>
 #include <mutex>
@@ -65,6 +66,14 @@ struct Runtime::Implementation {
     Json process_mutating_request(const Request &request);
     Json execute_mutating_request(const Request &request);
     vehicle::CommandResult invoke_vehicle(const Request &request);
+    Json execute_actuator_request(const Request &request);
+    std::optional<Json> process_actuator_release(const Request &request, bool &safe);
+    Json execute_actuator_decision(const Request &request);
+    Json execute_actuator_plan(const Request &request, const detail::ActuatorDecision &decision);
+    Json configure_actuators(const Request &request);
+    Json complete_configuration_save(const Request &request, Json response, const std::string &outcome,
+                                     bool change_known);
+    std::string actuator_authority() const;
     void remember_response(const std::string &key, const std::string &fingerprint, const Json &response);
 
     // Read requests and status.
@@ -92,6 +101,8 @@ struct Runtime::Implementation {
     std::unique_ptr<mavlink::MavlinkConnection> connection_;
     RuntimeConfig config_;
     vehicle::Vehicle vehicle_;
+    detail::ActuatorState actuators_;
+    std::atomic_bool actuator_configuration_recovery_{false};
     detail::IpcServer server_;
     std::atomic_bool stopping_{false};
     bool shutdown_recorded_{true};

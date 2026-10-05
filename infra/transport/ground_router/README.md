@@ -46,9 +46,9 @@ The [example](example.json) has the following ownership on the ground computer:
 | `0.0.0.0:14550` | Router, physical `radiomaster` | Same, independently monitored |
 | `0.0.0.0:14570` | Router, physical `wifi` | Same, independently monitored |
 | `127.0.0.1:14600` | Router, consumer `mission_planner` | MP UDPCl receives telemetry only; unsafe outbound configuration is rejected |
-| Ephemeral MP port | Mission Planner | Receives telemetry and sends native GCS MAVLink |
+| Ephemeral MP port | Mission Planner | Receives telemetry; consumer command egress is rejected |
 | `127.0.0.1:14602` | Router, consumer `nomad_core` | Sends downlink to `14601`; accepts outbound only from `14601` |
-| `127.0.0.1:14601` | One persistent C++ runtime or one exclusive direct CLI process | `udpin:127.0.0.1:14601`; MAVSDK learns router peer `14602` |
+| `127.0.0.1:14601` | One persistent nomad-runtime | `udpin:127.0.0.1:14601`; MAVSDK learns router peer `14602` |
 | `127.0.0.1:14610` | Standalone router management server | JSON Lines status, events, and safe link-selection controls |
 
 Run one standalone host with the configured physical links and consumers, then
@@ -154,7 +154,9 @@ concurrently on the same listener.
 All enabled links are read by one owned worker with bounded polling batches.
 TCP connect attempts are asynchronous; per-link reopen state and parser resets
 are independent. Complete frames establish freshness, not arbitrary incoming
-bytes. UDP silence expires after `HeartbeatTimeoutSec` (default 3 seconds).
+bytes. Complete-frame silence expires after the serialized compatibility setting
+`HeartbeatTimeoutSec` (default 3 seconds). This setting controls availability;
+heartbeat age separately contributes to health classification.
 Sequence gaps are tracked per physical link and `(sysid, compid)`; duplicates
 and backward/out-of-order sequence deltas are ignored. `LatencyMs` is retained
 for compatibility and measures heartbeat interval deviation, **not RTT**.

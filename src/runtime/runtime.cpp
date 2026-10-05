@@ -11,7 +11,7 @@ Runtime::Implementation::Implementation(std::unique_ptr<mavlink::MavlinkConnecti
     : incarnation_(new_incarnation()), journal_(std::make_shared<detail::AuditJournal>(config.audit_write_guard)),
       authority_gate_(std::make_shared<AuthorityGate>()),
       connection_(std::move(connection)), config_(std::move(config)),
-      vehicle_(require_connection(connection_), make_vehicle_config(config_)) {
+      vehicle_(require_connection(connection_), make_vehicle_config(config_)), actuators_(config_.actuators) {
     authority_gate_->incarnation = incarnation_;
     const std::weak_ptr<AuthorityGate> weak_gate = authority_gate_;
     const auto journal = journal_;
@@ -57,6 +57,9 @@ Runtime::Implementation::Implementation(std::unique_ptr<mavlink::MavlinkConnecti
 }
 
 bool Runtime::Implementation::start(std::string &error) {
+    if (!validate_actuator_definitions(config_.actuators, error)) {
+        return false;
+    }
     if (!detail::valid_credentials(config_.client_credentials)) {
         error = "valid client authentication configuration required";
         return false;
@@ -141,7 +144,7 @@ Json Runtime::Implementation::handle_authenticated_message(std::string_view line
     }
     auto envelope = Json::parse(line, nullptr, false);
     const auto type = envelope.is_object() ? field_string(envelope, "type") : "";
-    const bool protected_request = is_mutating(type) || type == "admit_authority" ||
+    const bool protected_request = is_mutating(type) || type == "get_actuators" || type == "admit_authority" ||
                                    type == "revoke_authority" || type == "handback_authority";
     if (protected_request && !authenticate_request(envelope)) {
         const auto id = field_string(envelope, "id");

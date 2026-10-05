@@ -17,17 +17,13 @@ namespace NOMAD.MissionPlanner
 
             AddSectionLabel(tab, "Physical Joystick Routing", ref y);
             AddLabel(tab,
-                "Two DirectInput sticks: one drives the CADDx gimbal,",
+                "Select explicit USB HID devices for gimbal and configured actuator input.",
                 10, y, Color.FromArgb(180, 180, 180));
             y += 18;
             AddLabel(tab,
-                "the other drives the camera tilt servo. RC override is never sent.",
+                "A missing selected device is never replaced by an unrelated device.",
                 10, y, Color.FromArgb(180, 180, 180));
             y += 24;
-
-            _chkJoyAutoSelect = AddCheckBox(tab,
-                "Auto-pick first available device (and hot-plug retry)", 20, y, Color.LimeGreen);
-            y += 28;
 
             var devices = NomadJoystickService.EnumerateDevices();
             var axes = new System.Collections.Generic.List<string>(NomadJoystickService.AxisNames).ToArray();
@@ -62,26 +58,27 @@ namespace NOMAD.MissionPlanner
             y += 36;
 
             // Camera tilt channel
-            AddSectionLabel(tab, "Camera Tilt Servo", ref y);
+            AddSectionLabel(tab, "Configured Position Input", ref y);
 
-            _chkJoyCameraTiltEnabled = AddCheckBox(tab, "Enable", 20, y, Color.LimeGreen);
+            _chkJoyPositionEnabled = AddCheckBox(tab, "Enable", 20, y, Color.LimeGreen);
             y += 28;
 
             AddLabel(tab, "Device:", 20, y);
-            _cmbJoyCameraTiltDevice = AddComboBox(tab, 90, y, 290, deviceList);
+            _cmbJoyPositionDevice = AddComboBox(tab, 90, y, 290, deviceList);
             y += 28;
 
             AddLabel(tab, "Tilt axis:", 20, y);
-            _cmbJoyCameraTiltAxis = AddComboBox(tab, 95, y, 80, axes);
-            _chkJoyCameraTiltInvert = AddCheckBox(tab, "invert", 185, y, Color.White);
+            _cmbJoyPositionAxis = AddComboBox(tab, 95, y, 80, axes);
+            _chkJoyPositionInvert = AddCheckBox(tab, "invert", 185, y, Color.White);
             y += 28;
 
             AddLabel(tab, "Deadzone:", 20, y);
-            _numJoyCameraTiltDeadzone = AddNumericUpDown(tab, 95, y, 60, 0.00m, 0.50m, 0.08m, 2);
-            AddLabel(tab, "Max rate (us/s):", 175, y);
-            _numJoyCameraTiltMaxRate = AddNumericUpDown(tab, 280, y, 70, 50, 4000, 400);
+            _numJoyPositionDeadzone = AddNumericUpDown(tab, 95, y, 60, 0.00m, 0.50m, 0.08m, 2);
             y += 36;
 
+            AddLabel(tab, "Actuator ID:", 20, y);
+            _txtJoyPositionActuatorId = AddTextBox(tab, 110, y, 240);
+            y += 32;
             _btnJoyRefreshDevices = new Button
             {
                 Text = "Refresh device list",
@@ -96,19 +93,19 @@ namespace NOMAD.MissionPlanner
                 var fresh = NomadJoystickService.EnumerateDevices();
                 var freshList = BuildDeviceComboList(fresh);
                 string keepG = _cmbJoyGimbalDevice.SelectedItem?.ToString();
-                string keepCameraTilt = _cmbJoyCameraTiltDevice.SelectedItem?.ToString();
+                string keepCameraTilt = _cmbJoyPositionDevice.SelectedItem?.ToString();
                 string keepS = _cmbSwitchDevice?.SelectedItem?.ToString();
                 _cmbJoyGimbalDevice.Items.Clear();
-                _cmbJoyCameraTiltDevice.Items.Clear();
+                _cmbJoyPositionDevice.Items.Clear();
                 _cmbJoyGimbalDevice.Items.AddRange(freshList);
-                _cmbJoyCameraTiltDevice.Items.AddRange(freshList);
-                SetComboBoxValue(_cmbJoyGimbalDevice, keepG);
-                SetComboBoxValue(_cmbJoyCameraTiltDevice, keepCameraTilt);
+                _cmbJoyPositionDevice.Items.AddRange(freshList);
+                SetDeviceComboValue(_cmbJoyGimbalDevice, keepG);
+                SetDeviceComboValue(_cmbJoyPositionDevice, keepCameraTilt);
                 if (_cmbSwitchDevice != null)
                 {
                     _cmbSwitchDevice.Items.Clear();
                     _cmbSwitchDevice.Items.AddRange(freshList);
-                    SetComboBoxValue(_cmbSwitchDevice, keepS);
+                    SetDeviceComboValue(_cmbSwitchDevice, keepS);
                 }
                 _lblJoyStatus.Text = $"{fresh.Count} device(s) detected.";
             };
@@ -135,7 +132,7 @@ namespace NOMAD.MissionPlanner
             _cmbSwitchDevice = AddComboBox(tab, 90, y, 290, deviceList);
             y += 28;
 
-            string[] actionLabels = SwitchActionLabels();
+            string[] actionLabels = new[] { "None" };
             AddLabel(tab, "SW1 up:", 20, y);
             _cmbSw1Up = AddComboBox(tab, 80, y, 220, actionLabels);
             AddLabel(tab, "SW1 down:", 310, y);
@@ -162,111 +159,52 @@ namespace NOMAD.MissionPlanner
                 20, y, Color.IndianRed);
             y += 36;
 
-            // Serial bridge
-            AddSectionLabel(tab, "Serial Bridge (joystick.py)", ref y);
-            AddLabel(tab, "Auto-launches a Python serial to virtual Xbox 360 bridge.",
-                10, y, Color.FromArgb(180, 180, 180));
-            y += 18;
-            AddLabel(tab, "Requires pyserial + vgamepad + ViGEmBus driver.",
-                10, y, Color.FromArgb(180, 180, 180));
-            y += 24;
-
-            _chkSerialBridgeEnabled = AddCheckBox(tab, "Enable headless serial bridge", 20, y, Color.LimeGreen);
-            y += 26;
-
-            AddLabel(tab, "Serial port:", 20, y);
-            _cmbSerialBridgePort = AddComboBox(
-                tab,
-                110,
-                y,
-                80,
-                System.IO.Ports.SerialPort.GetPortNames().OrderBy(port => port).ToArray());
-            _cmbSerialBridgePort.DropDownStyle = ComboBoxStyle.DropDown;
-            var btnRefreshPorts = new Button
+            AddSectionLabel(tab, "Direct USB HID button mapping", ref y);
+            var combos = new[] { _cmbSw1Up, _cmbSw1Down, _cmbSw2Up, _cmbSw2Down, _cmbSw3Up, _cmbSw3Down };
+            for (int index = 0; index < combos.Length; index++)
             {
-                Text = "Refresh",
-                Location = new Point(195, y),
-                Size = new Size(58, 23),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(70, 70, 75),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 7),
-            };
-            btnRefreshPorts.Click += (s, e) => RefreshSerialPortList();
-            tab.Controls.Add(btnRefreshPorts);
-            AddLabel(tab, "Baud:", 265, y);
-            _numSerialBridgeBaud = AddNumericUpDown(tab, 310, y, 80, 1200, 1000000, 115200);
-            y += 26;
-
-            AddLabel(tab, "Python:", 20, y);
-            _txtSerialBridgePython = AddTextBox(tab, 110, y, 230);
-            y += 26;
-
-            AddLabel(tab, "Script path:", 20, y);
-            _txtSerialBridgeScript = AddTextBox(tab, 110, y, 230);
-            y += 28;
-
-            AddLabel(tab, "Status:", 20, y);
-            _lblSerialBridgeStatus = new Label
-            {
-                Text = "(unknown)",
-                Location = new Point(110, y),
-                AutoSize = true,
-                ForeColor = Color.FromArgb(180, 180, 180),
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-            };
-            tab.Controls.Add(_lblSerialBridgeStatus);
-
-            _serialBridgeStatusTimer = new System.Windows.Forms.Timer { Interval = 500 };
-            _serialBridgeStatusTimer.Tick += (s, e) => RefreshSerialBridgeStatus();
-            this.HandleCreated += (s, e) => _serialBridgeStatusTimer.Start();
-            this.FormClosed   += (s, e) => { try { _serialBridgeStatusTimer?.Stop(); _serialBridgeStatusTimer?.Dispose(); } catch { } };
+                combos[index].DropDownStyle = ComboBoxStyle.DropDown;
+                AddLabel(tab, "Slot " + index + " button index:", 20, y);
+                _switchButtons[index] = AddNumericUpDown(tab, 170, y, 65, 0, 127, index);
+                y += 27;
+            }
+            var discover = new Button { Text = "Load runtime action labels", Location = new Point(20, y), Size = new Size(210, 28) };
+            discover.Click += async (s, e) => await LoadActuatorConfigurationAsync();
+            tab.Controls.Add(discover);
 
             return tab;
         }
 
-        private void RefreshSerialPortList()
+        private readonly System.Collections.Generic.Dictionary<string, string> _actionIds =
+            new System.Collections.Generic.Dictionary<string, string>();
+        private void ApplyActuatorActions(System.Collections.Generic.IReadOnlyList<Connectivity.NomadActuator> actuators)
         {
-            string selected = _cmbSerialBridgePort?.Text?.Trim();
-            var ports = System.IO.Ports.SerialPort.GetPortNames().OrderBy(port => port).ToArray();
-            _cmbSerialBridgePort.Items.Clear();
-            _cmbSerialBridgePort.Items.AddRange(ports);
-            _cmbSerialBridgePort.Text = selected;
+            var combos = new[] { _cmbSw1Up, _cmbSw1Down, _cmbSw2Up, _cmbSw2Down, _cmbSw3Up, _cmbSw3Down };
+            var preservedIds = combos.Select(combo => ActionIdForLabel(combo.Text)).ToArray();
+            _actionIds.Clear();
+            _actionIds["None"] = "None";
+            foreach (var actuator in actuators)
+            {
+                foreach (var action in actuator.Actions)
+                {
+                    if (action.Control != "button")
+                    {
+                        continue;
+                    }
+                    string id = actuator.Id + ":" + action.Operation;
+                    _actionIds[actuator.Name + " / " + action.Label + " [" + id + "]"] = id;
+                }
+            }
+            for (int index = 0; index < combos.Length; index++)
+            {
+                var combo = combos[index];
+                string keep = preservedIds[index];
+                combo.Items.Clear();
+                combo.Items.AddRange(_actionIds.Keys.ToArray());
+                combo.Text = _actionIds.FirstOrDefault(entry => entry.Value == keep).Key ?? keep;
+            }
         }
-
-        private static readonly (string Id, string Label)[] SwitchActionMap =
-        {
-            ("None",          "(unassigned)"),
-            ("DropToggleP1",  "Drop / Retract Payload 1"),
-            ("DropToggleP2",  "Drop / Retract Payload 2"),
-            ("DropToggleP3",  "Drop / Retract Payload 3"),
-            ("ReelInP1",      "Reel In - Payload 1 (hold)"),
-            ("ReelOutP1",     "Reel Out - Payload 1 (hold)"),
-            ("ReelInP2",      "Reel In - Payload 2 (hold)"),
-            ("ReelOutP2",     "Reel Out - Payload 2 (hold)"),
-            ("FireWaterPump", "Fire Water Pump"),
-        };
-
-        private static string[] SwitchActionLabels()
-        {
-            var labels = new string[SwitchActionMap.Length];
-            for (int i = 0; i < SwitchActionMap.Length; i++) labels[i] = SwitchActionMap[i].Label;
-            return labels;
-        }
-
-        private static string LabelForActionId(string id)
-        {
-            foreach (var (Id, Label) in SwitchActionMap)
-                if (string.Equals(Id, id, StringComparison.OrdinalIgnoreCase)) return Label;
-            return SwitchActionMap[0].Label;
-        }
-
-        private static string ActionIdForLabel(string label)
-        {
-            foreach (var (Id, Label) in SwitchActionMap)
-                if (string.Equals(Label, label, StringComparison.OrdinalIgnoreCase)) return Id;
-            return "None";
-        }
+        private string ActionIdForLabel(string label) => _actionIds.TryGetValue(label ?? "", out var id) ? id : label ?? "None";
 
         private static string[] BuildDeviceComboList(System.Collections.Generic.IList<string> devices)
         {

@@ -73,9 +73,18 @@ Json Runtime::Implementation::execute_mutating_request(const Request &request) {
     if (!config_.actuation_enabled) {
         return error_response(request.id, "missing_api_key", "NOMAD_API_KEY is not set for the runtime");
     }
+    if (request.type == "actuator_action" || request.type == "configure_actuators") {
+        return execute_actuator_request(request);
+    }
     std::unique_lock command_lock(command_mutex_, std::try_to_lock);
     if (!command_lock.owns_lock()) {
         return error_response(request.id, "busy", "another NOMAD command is still executing");
+    }
+    if (((request.type == "set_servo" || request.type == "set_relay") && actuator_configuration_recovery_.load()) ||
+        (request.type == "set_servo" && actuators_.contains_output(request.channel, false)) ||
+        (request.type == "set_relay" && actuators_.contains_output(request.relay_number, true))) {
+        return error_response(request.id, "configured_output",
+              "use semantic actuator actions; raw configured outputs are blocked");
     }
     if (const auto denied = check_request_authority(request); denied.has_value()) {
         return *denied;

@@ -23,7 +23,7 @@ classifiers = [
 dependencies = ["numpy>=1.26"]
 
 [project.optional-dependencies]
-hardware = ["pyserial>=3.5", "vgamepad>=0.1; sys_platform == 'win32'"]
+hardware = ["pyserial>=3.5"]
 dev = [
     "pymavlink>=2.4",
     "psutil>=5.9",

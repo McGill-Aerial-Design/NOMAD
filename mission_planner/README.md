@@ -52,7 +52,7 @@ preserves success, rejection before eligible send, definite failure,
 interruption and unknown result separately. The client also distinguishes local
 validation from connection failure before request write. ACK evidence remains
 separate from success and physical completion. Release/retract controls display
-commanded payload state and explicitly leave physical state unverified; a
+commanded actuator state and explicitly leave physical state unverified; a
 failed or uncertain request does not change the recorded commanded state.
 Reel messages describe accepted movement/stop commands and local timer expiry,
 without asserting motion or stopping. Gimbal mode readouts say selected mode:
@@ -116,3 +116,8 @@ by default. Set `NOMAD_PLUGIN_EXAMPLE_MODULE=1` before launching Mission Planner
 to show its example view and action. It reads configuration and sends no vehicle
 commands. Modules without workers may inherit the base no-op Start/Stop methods;
 modules that start workers must stop and dispose them.
+
+Configured actuators are discovered from authenticated runtime IPC. This frontend
+renders returned labels/state and translates real USB HID or UI input into semantic
+requests. Runtime owns mapping, confirmations, timing and recovery. See the
+[migration and configuration procedure](../docs/operations.md#generic-actuator-configuration-and-frontend-migration).

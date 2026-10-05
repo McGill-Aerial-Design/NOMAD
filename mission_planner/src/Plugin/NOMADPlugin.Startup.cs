@@ -147,7 +147,7 @@ namespace NOMAD.MissionPlanner
                     $"McGill Aerial Design\n\n" +
                     $"Hover the NOMAD menu for tools; click it to open the\n" +
                     $"NOMAD screen (dashboard, flight boundaries, video,\n" +
-                    $"local log analysis and dual-link status).\n\n" +
+                    $"local log analysis and standalone router status).\n\n" +
                     $"Boundary monitoring with termination-unavailable alerts,\n" +
                     $"plugin-wide alerts with toast overlays, standalone-router\n" +
                     $"management and status, and configurable payload controls.\n\n" +

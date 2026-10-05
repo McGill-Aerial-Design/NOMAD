@@ -44,6 +44,7 @@ $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadCoreRequestResult.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Network.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Requests.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Control\FlightModeController.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\TerminationRequestTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientTests.cs'),
@@ -53,14 +54,14 @@ $sources = @(
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientOutcomeTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputOutcomeTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputTestFixtures.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\coreclient\JoystickAuthorizationTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\JoystickMappingTests.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Input\NomadJoystickService.Switches.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Input\NomadJoystickService.Axis.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Control\OutputController.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Payload\PayloadActions.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Payload\PayloadControlPanel.Drop.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Payload\PayloadControlPanel.Relays.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Payload\PayloadControlPanel.Reels.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Payload\PayloadReleaseInterlock.cs')
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadActuatorModels.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadCoreClient.Actuators.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Actuators.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Actuators\ActuatorControlPanel.cs')
 )
 $outDir = Join-Path $repoRoot 'mission_planner\tests\coreclient\bin'
 New-Item -ItemType Directory -Force $outDir | Out-Null

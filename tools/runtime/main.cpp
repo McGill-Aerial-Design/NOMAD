@@ -3,6 +3,7 @@
 #include "nomad/mavlink/mavsdk_validation.hpp"
 #include "nomad/runtime/runtime.hpp"
 #include "client_auth.hpp"
+#include "actuator_storage.hpp"
 #include "lifecycle.hpp"
 #include "service_config.hpp"
 #include "nomad/safety/fence_config.hpp"
@@ -21,6 +22,7 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -113,6 +115,7 @@ void print_usage() {
     std::cout << "Usage: nomad-runtime [--endpoint udpin:127.0.0.1:14601] [--ipc-port 14611] [--system-id 1]\n";
     std::cout << "IPC binds only to 127.0.0.1. NOMAD_RUNTIME_IPC_PORT and NOMAD_MAVLINK_ENDPOINT may set defaults.\n";
     std::cout << "--config <protected-json> loads service environment; --service uses Windows SCM.\n";
+    std::cout << "--validate-actuators <absolute-protected-json> validates configuration without connecting.\n";
 }
 
 bool api_key_configured() {
@@ -154,6 +157,14 @@ std::optional<nomad::runtime::RuntimeConfig> load_runtime_config(const Arguments
         return std::nullopt;
     }
     config.audit_directory = audit == nullptr ? "" : audit;
+    const char *actuators = std::getenv("NOMAD_ACTUATORS_FILE");
+    config.actuator_config_file = actuators == nullptr ? "" : actuators;
+    std::string actuator_error;
+    if (!nomad::runtime::detail::load_actuator_configuration(
+            config.actuator_config_file, config.actuators, actuator_error)) {
+        std::cerr << actuator_error << '\n';
+        return std::nullopt;
+    }
     config.fence_policy = nomad::safety::load_fence_policy(std::getenv("NOMAD_FENCE_POLYGON"),
                                                             std::getenv("NOMAD_FENCE_MARGIN_M"));
     config.velocity_limits = nomad::safety::load_velocity_limits(
@@ -184,6 +195,19 @@ int wait_runtime(nomad::runtime::Runtime &runtime, std::uint16_t port) {
 }
 
 int run_runtime(int argc, char **argv) {
+    if (argc > 1 && std::string_view(argv[1]) == "--validate-actuators") {
+        if (argc != 3 || std::string_view(argv[2]).empty()) {
+            return fail_runtime("usage: nomad-runtime --validate-actuators <absolute-protected-json>");
+        }
+        std::vector<nomad::runtime::ActuatorDefinition> definitions;
+        std::string error;
+        if (!nomad::runtime::detail::load_actuator_configuration(argv[2], definitions, error)) {
+            std::cerr << error << '\n';
+            return nomad::runtime::process::kConfigurationFailure;
+        }
+        std::cout << "Actuator configuration valid; no vehicle connection or command was attempted.\n";
+        return EXIT_SUCCESS;
+    }
     for (int index = 1; index < argc; ++index) {
         const std::string_view token(argv[index]);
         if (token == "--help" || token == "-h") {
@@ -205,7 +229,8 @@ int run_runtime(int argc, char **argv) {
     }
     auto config = load_runtime_config(*arguments);
     if (!config) {
-        return fail_runtime("runtime configuration error: valid protected client credentials file required");
+        return fail_runtime("runtime configuration error: "
+              "protected credentials and valid actuator configuration required");
     }
     auto connection = nomad::mavlink::make_mavsdk_connection(
         *endpoint, arguments->system_id, config->discovery_timeout);

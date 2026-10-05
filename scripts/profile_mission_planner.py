@@ -15,6 +15,24 @@ else:
 
 _RETIRED_MP_FIELDS = (
     "IntegratedFlightMode",
+    "SprayTargetCameraRangeM",
+    "SprayRangeToleranceM",
+    "SprayTriggerMaxDistanceM",
+    "SprayAimPixelX",
+    "SprayAimPixelY",
+    "SprayAimTolerancePx",
+    "SprayServoFireAngleDeg",
+    "SprayForwardGain",
+    "SprayLateralGain",
+    "SprayAltitudeGain",
+    "SprayYawGain",
+    "SprayUseYawAlignment",
+    "SprayMaxForwardSpeedMps",
+    "SprayMaxLateralSpeedMps",
+    "SprayMaxAltitudeSpeedMps",
+    "SprayMaxYawRateRadps",
+    "SprayLockHoldMs",
+    "SprayAlignTimeoutS",
     "RouterLinks",
     "RouterConsumers",
     "RouterEnabled",
@@ -55,6 +73,16 @@ def _config_path() -> Path | None:
 
 
 def _apply_profile_settings(config: dict[str, object], name: str, env: dict[str, str]) -> None:
+    for key in ("Payloads", "Actuators"):
+        if key in config:
+            if config[key] != []:
+                raise ValueError(f"{key} must be migrated to runtime configuration before loading a profile")
+            config.pop(key)
+    if config.get("SerialJoystickEnabled") is True:
+        raise ValueError("Enabled virtual-gamepad input requires explicit USB HID review before loading a profile")
+    for key in list(config):
+        if key.startswith("SerialJoystick"):
+            config.pop(key)
     config.pop("CoreApiKey", None)
     legacy_mode = config.get("RouterMode")
     if legacy_mode is not None and (not isinstance(legacy_mode, str) or legacy_mode.strip().lower() != "standalone"):

@@ -2,7 +2,7 @@
 #include "nomad/vehicle/vehicle.hpp"
 
 #include "command_ids.hpp"
-#include "nomad/safety/payload.hpp"
+#include "nomad/safety/output.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -29,7 +29,7 @@ CommandResult Vehicle::set_servo(int channel, int pwm_microseconds) {
         send_command(make_command(kSetServoCommand,
                                   {static_cast<float>(channel), static_cast<float>(pwm_microseconds), 0, 0, 0, 0, 0}),
                      "set servo");
-    return verified(result, "servo command verified");
+    return verified(result, "servo command acknowledged");
 }
 
 CommandResult Vehicle::set_relay(int relay_number, bool on) {
@@ -43,7 +43,7 @@ CommandResult Vehicle::set_relay(int relay_number, bool on) {
     const auto result = send_command(make_command(kSetRelayCommand,
                                                   {static_cast<float>(relay_number), on ? 1.0F : 0.0F, 0, 0, 0, 0, 0}),
                                      "set relay");
-    return verified(result, "relay command verified");
+    return verified(result, "relay command acknowledged");
 }
 
 CommandResult Vehicle::motor_test(int motor_instance, int pwm_microseconds, float timeout_seconds) {
@@ -66,7 +66,7 @@ CommandResult Vehicle::motor_test(int motor_instance, int pwm_microseconds, floa
                      {static_cast<float>(motor_instance), 1.0F, static_cast<float>(pwm_microseconds), clamped_timeout,
                       1.0F, 0, 0}),
         "motor test");
-    return verified(result, "motor test command verified");
+    return verified(result, "motor test command acknowledged");
 }
 
 CommandResult Vehicle::configure_gimbal(int mount_mode) {

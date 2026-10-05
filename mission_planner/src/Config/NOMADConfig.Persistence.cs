@@ -31,7 +31,11 @@ namespace NOMAD.MissionPlanner
             var primary = ConfigPath;
             var backup = primary + ".bak";
 
-            foreach (var path in new[] { primary, backup })
+            foreach (var path in new[]
+            {
+                primary, backup
+            }
+            )
             {
                 try
                 {
@@ -78,6 +82,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                ValidateInputBindings();
                 var path = ConfigPath;
                 var dir = Path.GetDirectoryName(path);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -103,7 +108,15 @@ namespace NOMAD.MissionPlanner
             catch (Exception ex)
             {
                 Log.Error($"Failed to save config - {ex.Message}");
-                try { File.Delete(ConfigPath + ".tmp"); } catch { }
+                try
+                {
+                    File.Delete(ConfigPath + ".tmp");
+                }
+                catch
+                {
+
+                }
+                throw new IOException("Configuration was not saved.", ex);
             }
         }
 
@@ -124,33 +137,69 @@ namespace NOMAD.MissionPlanner
 
         private static NOMADConfig Deserialize(string json)
         {
-            var migratedJson = MigrateLegacyConfigKeys(json);
-            var config = JsonConvert.DeserializeObject<NOMADConfig>(migratedJson);
-            if (config == null)
-                throw new JsonSerializationException("The configuration file did not contain a NOMAD configuration.");
-
-            config.MigrateDefaults();
-            return config;
+            var document = JObject.Parse(json);
+            try
+            {
+                var migratedJson = MigrateLegacyConfigKeys(json);
+                var config = JsonConvert.DeserializeObject<NOMADConfig>(migratedJson);
+                if (config == null)
+                { throw new JsonSerializationException("The configuration file did not contain a NOMAD configuration."); }
+                config.MigrateDefaults();
+                return config;
+            }
+            catch (UnsupportedConfigurationMigrationException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (document.Property("Payloads") != null || document.Property("Actuators") != null)
+            {
+                throw new UnsupportedConfigurationMigrationException("Invalid actuator configuration: " + ex.Message);
+            }
         }
 
         private static string MigrateLegacyConfigKeys(string json)
         {
             var document = JObject.Parse(json);
-            var mappings = new[]
+            RejectRetiredActuatorOwnership(document);
+            bool legacyAxisEnabled = document["JoystickCameraTiltEnabled"]?.Value<bool>() == true ||
+                document["JoystickZedEnabled"]?.Value<bool>() == true;
+            if (legacyAxisEnabled && document["JoystickPositionEnabled"] == null)
+            { throw new UnsupportedConfigurationMigrationException(
+                "Enabled legacy relative-rate position input requires explicit review before absolute position input is enabled. Preserve the original file."); }
+            foreach (var suffix in new[]
             {
-                ("JoystickZedEnabled", "JoystickCameraTiltEnabled"),
-                ("JoystickZedDevice", "JoystickCameraTiltDevice"),
-                ("JoystickZedTiltAxis", "JoystickCameraTiltAxis"),
-                ("JoystickZedTiltInvert", "JoystickCameraTiltInvert"),
-                ("JoystickZedDeadzone", "JoystickCameraTiltDeadzone"),
-                ("JoystickZedMaxRateUsPerSec", "JoystickCameraTiltMaxRateUsPerSec"),
-            };
-            foreach (var (legacyKey, currentKey) in mappings)
-            {
-                if (document[currentKey] == null && document[legacyKey] != null)
-                    document[currentKey] = document[legacyKey];
-                document.Remove(legacyKey);
+                "Enabled", "Device", "Axis", "Invert", "Deadzone"
             }
+            )
+            {
+                string old = "JoystickCameraTilt" + suffix;
+                string current = "JoystickPosition" + suffix;
+                if (document[current] == null && document[old] != null)
+                {
+                    document[current] = document[old];
+                }
+                document.Remove(old);
+            }
+            foreach (var suffix in new[]
+            {
+                "Enabled", "Device", "TiltAxis", "TiltInvert", "Deadzone"
+            }
+            )
+            {
+                string old = "JoystickZed" + suffix;
+                string current = "JoystickPosition" + suffix.Replace("Tilt", "");
+                if (document[current] == null && document[old] != null)
+                {
+                    document[current] = document[old];
+                }
+                document.Remove(old);
+            }
+            foreach (var retired in new[]
+            {
+                "JoystickAutoSelectDevice", "JoystickCameraTiltMaxRateUsPerSec", "JoystickZedMaxRateUsPerSec"
+            }
+            )
+            { document.Remove(retired); }
 
             var legacyMode = document["RouterMode"]?.Value<string>();
             if (!string.IsNullOrWhiteSpace(legacyMode) &&
@@ -173,6 +222,24 @@ namespace NOMAD.MissionPlanner
             var removed = new[]
             {
                 "IntegratedFlightMode",
+                "SprayTargetCameraRangeM",
+                "SprayRangeToleranceM",
+                "SprayTriggerMaxDistanceM",
+                "SprayAimPixelX",
+                "SprayAimPixelY",
+                "SprayAimTolerancePx",
+                "SprayServoFireAngleDeg",
+                "SprayForwardGain",
+                "SprayLateralGain",
+                "SprayAltitudeGain",
+                "SprayYawGain",
+                "SprayUseYawAlignment",
+                "SprayMaxForwardSpeedMps",
+                "SprayMaxLateralSpeedMps",
+                "SprayMaxAltitudeSpeedMps",
+                "SprayMaxYawRateRadps",
+                "SprayLockHoldMs",
+                "SprayAlignTimeoutS",
                 "RouterLinks", "RouterConsumers", "RouterEnabled", "RouterMode",
                 "RadioMasterConnectionType", "RadioMasterPort", "RadioMasterComPort",
                 "RadioMasterTcpHost", "RadioMasterBaudRate", "LteMavlinkPort",
@@ -201,6 +268,31 @@ namespace NOMAD.MissionPlanner
             return document.ToString(Formatting.None);
         }
 
+        private static void RejectRetiredActuatorOwnership(JObject document)
+        {
+            foreach (var key in new[]
+            {
+                "Payloads", "Actuators"
+            }
+            )
+            {
+                if (document[key] == null)
+                {
+                    continue;
+                }
+                if (!(document[key] is JArray list) || list.Count > 0)
+                { throw new UnsupportedConfigurationMigrationException("Persisted " + key +
+                    " must be migrated to the runtime actuator configuration before loading. Preserve the original file."); }
+                document.Remove(key);
+            }
+            if (document["SerialJoystickEnabled"]?.Value<bool>() == true ||
+                !string.IsNullOrWhiteSpace(document["SerialJoystickScriptPath"]?.Value<string>()))
+            { throw new UnsupportedConfigurationMigrationException(
+                "Serial/virtual joystick bridging is retired. Select and review direct USB HID mappings; preserve the original file."); }
+            foreach (var key in new[] { "SerialJoystickEnabled", "SerialJoystickPort", "SerialJoystickBaud",
+                "SerialJoystickPython", "SerialJoystickScriptPath" }) { document.Remove(key); }
+        }
+
         private static void ValidateLegacyLoopbackSetting(JObject document, string key)
         {
             var address = document[key]?.Value<string>();
@@ -216,6 +308,11 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         private void MigrateDefaults()
         {
+            ValidateInputBindings();
+            if (JoystickButtonIndices == null || JoystickButtonIndices.Length != 6 ||
+                System.Array.Exists(JoystickButtonIndices, index => index < 0 || index > 127))
+            { throw new UnsupportedConfigurationMigrationException("Direct USB HID button indices require six values from 0 to 127."); }
+
             if (CoreRuntimePort < 1 || CoreRuntimePort > 65535)
             {
                 CoreRuntimePort = Connectivity.NomadCoreClient.DefaultRuntimePort;
@@ -263,28 +360,22 @@ namespace NOMAD.MissionPlanner
             if (LogMinimumSatellites < 0 || LogMinimumSatellites > 40) LogMinimumSatellites = 8;
             if (LogLiveBufferPoints < 60 || LogLiveBufferPoints > 10000) LogLiveBufferPoints = 600;
 
-            if (Payloads == null)
-            {
-                Payloads = DefaultPayloads();
-            }
+        }
 
-            SprayTargetCameraRangeM = Clamp(SprayTargetCameraRangeM, 0.5f, 8.0f, 3.8f);
-            SprayRangeToleranceM = Clamp(SprayRangeToleranceM, 0.05f, 1.0f, 0.25f);
-            SprayTriggerMaxDistanceM = Clamp(SprayTriggerMaxDistanceM, 1.0f, 8.0f, 5.5f);
-            if (SprayAimPixelX < 0 || SprayAimPixelX > 4000) SprayAimPixelX = 640;
-            if (SprayAimPixelY < 0 || SprayAimPixelY > 3000) SprayAimPixelY = 390;
-            if (SprayAimTolerancePx < 2 || SprayAimTolerancePx > 250) SprayAimTolerancePx = 25;
-            SprayServoFireAngleDeg = Clamp(SprayServoFireAngleDeg, 0.0f, 180.0f, 82.0f);
-            SprayForwardGain = Clamp(SprayForwardGain, 0.0f, 2.0f, 0.45f);
-            SprayLateralGain = Clamp(SprayLateralGain, -0.02f, 0.02f, 0.0010f);
-            SprayAltitudeGain = Clamp(SprayAltitudeGain, -0.02f, 0.02f, 0.0010f);
-            SprayYawGain = Clamp(SprayYawGain, -0.02f, 0.02f, 0.0025f);
-            SprayMaxForwardSpeedMps = Clamp(SprayMaxForwardSpeedMps, 0.05f, 2.0f, 0.45f);
-            SprayMaxLateralSpeedMps = Clamp(SprayMaxLateralSpeedMps, 0.05f, 1.0f, 0.25f);
-            SprayMaxAltitudeSpeedMps = Clamp(SprayMaxAltitudeSpeedMps, 0.05f, 1.0f, 0.20f);
-            SprayMaxYawRateRadps = Clamp(SprayMaxYawRateRadps, 0.05f, 2.0f, 0.35f);
-            if (SprayLockHoldMs < 100 || SprayLockHoldMs > 5000) SprayLockHoldMs = 700;
-            SprayAlignTimeoutS = Clamp(SprayAlignTimeoutS, 2.0f, 60.0f, 20.0f);
+        internal void ValidateInputBindings()
+        {
+            foreach (var binding in new[] { JoystickSw1UpAction, JoystickSw1DownAction, JoystickSw2UpAction,
+                JoystickSw2DownAction, JoystickSw3UpAction, JoystickSw3DownAction })
+            {
+                if (string.IsNullOrEmpty(binding) || binding == "None")
+                {
+                    continue;
+                }
+                int separator = binding.LastIndexOf(':');
+                if (separator <= 0 || separator == binding.Length - 1)
+                { throw new UnsupportedConfigurationMigrationException(
+                    "Joystick actions must refer to runtime actuator IDs and operations. Migrate legacy mappings before loading."); }
+            }
         }
 
         private static float Clamp(float value, float min, float max, float fallback)
@@ -360,25 +451,7 @@ namespace NOMAD.MissionPlanner
             SlamHeadingOffsetDeg = defaults.SlamHeadingOffsetDeg;
             SlamCameraFovDeg = defaults.SlamCameraFovDeg;
             SlamMapRadiusM = defaults.SlamMapRadiusM;
-            Payloads = defaults.Payloads;
-            SprayTargetCameraRangeM = defaults.SprayTargetCameraRangeM;
-            SprayRangeToleranceM = defaults.SprayRangeToleranceM;
-            SprayTriggerMaxDistanceM = defaults.SprayTriggerMaxDistanceM;
-            SprayAimPixelX = defaults.SprayAimPixelX;
-            SprayAimPixelY = defaults.SprayAimPixelY;
-            SprayAimTolerancePx = defaults.SprayAimTolerancePx;
-            SprayServoFireAngleDeg = defaults.SprayServoFireAngleDeg;
-            SprayForwardGain = defaults.SprayForwardGain;
-            SprayLateralGain = defaults.SprayLateralGain;
-            SprayAltitudeGain = defaults.SprayAltitudeGain;
-            SprayYawGain = defaults.SprayYawGain;
-            SprayUseYawAlignment = defaults.SprayUseYawAlignment;
-            SprayMaxForwardSpeedMps = defaults.SprayMaxForwardSpeedMps;
-            SprayMaxLateralSpeedMps = defaults.SprayMaxLateralSpeedMps;
-            SprayMaxAltitudeSpeedMps = defaults.SprayMaxAltitudeSpeedMps;
-            SprayMaxYawRateRadps = defaults.SprayMaxYawRateRadps;
-            SprayLockHoldMs = defaults.SprayLockHoldMs;
-            SprayAlignTimeoutS = defaults.SprayAlignTimeoutS;
+            JoystickPositionActuatorId = defaults.JoystickPositionActuatorId;
         }
     }
 }

@@ -2,8 +2,7 @@
 // Vehicle lifecycle, the safety-gated command verbs, their state verification,
 // and the shared command/acknowledgement exchange.
 //
-// Velocity control and its watchdog live in vehicle_velocity.cpp; the payload
-// interlock in vehicle_payload.cpp; the fence upload/readback in
+// Velocity control and its watchdog live in vehicle_velocity.cpp; fence upload/readback is in
 // vehicle_fence.cpp. The MAV_CMD ids and make_command are in command_ids.hpp.
 #include "nomad/vehicle/vehicle.hpp"
 

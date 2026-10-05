@@ -45,8 +45,6 @@ std::string_view operation_name(VehicleOperation operation) {
         return "configure gimbal";
     case VehicleOperation::SetGimbalTarget:
         return "set gimbal target";
-    case VehicleOperation::ReleasePayload:
-        return "release payload";
     case VehicleOperation::FenceConfiguration:
         return "fence configuration";
     }
@@ -71,7 +69,6 @@ bool supports_operation(telemetry::AircraftClass aircraft_class, VehicleOperatio
         case VehicleOperation::MotorTest:
         case VehicleOperation::ConfigureGimbal:
         case VehicleOperation::SetGimbalTarget:
-        case VehicleOperation::ReleasePayload:
         case VehicleOperation::FenceConfiguration:
             return true;
         case VehicleOperation::VtolTakeoff:
@@ -108,7 +105,6 @@ bool supports_operation(telemetry::AircraftClass aircraft_class, VehicleOperatio
         case VehicleOperation::MotorTest:
         case VehicleOperation::ConfigureGimbal:
         case VehicleOperation::SetGimbalTarget:
-        case VehicleOperation::ReleasePayload:
         case VehicleOperation::FenceConfiguration:
             return false;
         }

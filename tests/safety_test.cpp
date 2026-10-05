@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "support/fake_connection.hpp"
 #include "nomad/safety/geofence.hpp"
-#include "nomad/safety/payload.hpp"
+#include "nomad/safety/output.hpp"
 #include "nomad/safety/velocity.hpp"
 #include "nomad/safety/watchdog.hpp"
 #include "nomad/vehicle/vehicle.hpp"
@@ -248,61 +248,13 @@ void test_vehicle_takeoff_altitude_rejects_stale_position() {
     CHECK(result.message.find("stale") != std::string::npos);
 }
 
-void test_vehicle_payload_commands_require_interlock_and_validate_ranges() {
-    FakeConnection connection;
-    connection.connect();
-    nomad::vehicle::Vehicle vehicle(connection);
-    connection.acknowledgement = nomad::mavlink::CommandAck{183, 0};
-    CHECK(!vehicle.set_servo(0, 1500).success);
-    CHECK(vehicle.set_servo(8, 1500).success);
-
-    connection.acknowledgement = nomad::mavlink::CommandAck{181, 0};
-    CHECK(!vehicle.release_payload(2, 0.1F).success);
-    CHECK(vehicle.arm_payload().success);
-    CHECK(vehicle.release_payload(2, 0.05F).success);
-    CHECK(!vehicle.release_payload(2, 0.05F).success);
-}
-
-void test_vehicle_payload_on_failure_still_attempts_off() {
-    FakeConnection connection;
-    connection.connect();
-    nomad::vehicle::Vehicle vehicle(connection);
-    connection.acknowledgement = nomad::mavlink::CommandAck{181, 4};
-
-    CHECK(vehicle.arm_payload().success);
-    CHECK(!vehicle.release_payload(2, 0.05F).success);
-    CHECK(connection.command_history.size() >= 2);
-    CHECK(connection.command_history.back().id == 181);
-    CHECK(connection.command_history.back().parameters[1] == 0.0F);
-}
-
-void test_vehicle_payload_off_failure_is_reported() {
-    FakeConnection connection;
-    connection.connect();
-    nomad::vehicle::Vehicle vehicle(connection);
-    connection.acknowledgement = nomad::mavlink::CommandAck{181, 0};
-    connection.command_send_results = {true, false};
-
-    CHECK(vehicle.arm_payload().success);
-    CHECK(!vehicle.release_payload(2, 0.05F).success);
-    CHECK(connection.command_history.size() >= 2);
-    CHECK(connection.command_history.back().parameters[1] == 0.0F);
-}
-
-void test_payload_validation_and_interlock() {
+void test_generic_servo_validation() {
     CHECK(nomad::safety::validate_servo_command(1, 500).allowed);
+    CHECK(nomad::safety::validate_servo_command(16, 2500).allowed);
     CHECK(!nomad::safety::validate_servo_command(0, 1500).allowed);
+    CHECK(!nomad::safety::validate_servo_command(17, 1500).allowed);
+    CHECK(!nomad::safety::validate_servo_command(8, 499).allowed);
     CHECK(!nomad::safety::validate_servo_command(8, 2501).allowed);
-    CHECK(*nomad::safety::clamp_release_duration(60.0F) == 5.0F);
-    CHECK(!nomad::safety::clamp_release_duration(std::numeric_limits<float>::quiet_NaN()).has_value());
-
-    nomad::safety::ReleaseInterlock interlock;
-    CHECK(!interlock.evaluate_release(1.0F).allowed);
-    CHECK(interlock.arm(10.0F).allowed);
-    CHECK(interlock.evaluate_release(11.0F).allowed);
-    CHECK(!interlock.evaluate_release(11.1F).allowed);
-    CHECK(interlock.arm(20.0F).allowed);
-    CHECK(!interlock.evaluate_release(31.0F).allowed);
 }
 
 void test_vehicle_destructor_sends_zero_velocity_before_shutdown() {
@@ -471,10 +423,7 @@ int main() {
         test_vehicle_fence_rejects_target_before_transmission();
         test_vehicle_goto_location_rejects_stale_position();
         test_vehicle_takeoff_altitude_rejects_stale_position();
-        test_vehicle_payload_commands_require_interlock_and_validate_ranges();
-        test_vehicle_payload_on_failure_still_attempts_off();
-        test_vehicle_payload_off_failure_is_reported();
-        test_payload_validation_and_interlock();
+        test_generic_servo_validation();
         test_vehicle_destructor_sends_zero_velocity_before_shutdown();
         test_vehicle_destructor_orders_zero_before_disconnect();
         test_vehicle_upload_fence_validates_boundary();

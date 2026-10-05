@@ -24,8 +24,6 @@ internal static partial class NomadCoreClientTests
         Runtime_DelayedResponseReturnsControl();
         Runtime_ConcurrentResultsStayIsolated();
         Output_ConcurrentRequestsUseExactResultsAndRejectOverlap();
-        Output_ExplicitStopHasOneBoundedWaiter();
-        Output_QueuedStopRetainsOriginalRuntimeAcrossConfigurationChange();
         Runtime_ConcurrentSequencesRespectRuntimeFloor();
         Runtime_RevokeInterruptsActiveMutation();
         Runtime_MockRejectsReversedSequences();
@@ -163,9 +161,9 @@ internal static partial class NomadCoreClientTests
     {
         using var runtime = new AsyncRuntime(1);
         OutputController.Initialize(new NOMADConfig { CoreRuntimePort = runtime.Port });
-        var payloadSuccess = OutputController.SendServoPwmAsync(1, 1500);
+        var payloadSuccess = new NomadCoreClient("test-key", runtime.Port).ServoAsync(1, 1500);
         runtime.WaitForCommands(1);
-        var payloadOverlap = WaitResult(OutputController.SendServoPwmAsync(2, 1500));
+        var payloadOverlap = WaitResult(new NomadCoreClient("test-key", runtime.Port).ServoAsync(2, 1500));
         var gimbalOverlap = WaitResult(OutputController.SendGimbalTargetAsync(0, 0));
         Expect(payloadOverlap.Outcome == NomadCoreRequestOutcome.NotAttempted &&
             payloadOverlap.ErrorCode == "request_in_progress", "different payload channel respects identity gate");
@@ -214,7 +212,11 @@ internal static partial class NomadCoreClientTests
 
     private static void Runtime_BufferedResponsesPreserveSizeLimit()
     {
-        foreach (var size in new[] { 4096, 9000, 65536, 65537 })
+        foreach (var size in new[]
+        {
+            4096, 9000, 65536, 65537
+        }
+        )
         {
             using var runtime = new AsyncRuntime(1) { ResponseSize = size };
             runtime.ReleaseResponses();
@@ -251,7 +253,11 @@ internal static partial class NomadCoreClientTests
 
     private static void Runtime_InvalidSequenceFloorsFailBeforeMutation()
     {
-        foreach (var floor in new object[] { null, 0, -1, 1.5, "invalid", "18446744073709551616" })
+        foreach (var floor in new object[]
+        {
+            null, 0, -1, 1.5, "invalid", "18446744073709551616"
+        }
+        )
         {
             using var runtime = new AsyncRuntime(1)
             {
@@ -275,28 +281,6 @@ internal static partial class NomadCoreClientTests
         Expect(runtime.CommandCount == 1, "stale mutation is never automatically reallocated and retried");
     }
 
-    private static void Output_ExplicitStopHasOneBoundedWaiter()
-    {
-        using var runtime = new AsyncRuntime(2);
-        OutputController.Initialize(new NOMADConfig { CoreRuntimePort = runtime.Port });
-        var start = OutputController.SendServoPwmAsync(8, 2000);
-        runtime.WaitForCommands(1);
-        var stop = OutputController.SendServoStopAsync(8, 1500);
-        Expect(!stop.IsCompleted, "explicit stop waits asynchronously behind the in-flight channel command");
-        var duplicate = WaitResult(OutputController.SendServoStopAsync(8, 1500));
-        var newStart = WaitResult(OutputController.SendServoPwmAsync(8, 2000));
-        Expect(duplicate.Outcome == NomadCoreRequestOutcome.NotAttempted,
-            "a second stop is rejected without adding a waiter");
-        Expect(newStart.Outcome == NomadCoreRequestOutcome.NotAttempted,
-            "new starts are rejected while an explicit stop is pending");
-        Expect(runtime.Commands.Count == 1, "pending stop and rejected overlaps send nothing before current result");
-        runtime.ReleaseResponses();
-        Expect(WaitResult(start).Succeeded && WaitResult(stop).Succeeded,
-            "original command finishes and one explicit stop receives its exact result");
-        runtime.Wait();
-        Expect(runtime.Commands.Count == 2 && Convert.ToInt32(runtime.Commands[1]["pwm_microseconds"]) == 1500,
-            "exactly one neutral stop follows the initial command with no stale start replay");
-    }
 
     private static void Runtime_RestartRefreshesAuthorityBinding()
     {
@@ -325,27 +309,6 @@ internal static partial class NomadCoreClientTests
         }
     }
 
-    private static void Output_QueuedStopRetainsOriginalRuntimeAcrossConfigurationChange()
-    {
-        using var original = new AsyncRuntime(2);
-        using var replacement = new AsyncRuntime(1);
-        replacement.ReleaseResponses();
-        OutputController.Initialize(new NOMADConfig { CoreRuntimePort = original.Port });
-        var movement = OutputController.SendServoPwmAsync(8, 2000);
-        original.WaitForCommands(1);
-        var stop = OutputController.SendServoStopAsync(8, 1500);
-        Expect(!stop.IsCompleted, "old output's explicit stop is queued behind its controlled movement request");
-        OutputController.Initialize(new NOMADConfig { CoreRuntimePort = replacement.Port });
-        original.ReleaseResponses();
-        Expect(WaitResult(movement).Succeeded, "original movement completes with its original runtime result");
-        Expect(WaitResult(stop).Succeeded, "queued stop completes using the transport captured at invocation");
-        original.Wait();
-        Expect(original.Commands.Count == 2 &&
-            Convert.ToInt32(original.Commands[1]["pwm_microseconds"]) == 1500,
-            "old output stop reaches the original runtime exactly once after configuration changes");
-        Expect(replacement.AcceptedConnections == 0 && replacement.Commands.Count == 0,
-            "replacement runtime receives no connection or mutation from an old queued stop");
-    }
 
     private static void Runtime_CancellationBeforeWriteIsNotSent()
     {

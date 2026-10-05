@@ -16,7 +16,7 @@ namespace NOMAD.MissionPlanner
         private readonly Func<IVideoPipeline> _createPipeline;
         private readonly NOMADConfig _config;
         private EmbeddedVideoPlayer _videoPlayer;
-        private PayloadControlPanel _payloadPanel;
+        private ActuatorControlPanel _actuatorPanel;
 
         public NOMADVideoView(NOMADConfig config)
             : this(config, System.Threading.CancellationToken.None) { }
@@ -83,14 +83,14 @@ namespace NOMAD.MissionPlanner
             };
             try
             {
-                _payloadPanel = new PayloadControlPanel(_config) { Dock = DockStyle.Fill };
-                controlsSection.Controls.Add(_payloadPanel);
+                _actuatorPanel = new ActuatorControlPanel(_config) { Dock = DockStyle.Fill };
+                controlsSection.Controls.Add(_actuatorPanel);
             }
             catch (Exception ex)
             {
                 controlsSection.Controls.Add(new Label
                 {
-                    Text = $"Payload controls unavailable: {ex.Message}",
+                    Text = $"Actuator controls unavailable: {ex.Message}",
                     Font = new Font("Segoe UI", 11),
                     ForeColor = ERROR_COLOR,
                     Dock = DockStyle.Top,
@@ -112,7 +112,7 @@ namespace NOMAD.MissionPlanner
             if (disposing)
             {
                 _videoPlayer?.Dispose();
-                _payloadPanel?.Dispose();
+                _actuatorPanel?.Dispose();
             }
             base.Dispose(disposing);
         }

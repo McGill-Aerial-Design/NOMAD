@@ -236,9 +236,9 @@ pixi run test-plugin-video
 ```
 
 The build writes `mission_planner/src/bin/Release/NOMADPlugin.dll`; it does not
-install it. `test-plugin-config-migration`, `test-plugin-interlock`,
-`test-plugin-core-client`, and `test-plugin-duallink` cover focused helpers,
-the runtime client and router behavior. Follow the [Mission Planner build and installation guide](../mission_planner/README.md)
+install it. `test-plugin-config-migration`,
+`test-plugin-core-client`, and `test-plugin-duallink` cover persisted settings, input/UI to semantic API mapping, the runtime client and router behavior.
+The C++ `nomad_actuator_tests` and runtime IPC suite own actuator safety and sequencing. Follow the [Mission Planner build and installation guide](../mission_planner/README.md)
 and its [packaging guide](../mission_planner/packaging/README.md). Tagged
 releases use `.github/workflows/release.yml` to assemble separate plugin and
 router ZIP files; a manual workflow dispatch uploads artifacts without

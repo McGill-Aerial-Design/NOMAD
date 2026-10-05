@@ -21,6 +21,7 @@ set -e
 
 # Configuration
 HOSTNAME="nomad-jetson"
+OPERATOR=""
 TAILSCALE_INSTALL_URL="https://tailscale.com/install.sh"
 LOG_FILE="/var/log/nomad-tailscale-setup.log"
 
@@ -69,6 +70,7 @@ show_help() {
     echo "Options:"
     echo "  --authkey <KEY>    Use auth key for non-interactive authentication"
     echo "  --hostname <NAME>  Set custom hostname (default: nomad-jetson)"
+    echo "  --operator <USER>  Delegate local Tailscale management (default: none)"
     echo "  --help             Show this help message"
     echo ""
     echo "Examples:"
@@ -127,14 +129,14 @@ authenticate() {
     if [[ -n "$authkey" ]]; then
         # Non-interactive auth with key
         log "Using auth key for authentication"
-        tailscale up --authkey="$authkey" --hostname="$HOSTNAME"
+        tailscale up --authkey="$authkey" --hostname="$HOSTNAME" --operator="$OPERATOR"
     else
         # Interactive auth (generates URL)
         log "Starting interactive authentication..."
         echo ""
         echo "Please visit the URL below to authenticate:"
         echo ""
-        tailscale up --hostname="$HOSTNAME"
+        tailscale up --hostname="$HOSTNAME" --operator="$OPERATOR"
     fi
 
     # Verify authentication
@@ -162,6 +164,31 @@ configure_firewall() {
     log "Firewall configured for Tailscale"
 }
 
+render_watchdog_service() {
+    local script_dir repo_root watchdog_script service_file escaped_script
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+    repo_root="$(cd "$script_dir/../../.." && pwd -P)"
+    watchdog_script="$repo_root/infra/tailscale/scripts/watchdog.sh"
+    service_file="$script_dir/../config/tailscale-watchdog.service"
+    if [[ ! -f "$watchdog_script" || ! -f "$service_file" ]]; then
+        echo "Watchdog script or service template is missing" >&2
+        return 1
+    fi
+    if [[ "$watchdog_script" == *$'\n'* || "$watchdog_script" == *$'\r'* ]]; then
+        echo "Watchdog path must not contain line breaks" >&2
+        return 1
+    fi
+    # Quote systemd argv and escape its specifiers before escaping sed replacements.
+    escaped_script="${watchdog_script//\\/\\\\}"
+    escaped_script="${escaped_script//\"/\\\"}"
+    escaped_script="${escaped_script//%/%%}"
+    escaped_script="${escaped_script//\$/\$\$}"
+    escaped_script="$(printf '%s' "$escaped_script" | sed 's/[&|\\]/\\&/g')"
+    sed -e "s|__WATCHDOG_SCRIPT__|$escaped_script|g" \
+        -e "s|__TS_HOSTNAME__|$HOSTNAME|g" \
+        -e "s|__TS_OPERATOR__|$OPERATOR|g" "$service_file"
+}
+
 install_watchdog() {
     log "Installing Tailscale watchdog service..."
 
@@ -179,12 +206,11 @@ install_watchdog() {
     # Make watchdog executable
     chmod +x "$watchdog_script"
 
-    # Determine NOMAD repo root from config or script path
-    local repo_root="${NOMAD_REPO_ROOT:-$(cd "$script_dir/../.." && pwd)}"
-
     # Copy service file if exists
     if [[ -f "$service_file" ]]; then
-        sed -e "s|__NOMAD_ROOT__|$repo_root|g" "$service_file" > /etc/systemd/system/tailscale-watchdog.service
+        local service_config
+        service_config="$(render_watchdog_service)"
+        printf '%s\n' "$service_config" > /etc/systemd/system/tailscale-watchdog.service
         systemctl daemon-reload
         systemctl enable tailscale-watchdog
         systemctl start tailscale-watchdog
@@ -273,6 +299,10 @@ main() {
                 HOSTNAME="$2"
                 shift 2
                 ;;
+            --operator)
+                OPERATOR="$2"
+                shift 2
+                ;;
             --help)
                 show_help
                 exit 0
@@ -282,6 +312,13 @@ main() {
                 ;;
         esac
     done
+
+    if [[ ! "$HOSTNAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$ ]]; then
+        error "Hostname must contain 1-63 letters, digits or hyphens"
+    fi
+    if [[ -n "$OPERATOR" && ! "$OPERATOR" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*\$?$ ]]; then
+        error "Operator must be a valid local account name"
+    fi
 
     echo ""
     echo "============================================================"
@@ -301,4 +338,6 @@ main() {
     print_next_steps
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

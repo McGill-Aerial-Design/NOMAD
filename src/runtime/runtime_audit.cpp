@@ -106,7 +106,18 @@ std::string Runtime::Implementation::hello_proof(const Request &request) const {
 Json Runtime::Implementation::request_record(
     const Request &request, const std::string &event, const std::string &result) {
     Json normalized = Json::object();
-    if (request.type == "set_servo") {
+    if (request.type == "actuator_action") {
+        normalized = {{"actuator_id", request.original["actuator_id"]},
+                      {"operation", request.original["operation"]},
+                      {"input_source", request.original["input_source"]}};
+        for (const auto *key : {"value", "input_slot"}) {
+            if (request.original.contains(key)) {
+                normalized[key] = request.original[key];
+            }
+        }
+    } else if (request.type == "configure_actuators") {
+        normalized = {{"actuator_count", request.original["actuator_configs"].size()}};
+    } else if (request.type == "set_servo") {
         normalized = {{"channel", request.channel}, {"pwm_microseconds", request.pwm_microseconds}};
     } else if (request.type == "set_relay") {
         normalized = {{"relay_number", request.relay_number}, {"on", request.relay_on}};

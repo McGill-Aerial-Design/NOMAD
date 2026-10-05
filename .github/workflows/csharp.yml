@@ -83,9 +83,6 @@ jobs:
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v3
 
-      - name: Payload-release interlock tests (SR-PAY-03)
-        run: pwsh -File scripts/build/test_plugin_interlock.ps1
-
       - name: Geofence geometry tests
         run: pwsh -File scripts/build/test_plugin_geometry.ps1
 
@@ -98,7 +95,7 @@ jobs:
       - name: Altitude callout tests
         run: pwsh -File scripts/build/test_plugin_audio.ps1
 
-      - name: Core client boundary tests
+      - name: Semantic client, actuator UI and USB HID mapping tests
         run: pwsh -File scripts/build/test_plugin_core_client.ps1
 
       - name: Mission Planner reviewed-target warning tests
@@ -186,6 +183,9 @@ jobs:
           if (-not (Test-Path "mission_planner/src/bin/Release/NOMADPlugin.dll")) {
             throw "build did not produce NOMADPlugin.dll"
           }
+
+      - name: Persisted configuration migration and settings UI tests
+        run: pwsh -File scripts/build/test_plugin_config_migration.ps1
 
       - name: Gimbal joystick UI smoke
         run: pwsh -File scripts/build/test_plugin_gimbal_ui.ps1

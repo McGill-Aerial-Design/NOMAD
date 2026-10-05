@@ -24,9 +24,17 @@ Json Runtime::Implementation::handle_read_request(const Request &request) {
                                 {"next_sequence", next_sequence()},
                                 {"server_time_ms", unix_milliseconds()}}},
                 {"capabilities",
-                 {"hello", "ping", "status", "set_servo", "set_relay", "motor_test",
+                 {"hello", "ping", "status", "get_actuators", "configure_actuators", "actuator_action",
+                  "set_servo", "set_relay", "motor_test",
                   "configure_gimbal", "set_gimbal_target", "admit_authority", "revoke_authority",
                   "handback_authority"}}};
+    }
+    if (request.type == "get_actuators") {
+        observe_vehicle_session();
+        return {{"protocol", kProtocolName}, {"version", kProtocolVersion}, {"id", request.id},
+                {"ok", true}, {"type", "actuators_response"}, {"runtime_incarnation", incarnation_},
+                {"configuration_recovery_required", actuator_configuration_recovery_.load()},
+                {"actuators", actuators_.discover(actuator_authority())}};
     }
     if (request.type == "ping") {
         return {{"protocol", kProtocolName}, {"version", kProtocolVersion}, {"id", request.id},

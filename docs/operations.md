@@ -491,21 +491,65 @@ Mission Planner reports vehicle mutations using the
 [runtime outcome contract](runtime-ipc.md#vehicle-mutation-outcomes).
 Rejected means no eligible vehicle send; failed means a definite unsuccessful
 attempt; interrupted and unknown mean the final vehicle effect is uncertain.
-Do not retry an uncertain release or retract automatically. Observe the payload
-and follow the reviewed procedure before deciding on another action. Payload
-indicators record commanded state only; successful release/retract commands do
-not verify physical release or retraction.
+Do not retry an uncertain actuator mutation automatically. Read backend state,
+inspect the mechanism and use the configured safe action. Backend commanded state
+records software evidence only; a successful safe command is not physical proof.
 
-Payload drop controls require three confirmations; relay ON/fire controls require
-two, with no more than three seconds between confirmations. Joystick confirmations
-require a return to neutral between switch edges, including after startup or lost
-input. A held switch does not confirm again. The UI and joystick use the same
-consuming authorization policy and share successful commanded-release state.
-Interrupted or unknown payload outputs latch further release/fire off. The next
-explicit action requests retract or relay OFF; only software success clears that
-latch, and a new full confirmation sequence is then required. An accepted safe
-command still does not verify physical state. Generic non-payload servo/relay
-output primitives retain their existing behavior.
+## Generic actuator configuration and frontend migration
+
+`nomad-runtime` owns output mapping, values, confirmations, timing and recovery.
+Mission Planner discovers names, labels, available actions and state with
+authenticated `get_actuators`; it sends `actuator_action` with a stable ID and
+operation. Position is normalized from 0 to 1; only the backend converts it to PWM.
+UI confirmations are discrete requests. USB HID uses the actual selected device,
+configured button indices, real neutral observations and backend-provided release
+metadata. There is no Python serial/virtual-gamepad helper. Input loss cancels
+unsent stale observations and sends a semantic safe intent once; uncertain begun
+mutations are never retried. A hazardous absolute-position axis has no supported
+confirmation gesture; use the UI for that configuration instead of bypassing policy.
+
+| Behavior | Configured actions |
+|---|---|
+| ServoToggle | Two PWM endpoints with operator-defined labels and an explicit safe endpoint |
+| ServoPosition | Bounded normalized position and a configured safe PWM |
+| ServoBidirectional | Negative/positive values, neutral safe value and short bounded runs |
+| RelayToggle | Configured ON/OFF labels |
+| RelayPulse | ON, configured wait, explicit OFF; any unsuccessful OFF requires recovery |
+
+Provision an absolute protected `NOMAD_ACTUATORS_FILE` outside the installation
+tree. A blank path configures no outputs. Begin with
+[`actuators.example.json`](../config/actuators.example.json), review every physical
+channel, value, label and hazard classification, and protect the file with the same
+ownership/permissions as runtime credentials. Validate without any vehicle connection:
+
+```sh
+nomad-runtime --validate-actuators <absolute-protected-actuators.json>
+```
+
+Actuator configuration uses `configure_actuators` under ordinary admitted authority
+and requires fresh disarmed state, no active/pending/recovery output, and a configured
+file path. Startup, replacement and authority/session changes require explicit safe
+commands. Ambiguous persistence, post-save arming/authority changes, or failed outcome
+auditing inhibit activation until restart and operator review. The API reports that
+the configuration changed or may have changed; it never fabricates vehicle-send evidence.
+
+Old nonempty Mission Planner `Payloads`/`Actuators` settings fail visibly and leave
+the original file unchanged. Export a supported legacy configuration to two new files:
+
+```sh
+python scripts/migrate_actuators.py <old-mp.json> <new-backend.json> <new-private-mp.json> --runtime <nomad-runtime>
+```
+
+The converter preserves exact channels, endpoints, reversal, pulse values, names and
+stable list-index IDs, and maps old switch actions to semantic IDs. It preserves the
+old direct-HID button indices (0–5); select the actual USB HID device explicitly.
+Backend exports contain no frontend credentials. The private frontend output preserves
+independently provisioned credentials; it is not a portable profile template. The
+native backend validates the candidate before either export. Unsupported RC pass-through,
+disabled/ambiguous outputs, missing mapped targets, enabled virtual bridging, enabled
+relative-rate axes, conflicting legacy relay UI-toggle/HID-pulse actions, and waits
+beyond the reviewed 1500 ms limit require explicit review.
+No value is silently clamped or remapped. Review both exports before provisioning them.
 
 ## Managed runtime configuration
 

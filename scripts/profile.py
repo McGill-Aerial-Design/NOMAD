@@ -59,7 +59,7 @@ _ENDPOINT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _RETIRED_PROFILE_SETTINGS = {
-    "NOMAD_ENABLE_SERVOS": "servo outputs are configured as payloads; this environment flag has no consumer",
+    "NOMAD_ENABLE_SERVOS": "servo outputs are configured as actuators; this environment flag has no consumer",
     "NOMAD_BRIDGE_MAVLINK_ENDPOINT": "aircraft transport belongs to NOMAD_MAVLINK_ENDPOINT in nomad-runtime",
     "NOMAD_CORE_SITL_PORT": "this port belongs to test tooling and is not a product-profile setting",
     "NOMAD_LTE_UDP_PORT": "physical ground links belong in the standalone router Links array",
@@ -138,7 +138,6 @@ _KEY_SETTINGS = (
     "NOMAD_PROFILE",
     "NOMAD_PROFILE_DESCRIPTION",
     "NOMAD_SIM_MODE",
-    "NOMAD_ENABLE_SERVOS",
 )
 
 
@@ -330,9 +329,13 @@ def cmd_show() -> None:
     if not ENV_FILE.exists():
         print("[WARN] No active config (config/nomad.env does not exist)")
         print("Load a profile: python scripts/profile.py load <name>")
-        sys.exit(1)
+        return
 
-    settings = _key_settings(ENV_FILE)
+    try:
+        settings = _key_settings(ENV_FILE)
+    except (OSError, UnicodeError):
+        print("[WARN] Active config is unreadable; preserve it before loading a profile")
+        return
     profile = settings.get("NOMAD_PROFILE", "unknown")
     desc = settings.get("NOMAD_PROFILE_DESCRIPTION", "No description")
     sim = settings.get("NOMAD_SIM_MODE", "false")

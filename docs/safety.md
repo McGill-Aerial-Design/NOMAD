@@ -106,13 +106,37 @@ fixed-wing surface behavior. The plugin's existing 122 m defaults/displays remai
 a separate gap against the official 100 m AGL ceiling.
 
 The original SR-PAY-03 explicit operator interlock remains binding project policy.
-Mission Planner payload helpers consume a bounded, one-use grant from the same
-`PayloadReleaseInterlock` used by UI and joystick inputs. Drops require three
-confirmations and relay ON/fire requires two within the rolling three-second
-window; joystick confirmations require neutral between edges. Reset, expiry and
-lost input fail closed. Interrupted/unknown outputs block new release/fire until
-an explicit retract/OFF obtains software success; no physical completion is
-inferred. Generic non-payload output primitives remain available.
+Configured hazardous actuator authorization is enforced by `nomad-runtime` under
+chooses output values, confirmation policy, sequencing or recovery. Names and
+action labels are configuration data. The five concrete behaviors are
+`ServoToggle`, `ServoPosition`, `ServoBidirectional`, `RelayToggle` and `RelayPulse`.
+
+Hazardous configuration requires two or three confirmations within a total
+500–5000 ms window, with real neutral between HID edges. Nonhazardous actions may
+require zero to three confirmations. Sequences bind the actuator, operation,
+normalized value, authority/session/generation, input source and physical slot.
+Expiry, input loss, contradiction and authority changes fail closed. Startup,
+configuration replacement and authority/session invalidation require an explicit
+software-successful safe command before activation. Safe actions bypass hazardous
+confirmation counts but retain ordinary authentication, authority and audit checks.
+
+For a pulse, software-successful ON followed by any unsuccessful OFF latches
+recovery. Further activation is blocked; an explicit safe OFF remains available.
+Only a successful explicit safe request clears recovery. Initial definite ON
+failure does not imply ON happened; unknown/interrupted results require recovery.
+The backend never retries an uncertain mutation. Software command success,
+request disposition and physical actuator state remain separate.
+
+Configured outputs reject raw servo/relay requests, including requests from other
+frontends. Primitives remain available for unconfigured outputs. This is a NOMAD
+software boundary; external RC, native GCS and ArduPilot remain outside it.
+Actuator configuration requires explicit output/safe values and reviewed bounds:
+servo 1–16, relay 0–15, PWM 500–2500 us, pulse/motion wait 50–1500 ms. Before ON,
+the original request must have enough validity for the 3000 ms ACK budget, wait
+and 250 ms margin; OFF retains the same final-send authority token. These bounds
+do not establish a maximum physical ON time or prove physical OFF. Hardware
+feedback, mechanism calibration and ArduPilot failsafes require qualification.
+
 Do not remove it to pursue the sample-autonomy bonus. If preauthorization is
 accepted and selected, propose a bounded sequence and intervention/abort contract
 as a later reviewed change with no uncertain-action retries.
@@ -190,7 +214,7 @@ These retain their original obligations; partial coverage is not satisfaction.
 | SR-FEN-02 | Reject position targets outside configured boundary | C++ target tests; Mission Planner GuidedGoto reports unavailable without dispatch (`mission_planner/tests/coreclient/TerminationRequestTests.cs::GuidedGoto_ReportsUnavailableWithoutDispatch`); unsupported runtime goto produces zero fake commands (`tests/runtime_ipc_test.cpp::test_protocol_errors`); live containment and full mission/velocity paths open |
 | SR-PAY-01 | Validate servo channel and PWM before actuation | C++ generic range tests; board map and reserved payload channels open |
 | SR-PAY-02 | Bound payload duration and de-energize outputs on failure | Dedicated release/off-failure tests; generic relay and physical power-loss behavior open |
-| SR-PAY-03 | Release requires explicit operator interlock | Dedicated core release and UI tests; all raw output access must share authorization |
+| SR-PAY-03 | Authorize configured hazardous actuator actions behind runtime IPC | Backend confirmations, neutral readiness, expiry, authority invalidation, configured-output guards and explicit recovery are covered by actuator and IPC fault tests; software success is not physical proof |
 | SR-SEC-01 | No NOMAD command disables FC failsafes | Structural scan only; semantic allowlist and plugin parameter audit open |
 | SR-SEC-02 | Authenticate command clients at trust boundary | Per-client HMAC proofs authenticate configured local client identities; the nonempty deployment gate remains separate, and no human-user or remote identity is established |
 | SR-SEC-03 | Authenticate and audit command requests | Runtime JSONL intent is synchronized before execution and observed outcomes afterward; authentication/audit faults fail closed, and recorded software evidence does not prove physical action; see [protocol policy](runtime-ipc.md#durable-runtime-command-evidence) |
@@ -299,17 +323,15 @@ SR-FEN-01 | src/mavlink/mavsdk_fence.cpp:download_fence_plan | tests/test_mavsdk
 SR-FEN-01 | src/mavlink/mavsdk_mavlink_connection.cpp:read_param | tests/test_mavsdk_connection.py::test_disabled_fence_never_verifies
 SR-FEN-02 | src/safety/geofence.cpp:evaluate_global_position | tests/safety_test.cpp::test_vehicle_fence_rejects_target_before_transmission
 SR-FEN-02 | src/safety/geofence.cpp:evaluate_position | tests/fence_config_test.cpp::test_local_polygon_with_nonfinite_vertex_fails_closed
-SR-PAY-01 | src/safety/payload.cpp:validate_servo_command | tests/safety_test.cpp::test_vehicle_payload_commands_require_interlock_and_validate_ranges
-SR-PAY-02 | src/safety/payload.cpp:clamp_release_duration | tests/safety_test.cpp::test_payload_validation_and_interlock
-SR-PAY-02 | src/vehicle/vehicle_payload.cpp:release_payload | tests/safety_test.cpp::test_vehicle_payload_on_failure_still_attempts_off
-SR-PAY-02 | src/vehicle/vehicle_payload.cpp:release_payload | tests/safety_test.cpp::test_vehicle_payload_off_failure_is_reported
-SR-PAY-03 | src/safety/payload.cpp:ReleaseInterlock::evaluate_release | tests/safety_test.cpp::test_payload_validation_and_interlock
-SR-PAY-03 | mission_planner/src/Payload/PayloadReleaseInterlock.cs:RegisterClick | mission_planner/tests/payload/PayloadReleaseInterlockTests.cs::Authorization_IsBoundedConsumingAndRevocable
-SR-PAY-03 | mission_planner/src/Input/NomadJoystickService.Switches.cs:DrivePayloadButtons | mission_planner/tests/coreclient/JoystickAuthorizationTests.cs::Joystick_OneEdgeAndHeldButtonSendNothing
-SR-PAY-03 | mission_planner/src/Input/NomadJoystickService.Switches.cs:DrivePayloadButtons | mission_planner/tests/coreclient/JoystickAuthorizationTests.cs::Joystick_ResetExpiryAndInvalidInputFailClosed
-SR-PAY-03 | mission_planner/src/Payload/PayloadActions.cs:Drop | mission_planner/tests/coreclient/JoystickAuthorizationTests.cs::Joystick_AuthorizedDropSendsOnceAndSharesState
-SR-PAY-03 | mission_planner/src/Payload/PayloadActions.cs:FireRelay | mission_planner/tests/coreclient/JoystickAuthorizationTests.cs::Joystick_AuthorizedPumpFiresOnce
-SR-PAY-03 | mission_planner/src/Payload/PayloadActions.cs:SendOutput | mission_planner/tests/coreclient/JoystickAuthorizationTests.cs::PayloadBoundary_ReservesOutputUntilUncertaintyRecorded
+SR-PAY-01 | src/safety/output.cpp:validate_servo_command | tests/safety_test.cpp::test_generic_servo_validation
+SR-PAY-01 | src/runtime/actuator_config.cpp:validate_actuator_definitions | tests/actuator_test.cpp::test_configuration_validation_and_revision
+SR-PAY-02 | src/runtime/actuator_sequence.cpp:run_actuator_sequence | tests/actuator_test.cpp::test_staged_recovery_matrix
+SR-PAY-02 | src/runtime/actuator_state.cpp:ActuatorState::finish | tests/actuator_test.cpp::test_initial_failure_and_final_audit_failure
+SR-PAY-02 | src/runtime/actuator_sequence.cpp:run_actuator_sequence | tests/actuator_test.cpp::test_staged_exceptions_leave_explicit_recovery_available
+SR-PAY-03 | src/runtime/actuator_state.cpp:ActuatorState::confirm_locked | tests/actuator_test.cpp::test_hid_and_authority_bound_confirmation
+SR-PAY-03 | src/runtime/runtime_actuators.cpp:execute_actuator_request | tests/runtime_actuator_cases.hpp::test_backend_actuator_authorization_and_raw_boundary
+SR-PAY-03 | src/runtime/actuator_state.cpp:ActuatorState::finish | tests/runtime_actuator_cases.hpp::test_backend_pulse_failure_and_explicit_recovery
+SR-PAY-03 | src/runtime/actuator_state.cpp:ActuatorState::release_input | tests/runtime_actuator_cases.hpp::test_hid_bidirectional_release_preserves_confirmations_and_stops
 SR-SEC-01 | src/vehicle/vehicle.cpp:send_command | tests/test_mavsdk_connection.py::test_command_wire_forms
 SR-SEC-01 | src/qualification/main.cpp:run_command | tests/test_cpp_command_surface.py::test_cpp_command_surface_has_no_failsafe_controls
 SR-SEC-02 | src/qualification/main.cpp:run_command | tests/test_qualification_cli.py::test_direct_actuation_refused_without_key_before_transport
