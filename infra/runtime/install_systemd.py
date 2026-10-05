@@ -33,6 +33,7 @@ def render_unit(executable: Path, config: Path, state: Path, user: str) -> str:
 def validate_state_paths(config: Path, state: Path) -> None:
     """Atomic actuator replacement and audit writes must remain in the writable state tree."""
     settings = json.loads(config.read_text(encoding="utf-8"))
+    state_root = state.resolve()
     for key in ("NOMAD_AUDIT_DIRECTORY", "NOMAD_ACTUATORS_FILE"):
         value = settings.get(key, "")
         if key == "NOMAD_ACTUATORS_FILE" and value == "":
@@ -40,7 +41,8 @@ def validate_state_paths(config: Path, state: Path) -> None:
         if not isinstance(value, str) or not value or not Path(value).is_absolute():
             raise ValueError(f"{key} requires an absolute path")
         path = Path(value)
-        if not path.resolve().is_relative_to(state.resolve()) or path.resolve() == state.resolve():
+        resolved = path.resolve()
+        if not resolved.is_relative_to(state_root) or (key == "NOMAD_ACTUATORS_FILE" and resolved == state_root):
             raise ValueError(f"{key} must be beneath --state for systemd write access")
         for parent in (path, *path.parents, state, *state.parents):
             if parent.is_symlink():

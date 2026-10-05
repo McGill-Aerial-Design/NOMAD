@@ -139,7 +139,7 @@ def test_service_accepts_private_actuator_state_location(tmp_path):
         )
     )
     install_systemd.validate_state_paths(config, state)
-    config.write_text(json.dumps({"NOMAD_AUDIT_DIRECTORY": str(state / "audit"), "NOMAD_ACTUATORS_FILE": ""}))
+    config.write_text(json.dumps({"NOMAD_AUDIT_DIRECTORY": str(state), "NOMAD_ACTUATORS_FILE": ""}))
     install_systemd.validate_state_paths(config, state)
 
 
