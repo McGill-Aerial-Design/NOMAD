@@ -352,7 +352,7 @@ def case_servo_parity(cli: Path) -> None:
     result, observed = run_cli_case(cli, "servo", "9", "1500")
     parameters = find_parameters(observed, COMMAND_DO_SET_SERVO)
     require(
-        result.returncode == 0 and "servo command verified" in result.stdout,
+        result.returncode == 0 and "servo command acknowledged" in result.stdout,
         "servo command is acknowledged and reported",
         describe(result, observed),
     )
@@ -367,7 +367,7 @@ def case_relay_parity(cli: Path) -> None:
     result, observed = run_cli_case(cli, "relay", "3", "1")
     parameters = find_parameters(observed, COMMAND_DO_SET_RELAY)
     require(
-        result.returncode == 0 and "relay command verified" in result.stdout,
+        result.returncode == 0 and "relay command acknowledged" in result.stdout,
         "relay command is acknowledged and reported",
         describe(result, observed),
     )
@@ -397,7 +397,7 @@ def case_motor_test_parity(cli: Path) -> None:
     result, observed = run_cli_case(cli, "motor-test", "1", "0", "1")
     parameters = find_parameters(observed, COMMAND_DO_MOTOR_TEST)
     require(
-        result.returncode == 0 and "motor test command verified" in result.stdout,
+        result.returncode == 0 and "motor test command acknowledged" in result.stdout,
         "motor test is acknowledged and reported",
         describe(result, observed),
     )
