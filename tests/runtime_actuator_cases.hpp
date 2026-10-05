@@ -191,42 +191,6 @@ void test_configuration_arming_after_native_save() {
     runtime.stop();
 }
 
-void test_hid_bidirectional_release_preserves_confirmations_and_stops() {
-    auto config = test_config();
-    config.ipc_port = free_port();
-    config.actuation_enabled = true;
-    config.actuators = {runtime_actuator(nomad::runtime::ActuatorBehavior::ServoBidirectional)};
-    config.actuators[0].hold_ms = 1500;
-    auto connection = std::make_unique<FakeConnection>();
-    auto *observed = connection.get();
-    nomad::runtime::Runtime runtime(std::move(connection), config);
-    start_ready(runtime, config.ipc_port);
-    admit_authority(config.ipc_port);
-    Client client(config.ipc_port);
-    const auto description = client.request(base_request("release-metadata", "get_actuators"));
-    CHECK(description["actuators"][0]["actions"][0]["release_operation"] == "release_input");
-    CHECK(client.request(actuator_request("direction-safe", "safe"))["command_result"]["success"] == true);
-    client.request(actuator_request("direction-neutral-one", "neutral", "hid", 0));
-    CHECK(client.request(actuator_request("direction-positive-one", "positive", "hid", 0))["execution_attempted"] ==
-          false);
-    const auto release = client.request(actuator_request("direction-release-one", "release_input", "hid", 0));
-    CHECK(release["execution_attempted"] == false);
-    CHECK(release["actuator_state"]["confirmation_remaining"] == 1);
-    CHECK(observed->command_count() == 1);
-    client.request(actuator_request("direction-neutral-two", "neutral", "hid", 0));
-    const auto final_press = actuator_request("direction-positive-two", "positive", "hid", 0);
-    auto motion = std::async(std::launch::async, [&] { return Client(config.ipc_port).request(final_press); });
-    wait_until([&] { return observed->command_count() == 2; });
-    CHECK(motion.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready);
-    const auto stopped = client.request(actuator_request("direction-release-two", "release_input", "hid", 0));
-    CHECK(stopped["execution_attempted"] == true);
-    CHECK(stopped["command_result"]["success"] == true);
-    CHECK(motion.get()["command_result"]["success"] == true);
-    CHECK(stopped["actuator_state"]["recovery_required"] == false);
-    CHECK(observed->command_count() == 4);
-    runtime.stop();
-}
-
 void test_catalog_revision_orders_persistence_and_empty_replacement() {
     auto config = test_config();
     config.ipc_port = free_port();
@@ -448,42 +412,5 @@ void test_backend_configuration_persistence_uncertainty() {
     CHECK(client.request(servo_request("config-raw-inhibited", 2000))["error"]["code"] == "configured_output");
     CHECK(observed->command_count() == 1);
     CHECK(client.request(actuator_request("config-safe-still-available", "safe"))["command_result"]["success"] == true);
-    runtime.stop();
-}
-
-void test_backend_pending_neutral_and_safe_interrupt() {
-    auto config = test_config();
-    config.ipc_port = free_port();
-    config.actuation_enabled = true;
-    config.actuators = {runtime_actuator(nomad::runtime::ActuatorBehavior::RelayPulse)};
-    config.actuators[0].pulse_ms = 1500;
-    auto connection = std::make_unique<FakeConnection>();
-    auto *observed = connection.get();
-    nomad::runtime::Runtime runtime(std::move(connection), config);
-    start_ready(runtime, config.ipc_port);
-    admit_authority(config.ipc_port);
-    Client client(config.ipc_port);
-    CHECK(client.request(actuator_request("pending-safe", "safe"))["command_result"]["success"] == true);
-    client.request(actuator_request("pending-neutral-one", "neutral", "hid", 0));
-    CHECK(client.request(actuator_request("pending-confirm-one", "activate", "hid", 0))["execution_attempted"] ==
-          false);
-    client.request(actuator_request("pending-neutral-two", "neutral", "hid", 0));
-    const auto activation = actuator_request("pending-confirm-two", "activate", "hid", 0);
-    auto pulse = std::async(std::launch::async, [&] {
-        return Client(config.ipc_port).request(activation);
-    });
-    wait_until([&] { return observed->command_count() == 2; });
-    const auto neutral = client.request(actuator_request("pending-neutral-live", "neutral", "hid", 0));
-    CHECK(neutral["execution_attempted"] == false);
-    CHECK(neutral["actuator_state"]["pending"] == true);
-    CHECK(pulse.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready);
-    const auto safe = client.request(actuator_request("pending-explicit-stop", "safe"));
-    const auto completed = pulse.get();
-    CHECK(completed["command_result"]["success"] == true);
-    CHECK(safe["command_result"]["success"] == true);
-    CHECK(safe["actuator_state"]["recovery_required"] == false);
-    CHECK(safe["actuator_state"]["state_revision"].get<std::uint64_t>() >
-          completed["actuator_state"]["state_revision"].get<std::uint64_t>());
-    CHECK(observed->command_count() == 4);
     runtime.stop();
 }

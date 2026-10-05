@@ -124,6 +124,7 @@ void wait_until(const std::function<bool()> &predicate) {
 #include "runtime_outcome_cases.hpp"
 #include "runtime_client_cases.hpp"
 #include "runtime_actuator_cases.hpp"
+#include "runtime_actuator_pending_cases.hpp"
 void test_protocol_and_status(std::uint16_t port, FakeConnection &connection) {
     Client client(port);
     const auto hello = client.request(base_request("1", "hello"));
@@ -438,6 +439,15 @@ void run_runtime_scenarios() {
 
 int main(int argc, char **argv) {
     return nomad::test::run_tests([argc, argv] {
+        if (argc == 2 && std::string_view(argv[1]) == "--actuator-pending-stress") {
+            for (int iteration = 1; iteration <= 5; ++iteration) {
+                nomad::test::run_scenario("gated_direction_release_" + std::to_string(iteration),
+                    test_hid_bidirectional_release_preserves_confirmations_and_stops);
+                nomad::test::run_scenario("gated_pending_neutral_" + std::to_string(iteration),
+                    test_backend_pending_neutral_and_safe_interrupt);
+            }
+            return;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--actuator-tests") {
             test_unknown_actuator_actions_are_rejected_without_state_change();
             test_continuous_axis_eligibility_is_owned_by_backend();
