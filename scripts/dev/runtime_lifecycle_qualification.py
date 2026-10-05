@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from mavsdk_peer import VehiclePeer
+from runtime_actuator_deployment_fixture import verify_actuator_deployment
 from runtime_connection_lifetime_fixture import verify_connection_lifetime
 from runtime_fixture_support import (
     find_runtime,
@@ -239,6 +240,9 @@ def main() -> int:
     verify_connection_lifetime(binary)
     with tempfile.TemporaryDirectory(prefix="nomad-lifecycle-") as temporary:
         root = Path(temporary)
+        directory = root / "actuator-deployment"
+        directory.mkdir()
+        verify_actuator_deployment(binary, directory)
         for crash in (False, True):
             directory = root / ("crash" if crash else "clean")
             directory.mkdir()

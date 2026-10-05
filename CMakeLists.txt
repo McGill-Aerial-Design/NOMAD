@@ -193,10 +193,10 @@ if(PROJECT_IS_TOP_LEVEL)
     install(TARGETS nomad nomad-runtime RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT nomad_runtime)
     install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT nomad_runtime)
     install(FILES LICENSE NOTICE DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad COMPONENT nomad_runtime)
-    install(FILES config/README.md config/nomad.env.example
+    install(FILES config/README.md config/nomad.env.example config/actuators.example.json
             DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad/config COMPONENT nomad_runtime)
     install(FILES infra/runtime/nomad-runtime.service.in infra/runtime/runtime.example.json
-            infra/runtime/install_systemd.py infra/runtime/Manage-NomadRuntime.ps1
+            infra/runtime/install_systemd.py infra/runtime/Manage-NomadRuntime.ps1 scripts/migrate_actuators.py
             DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad/lifecycle COMPONENT nomad_runtime)
     install(FILES docs/operations.md DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad COMPONENT nomad_runtime)
     install(DIRECTORY licenses/mavsdk-phase-a/

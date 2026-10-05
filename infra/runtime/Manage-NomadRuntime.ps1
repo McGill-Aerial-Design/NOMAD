@@ -44,6 +44,21 @@ function Set-PrivatePath {
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
+function Test-ProvisionedPath {
+    param([string]$Path, [bool]$Directory)
+    if (-not [IO.Path]::IsPathRooted($Path) -or $Path -match '["\r\n]') {
+        throw 'Provision absolute configuration paths without quotes or line breaks.'
+    }
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item.PSIsContainer -ne $Directory) { throw 'Unexpected configuration path type.' }
+    while ($null -ne $item) {
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw 'Reparse points are not supported, including parent directories.'
+        }
+        $item = if ($item.PSIsContainer) { $item.Parent } else { $item.Directory }
+    }
+}
+
 if ($Action -eq 'Uninstall') {
     $service = Get-Service nomad-runtime -ErrorAction SilentlyContinue
     if ($service) {
@@ -60,21 +75,33 @@ if ($Action -eq 'Plan') {
     return
 }
 if ($Action -eq 'Protect') {
+    Test-ProvisionedPath $Config $false
     $settings = Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
     $credentials = $settings.NOMAD_CLIENT_CREDENTIALS_FILE
     $audit = $settings.NOMAD_AUDIT_DIRECTORY
-    foreach ($path in @($Config, $credentials, $audit)) {
-        if (-not [IO.Path]::IsPathRooted($path)) { throw 'Provision absolute configuration paths.' }
-        if (Test-Path -LiteralPath $path) {
-            if ((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint) {
-                throw 'Reparse points are not supported.'
-            }
+    Test-ProvisionedPath $credentials $false
+    if (-not [IO.Path]::IsPathRooted($audit)) { throw 'Provision an absolute audit directory.' }
+    if (-not (Test-Path -LiteralPath $audit)) {
+        Test-ProvisionedPath (Split-Path -Parent $audit) $true
+    }
+    $actuators = $settings.NOMAD_ACTUATORS_FILE
+    if (-not [string]::IsNullOrEmpty($actuators)) {
+        Test-ProvisionedPath $actuators $false
+        $actuatorDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($actuators))
+        $entries = @(Get-ChildItem -LiteralPath $actuatorDirectory -Force)
+        if ($entries.Count -ne 1 -or $entries[0].FullName -ne [IO.Path]::GetFullPath($actuators)) {
+            throw 'Use a dedicated actuator directory containing only the reviewed actuator file.'
         }
     }
     if (-not (Test-Path -LiteralPath $audit)) { New-Item -ItemType Directory -Path $audit | Out-Null }
+    Test-ProvisionedPath $audit $true
     Set-PrivatePath $Config $false
     Set-PrivatePath $credentials $false
     Set-PrivatePath $audit $true
+    if (-not [string]::IsNullOrEmpty($actuators)) {
+        Set-PrivatePath $actuatorDirectory $true
+        Set-PrivatePath $actuators $false
+    }
     return
 }
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf) -or

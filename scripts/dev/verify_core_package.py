@@ -21,6 +21,8 @@ REQUIRED_FILES = (
     Path("share/nomad/NOTICE"),
     Path("share/nomad/config/README.md"),
     Path("share/nomad/config/nomad.env.example"),
+    Path("share/nomad/config/actuators.example.json"),
+    Path("share/nomad/lifecycle/migrate_actuators.py"),
     Path("share/nomad/operations.md"),
     Path("share/nomad/lifecycle/nomad-runtime.service.in"),
     Path("share/nomad/lifecycle/install_systemd.py"),

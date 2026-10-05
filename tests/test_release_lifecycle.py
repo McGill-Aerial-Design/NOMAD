@@ -182,7 +182,7 @@ def test_corrupt_previous_archive_prevents_unverified_rollback(installed):
     assert deployment.status()["active"]["release_version"] == b[2]
 
 
-@pytest.mark.parametrize("key", ["NOMAD_CLIENT_CREDENTIALS_FILE", "NOMAD_AUDIT_DIRECTORY"])
+@pytest.mark.parametrize("key", ["NOMAD_CLIENT_CREDENTIALS_FILE", "NOMAD_AUDIT_DIRECTORY", "NOMAD_ACTUATORS_FILE"])
 def test_external_state_cannot_use_dot_paths_into_release_root(tmp_path, key):
     from scripts.release.deploy import external_config
 
@@ -194,6 +194,14 @@ def test_external_state_cannot_use_dot_paths_into_release_root(tmp_path, key):
     config.write_text(json.dumps({key: str(state)}))
     with pytest.raises(ValueError, match="outside deployment root"):
         external_config(root, config)
+
+
+def test_external_configuration_accepts_blank_optional_actuator_path(tmp_path):
+    from scripts.release.deploy import external_config
+
+    config = tmp_path / "runtime.json"
+    config.write_text(json.dumps({"NOMAD_ACTUATORS_FILE": ""}))
+    assert external_config(tmp_path / "release", config) == {"NOMAD_ACTUATORS_FILE": ""}
 
 
 def test_unsupported_native_os_is_rejected_before_staging(tmp_path, monkeypatch):

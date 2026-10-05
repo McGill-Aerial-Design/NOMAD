@@ -28,6 +28,8 @@ CORE_REQUIRED_FILES = (
     "share/nomad/NOTICE",
     "share/nomad/config/README.md",
     "share/nomad/config/nomad.env.example",
+    "share/nomad/config/actuators.example.json",
+    "share/nomad/lifecycle/migrate_actuators.py",
     "share/nomad/operations.md",
     "share/nomad/lifecycle/nomad-runtime.service.in",
     "share/nomad/lifecycle/install_systemd.py",

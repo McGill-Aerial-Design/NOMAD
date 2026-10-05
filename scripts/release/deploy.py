@@ -63,12 +63,14 @@ def external_config(root: Path, path: Path) -> dict:
     if path.resolve().is_relative_to(root.resolve()):
         raise ValueError("operator configuration must be outside deployment root")
     settings = storage.read_json(path)
-    for key in ("NOMAD_CLIENT_CREDENTIALS_FILE", "NOMAD_AUDIT_DIRECTORY"):
-        if key in settings:
+    for key in ("NOMAD_CLIENT_CREDENTIALS_FILE", "NOMAD_AUDIT_DIRECTORY", "NOMAD_ACTUATORS_FILE"):
+        if key in settings and (key != "NOMAD_ACTUATORS_FILE" or settings[key]):
             state = Path(settings[key])
             storage.reject_links(state)
             if not state.is_absolute() or state.resolve().is_relative_to(root.resolve()):
-                raise ValueError("credentials and audit history require absolute paths outside deployment root")
+                raise ValueError(
+                    "credentials, audit history and actuators require absolute paths outside deployment root"
+                )
     return settings
 
 
