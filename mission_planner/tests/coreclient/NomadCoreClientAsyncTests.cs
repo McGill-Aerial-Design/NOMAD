@@ -25,6 +25,7 @@ internal static partial class NomadCoreClientTests
         Runtime_ConcurrentResultsStayIsolated();
         Output_ConcurrentRequestsUseExactResultsAndRejectOverlap();
         Output_ExplicitStopHasOneBoundedWaiter();
+        Output_QueuedStopRetainsOriginalRuntimeAcrossConfigurationChange();
         Runtime_ConcurrentSequencesRespectRuntimeFloor();
         Runtime_RevokeInterruptsActiveMutation();
         Runtime_MockRejectsReversedSequences();
@@ -322,6 +323,28 @@ internal static partial class NomadCoreClientTests
             Expect(Convert.ToUInt64(command["sequence"]) > previous,
                 "runtime restart preserves safe monotonic client allocation even when runtime floor resets");
         }
+    }
+
+    private static void Output_QueuedStopRetainsOriginalRuntimeAcrossConfigurationChange()
+    {
+        using var original = new AsyncRuntime(2);
+        using var replacement = new AsyncRuntime(1);
+        replacement.ReleaseResponses();
+        OutputController.Initialize(new NOMADConfig { CoreRuntimePort = original.Port });
+        var movement = OutputController.SendServoPwmAsync(8, 2000);
+        original.WaitForCommands(1);
+        var stop = OutputController.SendServoStopAsync(8, 1500);
+        Expect(!stop.IsCompleted, "old output's explicit stop is queued behind its controlled movement request");
+        OutputController.Initialize(new NOMADConfig { CoreRuntimePort = replacement.Port });
+        original.ReleaseResponses();
+        Expect(WaitResult(movement).Succeeded, "original movement completes with its original runtime result");
+        Expect(WaitResult(stop).Succeeded, "queued stop completes using the transport captured at invocation");
+        original.Wait();
+        Expect(original.Commands.Count == 2 &&
+            Convert.ToInt32(original.Commands[1]["pwm_microseconds"]) == 1500,
+            "old output stop reaches the original runtime exactly once after configuration changes");
+        Expect(replacement.AcceptedConnections == 0 && replacement.Commands.Count == 0,
+            "replacement runtime receives no connection or mutation from an old queued stop");
     }
 
     private static void Runtime_CancellationBeforeWriteIsNotSent()

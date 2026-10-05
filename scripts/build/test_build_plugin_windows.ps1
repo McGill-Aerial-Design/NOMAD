@@ -348,6 +348,22 @@ function Test-BuildOnlySuccess {
     if (-not (Test-Path -LiteralPath (Join-Path $Fixture.Repo 'build\release\ReleaseIdentity.cs'))) {
         throw 'Plugin build did not generate its C# embedded identity input.'
     }
+    $csharp = Get-Content -LiteralPath (Join-Path $Fixture.Repo 'build\release\ReleaseIdentity.cs') -Raw
+    Assert-Contains $csharp "MissionPlannerTarget = `"$targetVersion`"" `
+        'C# build metadata did not carry the reviewed Mission Planner target'
+}
+
+function Test-ChangedReviewedTarget {
+    param([pscustomobject]$Fixture)
+
+    $targetPath = Join-Path $Fixture.Repo 'scripts/release/mission-planner-target.json'
+    $original = Get-Content -LiteralPath $targetPath -Raw
+    try {
+        [IO.File]::WriteAllText($targetPath, '{"version":"2.3.4"}')
+        Test-BuildOnlySuccess -Fixture $Fixture
+    } finally {
+        [IO.File]::WriteAllText($targetPath, $original)
+    }
 }
 
 function Test-BuildFailure {
@@ -464,6 +480,7 @@ try {
     Set-TestEnvironment -Fixture $fixture
 
     Test-BuildOnlySuccess -Fixture $fixture
+    Test-ChangedReviewedTarget -Fixture $fixture
     Test-BuildFailure -Fixture $fixture
     Test-CleanFailure -Fixture $fixture
     Test-MissingArtifact -Fixture $fixture

@@ -23,6 +23,19 @@ def test_tailscale_setup_exposes_only_retained_service_ports() -> None:
     assert "ufw allow from 100.0.0.0/8 to any port 14560 proto udp" in setup
 
 
+def test_tailscale_next_steps_follow_standalone_router_ownership() -> None:
+    setup = read("infra/tailscale/scripts/setup.sh")
+    assert "GCS_IP to the ground station's Tailscale IP in ignored config/nomad.env" in setup
+    assert "retained when loading a product profile" in setup
+    assert "infra/transport/ground_router/example.json" in setup
+    assert "Links and Consumers" in setup
+    assert "nomad-runtime owns commands" in setup
+    assert "receive-only router telemetry" in setup
+    assert "docs/operations.md" in setup
+    assert "NOMAD plugin LTE input" not in setup
+    assert "NOMAD plugin RadioMaster input" not in setup
+
+
 def test_mavlink_router_attributes_local_core_to_cpp_owner() -> None:
     config = read("infra/transport/mavlink_router/main.conf")
 

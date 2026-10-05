@@ -339,7 +339,7 @@ for each target before the overall completion message:
 
 | Target result | Meaning |
 |---|---|
-| `[APPLIED] env` | `config/nomad.env` was atomically replaced with the selected template and canonical MAVLink endpoint; existing `NOMAD_API_KEY` and `NOMAD_CLIENT_CREDENTIAL` values were preserved. |
+| `[APPLIED] env` | `config/nomad.env` was atomically replaced with profile-owned settings and the canonical MAVLink endpoint while retaining reviewed deployment-local settings. |
 | `[APPLIED] mission_planner` | Profile-owned MP settings were synced: `ActiveProfile`, `VideoUrl`, and supported legacy migration. Unrelated settings and the separately provisioned `CoreClientCredential` remain. Retired settings, including `CoreApiKey`, are removed. |
 | `[SKIPPED] mission_planner: config path unavailable` | MP sync is optional when neither `NOMAD_MP_CONFIG` nor `LOCALAPPDATA` supplies a path. Only env was applied; exit status is 0. Set `NOMAD_MP_CONFIG` to require a specific MP target. |
 | `[SKIPPED] ... unchanged` or `... rolled back` | That target was not applied because another target failed, or its change was restored. |
@@ -355,6 +355,27 @@ If env replacement fails, MP remains unchanged. If MP replacement fails after
 env replacement, env is restored atomically (or removed if it was newly created).
 Temporary files are cleaned up on handled failures. Backups contain credentials;
 keep them private as you would `nomad.env`.
+
+Profile-owned settings are identity/compute placement, service autostarts, runtime
+MAVLink and video endpoints, simulation/qualification inhibition, fences and
+velocity limits. Deployment-local settings include both credentials, protected
+credential/audit paths, CLI identity, runtime IPC port, host/data/log/run paths,
+GCS/Tailscale addresses and ports, UART devices and retained service settings.
+The reviewed key sets are in `scripts/profile_settings.py`; unknown and retired
+keys are discarded, rather than carried into a new deployment. Existing local
+assignments are retained verbatim. Missing local keys use the example defaults;
+an absent active env is created from those defaults and the selected profile.
+Blank required credential/audit paths still require provisioning before startup.
+Saving a profile writes only its owned keys, never local deployment settings.
+Profile diff compares only those owned assignments and omits credentials and
+deployment-local configuration from its output.
+
+`NOMAD_AUTOSTART_MAVLINK_ROUTER` enables the optional aircraft-side
+`mavlink-routerd`: the onboard profile enables it; both ground-station profiles
+disable it. The Windows standalone ground router owns its own `Links` and
+`Consumers` JSON configuration, independent of that service flag. Set `GCS_IP`
+in ignored `config/nomad.env` to direct aircraft-side telemetry to the ground
+station's Tailscale address; profile loading retains that local wiring.
 
 For example, an env-only load reports `[APPLIED] env`, `[SKIPPED] mission_planner`,
 then `[OK] Profile load completed` and exits 0. Invalid MP JSON reports
@@ -474,6 +495,17 @@ Do not retry an uncertain release or retract automatically. Observe the payload
 and follow the reviewed procedure before deciding on another action. Payload
 indicators record commanded state only; successful release/retract commands do
 not verify physical release or retraction.
+
+Payload drop controls require three confirmations; relay ON/fire controls require
+two, with no more than three seconds between confirmations. Joystick confirmations
+require a return to neutral between switch edges, including after startup or lost
+input. A held switch does not confirm again. The UI and joystick use the same
+consuming authorization policy and share successful commanded-release state.
+Interrupted or unknown payload outputs latch further release/fire off. The next
+explicit action requests retract or relay OFF; only software success clears that
+latch, and a new full confirmation sequence is then required. An accepted safe
+command still does not verify physical state. Generic non-payload servo/relay
+output primitives retain their existing behavior.
 
 ## Managed runtime configuration
 

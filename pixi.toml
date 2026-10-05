@@ -161,6 +161,7 @@ test-plugin-config-migration = "powershell -ExecutionPolicy Bypass -File scripts
 
 # Requires Visual Studio's MSBuild/C# compiler; tests dispatch against a temporary deny-write installation.
 test-plugin-build-only = "powershell -ExecutionPolicy Bypass -File scripts/build/test_build_plugin_windows.ps1"
+test-plugin-version = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_version.ps1"
 
 # Dead-code lint for the plugin (Windows only) — fails on unused fields/locals,
 # unreachable code, etc. (C# compiler diagnostics promoted to errors).
@@ -221,12 +222,12 @@ test-ground-router = "pixi run build-ground-router && pixi run test-plugin-duall
 
 # ==================== Configuration Profiles ====================
 # Manage config/nomad.env via named profiles stored in config/profiles/.
-# Each profile is a complete environment file with all settings for a
-# specific deployment target (real drone, minimal dev).
+# Each profile owns product settings; deployment-local values remain in the active
+# environment. Only reviewed local keys survive a profile load.
 #
 # Quick start:
 #   pixi run profile-load onboard_companion  # Optional onboard compute placement
-#   pixi run profile-load groundstation_minimal  # Direct MAVLink + C++ core
+#   pixi run profile-load groundstation_minimal  # Runtime IPC + standalone ground router
 #   pixi run profile-show           # Show active profile
 #   pixi run profile-list           # List available profiles
 

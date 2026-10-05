@@ -4,8 +4,8 @@
 NOMAD Configuration Profile Manager (cross-platform).
 
 Provides load / save / list / show / diff / edit for configuration profiles.
-Each profile is a complete .env file in config/profiles/ that can be loaded
-into config/nomad.env (the gitignored runtime config).
+Each profile owns product settings in config/profiles/. Loading merges these
+with reviewed deployment-local settings in the gitignored config/nomad.env.
 
 On `load`, the client profile is synced into the Mission Planner plugin
 config (nomad_config.json) along with an ActiveProfile marker. The qualification
@@ -25,6 +25,7 @@ Usage:
 
 from __future__ import annotations
 
+import difflib
 import ipaddress
 import os
 import re
@@ -36,10 +37,12 @@ if __package__:
     from .profile_application import apply_targets
     from .profile_mission_planner import prepare_config
     from .profile_mission_planner import sync_config as _sync_mission_planner_config
+    from .profile_settings import PROFILE_KEYS, get_assignment_key, prepare_environment
 else:
     from profile_application import apply_targets
     from profile_mission_planner import prepare_config
     from profile_mission_planner import sync_config as _sync_mission_planner_config
+    from profile_settings import PROFILE_KEYS, get_assignment_key, prepare_environment
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROFILES_DIR = REPO_ROOT / "config" / "profiles"
@@ -48,7 +51,7 @@ ENV_FILE = REPO_ROOT / "config" / "nomad.env"
 PROFILES = {
     "onboard_companion": "Onboard companion: Jetson/SBC runs ROS 2, VIO, and video workloads",
     "groundstation_gpu": "Ground station GPU: Workstation runs ROS 2, VIO, camera, and perception locally",
-    "groundstation_minimal": "Ground station minimal: Direct MAVLink & C++ core only, no companion or GPU perception",
+    "groundstation_minimal": "Ground station minimal: Runtime IPC and standalone router, no companion or perception",
 }
 
 _ENDPOINT_PATTERN = re.compile(
@@ -223,21 +226,9 @@ def _print_next_steps(settings: dict) -> None:
 
 
 def _prepare_env_content(content: str, profile_env: dict[str, str]) -> bytes:
-    canonical = profile_env["NOMAD_MAVLINK_ENDPOINT"]
-    content = re.sub(r"^NOMAD_MAVLINK_ENDPOINT=.*$", f"NOMAD_MAVLINK_ENDPOINT={canonical}", content, flags=re.MULTILINE)
     current = ENV_FILE.read_text(encoding="utf-8") if ENV_FILE.exists() else ""
-    credentials = {}
-    for line in current.splitlines():
-        key, separator, _ = line.partition("=")
-        if separator and key.strip() in _UNSAVED_SECRET_KEYS:
-            credentials[key.strip()] = line
-    for key, line in sorted(credentials.items()):
-        pattern = rf"^[ \t]*{key}[ \t]*=.*$"
-        if re.search(pattern, content, flags=re.MULTILINE):
-            content = re.sub(pattern, lambda _, line=line: line, content, flags=re.MULTILINE)
-        else:
-            content = content.rstrip("\n") + f"\n{line}\n"
-    return content.encode("utf-8")
+    defaults = (REPO_ROOT / "config" / "nomad.env.example").read_text(encoding="utf-8")
+    return prepare_environment(content, current, defaults, profile_env["NOMAD_MAVLINK_ENDPOINT"])
 
 
 def _apply_profile(name: str, src: Path) -> bool:
@@ -289,13 +280,15 @@ def _format_env_value(value: str) -> str:
 
 def _format_saved_profile(name: str, profile_env: dict[str, str], template: Path) -> str:
     template_text = template.read_text(encoding="utf-8")
-    allowed = set(read_env_text(template_text))
+    allowed = set(read_env_text(template_text)).intersection(PROFILE_KEYS)
     values = {key: value for key, value in profile_env.items() if key in allowed and key not in _UNSAVED_SECRET_KEYS}
     values["NOMAD_PROFILE"] = name
 
     result: list[str] = []
     for line in template_text.splitlines():
-        key = line.partition("=")[0].strip()
+        key = get_assignment_key(line)
+        if key and key not in PROFILE_KEYS:
+            continue
         if key in values and not line.lstrip().startswith("#"):
             result.append(f"{key}={_format_env_value(values[key])}")
         else:
@@ -374,21 +367,15 @@ def cmd_diff(name: str) -> None:
         print("[FAIL] No current config to diff against")
         sys.exit(1)
 
-    try:
-        result = subprocess.run(
-            ["diff", "-u", str(ENV_FILE), str(src)],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        print(result.stdout)
-    except FileNotFoundError:
-        lines_a = ENV_FILE.read_text(encoding="utf-8").splitlines()
-        lines_b = src.read_text(encoding="utf-8").splitlines()
-        import difflib
+    lines_a = _profile_assignment_lines(ENV_FILE)
+    lines_b = _profile_assignment_lines(src)
+    for line in difflib.unified_diff(lines_a, lines_b, fromfile="current profile settings", tofile=name, lineterm=""):
+        print(line)
 
-        for line in difflib.unified_diff(lines_a, lines_b, fromfile="current", tofile=name, lineterm=""):
-            print(line)
+
+def _profile_assignment_lines(path: Path) -> list[str]:
+    settings = read_env_file(path)
+    return [f"{key}={_format_env_value(settings[key])}" for key in sorted(PROFILE_KEYS.intersection(settings))]
 
 
 def cmd_edit() -> None:

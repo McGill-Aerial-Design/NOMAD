@@ -35,6 +35,7 @@ internal static partial class NomadCoreClientTests
     {
         foreach (var outcome in new[] { "rejected", "failed", "interrupted", "unknown", "success" })
         {
+            ClearPayloadUncertainty();
             using var runtime = new MockRuntime(2, outcome: outcome, acknowledged: outcome != "rejected");
             var config = new NOMADConfig { CoreRuntimePort = runtime.Port };
             OutputController.Initialize(config);
@@ -76,6 +77,7 @@ internal static partial class NomadCoreClientTests
 
         Expect(runtime.CommandCount == 1, "headless unknown retract is not replayed");
         PayloadControlPanel.RaisePayloadReleaseCommandedState(0, false);
+        ClearPayloadUncertainty();
     }
 
     private static void RelayPanel_PreservesCommandedStateOnFailure()
@@ -86,9 +88,12 @@ internal static partial class NomadCoreClientTests
         using var panel = new PayloadControlPanel(config);
         using var button = new Button { Text = "No confirmed command" };
         button.CreateControl();
-        WaitForPanel(panel.TestToggleRelay(new PayloadControl { Kind = PayloadKind.Relay, Channel = 3 }, button));
+        var relay = new PayloadControl { Kind = PayloadKind.Relay, Channel = 3 };
+        WaitForPanel(panel.TestToggleRelay(relay, button));
+        Expect(runtime.CommandCount == 0, "one latching relay confirmation sends no mutation");
+        WaitForPanel(panel.TestToggleRelay(relay, button));
         runtime.Wait();
-        Expect(button.Text == "No confirmed command", "failed relay cannot assert a commanded ON state");
+        Expect(button.Text.Contains("no confirmed command"), "failed relay cannot assert a commanded ON state");
         Expect(panel.TestStatus.Contains("definite failure"), "relay panel preserves definite failed category");
     }
     private static void ReelPanel_DoesNotClaimPhysicalMovementOrStop()
@@ -176,5 +181,19 @@ internal static partial class NomadCoreClientTests
         }
         Expect(request.IsCompleted, "panel request completes while its UI context is pumped");
         request.GetAwaiter().GetResult();
+    }
+
+    private static void ClearPayloadUncertainty()
+    {
+        if (!PayloadActions.RequiresSafeRecovery(8))
+        {
+            return;
+        }
+        using var safeRuntime = new MockRuntime(1);
+        var config = new NOMADConfig { CoreRuntimePort = safeRuntime.Port };
+        OutputController.Initialize(config);
+        var result = PayloadActions.Retract(config, 1).GetAwaiter().GetResult();
+        safeRuntime.Wait();
+        Expect(result.Succeeded, "explicit accepted safe retract restores test output state");
     }
 }

@@ -84,7 +84,7 @@ telemetry was sent.
 | U-MOD-01 | U | Keep NOMAD general-purpose: competition/event-specific schemas, credentials, cadence and scoring behavior live in opt-in application modules with no core dependency on those details and no direct vehicle-command path | G2/G4 |
 | U-PROF-01 | U | onboard_companion runs optional ROS 2, VIO, camera/video and perception on a Jetson/SBC aboard | G3/G7 |
 | U-PROF-02 | U | groundstation_gpu runs those optional workloads on a GPU laptop with no Jetson aboard | G3/G7 |
-| U-PROF-03 | U | groundstation_minimal works with direct MAVLink and C++ without companion/perception; missing features are explicit | G3 |
+| U-PROF-03 | U | groundstation_minimal works with runtime IPC and the standalone ground router without companion/perception; missing features are explicit | G3 |
 | U-TEST-01 | U | Important behavior is testable without hardware; safety needs invalid, boundary and failure cases | All |
 | U-SCOPE-01 | U | This iteration reconciles plans and docs; no speculative implementation or destructive migration | G0 |
 

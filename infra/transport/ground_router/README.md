@@ -116,7 +116,7 @@ as `LTE` and `RadioMaster` are ordinary stable IDs, not a transport model.
 and top-level bind-address settings are rejected; move physical links into
 `Links` and local endpoints into `Consumers`.
 
-`Consumers` contains 1â€“32 entries with unique `Id`, `RouterPort`, and optional
+`Consumers` contains 1–32 entries with unique `Id`, `RouterPort`, and optional
 `ClientPort`. `AllowOutbound` defaults to true; false lets a consumer receive
 telemetry while preventing its local MAVLink frames from reaching physical
 links. The exact ID `mission_planner` is reserved as receive-only: an explicit
@@ -261,7 +261,7 @@ settings, and operator topology. Release packages contain only `router.example.j
 
 The software process qualification uses two compiled fixture router versions with distinct
 executable bytes. It stages B while A remains running, verifies management `hello` and
-`get_status` across A â†’ B â†’ A, deliberately fails B health and verifies automatic
+`get_status` across A → B → A, deliberately fails B health and verifies automatic
 restoration of exact A, and compares the external configuration byte for byte. All
 endpoints are loopback UDP and shutdown uses the host's `stop` command. It requires
 neither physical links nor a vehicle. Native supervision and protected directory ACLs

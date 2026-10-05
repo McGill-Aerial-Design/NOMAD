@@ -6,5 +6,6 @@ namespace NOMAD.MissionPlanner
     {
         public const string Version = "0.0.0-development";
         public const string SourceSha = "unknown";
+        public const string MissionPlannerTarget = "";
     }
 }

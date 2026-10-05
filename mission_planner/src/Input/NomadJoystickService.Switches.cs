@@ -32,8 +32,8 @@ namespace NOMAD.MissionPlanner
         //   button 4 (LB) = sw3 UP    -> Config.JoystickSw3UpAction
         //   button 5 (RB) = sw3 DOWN  -> Config.JoystickSw3DownAction
         //
-        // Drop toggles and FireWaterPump are edge-triggered (on switch flip into
-        // position). Reel actions are level-triggered — run while the switch is
+        // Drop/fire confirmations require neutral between edges (three for drop,
+        // two for fire within the shared window). Reel actions are level-triggered — run while the switch is
         // held off-centre, neutral PWM when it returns to middle.
 
         private const int SLOT_COUNT = 6;
@@ -44,6 +44,9 @@ namespace NOMAD.MissionPlanner
 
         private bool[] _prevButtons = new bool[SLOT_COUNT];
         private bool _prevKillButton;
+        private readonly bool[] _neutralObserved = new bool[3];
+        private readonly PayloadReleaseInterlock[] _releaseInterlocks = new PayloadReleaseInterlock[SLOT_COUNT];
+        private readonly bool[] _knownReleaseCommanded = new bool[3];
         // Drop toggle state lives in PayloadControlPanel.s_payloadReleaseCommanded so the
         // joystick and UI agree about what the next switch flip should do —
         // dropping from the GUI then flipping the switch retracts, and vice versa.
@@ -84,15 +87,46 @@ namespace NOMAD.MissionPlanner
 
         private void DrivePayloadButtons(IMyJoystickState st)
         {
+            DrivePayloadButtons(st, PayloadReleaseInterlock.NowMs);
+        }
+
+        private void DrivePayloadButtons(IMyJoystickState st, long nowMs)
+        {
             bool[] buttons;
             try { buttons = st.GetButtons(); }
-            catch { return; }
-            if (buttons == null) return;
+            catch
+            {
+                ResetPayloadInput();
+                return;
+            }
+            if (buttons == null || buttons.Length < SLOT_COUNT)
+            {
+                ResetPayloadInput();
+                return;
+            }
+            ResetChangedPayloadState();
 
             // Snapshot per-slot pressed state for this tick.
             var pressed = new bool[SLOT_COUNT];
             for (int i = 0; i < SLOT_COUNT; i++)
                 pressed[i] = i < buttons.Length && buttons[i];
+            for (int pair = 0; pair < 3; pair++)
+            {
+                int first = pair * 2;
+                if (!pressed[first] && !pressed[first + 1])
+                {
+                    _neutralObserved[pair] = true;
+                }
+                if (pressed[first] && pressed[first + 1])
+                {
+                    _neutralObserved[pair] = false;
+                    // Contradictory positions cannot command a reel direction.
+                    pressed[first] = false;
+                    pressed[first + 1] = false;
+                    _releaseInterlocks[first]?.Reset();
+                    _releaseInterlocks[first + 1]?.Reset();
+                }
+            }
 
             // Kill switch — dedicated edge-triggered pushbutton (XInput BACK).
             // Sits outside the configurable slot table because it has fixed
@@ -121,7 +155,12 @@ namespace NOMAD.MissionPlanner
                 bool now = pressed[slot];
                 bool prev = _prevButtons[slot];
                 if (!(now && !prev)) continue; // rising edge only
-                FireEdgeAction(GetSlotAction(slot));
+                if (!_neutralObserved[slot / 2])
+                {
+                    continue;
+                }
+                _neutralObserved[slot / 2] = false;
+                FireEdgeAction(GetSlotAction(slot), slot, nowMs);
             }
 
             // Pass 2: level-triggered reels. A reel can be driven from either
@@ -149,29 +188,119 @@ namespace NOMAD.MissionPlanner
             _prevButtons = pressed;
         }
 
-        private void FireEdgeAction(SwitchAction action)
+        private void FireEdgeAction(SwitchAction action, int slot, long nowMs)
         {
             switch (action)
             {
-                case SwitchAction.DropToggleP1: ToggleDrop(0); break;
-                case SwitchAction.DropToggleP2: ToggleDrop(1); break;
-                case SwitchAction.DropToggleP3: ToggleDrop(2); break;
+                case SwitchAction.DropToggleP1: ToggleDrop(0, slot, nowMs); break;
+                case SwitchAction.DropToggleP2: ToggleDrop(1, slot, nowMs); break;
+                case SwitchAction.DropToggleP3: ToggleDrop(2, slot, nowMs); break;
                 case SwitchAction.FireWaterPump:
-                    RunPayloadAction(() => PayloadActions.FireWater(_config), "fire water pump");
+                    ConfirmWater(slot, nowMs);
                     break;
                 // Reel actions are handled level-triggered in pass 2 — ignore on edge.
                 default: break;
             }
         }
 
-        private void ToggleDrop(int payloadIdx)
+        private void ToggleDrop(int payloadIdx, int slot, long nowMs)
         {
             // PayloadActions.Drop / Retract raise PayloadReleaseCommandedStateChanged on
             // success, which updates the shared state we read here next time.
-            if (PayloadControlPanel.IsPayloadReleaseCommanded(payloadIdx))
+            var drops = _config.DropPayloads();
+            if (payloadIdx >= drops.Count)
+            {
+                return;
+            }
+            if (PayloadControlPanel.IsPayloadReleaseCommanded(payloadIdx) ||
+                PayloadActions.RequiresSafeRecovery(drops[payloadIdx].Channel))
+            {
+                _releaseInterlocks[slot]?.Reset();
                 RunPayloadAction(() => PayloadActions.Retract(_config, payloadIdx + 1), $"retract payload {payloadIdx + 1}");
+            }
             else
-                RunPayloadAction(() => PayloadActions.Drop(_config, payloadIdx + 1), $"drop payload {payloadIdx + 1}");
+            {
+                var authorization = ConfirmRelease(slot, PayloadReleaseInterlock.DropConfirmations, nowMs);
+                if (authorization == null)
+                {
+                    return;
+                }
+                RunPayloadAction(() => PayloadActions.Drop(_config, payloadIdx + 1, authorization),
+                    $"drop payload {payloadIdx + 1}");
+            }
+        }
+
+        private PayloadReleaseAuthorization ConfirmRelease(int slot, int confirmations, long nowMs)
+        {
+            if (_releaseInterlocks[slot] == null)
+            {
+                _releaseInterlocks[slot] = new PayloadReleaseInterlock(confirmations,
+                    PayloadReleaseInterlock.ConfirmationWindowMs);
+            }
+            var result = _releaseInterlocks[slot].RegisterClick(nowMs);
+            if (result.Outcome == ReleaseInterlockOutcome.Arming)
+            {
+                Log.Warn($"Payload switch: return to neutral; {result.ClicksRemaining} more confirmation(s) required.");
+            }
+            return result.Authorization;
+        }
+
+        private void ConfirmWater(int slot, long nowMs)
+        {
+            var pump = _config.WaterPump();
+            if (pump == null)
+            {
+                return;
+            }
+            if (PayloadActions.RequiresSafeRecovery(pump.Channel, relay: true))
+            {
+                _releaseInterlocks[slot]?.Reset();
+                RunPayloadAction(() => PayloadActions.SetRelay(pump, false), "stop water pump");
+                return;
+            }
+            var authorization = ConfirmRelease(slot, PayloadReleaseInterlock.RelayConfirmations, nowMs);
+            if (authorization == null)
+            {
+                return;
+            }
+            RunPayloadAction(() => PayloadActions.FireWater(_config, authorization), "fire water pump");
+        }
+
+        private void ResetChangedPayloadState()
+        {
+            for (int payload = 0; payload < _knownReleaseCommanded.Length; payload++)
+            {
+                bool commanded = PayloadControlPanel.IsPayloadReleaseCommanded(payload);
+                if (commanded == _knownReleaseCommanded[payload])
+                {
+                    continue;
+                }
+                _knownReleaseCommanded[payload] = commanded;
+                for (int slot = 0; slot < SLOT_COUNT; slot++)
+                {
+                    if (GetSlotAction(slot) == (SwitchAction)((int)SwitchAction.DropToggleP1 + payload))
+                    {
+                        _releaseInterlocks[slot]?.Reset();
+                    }
+                }
+            }
+        }
+
+        private void ResetPayloadInput()
+        {
+            ApplyReel(0, 0);
+            ApplyReel(1, 0);
+            for (int slot = 0; slot < SLOT_COUNT; slot++)
+            {
+                _releaseInterlocks[slot]?.Reset();
+                _releaseInterlocks[slot] = null;
+                _prevButtons[slot] = false;
+            }
+            for (int pair = 0; pair < _neutralObserved.Length; pair++)
+            {
+                _neutralObserved[pair] = false;
+            }
+            _prevKillButton = false;
         }
 
         private void ApplyReel(int reelIdx, int target)

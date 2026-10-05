@@ -43,6 +43,7 @@ internal static partial class NomadCoreClientTests
         PayloadActions_PreserveStateOnUnknownRetract();
         RelayPanel_PreservesCommandedStateOnFailure();
         ReelPanel_DoesNotClaimPhysicalMovementOrStop();
+        Joystick_AuthorizationTests();
         Runtime_RejectsRogueRuntimeWithoutCredentialDisclosure();
         Runtime_AuditFailureAfterSendIsUnknown();
         Runtime_GimbalTarget_UsesTypedRequestAndRequiresAuthority();

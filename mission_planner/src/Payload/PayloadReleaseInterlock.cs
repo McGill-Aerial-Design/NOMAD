@@ -21,6 +21,7 @@
 // ============================================================
 
 using System;
+using System.Diagnostics;
 
 namespace NOMAD.MissionPlanner
 {
@@ -41,11 +42,13 @@ namespace NOMAD.MissionPlanner
     /// </summary>
     public readonly struct ReleaseInterlockResult
     {
-        public ReleaseInterlockResult(ReleaseInterlockOutcome outcome, int clickCount, int clicksRemaining)
+        internal ReleaseInterlockResult(ReleaseInterlockOutcome outcome, int clickCount, int clicksRemaining,
+            PayloadReleaseAuthorization authorization = null)
         {
             Outcome = outcome;
             ClickCount = clickCount;
             ClicksRemaining = clicksRemaining;
+            Authorization = authorization;
         }
 
         /// <summary>Whether this click fired the actuation or only advanced the arm.</summary>
@@ -56,6 +59,46 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>Clicks still required before Fire (0 on Fire).</summary>
         public int ClicksRemaining { get; }
+        public PayloadReleaseAuthorization Authorization { get; }
+    }
+
+    /// <summary>A consuming, expiring grant for one explicitly confirmed payload command.</summary>
+    public sealed class PayloadReleaseAuthorization
+    {
+        private readonly object _gate = new object();
+        private readonly int _clicksRequired;
+        private readonly int _windowMs;
+        private readonly long _issuedAtMs;
+        private bool _consumed;
+
+        internal PayloadReleaseAuthorization(int clicksRequired, int windowMs, long issuedAtMs)
+        {
+            _clicksRequired = clicksRequired;
+            _windowMs = windowMs;
+            _issuedAtMs = issuedAtMs;
+        }
+
+        internal bool TryConsume(int requiredClicks, long nowMs)
+        {
+            lock (_gate)
+            {
+                if (_consumed)
+                {
+                    return false;
+                }
+                _consumed = true;
+                return _clicksRequired == requiredClicks && _windowMs == PayloadReleaseInterlock.ConfirmationWindowMs
+                    && nowMs >= _issuedAtMs && nowMs - _issuedAtMs <= _windowMs;
+            }
+        }
+
+        internal void Invalidate()
+        {
+            lock (_gate)
+            {
+                _consumed = true;
+            }
+        }
     }
 
     /// <summary>
@@ -66,9 +109,15 @@ namespace NOMAD.MissionPlanner
     /// </summary>
     public sealed class PayloadReleaseInterlock
     {
+        public const int DropConfirmations = 3;
+        public const int RelayConfirmations = 2;
+        public const int ConfirmationWindowMs = 3000;
+        private static readonly Stopwatch Clock = Stopwatch.StartNew();
+        public static long NowMs => Clock.ElapsedMilliseconds;
         private int _clickCount;
         private long _lastClickAtMs;
         private bool _hasClick;
+        private PayloadReleaseAuthorization _authorization;
 
         /// <param name="clicksRequired">Clicks needed to fire (e.g. 3 for a drop, 2 for an arm→confirm relay fire).</param>
         /// <param name="windowMs">Maximum gap, in milliseconds, allowed between consecutive clicks.</param>
@@ -104,6 +153,8 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public ReleaseInterlockResult RegisterClick(long nowMs)
         {
+            _authorization?.Invalidate();
+            _authorization = null;
             if (!_hasClick || nowMs < _lastClickAtMs || nowMs - _lastClickAtMs > WindowMs)
                 _clickCount = 0;
 
@@ -115,7 +166,8 @@ namespace NOMAD.MissionPlanner
             {
                 int fired = _clickCount;
                 Reset();
-                return new ReleaseInterlockResult(ReleaseInterlockOutcome.Fire, fired, 0);
+                _authorization = new PayloadReleaseAuthorization(ClicksRequired, WindowMs, nowMs);
+                return new ReleaseInterlockResult(ReleaseInterlockOutcome.Fire, fired, 0, _authorization);
             }
 
             return new ReleaseInterlockResult(
@@ -133,6 +185,8 @@ namespace NOMAD.MissionPlanner
         /// <summary>Clear all arming state — on timeout, cancel, or after a fire.</summary>
         public void Reset()
         {
+            _authorization?.Invalidate();
+            _authorization = null;
             _clickCount = 0;
             _lastClickAtMs = 0;
             _hasClick = false;

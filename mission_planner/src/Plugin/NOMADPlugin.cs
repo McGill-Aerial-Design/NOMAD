@@ -103,7 +103,7 @@ namespace NOMAD.MissionPlanner
                 // Startup chime + spoken welcome (fires once per process).
                 AudioAlerts.PlayWelcomeOnce();
 
-                // Initialize MAVLink dual link connection manager
+                // Initialize the standalone ground router management client
                 if (_config.DualLinkEnabled)
                 {
                     InitializeConnectionManager();
@@ -372,6 +372,14 @@ namespace NOMAD.MissionPlanner
                 {
                     _config = form.Config;
                     _config.Save();
+                    try
+                    {
+                        _joystickService?.Stop();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"Joystick stop before output reconfiguration failed — {ex.Message}");
+                    }
                     OutputController.Initialize(_config);
                     ApplyDualLinkSettings();
                     try { _serialBridge?.UpdateConfig(_config); }

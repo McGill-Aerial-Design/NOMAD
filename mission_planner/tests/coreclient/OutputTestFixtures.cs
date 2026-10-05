@@ -23,7 +23,7 @@ namespace NOMAD.MissionPlanner
         public static void Error(string message) { lock (Messages) { LastError = message; Messages.Add(message); } }
     }
 
-    public enum PayloadKind { Drop, Slider, Relay }
+    public enum PayloadKind { Drop, Slider, Relay, Reel }
 
     public sealed class PayloadControl
     {
@@ -46,9 +46,20 @@ namespace NOMAD.MissionPlanner
         public int CoreRuntimePort;
         public readonly List<PayloadControl> Payloads = new List<PayloadControl> { new PayloadControl() };
         public List<PayloadControl> EnabledPayloads() => Payloads;
-        public List<PayloadControl> DropPayloads() => Payloads;
-        public PayloadControl ReelAt(int index) => null;
-        public PayloadControl WaterPump() => null;
+        public List<PayloadControl> DropPayloads() => Payloads.FindAll(p => p.Kind == PayloadKind.Drop);
+        public PayloadControl ReelAt(int index)
+        {
+            var reels = Payloads.FindAll(p => p.Kind == PayloadKind.Reel);
+            return index >= 0 && index < reels.Count ? reels[index] : null;
+        }
+        public PayloadControl WaterPump() => Payloads.Find(p => p.Kind == PayloadKind.Relay);
+        public string JoystickSw1UpAction = "DropToggleP1";
+        public string JoystickSw1DownAction = "None";
+        public string JoystickSw2UpAction = "None";
+        public string JoystickSw2DownAction = "None";
+        public string JoystickSw3UpAction = "None";
+        public string JoystickSw3DownAction = "FireWaterPump";
+        public bool JoystickKillSwitchEnabled;
     }
 
     internal static class UiAsync
@@ -118,7 +129,15 @@ namespace NOMAD.MissionPlanner
         internal System.Threading.Tasks.Task TestStopReel() => StopReel(0);
         internal System.Threading.Tasks.Task TestStartFullReel() => StartFullReel(0);
         internal System.Threading.Tasks.Task TestStopFullReel() => StopFullReel(0, false);
-        internal System.Threading.Tasks.Task TestDrop() => ExecuteDrop(0);
+        internal System.Threading.Tasks.Task TestDrop()
+        {
+            var interlock = DropInterlock(0);
+            interlock.RegisterClick(NowMs());
+            interlock.RegisterClick(NowMs());
+            return ExecuteDrop(0, interlock.RegisterClick(NowMs()).Authorization);
+        }
+        internal void TestDropClick() => OnDropClick(0);
+        internal System.Threading.Tasks.Task TestUnauthorizedDrop() => ExecuteDrop(0, null);
         internal System.Threading.Tasks.Task TestRetract() => ExecuteRetract(0);
         internal System.Threading.Tasks.Task TestToggleRelay(PayloadControl payload, Button button) => ToggleRelay(payload, button);
     }

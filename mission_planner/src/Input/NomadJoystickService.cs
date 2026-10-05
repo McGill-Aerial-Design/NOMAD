@@ -113,6 +113,7 @@ namespace NOMAD.MissionPlanner
 
         public void Stop()
         {
+            ResetPayloadInput();
             try { _timer?.Stop(); _timer?.Dispose(); } catch { }
             _timer = null;
 
@@ -157,8 +158,12 @@ namespace NOMAD.MissionPlanner
         public void UpdateConfig(NOMADConfig config)
         {
             if (config == null) return;
+            Stop();
             _config = config;
-            RestartWithConfig();
+            if (NeedsToRun())
+            {
+                Start();
+            }
         }
 
         public void Dispose() => Stop();
@@ -342,10 +347,25 @@ namespace NOMAD.MissionPlanner
                 if (btnDev != null)
                 {
                     var st = SafeGetState(btnDev);
-                    if (st != null) DrivePayloadButtons(st);
+                    if (st != null)
+                    {
+                        DrivePayloadButtons(st);
+                    }
+                    else
+                    {
+                        ResetPayloadInput();
+                    }
+                }
+                else
+                {
+                    ResetPayloadInput();
                 }
             }
-            catch (Exception ex) { Log.Error($"buttons: {ex.Message}"); }
+            catch (Exception ex)
+            {
+                ResetPayloadInput();
+                Log.Error($"buttons: {ex.Message}");
+            }
         }
 
         private void DriveGimbal(float dt)

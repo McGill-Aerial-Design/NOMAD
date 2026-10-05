@@ -12,12 +12,14 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cerrno>
 #include <cstdint>
 #include <functional>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <random>
+#include <source_location>
 #include <future>
 #include <stdexcept>
 #include <string>
@@ -117,6 +119,7 @@ void wait_until(const std::function<bool()> &predicate) {
 #include "runtime_security_recovery_cases.hpp"
 #include "runtime_lifecycle_cases.hpp"
 #include "runtime_outcome_cases.hpp"
+#include "runtime_client_cases.hpp"
 void test_protocol_and_status(std::uint16_t port, FakeConnection &connection) {
     Client client(port);
     const auto hello = client.request(base_request("1", "hello"));
@@ -375,37 +378,53 @@ void test_competing_admission() {
 
 } // namespace
 
-int main() {
-    return nomad::test::run_tests([] {
-        test_runtime_owns_one_connection_and_releases_port();
-        test_runtime_restart_and_missing_key();
-        test_restart_rejects_old_request();
-        test_service_stop_closes_admission();
-        test_shutdown_fences_queued_command();
-        test_shutdown_audit_failure(false);
-        test_shutdown_audit_failure(true);
-        test_shutdown_drain_audit_failure();
-        test_competing_admission();
-        test_client_authentication();
-        test_journal_order_and_outcomes();
-        test_journal_failure(false);
-        test_journal_failure(true);
-        test_journal_startup_and_recovery();
-        test_credential_configuration();
-        test_damaged_history();
-        test_native_file_failure_and_lock();
-        test_authenticated_authority_events();
-        test_rejection_audit_failure(false);
-        test_rejection_audit_failure(true);
-        test_acknowledgement_without_admission_evidence(false);
-        test_acknowledgement_without_admission_evidence(true);
-        test_session_rollover_revokes_at_admission();
-        test_all_mutation_outcomes();
-        test_authority_interruption_after_delivery();
-        test_in_progress_audit_failure();
-        test_execution_exception(false);
-        test_execution_exception(true);
-        test_admission_cancellation_without_send();
-        test_definite_rejection_outcomes();
+void run_runtime_scenarios() {
+    using nomad::test::run_scenario;
+    run_scenario("socket_failure_classification", test_socket_failure_classification);
+    run_scenario("idle_observer_authority_phase", test_idle_observer_during_independent_authority_phase);
+    run_scenario("response_timeout_without_resend", test_response_timeout_does_not_resend_mutation);
+    run_scenario("one_connection_and_released_port", test_runtime_owns_one_connection_and_releases_port);
+    run_scenario("runtime_restart_and_missing_key", test_runtime_restart_and_missing_key);
+    run_scenario("restart_rejects_old_request", test_restart_rejects_old_request);
+    run_scenario("service_stop_closes_admission", test_service_stop_closes_admission);
+    run_scenario("shutdown_fences_queued_command", test_shutdown_fences_queued_command);
+    run_scenario("shutdown_audit_failure", [] { test_shutdown_audit_failure(false); });
+    run_scenario("shutdown_previously_failed_audit", [] { test_shutdown_audit_failure(true); });
+    run_scenario("shutdown_drain_audit_failure", test_shutdown_drain_audit_failure);
+    run_scenario("competing_admission", test_competing_admission);
+    run_scenario("client_authentication", test_client_authentication);
+    run_scenario("journal_order_and_outcomes", test_journal_order_and_outcomes);
+    run_scenario("journal_failure_before_send", [] { test_journal_failure(false); });
+    run_scenario("journal_failure_after_send", [] { test_journal_failure(true); });
+    run_scenario("journal_startup_and_recovery", test_journal_startup_and_recovery);
+    run_scenario("credential_configuration", test_credential_configuration);
+    run_scenario("damaged_history", test_damaged_history);
+    run_scenario("native_file_failure_and_lock", test_native_file_failure_and_lock);
+    run_scenario("authenticated_authority_events", test_authenticated_authority_events);
+    run_scenario("rejection_audit_failure", [] { test_rejection_audit_failure(false); });
+    run_scenario("authentication_rejection_audit_failure", [] { test_rejection_audit_failure(true); });
+    run_scenario("ack_without_admission_evidence", [] { test_acknowledgement_without_admission_evidence(false); });
+    run_scenario("ack_without_evidence_audit_failure", [] { test_acknowledgement_without_admission_evidence(true); });
+    run_scenario("session_rollover_revokes_at_admission", test_session_rollover_revokes_at_admission);
+    run_scenario("all_mutation_outcomes", test_all_mutation_outcomes);
+    run_scenario("authority_interruption_after_delivery", test_authority_interruption_after_delivery);
+    run_scenario("in_progress_audit_failure", test_in_progress_audit_failure);
+    run_scenario("execution_exception_before_send", [] { test_execution_exception(false); });
+    run_scenario("execution_exception_after_send", [] { test_execution_exception(true); });
+    run_scenario("admission_cancellation_without_send", test_admission_cancellation_without_send);
+    run_scenario("definite_rejection_outcomes", test_definite_rejection_outcomes);
+}
+
+int main(int argc, char **argv) {
+    return nomad::test::run_tests([argc, argv] {
+        if (argc == 2 && std::string_view(argv[1]) == "--authority-events-stress") {
+            for (int iteration = 1; iteration <= 50; ++iteration) {
+                nomad::test::run_scenario("authority_events_iteration_" + std::to_string(iteration),
+                                         test_authenticated_authority_events);
+            }
+            return;
+        }
+        CHECK(argc == 1);
+        run_runtime_scenarios();
     });
 }

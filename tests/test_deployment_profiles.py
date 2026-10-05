@@ -14,7 +14,7 @@ Verifies profile separation of concerns:
 - video source
 - VIO availability
 - core placement and transport
-- direct MAVLink connection
+- runtime endpoint and standalone ground-router wiring
 """
 
 from __future__ import annotations
@@ -76,6 +76,7 @@ def test_onboard_companion_profile_separation() -> None:
     assert env.get("NOMAD_AUTOSTART_ISAAC_ROS_CONTAINER") == "false"
     assert env.get("NOMAD_AUTOSTART_ROS_VEHICLE") == "false"
     assert env.get("NOMAD_AUTOSTART_VIDEO_BRIDGE") == "false"
+    assert env.get("NOMAD_AUTOSTART_MAVLINK_ROUTER") == "true"
 
 
 def test_groundstation_gpu_profile_separation() -> None:
@@ -91,6 +92,7 @@ def test_groundstation_gpu_profile_separation() -> None:
     assert env.get("NOMAD_AUTOSTART_ISAAC_ROS_CONTAINER") == "false"
     assert env.get("NOMAD_AUTOSTART_ROS_VEHICLE") == "false"
     assert env.get("NOMAD_AUTOSTART_VIDEO_BRIDGE") == "false"
+    assert env.get("NOMAD_AUTOSTART_MAVLINK_ROUTER") == "false"
 
 
 def test_groundstation_minimal_profile_separation() -> None:
@@ -100,13 +102,14 @@ def test_groundstation_minimal_profile_separation() -> None:
     assert env.get("NOMAD_HAS_COMPANION") == "false"
     assert env.get("NOMAD_HAS_PERCEPTION") == "false"
     assert env.get("NOMAD_VIDEO_RTSP_URL", "") == ""
-    # Direct MAVLink / C++ core transport remains active
+    # The runtime listens to its standalone ground-router consumer.
     assert env.get("NOMAD_MAVLINK_ENDPOINT") == "udpin:127.0.0.1:14601"
     assert env.get("NOMAD_API_KEY", "") == ""
     assert "NOMAD_ROS_VIO_SOURCE" not in env
     assert env.get("NOMAD_AUTOSTART_ISAAC_ROS_CONTAINER") == "false"
     assert env.get("NOMAD_AUTOSTART_ROS_VEHICLE") == "false"
     assert env.get("NOMAD_AUTOSTART_VIDEO_BRIDGE") == "false"
+    assert env.get("NOMAD_AUTOSTART_MAVLINK_ROUTER") == "false"
 
 
 @pytest.mark.parametrize(
@@ -249,9 +252,9 @@ def test_save_uses_template_schema_and_preserves_secret_placeholder(tmp_path: Pa
     saved = template.read_text(encoding="utf-8")
     assert "NOMAD_MAVLINK_ENDPOINT=udpin:127.0.0.1:14550" in saved
     assert "NOMAD_SIM_MODE=true" in saved
-    assert "NOMAD_API_KEY=\n" in saved
+    assert "NOMAD_API_KEY=" not in saved
     assert "deployment-secret" not in saved
-    assert "NOMAD_CLIENT_CREDENTIAL=\n" in saved
+    assert "NOMAD_CLIENT_CREDENTIAL=" not in saved
     assert "client-secret" not in saved
     assert "NOMAD_AUTOSTART_EDGE_CORE" not in saved
     assert "NOMAD_DEV_ONLY" not in saved

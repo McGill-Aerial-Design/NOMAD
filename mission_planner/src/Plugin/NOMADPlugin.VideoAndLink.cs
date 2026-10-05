@@ -5,8 +5,8 @@
 // ============================================================
 // Target: Mission Planner 1.3.x
 //
-// Video streaming (HUD overlay) and MAVLink dual-link
-// management for NOMAD.
+// Video streaming (HUD overlay) and standalone ground router
+// management and observation for NOMAD.
 // ============================================================
 
 using System;
@@ -19,7 +19,7 @@ using NOMAD.MissionPlanner.Core;
 namespace NOMAD.MissionPlanner
 {
     /// <summary>
-    /// Video streaming and MAVLink dual-link management for NOMAD.
+    /// Video streaming and standalone ground router management for NOMAD.
     /// </summary>
     public partial class NOMADPlugin
     {
@@ -196,7 +196,7 @@ namespace NOMAD.MissionPlanner
         }
 
         // ============================================================
-        // MAVLink Dual Link Management
+        // Standalone Ground Router Management
         // ============================================================
 
         /// <summary>

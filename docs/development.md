@@ -221,7 +221,11 @@ in the [router README](../infra/transport/ground_router/README.md).
 The Mission Planner plugin targets Windows, the reference-assembly version in
 [`mission-planner-target.json`](../scripts/release/mission-planner-target.json),
 and .NET Framework 4.8. CI downloads, release identities and deployment checks
-all derive their target from that file:
+all derive their target from that file. The plugin embeds that reviewed target
+in its build identity and warns when the running executable's file version
+differs. Its CLR assembly version is not the Mission Planner product version. A direct
+MSBuild development build without generated metadata reports that it has no
+reviewed target:
 
 ```powershell
 pixi run build-plugin-only

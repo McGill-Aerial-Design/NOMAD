@@ -226,6 +226,7 @@ internal static partial class NomadCoreClientTests
 
         public int Port { get; }
         public int CommandCount { get; private set; }
+        public List<Dictionary<string, object>> Commands { get; } = new List<Dictionary<string, object>>();
         public string LastCommandType { get; private set; } = "";
         public Dictionary<string, object> LastCommand { get; private set; } = new Dictionary<string, object>();
         public List<string> CommandSources { get; } = new List<string>();
@@ -290,6 +291,7 @@ internal static partial class NomadCoreClientTests
                         continue;
                     }
                     LastCommand = Parse(reader.ReadLine());
+                    Commands.Add(LastCommand);
                     LastCommandType = Convert.ToString(LastCommand["type"], CultureInfo.InvariantCulture);
                     CommandCount++;
                     CommandSources.Add(Convert.ToString(LastCommand["command_source"], CultureInfo.InvariantCulture));

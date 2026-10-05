@@ -93,7 +93,9 @@ def write_csharp(path: Path, identity: dict) -> None:
         f'[assembly: AssemblyInformationalVersion("{identity["version"]}+{source}")]\n'
         "namespace NOMAD.MissionPlanner { public static class NomadRelease {\n"
         f'public const string Version = "{identity["version"]}";\n'
-        f'public const string SourceSha = "{source}";\n' + "} }\n",
+        f'public const string SourceSha = "{source}";\n'
+        f'public const string MissionPlannerTarget = "{identity.get("mission_planner_target", "")}";\n'
+        "} }\n",
         encoding="utf-8",
     )
 

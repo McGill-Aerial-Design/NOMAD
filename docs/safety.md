@@ -106,6 +106,13 @@ fixed-wing surface behavior. The plugin's existing 122 m defaults/displays remai
 a separate gap against the official 100 m AGL ceiling.
 
 The original SR-PAY-03 explicit operator interlock remains binding project policy.
+Mission Planner payload helpers consume a bounded, one-use grant from the same
+`PayloadReleaseInterlock` used by UI and joystick inputs. Drops require three
+confirmations and relay ON/fire requires two within the rolling three-second
+window; joystick confirmations require neutral between edges. Reset, expiry and
+lost input fail closed. Interrupted/unknown outputs block new release/fire until
+an explicit retract/OFF obtains software success; no physical completion is
+inferred. Generic non-payload output primitives remain available.
 Do not remove it to pursue the sample-autonomy bonus. If preauthorization is
 accepted and selected, propose a bounded sequence and intervention/abort contract
 as a later reviewed change with no uncertain-action retries.

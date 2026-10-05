@@ -72,7 +72,7 @@ namespace NOMAD.MissionPlanner
         public bool AutoStartHudVideo { get; set; } = true;
 
         // ============================================================
-        // MAVLink Dual Link Configuration
+        // Standalone Ground Router Client Configuration
         // ============================================================
 
         /// <summary>
@@ -269,8 +269,8 @@ namespace NOMAD.MissionPlanner
         // a configurable action per slot. Valid action IDs:
         //   None, DropToggleP1, DropToggleP2, DropToggleP3,
         //   ReelInP1, ReelOutP1, ReelInP2, ReelOutP2, FireWaterPump
-        // Drop toggles and FireWaterPump are edge-triggered (fire on switch flip
-        // toward the position); Reel actions run while the switch is held off-
+        // Drop/fire require neutral between three/two confirmations within 3 seconds
+        // between edges; retract and OFF recovery stay available. Reel actions run while held off-
         // centre and stop when it returns to middle.
         /// <summary>
         /// DirectInput device that publishes the switch buttons (from joystick.py

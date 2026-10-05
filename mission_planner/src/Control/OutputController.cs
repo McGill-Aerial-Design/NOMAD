@@ -43,7 +43,7 @@ namespace NOMAD.MissionPlanner
 
         public static Task<NomadCoreRequestResult> SendServoPwmAsync(int channel, int pwmUs)
         {
-            return SendPayloadAsync(GetServoGate(channel), "servo",
+            return SendPayloadAsync(CreateCoreClient(), GetServoGate(channel), "servo",
                 $"channel={channel} pwm_us={pwmUs}",
                 client => client.ServoAsync(channel, pwmUs));
         }
@@ -54,6 +54,7 @@ namespace NOMAD.MissionPlanner
         // Only one explicit stop may wait behind its channel's current command.
         public static async Task<NomadCoreRequestResult> SendServoStopAsync(int channel, int pwmUs)
         {
+            var capturedClient = CreateCoreClient();
             var gateIndex = GetServoGate(channel);
             var stopGate = PayloadStops[gateIndex];
             if (!await stopGate.WaitAsync(0).ConfigureAwait(false))
@@ -62,7 +63,7 @@ namespace NOMAD.MissionPlanner
             }
             try
             {
-                return await SendPayloadAsync(gateIndex, "servo", $"channel={channel} pwm_us={pwmUs}",
+                return await SendPayloadAsync(capturedClient, gateIndex, "servo", $"channel={channel} pwm_us={pwmUs}",
                     client => client.ServoAsync(channel, pwmUs), explicitStop: true).ConfigureAwait(false);
             }
             finally
@@ -73,11 +74,13 @@ namespace NOMAD.MissionPlanner
 
         public static Task<NomadCoreRequestResult> SetRelayAsync(int relayNumber, bool on)
         {
-            return SendPayloadAsync(GetRelayGate(relayNumber), "relay", $"relay={relayNumber} state={(on ? 1 : 0)}",
+            return SendPayloadAsync(CreateCoreClient(), GetRelayGate(relayNumber), "relay",
+                $"relay={relayNumber} state={(on ? 1 : 0)}",
                 client => client.SetRelayAsync(relayNumber, on));
         }
 
-        private static async Task<NomadCoreRequestResult> SendPayloadAsync(int gateIndex, string command, string detail,
+        private static async Task<NomadCoreRequestResult> SendPayloadAsync(NomadCoreClient client,
+            int gateIndex, string command, string detail,
             Func<NomadCoreClient, Task<NomadCoreRequestResult>> send, bool explicitStop = false)
         {
             var gate = PayloadRequests[gateIndex];
@@ -95,7 +98,6 @@ namespace NOMAD.MissionPlanner
             }
             try
             {
-                var client = CreateCoreClient();
                 var result = client == null ? NotSent("core_not_configured", "NOMAD core is not configured.")
                     : await send(client).ConfigureAwait(false);
                 ReportPayloadResult(command, detail, result);
@@ -217,7 +219,7 @@ namespace NOMAD.MissionPlanner
         public static Task<NomadCoreRequestResult> FireRelayAsync(int relayNumber, int durationMs)
         {
             durationMs = Math.Max(50, Math.Min(durationMs, 5000));
-            return SendPayloadAsync(GetRelayGate(relayNumber), "relay",
+            return SendPayloadAsync(CreateCoreClient(), GetRelayGate(relayNumber), "relay",
                 $"relay={relayNumber} pulse_ms={durationMs}", async client =>
             {
                 var started = await client.SetRelayAsync(relayNumber, true).ConfigureAwait(false);

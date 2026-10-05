@@ -10,7 +10,7 @@
 #   nomad logs <service> [tail args]
 # nomad list
 # nomad config # show resolved config/nomad.env values
-# nomad profile load <sim|drone|dev>  # switch configuration profile
+# nomad profile load <onboard_companion|groundstation_gpu|groundstation_minimal>
 # nomad profile save <name>          # snapshot current config as a profile
 # nomad profile list                 # list available profiles
 # nomad profile show                 # show active profile
@@ -28,7 +28,6 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 . "$SCRIPT_DIR/lib/common.sh"
-load_nomad_env || exit 1
 
 SERVICES_DIR="$SCRIPT_DIR/services"
 
@@ -75,12 +74,12 @@ run_one() {
 }
 
 cmd_list() {
-printf "%-22s %-10s %s\n" "SERVICE" "AUTOSTART" "DESCRIPTION"
-printf "%-22s %-10s %s\n" "mavlink_router" "$NOMAD_AUTOSTART_MAVLINK_ROUTER" "MAVLink Router (host)"
-printf "%-22s %-10s %s\n" "mediamtx" "$NOMAD_AUTOSTART_MEDIAMTX" "RTSP server (host)"
-printf "%-22s %-10s %s\n" "isaac_ros_container" "$NOMAD_AUTOSTART_ISAAC_ROS_CONTAINER" "Long-running Docker container"
-printf "%-22s %-10s %s\n" "ros_vehicle" "$NOMAD_AUTOSTART_ROS_VEHICLE" "C++ ROS adapter node (in container)"
-printf "%-22s %-10s %s\n" "video_bridge" "$NOMAD_AUTOSTART_VIDEO_BRIDGE" "ROS image to RTSP relay"
+printf "%-22s %s\n" "SERVICE" "DESCRIPTION"
+printf "%-22s %s\n" "mavlink_router" "Aircraft-side mavlink-routerd"
+printf "%-22s %s\n" "mediamtx" "RTSP server (host)"
+printf "%-22s %s\n" "isaac_ros_container" "Long-running Docker container"
+printf "%-22s %s\n" "ros_vehicle" "C++ ROS adapter node (in container)"
+printf "%-22s %s\n" "video_bridge" "ROS image to RTSP relay"
 }
 
 cmd_config() {
@@ -141,7 +140,7 @@ cmd_status_all() {
 }
 
 usage() {
-    sed -n '2,/^# ===/p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,/^# ===/p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -150,12 +149,16 @@ main() {
     case "$action" in
         ""|-h|--help|help) usage 0 ;;
         list) cmd_list ;;
-        config) cmd_config ;;
+        config)
+            load_nomad_env || exit 1
+            cmd_config
+            ;;
         profile)
             shift
             bash "$SCRIPT_DIR/nomad-profile" "$@"
             ;;
         start|stop|restart|status|logs)
+            load_nomad_env || exit 1
             local target="${2:-}"
             if [ "$action" = "status" ] && [ -z "$target" ]; then
                 cmd_status_all; exit $?

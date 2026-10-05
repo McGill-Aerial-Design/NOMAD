@@ -41,6 +41,7 @@ internal static class PayloadReleaseInterlockTests
         IsExpired_TrueWhenClockMovedBackwards();
 
         Reset_ClearsArmingState();
+        Authorization_IsBoundedConsumingAndRevocable();
 
         Console.WriteLine(_failures == 0
             ? "All payload-interlock tests passed."
@@ -51,6 +52,33 @@ internal static class PayloadReleaseInterlockTests
     // ============================================================
     // Construction
     // ============================================================
+
+    private static void Authorization_IsBoundedConsumingAndRevocable()
+    {
+        var interlock = new PayloadReleaseInterlock(3, Window);
+        Assert(interlock.RegisterClick(100).Authorization == null, "arming cannot issue an authorization");
+        interlock.RegisterClick(200);
+        var grant = interlock.RegisterClick(300).Authorization;
+        Assert(grant.TryConsume(3, 300), "complete sequence authorizes one command");
+        Assert(!grant.TryConsume(3, 301), "grant cannot authorize a second command");
+        interlock.Reset();
+        interlock.RegisterClick(100);
+        interlock.RegisterClick(200);
+        grant = interlock.RegisterClick(300).Authorization;
+        interlock.Reset();
+        Assert(!grant.TryConsume(3, 301), "reset revokes an issued but unconsumed grant");
+        interlock.RegisterClick(100);
+        interlock.RegisterClick(200);
+        grant = interlock.RegisterClick(300).Authorization;
+        Assert(!grant.TryConsume(3, 300 + Window + 1), "expired grant fails closed");
+        interlock.RegisterClick(100);
+        interlock.RegisterClick(200);
+        grant = interlock.RegisterClick(300).Authorization;
+        Assert(!grant.TryConsume(2, 300), "a grant cannot cross a different actuator confirmation policy");
+        var unsafePolicy = new PayloadReleaseInterlock(1, Window);
+        Assert(!unsafePolicy.RegisterClick(100).Authorization.TryConsume(3, 100),
+            "single-click policy cannot authorize payload release");
+    }
 
     private static void Ctor_RejectsClicksRequiredBelowOne()
     {

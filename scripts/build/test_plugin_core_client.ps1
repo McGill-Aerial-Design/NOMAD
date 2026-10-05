@@ -53,9 +53,12 @@ $sources = @(
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientOutcomeTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputOutcomeTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputTestFixtures.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\JoystickAuthorizationTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Input\NomadJoystickService.Switches.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Control\OutputController.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Payload\PayloadActions.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Payload\PayloadControlPanel.Drop.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Payload\PayloadControlPanel.Relays.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Payload\PayloadControlPanel.Reels.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Payload\PayloadReleaseInterlock.cs')
 )
