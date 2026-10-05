@@ -168,9 +168,17 @@ may be removed by an operator after confirming no staging tool is running.
 
 Directory publication, POSIX symlink switches and individual state replacements
 use same-filesystem atomic rename. Windows deployment records use `ReplaceFileW`
-with readers permitting delete sharing; a failed replacement attempts to restore
+with readers permitting delete sharing. A per-record Windows kernel mutex guards
+recovery checks, existence probes, snapshot opening and replacement/backup cleanup
+across processes and sessions; readers release it once their snapshot is open.
+A stalled writer causes a clear failure after a 30-second guard wait; no record
+read or repair is retried. Process exit releases ownership, so a reader then
+checks the records left on disk. A failed replacement attempts to restore
 its retained old record before reporting failure. If that restoration is blocked,
 the deterministic `.deployment.json.previous` backup makes commands fail closed.
+Any retained backup blocks mutations; reads require a present, valid primary and
+never substitute the backup. A missing primary with a backup requires repair,
+including when checking whether this is a new deployment.
 Repair storage permissions, stop the affected deployment tool/supervisor, preserve
 both records as evidence, and restore the backup to `deployment.json` if the target
 is absent; if both exist, inspect them and retain the record with pending intent.

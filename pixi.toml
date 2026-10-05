@@ -79,7 +79,7 @@ test-authority-sitl-harness = "pytest tests/test_authority_sitl.py -q"
 test = "pytest --cov=python --cov=infra/tailscale --cov-report=term-missing --cov-fail-under=85"
 # Plain pytest without the coverage gate.
 test-python = "pytest"
-test-release-lifecycle = "pytest tests/test_release_identity.py tests/test_release_lifecycle.py tests/test_release_windows.py tests/test_release_linux.py -q"
+test-release-lifecycle = "pytest tests/test_release_identity.py tests/test_release_lifecycle.py tests/test_release_windows.py tests/test_release_linux.py tests/test_release_storage.py -q"
 
 # Hardware-free SITL stack (Docker), no Isaac Sim.
 #   pixi run dev-up      # start ArduPilot SITL and the Mission Planner bridge

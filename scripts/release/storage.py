@@ -56,20 +56,88 @@ def sync_tree(root: Path) -> None:
         sync_directory(directory)
 
 
-def write_json(path: Path, value: dict) -> None:
-    reject_links(path)
-    require_record_recovery(path, writing=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=".record-", dir=path.parent)
+def create_record_mutex(kernel, name: str):
+    """Share synchronization rights across authorized service/operator accounts."""
+    from ctypes import wintypes
+
+    class SecurityAttributes(ctypes.Structure):
+        _fields_ = [("length", wintypes.DWORD), ("descriptor", ctypes.c_void_p), ("inherit", wintypes.BOOL)]
+
+    security = ctypes.WinDLL("advapi32", use_last_error=True)
+    convert = security.ConvertStringSecurityDescriptorToSecurityDescriptorW
+    convert.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+    convert.restype = wintypes.BOOL
+    descriptor = ctypes.c_void_p()
+    # Mutex access does not grant record access; allow only wait/release, not DACL changes.
+    if not convert("D:(A;;0x00100001;;;AU)(A;;0x00100001;;;SY)", 1, ctypes.byref(descriptor), None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    attributes = SecurityAttributes(ctypes.sizeof(SecurityAttributes), descriptor, False)
+    kernel.CreateMutexExW.argtypes = [
+        ctypes.POINTER(SecurityAttributes),
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    ]
+    kernel.CreateMutexExW.restype = wintypes.HANDLE
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.LocalFree.restype = ctypes.c_void_p
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(value, stream, sort_keys=True, indent=2)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        replace_record(Path(temporary), path)
-        sync_directory(path.parent)
+        handle = kernel.CreateMutexExW(ctypes.byref(attributes), name, 0, 0x00100001)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return handle
     finally:
-        Path(temporary).unlink(missing_ok=True)
+        kernel.LocalFree(descriptor)
+
+
+@contextlib.contextmanager
+def record_guard(path: Path):
+    """Exclude live Windows replacement; kernel ownership ends if the writer dies."""
+    if os.name != "nt":
+        yield
+        return
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.ReleaseMutex.argtypes = [wintypes.HANDLE]
+    kernel.ReleaseMutex.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    identity = os.path.normcase(str(path.resolve())).encode("utf-8")
+    name = "Global\\NOMAD-record-" + hashlib.sha256(identity).hexdigest()
+    handle = create_record_mutex(kernel, name)
+    try:
+        result = kernel.WaitForSingleObject(handle, 30000)
+        if result == 258:
+            raise TimeoutError("deployment record replacement did not finish")
+        if result not in (0, 128):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            # Abandoned ownership still requires inspecting the records left on disk.
+            yield
+        finally:
+            kernel.ReleaseMutex(handle)
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def write_json(path: Path, value: dict) -> None:
+    with record_guard(path):
+        reject_links(path)
+        require_record_recovery(path, writing=True)
+        descriptor, temporary = tempfile.mkstemp(prefix=".record-", dir=path.parent)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                json.dump(value, stream, sort_keys=True, indent=2)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            replace_record(Path(temporary), path)
+            sync_directory(path.parent)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
 
 
 def replace_record(temporary: Path, path: Path) -> None:
@@ -100,20 +168,31 @@ def replace_record(temporary: Path, path: Path) -> None:
 
 
 def read_json(path: Path) -> dict:
-    reject_links(path)
-    require_record_recovery(path)
-    with open_record(path) as stream:
+    with record_guard(path):
+        reject_links(path)
+        require_record_recovery(path)
+        stream = open_record(path)
+    with stream:
         value = parse_json(stream.read())
     if not isinstance(value, dict):
         raise ValueError("deployment record must be an object")
     return value
 
 
+def record_exists(path: Path) -> bool:
+    """Probe only stable record state, including when absence means first deployment."""
+    with record_guard(path):
+        reject_links(path)
+        require_record_recovery(path)
+        return path.exists()
+
+
 def require_record_recovery(path: Path, writing: bool = False) -> None:
-    backup = path.with_name("." + path.name + ".previous")
-    reject_links(backup)
-    if backup.exists() and (writing or not path.exists()):
-        raise RecordRecoveryRequired(f"interrupted record replacement requires operator repair: {backup.name}")
+    with record_guard(path):
+        backup = path.with_name("." + path.name + ".previous")
+        reject_links(backup)
+        if backup.exists() and (writing or not path.exists()):
+            raise RecordRecoveryRequired(f"interrupted record replacement requires operator repair: {backup.name}")
 
 
 def open_record(path: Path):
