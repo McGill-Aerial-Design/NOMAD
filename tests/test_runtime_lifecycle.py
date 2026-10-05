@@ -78,6 +78,29 @@ def test_windows_plan_quotes_paths_and_bounds_recovery() -> None:
     assert plan["NonCrashRecovery"] is False
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows path qualification")
+@pytest.mark.parametrize("path", [r"C:nomad-runtime.exe", r"\NOMAD\nomad-runtime.exe"])
+def test_windows_plan_rejects_drive_relative_paths(path):
+    result = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-File",
+            str(ROOT / "infra/runtime/Manage-NomadRuntime.ps1"),
+            "-Action",
+            "Plan",
+            "-Executable",
+            path,
+            "-Config",
+            r"C:\NOMAD\runtime.json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode != 0 and "absolute paths" in result.stderr
+
+
 def test_lifecycle_templates_contain_no_actuation_credentials() -> None:
     example = json.loads((ROOT / "infra/runtime/runtime.example.json").read_text(encoding="utf-8"))
     assert example["NOMAD_API_KEY"] == ""

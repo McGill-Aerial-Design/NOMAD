@@ -7,10 +7,24 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+function Test-AbsolutePath {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path) -or $Path -match '["\r\n]') {
+        return $false
+    }
+    try {
+        # Rooted drive-relative paths still depend on the caller's working directory.
+        return [IO.Path]::IsPathRooted($Path) -and
+            ([IO.Path]::GetPathRoot($Path) -eq [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Path)))
+    } catch {
+        return $false
+    }
+}
+
 function Get-ServiceCommand {
     param([string]$Binary, [string]$Configuration)
     foreach ($value in @($Binary, $Configuration)) {
-        if (-not [IO.Path]::IsPathRooted($value) -or $value -match '["\r\n]') {
+        if (-not (Test-AbsolutePath $value)) {
             throw 'Executable and config must be absolute paths without quotes or line breaks.'
         }
     }
@@ -46,7 +60,7 @@ function Set-PrivatePath {
 
 function Test-ProvisionedPath {
     param([string]$Path, [bool]$Directory)
-    if (-not [IO.Path]::IsPathRooted($Path) -or $Path -match '["\r\n]') {
+    if (-not (Test-AbsolutePath $Path)) {
         throw 'Provision absolute configuration paths without quotes or line breaks.'
     }
     $item = Get-Item -LiteralPath $Path -Force
@@ -80,7 +94,7 @@ if ($Action -eq 'Protect') {
     $credentials = $settings.NOMAD_CLIENT_CREDENTIALS_FILE
     $audit = $settings.NOMAD_AUDIT_DIRECTORY
     Test-ProvisionedPath $credentials $false
-    if (-not [IO.Path]::IsPathRooted($audit)) { throw 'Provision an absolute audit directory.' }
+    if (-not (Test-AbsolutePath $audit)) { throw 'Provision an absolute audit directory.' }
     if (-not (Test-Path -LiteralPath $audit)) {
         Test-ProvisionedPath (Split-Path -Parent $audit) $true
     }

@@ -621,7 +621,7 @@ actuation is wanted. The account must traverse all these paths. `ProtectHome=yes
 intentionally excludes home directories. Render for review, then register:
 
 ```sh
-python3 /opt/nomad/share/nomad/lifecycle/install_systemd.py render --executable /opt/nomad/bin/nomad-runtime --config /etc/nomad/runtime.json --state /var/lib/nomad --user nomad
+sudo -u nomad python3 /opt/nomad/share/nomad/lifecycle/install_systemd.py render --executable /opt/nomad/bin/nomad-runtime --config /etc/nomad/runtime.json --state /var/lib/nomad --user nomad
 sudo python3 /opt/nomad/share/nomad/lifecycle/install_systemd.py install --executable /opt/nomad/bin/nomad-runtime --config /etc/nomad/runtime.json --state /var/lib/nomad --user nomad
 sudo systemctl start nomad-runtime.service
 systemctl status nomad-runtime.service
@@ -683,6 +683,8 @@ For actuator deployments, create a dedicated directory such as
 `NOMAD_ACTUATORS_FILE` to its absolute path in the runtime JSON. Keep the migrated
 private Mission Planner settings under the operator account. Leave the runtime field
 blank only when no configured outputs are wanted.
+Use fully qualified paths; drive-relative forms such as `C:runtime.json` or
+`\NOMAD\runtime.json` depend on the caller's current drive/directory and are rejected.
 
 `Protect` explicitly provisions owner/DACL for config, credentials, audit directory,
 and the optional actuator file and its dedicated parent. It refuses reparse points,
