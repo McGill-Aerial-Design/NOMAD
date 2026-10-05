@@ -8,7 +8,8 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: '\.(svg|patch)$'
+        # Reviewed redistribution licenses retain their upstream bytes.
+        exclude: '(^licenses/mavsdk-phase-a/|\.(svg|patch)$)'
       - id: end-of-file-fixer
         exclude: '\.(svg|patch)$'
       - id: check-yaml
