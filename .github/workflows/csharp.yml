@@ -95,6 +95,9 @@ jobs:
       - name: Altitude callout tests
         run: pwsh -File scripts/build/test_plugin_audio.ps1
 
+      - name: Local Mission Planner notification tests
+        run: pwsh -File scripts/build/test_plugin_local_messages.ps1
+
       - name: Semantic client, actuator UI and USB HID mapping tests
         run: pwsh -File scripts/build/test_plugin_core_client.ps1
 
@@ -183,6 +186,9 @@ jobs:
           if (-not (Test-Path "mission_planner/src/bin/Release/NOMADPlugin.dll")) {
             throw "build did not produce NOMADPlugin.dll"
           }
+
+      - name: Mission Planner dead-code lint
+        run: pwsh -File scripts/build/lint_plugin_deadcode.ps1
 
       - name: Persisted configuration migration and settings UI tests
         run: pwsh -File scripts/build/test_plugin_config_migration.ps1

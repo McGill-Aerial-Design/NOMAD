@@ -60,6 +60,13 @@ pixi run docs-build
 pixi run precommit
 ```
 
+On Windows, `pixi run lint-plugin` rebuilds the real Mission Planner plugin with
+unused fields/locals and unreachable-code diagnostics treated as errors. Hosted
+C# CI runs it after staging the reviewed Mission Planner assemblies.
+`pixi run test-plugin-local-messages` checks local message severity and complete
+text without any vehicle command APIs. Runtime lifecycle qualification also proves
+protected actuator configuration replacement and reload through managed `--config`.
+
 `docs-build` is the strict ProperDocs build. `format-check` is read-only;
 `format` rewrites Python files. `complexity-check` enforces the tracked
 changed-file limits. The Python suite checks that documented `pixi run` tasks
