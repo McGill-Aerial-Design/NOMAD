@@ -25,7 +25,13 @@ def targets(tmp_path: Path, monkeypatch):
         encoding="utf-8",
     )
     active = tmp_path / "nomad.env"
-    active.write_text("NOMAD_PROFILE=old\nNOMAD_API_KEY=private-test-value\n", encoding="utf-8")
+    active.write_text(
+        "NOMAD_PROFILE=old\nNOMAD_API_KEY=private-test-value\n"
+        'NOMAD_CLIENT_CREDENTIALS_FILE="/srv/nomad/auth/client credentials.json"\n'
+        "NOMAD_AUDIT_DIRECTORY=/srv/nomad/audit\nNOMAD_RUNTIME_IPC_PORT=14621\n"
+        "GCS_IP=100.64.0.10\nGCS_EXTRA_IPS=100.64.0.11\nMAVLINK_UART_DEV=/dev/test-uart\n",
+        encoding="utf-8",
+    )
     mp = tmp_path / "mp.json"
     mp.write_text('{"ActiveProfile":"old","CoreClientCredential":"private-client-value"}', encoding="utf-8")
     monkeypatch.setattr(profile, "PROFILES_DIR", profiles)
@@ -57,7 +63,7 @@ def test_full_application_and_secret_preservation(targets, capsys) -> None:
     status, lines = run_load(capsys)
     assert status == 0
     assert lines == [
-        "[APPLIED] env: profile settings loaded (existing credentials preserved)",
+        "[APPLIED] env: profile settings loaded (deployment-local settings preserved)",
         "[APPLIED] mission_planner: profile settings synced",
         f"[OK] Profile load completed: {NAME} (see target results above)",
     ]
@@ -79,7 +85,7 @@ def test_unknown_mp_path_is_explicit_optional_skip(targets, monkeypatch, capsys)
     status, lines = run_load(capsys)
     assert status == 0
     assert lines == [
-        "[APPLIED] env: profile settings loaded (existing credentials preserved)",
+        "[APPLIED] env: profile settings loaded (deployment-local settings preserved)",
         "[SKIPPED] mission_planner: config path unavailable; set NOMAD_MP_CONFIG to sync",
         f"[OK] Profile load completed: {NAME} (see target results above)",
     ]

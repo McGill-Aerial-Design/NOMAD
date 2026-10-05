@@ -155,8 +155,26 @@ bool validate_request_fields(Request &request, Json &error) {
     auto &body = request.original;
     if (request.type == "hello" || request.type == "ping" || request.type == "status" ||
         request.type == "admit_authority" || request.type == "revoke_authority" ||
-        request.type == "handback_authority") {
+        request.type == "handback_authority" || request.type == "get_actuators") {
         return true;
+    }
+    if (request.type == "configure_actuators" && body.contains("actuator_configs") &&
+        body["actuator_configs"].is_array()) {
+        return true;
+    }
+    if (request.type == "actuator_action" && is_string(body, "actuator_id") && is_string(body, "operation") &&
+        is_string(body, "input_source")) {
+        const auto source = body["input_source"].get<std::string>();
+        int slot{};
+        double value{};
+        const bool valid_slot = source == "ui" ? !body.contains("input_slot") :
+            source == "hid" && read_integer(body, "input_slot", slot) && slot >= 0 && slot <= 31;
+        const auto operation = field_string(body, "operation");
+        if (valid_slot && ((operation != "neutral" && operation != "release_input") || source == "hid") &&
+            (!body.contains("value") ||
+            (read_finite_number(body, "value", value) && value >= 0 && value <= 1))) {
+            return true;
+        }
     }
     if (request.type == "set_servo" && read_integer(body, "channel", request.channel) &&
         read_integer(body, "pwm_microseconds", request.pwm_microseconds)) {
@@ -179,7 +197,8 @@ bool validate_request_fields(Request &request, Json &error) {
         read_finite_number(body, "roll_deg", request.roll_deg)) {
         return true;
     }
-    const bool known_type = request.type == "set_servo" || request.type == "set_relay" ||
+    const bool known_type = request.type == "actuator_action" || request.type == "configure_actuators" ||
+                            request.type == "set_servo" || request.type == "set_relay" ||
                             request.type == "motor_test" ||
                             request.type == "configure_gimbal" || request.type == "set_gimbal_target";
     if (!known_type && request.type != "hello" && request.type != "ping" && request.type != "status") {
@@ -233,7 +252,8 @@ ParsedRequest parse_request(std::string_view line) {
 }
 
 bool is_mutating(const std::string &type) {
-    return type == "set_servo" || type == "set_relay" || type == "motor_test" ||
+    return type == "actuator_action" || type == "configure_actuators" ||
+           type == "set_servo" || type == "set_relay" || type == "motor_test" ||
            type == "configure_gimbal" || type == "set_gimbal_target";
 }
 

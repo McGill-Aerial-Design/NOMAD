@@ -2,7 +2,7 @@
 #pragma once
 
 #include "nomad/mavlink/connection.hpp"
-#include "nomad/safety/payload.hpp"
+#include "nomad/safety/output.hpp"
 #include "nomad/vehicle/config.hpp"
 #include "nomad/vehicle/operation.hpp"
 
@@ -87,8 +87,6 @@ class Vehicle {
     CommandResult motor_test(int motor_instance, int pwm_microseconds, float timeout_seconds);
     CommandResult configure_gimbal(int mount_mode);
     CommandResult set_gimbal_target(double pitch_deg, double roll_deg);
-    CommandResult arm_payload();
-    CommandResult release_payload(int relay_number, float duration_seconds);
     CommandResult stop_velocity();
     bool velocity_control_active() const;
     safety::WatchdogReason last_velocity_stop_reason() const;
@@ -199,8 +197,6 @@ class Vehicle {
     std::chrono::milliseconds fixed_wing_recovery_timeout_;
     std::chrono::milliseconds transition_ready_dwell_;
     std::chrono::milliseconds quadplane_landing_timeout_;
-    safety::ReleaseInterlock payload_interlock_;
-    mutable std::mutex payload_mutex_;
     mutable std::mutex velocity_mutex_;
     std::condition_variable velocity_condition_;
     std::thread watchdog_thread_;

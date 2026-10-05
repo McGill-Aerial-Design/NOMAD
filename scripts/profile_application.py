@@ -80,7 +80,7 @@ def _commit_targets(env_path: Path, staged: list[Path], mp_path: Path | None, or
             print(_restore_env(env_path, original))
             print("[FAILED] mission_planner: atomic replacement failed; unchanged")
             return False
-    print("[APPLIED] env: profile settings loaded (existing credentials preserved)")
+    print("[APPLIED] env: profile settings loaded (deployment-local settings preserved)")
     if mp_path is None:
         print("[SKIPPED] mission_planner: config path unavailable; set NOMAD_MP_CONFIG to sync")
     else:

@@ -46,9 +46,9 @@ The [example](example.json) has the following ownership on the ground computer:
 | `0.0.0.0:14550` | Router, physical `radiomaster` | Same, independently monitored |
 | `0.0.0.0:14570` | Router, physical `wifi` | Same, independently monitored |
 | `127.0.0.1:14600` | Router, consumer `mission_planner` | MP UDPCl receives telemetry only; unsafe outbound configuration is rejected |
-| Ephemeral MP port | Mission Planner | Receives telemetry and sends native GCS MAVLink |
+| Ephemeral MP port | Mission Planner | Receives telemetry; consumer command egress is rejected |
 | `127.0.0.1:14602` | Router, consumer `nomad_core` | Sends downlink to `14601`; accepts outbound only from `14601` |
-| `127.0.0.1:14601` | One persistent C++ runtime or one exclusive direct CLI process | `udpin:127.0.0.1:14601`; MAVSDK learns router peer `14602` |
+| `127.0.0.1:14601` | One persistent nomad-runtime | `udpin:127.0.0.1:14601`; MAVSDK learns router peer `14602` |
 | `127.0.0.1:14610` | Standalone router management server | JSON Lines status, events, and safe link-selection controls |
 
 Run one standalone host with the configured physical links and consumers, then
@@ -116,7 +116,7 @@ as `LTE` and `RadioMaster` are ordinary stable IDs, not a transport model.
 and top-level bind-address settings are rejected; move physical links into
 `Links` and local endpoints into `Consumers`.
 
-`Consumers` contains 1â€“32 entries with unique `Id`, `RouterPort`, and optional
+`Consumers` contains 1–32 entries with unique `Id`, `RouterPort`, and optional
 `ClientPort`. `AllowOutbound` defaults to true; false lets a consumer receive
 telemetry while preventing its local MAVLink frames from reaching physical
 links. The exact ID `mission_planner` is reserved as receive-only: an explicit
@@ -154,7 +154,9 @@ concurrently on the same listener.
 All enabled links are read by one owned worker with bounded polling batches.
 TCP connect attempts are asynchronous; per-link reopen state and parser resets
 are independent. Complete frames establish freshness, not arbitrary incoming
-bytes. UDP silence expires after `HeartbeatTimeoutSec` (default 3 seconds).
+bytes. Complete-frame silence expires after the serialized compatibility setting
+`HeartbeatTimeoutSec` (default 3 seconds). This setting controls availability;
+heartbeat age separately contributes to health classification.
 Sequence gaps are tracked per physical link and `(sysid, compid)`; duplicates
 and backward/out-of-order sequence deltas are ignored. `LatencyMs` is retained
 for compatibility and measures heartbeat interval deviation, **not RTT**.
@@ -261,7 +263,7 @@ settings, and operator topology. Release packages contain only `router.example.j
 
 The software process qualification uses two compiled fixture router versions with distinct
 executable bytes. It stages B while A remains running, verifies management `hello` and
-`get_status` across A â†’ B â†’ A, deliberately fails B health and verifies automatic
+`get_status` across A → B → A, deliberately fails B health and verifies automatic
 restoration of exact A, and compares the external configuration byte for byte. All
 endpoints are loopback UDP and shutdown uses the host's `stop` command. It requires
 neither physical links nor a vehicle. Native supervision and protected directory ACLs

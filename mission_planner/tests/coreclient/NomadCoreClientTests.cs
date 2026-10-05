@@ -23,6 +23,13 @@ internal static partial class NomadCoreClientTests
             return RunAsyncRestartChild(int.Parse(args[1]));
         }
         System.Windows.Forms.Control.CheckForIllegalCrossThreadCalls = true;
+        if (args.Length == 1 && args[0] == "--actuator-only")
+        {
+            ActuatorClient_ReportsBackendEvidence();
+            Joystick_AuthorizationTests();
+        Joystick_InputConfigurationTests();
+            return _failures == 0 ? 0 : 1;
+        }
         Runtime_AsyncTests();
         Termination_ReportsUnavailableWithoutVehicleDispatch();
         GuidedGoto_ReportsUnavailableWithoutDispatch();
@@ -39,10 +46,9 @@ internal static partial class NomadCoreClientTests
         Runtime_AllMutationsPreserveSuccessAndAcknowledgement();
         LocalValidation_ClearsPreviousSuccess();
         Output_ReportsTruthfulOutcomeWording();
-        PayloadPanel_UpdatesOnlySuccessfulCommandedState();
-        PayloadActions_PreserveStateOnUnknownRetract();
-        RelayPanel_PreservesCommandedStateOnFailure();
-        ReelPanel_DoesNotClaimPhysicalMovementOrStop();
+        ActuatorClient_ReportsBackendEvidence();
+        Joystick_AuthorizationTests();
+        Joystick_InputConfigurationTests();
         Runtime_RejectsRogueRuntimeWithoutCredentialDisclosure();
         Runtime_AuditFailureAfterSendIsUnknown();
         Runtime_GimbalTarget_UsesTypedRequestAndRequiresAuthority();

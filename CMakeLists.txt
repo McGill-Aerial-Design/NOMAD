@@ -71,7 +71,7 @@ add_library(nomad_core
     src/mission/executor.cpp
     src/safety/fence_config.cpp
     src/safety/geofence.cpp
-    src/safety/payload.cpp
+    src/safety/output.cpp
     src/safety/velocity.cpp
     src/safety/velocity_config.cpp
     src/safety/vio_source.cpp
@@ -83,7 +83,6 @@ add_library(nomad_core
     src/vehicle/vehicle.cpp
     src/vehicle/vehicle_vtol_takeoff.cpp
     src/vehicle/vehicle_fence.cpp
-    src/vehicle/vehicle_payload.cpp
     src/vehicle/vehicle_quadplane_landing.cpp
       src/vehicle/vehicle_route.cpp
       src/vehicle/vehicle_recovery.cpp
@@ -130,6 +129,11 @@ endif()
 target_link_libraries(nomad PRIVATE nomad_local_crypto)
 
 add_library(nomad_runtime_core
+    src/runtime/actuator_config.cpp
+    src/runtime/actuator_state.cpp
+    src/runtime/actuator_sequence.cpp
+    src/runtime/actuator_storage.cpp
+    src/runtime/runtime_actuators.cpp
     src/runtime/client_auth.cpp
     src/runtime/protected_file.cpp
     src/runtime/audit_journal.cpp
@@ -316,6 +320,9 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
 
     if(PROJECT_IS_TOP_LEVEL)
         add_executable(nomad_runtime_tests tests/runtime_ipc_test.cpp tools/runtime/lifecycle.cpp)
+        add_executable(nomad_actuator_tests tests/actuator_test.cpp)
+        target_link_libraries(nomad_actuator_tests PRIVATE nomad_runtime_core nlohmann_json::nlohmann_json)
+        add_test(NAME nomad_actuator_tests COMMAND nomad_actuator_tests)
         target_link_libraries(nomad_runtime_tests PRIVATE nomad_runtime_core nlohmann_json::nlohmann_json)
         target_compile_definitions(nomad_runtime_tests PRIVATE NOMAD_TESTS)
         if(WIN32)

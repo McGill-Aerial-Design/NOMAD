@@ -5,7 +5,7 @@
 // ============================================================
 // Handles plugin configuration persistence.
 // Stored in Mission Planner's config directory.
-// Supports direct video, MAVLink, payload, geofence, and log-analysis features.
+// Configures runtime IPC, video, router status, observation, and operator input.
 // ============================================================
 
 using System;
@@ -72,12 +72,13 @@ namespace NOMAD.MissionPlanner
         public bool AutoStartHudVideo { get; set; } = true;
 
         // ============================================================
-        // MAVLink Dual Link Configuration
+        // Standalone Ground Router Client Configuration
         // ============================================================
 
         /// <summary>
         /// Enable Mission Planner's standalone router status client.
         /// </summary>
+        // Serialized compatibility name; enables the standalone router status client only.
         public bool DualLinkEnabled { get; set; } = true;
 
         /// <summary>
@@ -178,49 +179,14 @@ namespace NOMAD.MissionPlanner
         public float SlamMapRadiusM { get; set; } = 3.0f;
 
         // ============================================================
-        // Servo Configuration (ArduPilot AUX outputs via MAVLink)
-        // All payloads, reels, water pump and camera tilt are driven through
-        // standard ArduPilot servo/relay outputs on any ArduPilot flight
-        // controller via MAVLink DO_SET_SERVO / DO_SET_RELAY.
-        // Commands are sent through the NOMAD C++ core, which owns the
-        // MAVLink transport.
-        // Channel numbers are ArduPilot servo output numbers (SERVOn_FUNCTION)
-        // and are mapped per-board in the autopilot parameters, not hardcoded
-        // to a specific flight controller.
-        // ============================================================
-
-        // --- Modular payloads (drop servos, slider servos, relay/GPIO outputs) ---
-        /// <summary>Maximum number of configurable payloads (panel + Settings cap).</summary>
-        public const int MaxPayloads = 8;
-
-        /// <summary>
-        /// Configurable payload outputs rendered on the payload panel and edited in
-        /// Settings → Payloads. Each is a drop servo, a slider servo, or a relay/GPIO
-        /// output. See <see cref="PayloadControl"/>.
-        /// </summary>
-        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
-        public List<PayloadControl> Payloads { get; set; } = DefaultPayloads();
-
-        /// <summary>Payload controls start empty and are configured per aircraft.</summary>
-        public static List<PayloadControl> DefaultPayloads() => new List<PayloadControl>();
-
-        // Strap reels and the camera tilt servo are regular payload entries now
-        // (PayloadKind.Reel / PayloadKind.CamTilt) — add them in Settings →
-        // Payloads. PayloadControl.NewReel / NewCamTilt carry the standard
-        // NOMAD defaults (reel out <1000 us / in >2000 us / stop 1500 us;
-        // tilt 700 down / 1250 level / 1450 up — the camera arm is mechanically
-        // offset, so level is NOT the standard 1500 us).
-
+        // Configured actuator commands use authenticated typed runtime IPC.
+        public string JoystickPositionActuatorId { get; set; } = "";
         // ============================================================
         // Joystick Configuration (Mission Planner DirectInput-based)
         // ============================================================
-        // Two independent joystick assignments routed by NomadJoystickService:
-        //   * Gimbal: stick deflection → pitch/roll rate, integrated locally
-        //     into typed NOMAD runtime angle-target requests.
-        //   * Camera tilt: stick deflection → PWM rate, integrated locally into
-        //     the camera tilt servo PWM target (DO_SET_SERVO).
-        // Axes are referenced by DirectInput state property name: X, Y, Z,
-        // Rx, Ry, Rz, Slider1, Slider2.
+        // Gimbal input produces angle targets; position input produces normalized
+        // values for an explicitly configured runtime actuator ID.
+        // DirectInput axes: X, Y, Z, Rx, Ry, Rz, Slider1, Slider2.
 
         /// <summary>Enable the gimbal joystick channel.</summary>
         public bool JoystickGimbalEnabled { get; set; } = false;
@@ -251,69 +217,31 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public bool GimbalArrowKeysEnabled { get; set; } = false;
 
-        /// <summary>Enable the camera tilt joystick channel.</summary>
-        public bool JoystickCameraTiltEnabled { get; set; } = false;
+        /// <summary>Enable the configured position input.</summary>
+        public bool JoystickPositionEnabled { get; set; } = false;
         /// <summary>DirectInput device name. May be the same device as gimbal (different axes).</summary>
-        public string JoystickCameraTiltDevice { get; set; } = "";
-        /// <summary>Axis driving camera tilt rate.</summary>
-        public string JoystickCameraTiltAxis { get; set; } = "Y";
-        public bool JoystickCameraTiltInvert { get; set; } = true;
-        public float JoystickCameraTiltDeadzone { get; set; } = 0.08f;
-        /// <summary>Max integrated PWM rate (microseconds per second) at full stick deflection.</summary>
-        public float JoystickCameraTiltMaxRateUsPerSec { get; set; } = 400f;
+        public string JoystickPositionDevice { get; set; } = "";
+        /// <summary>Axis producing a normalized position input.</summary>
+        public string JoystickPositionAxis { get; set; } = "Y";
+        public bool JoystickPositionInvert { get; set; } = true;
+        public float JoystickPositionDeadzone { get; set; } = 0.08f;
 
-        // --- Three-position switch action mapping ---
-        // joystick.py encodes each 3-position RadioMaster switch (sw1, sw2, sw3)
-        // as a pair of virtual Xbox 360 buttons — UP and DOWN positions press a
-        // dedicated button, middle releases both. NomadJoystickService dispatches
-        // a configurable action per slot. Valid action IDs:
-        //   None, DropToggleP1, DropToggleP2, DropToggleP3,
-        //   ReelInP1, ReelOutP1, ReelInP2, ReelOutP2, FireWaterPump
-        // Drop toggles and FireWaterPump are edge-triggered (fire on switch flip
-        // toward the position); Reel actions run while the switch is held off-
-        // centre and stop when it returns to middle.
-        /// <summary>
-        /// DirectInput device that publishes the switch buttons (from joystick.py
-        /// or any other source). Independent of the gimbal/camera-tilt axis devices so
-        /// payload switches keep working even when both axis channels are off.
-        /// Leave blank to fall back to the gimbal device, then the tilt device.
-        /// </summary>
+        // Each physical switch uses configurable UP/DOWN DirectInput button indices.
+        // Bindings carry backend actuator IDs and operation strings.
+        public int[] JoystickButtonIndices { get; set; } = new[] { 0, 1, 2, 3, 4, 5 };
         public string JoystickSwitchDevice  { get; set; } = "";
 
-        public string JoystickSw1UpAction   { get; set; } = "DropToggleP1";
-        public string JoystickSw1DownAction { get; set; } = "DropToggleP2";
-        public string JoystickSw2UpAction   { get; set; } = "DropToggleP3";
-        public string JoystickSw2DownAction { get; set; } = "ReelInP1";
-        public string JoystickSw3UpAction   { get; set; } = "ReelInP2";
-        public string JoystickSw3DownAction { get; set; } = "FireWaterPump";
+        public string JoystickSw1UpAction   { get; set; } = "None";
+        public string JoystickSw1DownAction { get; set; } = "None";
+        public string JoystickSw2UpAction   { get; set; } = "None";
+        public string JoystickSw2DownAction { get; set; } = "None";
+        public string JoystickSw3UpAction   { get; set; } = "None";
+        public string JoystickSw3DownAction { get; set; } = "None";
 
-        /// <summary>
-        /// Monitor button index 6 for termination requests. Aircraft-side
-        /// termination is unavailable; a press reports that failure visibly.
-        /// </summary>
+        /// <summary>Direct USB HID button index used only for the unavailable-termination monitor.</summary>
+        public int JoystickTerminationButtonIndex { get; set; } = 6;
+        /// <summary>Monitor the configured button and visibly report aircraft termination as unavailable.</summary>
         public bool JoystickKillSwitchEnabled { get; set; } = true;
-
-        /// <summary>
-        /// When true, the joystick service auto-picks the first available
-        /// DirectInput device for any role whose configured device name is
-        /// blank or not currently enumerated, and re-checks periodically so
-        /// hot-plugged controllers (e.g. the vgamepad created by joystick.py)
-        /// get picked up without a settings round-trip. Default true.
-        /// </summary>
-        public bool JoystickAutoSelectDevice { get; set; } = true;
-
-        // --- Serial → virtual gamepad bridge (jotystick.py) ---
-        /// <summary>Auto-launch jotystick.py on plugin start so a serial-attached MCU
-        /// appears as an Xbox 360 controller.</summary>
-        public bool SerialJoystickEnabled { get; set; } = false;
-        /// <summary>Serial port the MCU is on (e.g. COM10).</summary>
-        public string SerialJoystickPort { get; set; } = "COM10";
-        /// <summary>Baud rate.</summary>
-        public int SerialJoystickBaud { get; set; } = 115200;
-        /// <summary>Python executable to use. Leave blank to use "python" from PATH.</summary>
-        public string SerialJoystickPython { get; set; } = "python";
-        /// <summary>Absolute path to jotystick.py. Leave blank to auto-resolve relative to the plugin DLL.</summary>
-        public string SerialJoystickScriptPath { get; set; } = "";
 
     }
 }

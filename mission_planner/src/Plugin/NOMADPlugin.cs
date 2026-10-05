@@ -8,7 +8,7 @@
 // Features:
 // - Full-page NOMAD control interface with tabs
 // - Embedded video streaming
-// - C++ core command boundary
+// - Authenticated runtime command boundary
 // - Standalone ground-router management
 // - Configurable payload controls
 // ============================================================
@@ -39,10 +39,9 @@ namespace NOMAD.MissionPlanner
         private NotificationService _notificationService;
         private GeofenceConfig _geofenceConfig;               // Plugin-owned: survives NOMAD screen disposal
         private BoundaryMonitor _boundaryMonitor;             // Plugin-owned: alerts fire on every MP page
-        private MAVLinkConnectionManager _connectionManager;  // Dual link manager
+        private MAVLinkConnectionManager _connectionManager;  // Standalone router management/status client
         private NomadJoystickService _joystickService;        // Physical joysticks → gimbal + camera tilt
         private GimbalArrowKeyFilter _gimbalArrowKeyFilter;    // Mission Planner-wide arrow key nudges
-        private SerialJoystickBridge _serialBridge;           // Python subprocess: serial → virtual Xbox 360
         private Form _popOutForm;                             // Pop-out window for NOMAD screen
         private HudVideoPlayer _hudVideo;
         private bool _hudVideoStarted => _hudVideo?.IsActive == true;
@@ -103,20 +102,10 @@ namespace NOMAD.MissionPlanner
                 // Startup chime + spoken welcome (fires once per process).
                 AudioAlerts.PlayWelcomeOnce();
 
-                // Initialize MAVLink dual link connection manager
+                // Initialize the standalone ground router management client
                 if (_config.DualLinkEnabled)
                 {
                     InitializeConnectionManager();
-                }
-
-                // Serial → virtual Xbox 360 bridge — must start BEFORE the joystick
-                // service so the virtual device is registered with Windows by the
-                // time NomadJoystickService enumerates DirectInput devices.
-                _serialBridge = new SerialJoystickBridge(_config);
-                if (_config.SerialJoystickEnabled)
-                {
-                    try { _serialBridge.Start(); }
-                    catch (Exception ex) { Log.Error($"Serial bridge start failed — {ex.Message}"); }
                 }
 
                 // Seed centralized gimbal rate from persisted config so the floating
@@ -134,7 +123,10 @@ namespace NOMAD.MissionPlanner
                 _joystickService = new NomadJoystickService(_config);
                 if (_joystickService.NeedsToRun())
                 {
-                    try { _joystickService.Start(); }
+                    try
+                    {
+                        _joystickService.Start();
+                    }
                     catch (Exception ex) { Log.Error($"Joystick service start failed — {ex.Message}"); }
                 }
 
@@ -273,8 +265,6 @@ namespace NOMAD.MissionPlanner
                 _gimbalArrowKeyFilter = null;
 
                 // Kill serial bridge subprocess
-                _serialBridge?.Dispose();
-                _serialBridge = null;
 
                 if (_popOutForm != null && !_popOutForm.IsDisposed)
                 {
@@ -366,17 +356,25 @@ namespace NOMAD.MissionPlanner
             using (var form = new NOMADSettingsForm(_config))
             {
                 // Live serial bridge status indicator on the Joystick tab.
-                form.SetSerialBridgeStatusProvider(() => _serialBridge?.GetStatus() ?? "(no bridge instance)");
 
                 if (form.ShowDialog() == DialogResult.OK)
                 {
                     _config = form.Config;
                     _config.Save();
+                    try
+                    {
+                        _joystickService?.Stop();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"Joystick stop before output reconfiguration failed — {ex.Message}");
+                    }
                     OutputController.Initialize(_config);
-                    ApplyDualLinkSettings();
-                    try { _serialBridge?.UpdateConfig(_config); }
-                    catch (Exception ex) { Log.Error($"Serial bridge update failed — {ex.Message}"); }
-                    try { _joystickService?.UpdateConfig(_config); }
+                    ApplyRouterClientSettings();
+                    try
+                    {
+                        _joystickService?.UpdateConfig(_config);
+                    }
                     catch (Exception ex) { Log.Error($"Joystick restart failed — {ex.Message}"); }
                 }
             }

@@ -75,7 +75,7 @@ in the [historical migration archive](docs/migration.md).
 
 ## Product modules and competition evidence
 
-- [ ] Resolve open organizer decisions Q02â€“Q09 and assign accountable owners
+- [ ] Resolve open organizer decisions Q02–Q09 and assign accountable owners
   for requirements, implementation, safety acceptance and retained evidence.
 - [ ] Implement the required AEAC 2027 server/traffic contract and demonstrate
   telemetry, stale-data behavior, traffic separation and outage/replay handling.

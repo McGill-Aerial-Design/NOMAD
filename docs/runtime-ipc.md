@@ -272,11 +272,65 @@ source per response, resetting its idle deadline for each network read.
 Cancellation or failure before mutation write begins is `FailedBeforeSend`;
 once write begins it is `UnknownOutcome`. Neither uncertain nor stale mutations
 are retried automatically. UI callers await on the WinForms context, and gimbal
-and payload callers reject concurrent work with nonwaiting async gates so stale
-commands cannot accumulate. One explicit servo stop per channel may wait for that
-channel's current request; duplicate stops and new starts are declined while it
-is pending. Payload commanded state changes only on software
-success; physical effects remain unverified.
+requests retain their existing nonwaiting gate. Configured actuators use semantic
+requests; the backend owns concurrency, authorization, output values, sequencing
+and recovery. Physical HID input validity is checked before transmission; a stale
+unsent observation is `NotAttempted`. Input changes do not cancel an already-started
+mutation. Presentation uses backend revisions and retires old runtime incarnations.
+
+## Semantic actuator requests
+
+The additive v1 capabilities are `get_actuators`, `configure_actuators` and
+`actuator_action`. Discovery is authenticated; configuration and actions retain the
+ordinary admitted owner/session/generation, sequence, expiry, cache and durable-audit
+boundary. Raw servo/relay requests reject configured logical outputs.
+
+`get_actuators` returns `actuators_response`, the runtime incarnation, configuration
+recovery flag and entries with stable IDs, names, backend-built action labels/control
+types, configuration data and software state. No frontend needs to know channels/PWM
+to operate an entry. Position actions also provide `continuous_axis_allowed` and
+`continuous_axis_blocked_reason`; missing metadata is not permission to stream.
+Every full catalog includes `actuator_configuration_revision`, captured with its
+array under the backend state lock and incremented on definition replacement, including
+an empty replacement. Frontend catalog ordering uses this server revision within a
+runtime incarnation, not the client request sequence; missing revisions fail closed.
+The runtime rejects HID position requests for hazardous or confirmation-required
+definitions independently of frontend controls. UI position requests retain discrete
+confirmation support. `configure_actuators` carries a typed `actuator_configs` array;
+the schema is the complete set in [ActuatorDefinition](../include/nomad/runtime/actuator.hpp).
+The protected file wrapper contains only that array. Unknown/missing/wrong-typed fields,
+duplicate IDs/outputs and invalid bounds fail visibly; no automatic remapping occurs.
+
+`actuator_action` carries `actuator_id`, `operation`, `input_source` (`ui`/`hid`),
+HID `input_slot` (0–31), and `value` only for normalized position. Operations are
+activate/toggle/position/positive/negative/safe/stop, actual HID neutral and backend-
+provided `release_input`. Neutral never sends a vehicle command. Directional release
+preserves partial confirmation while idle; during pending/active/uncertain motion it
+performs an ordinary authorized stop. It never manufactures neutral readiness.
+
+`actuator_response` separates `request_result.success` (semantic request result),
+`execution_attempted`, `command_result.success`/`acknowledged` (observed software
+command facts), and `actuator_state`. Accepted confirmations send no vehicle command.
+State includes confirmation remaining, recovery/pending, commanded normalized position,
+activation-commanded, software command success, pulse-ON success, exact activation/safe
+outcomes and a monotonic revision. None proves physical actuator state. A staged action
+with successful ON and rejected OFF has a failed composite disposition, not a claim
+that no vehicle mutation occurred. Every unsuccessful required OFF latches recovery;
+only an explicit successful safe action clears it. Initial unknown/interrupted ON
+also requires recovery, without automatically issuing another mutation.
+
+Semantic clients use the existing maximum five-second request validity. Pulse/directional
+software waits are 50–1500 ms, admitted only with a 3000 ms ON ACK budget plus wait and
+250 ms margin. Both edges retain the original final-send token; expiry/revocation is
+never bypassed for OFF. Explicit safe requests can interrupt the wait and retain their
+own normal expiry/authority checks. Configuration changes report disk uncertainty
+separately, without inventing vehicle admission/ACK. See [operations](operations.md#generic-actuator-configuration-and-frontend-migration)
+and [backend fault tests](../tests/actuator_test.cpp).
+
+debt: at most eight actuators and the existing 32 IPC workers bound explicit safe
+waiters; revisit if measured concurrent safe requests exhaust workers or delay
+authority/status; then permit one pending explicit safe request per logical output.
+Longer actuator runs require a separately reviewed operation/authority lifetime.
 
 ## Authenticated local clients
 

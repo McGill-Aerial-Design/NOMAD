@@ -26,6 +26,10 @@ on:
       - "scripts/dev/runtime_*support.py"
       - "scripts/dev/runtime_lifecycle_fixture.py"
       - "scripts/dev/release_process*"
+      - "scripts/dev/release_router_launcher.py"
+      - "scripts/dev/release_supervisor_fixture.py"
+      - "scripts/dev/mavsdk_peer*.py"
+      - "scripts/dev/verify_core_package.py"
       - "scripts/release/**"
       - ".github/workflows/csharp.yml"
   pull_request:
@@ -40,6 +44,10 @@ on:
       - "scripts/dev/runtime_*support.py"
       - "scripts/dev/runtime_lifecycle_fixture.py"
       - "scripts/dev/release_process*"
+      - "scripts/dev/release_router_launcher.py"
+      - "scripts/dev/release_supervisor_fixture.py"
+      - "scripts/dev/mavsdk_peer*.py"
+      - "scripts/dev/verify_core_package.py"
       - "scripts/release/**"
       - ".github/workflows/csharp.yml"
   workflow_dispatch:
@@ -75,9 +83,6 @@ jobs:
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v3
 
-      - name: Payload-release interlock tests (SR-PAY-03)
-        run: pwsh -File scripts/build/test_plugin_interlock.ps1
-
       - name: Geofence geometry tests
         run: pwsh -File scripts/build/test_plugin_geometry.ps1
 
@@ -90,8 +95,11 @@ jobs:
       - name: Altitude callout tests
         run: pwsh -File scripts/build/test_plugin_audio.ps1
 
-      - name: Core client boundary tests
+      - name: Semantic client, actuator UI and USB HID mapping tests
         run: pwsh -File scripts/build/test_plugin_core_client.ps1
+
+      - name: Mission Planner reviewed-target warning tests
+        run: pwsh -File scripts/build/test_plugin_version.ps1
 
   router-tests:
     name: Router tests and release qualification (Windows)
@@ -171,11 +179,13 @@ jobs:
 
       - name: Build plugin (Release)
         run: |
-          msbuild mission_planner/src/NOMADPlugin.csproj `
-            /nologo /p:Configuration=Release /p:Platform=AnyCPU /v:minimal /clp:Summary
+          pwsh -File scripts/build/build_plugin_windows.ps1
           if (-not (Test-Path "mission_planner/src/bin/Release/NOMADPlugin.dll")) {
             throw "build did not produce NOMADPlugin.dll"
           }
+
+      - name: Persisted configuration migration and settings UI tests
+        run: pwsh -File scripts/build/test_plugin_config_migration.ps1
 
       - name: Gimbal joystick UI smoke
         run: pwsh -File scripts/build/test_plugin_gimbal_ui.ps1

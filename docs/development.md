@@ -221,7 +221,11 @@ in the [router README](../infra/transport/ground_router/README.md).
 The Mission Planner plugin targets Windows, the reference-assembly version in
 [`mission-planner-target.json`](../scripts/release/mission-planner-target.json),
 and .NET Framework 4.8. CI downloads, release identities and deployment checks
-all derive their target from that file:
+all derive their target from that file. The plugin embeds that reviewed target
+in its build identity and warns when the running executable's file version
+differs. Its CLR assembly version is not the Mission Planner product version. A direct
+MSBuild development build without generated metadata reports that it has no
+reviewed target:
 
 ```powershell
 pixi run build-plugin-only
@@ -232,9 +236,9 @@ pixi run test-plugin-video
 ```
 
 The build writes `mission_planner/src/bin/Release/NOMADPlugin.dll`; it does not
-install it. `test-plugin-config-migration`, `test-plugin-interlock`,
-`test-plugin-core-client`, and `test-plugin-duallink` cover focused helpers,
-the runtime client and router behavior. Follow the [Mission Planner build and installation guide](../mission_planner/README.md)
+install it. `test-plugin-config-migration`,
+`test-plugin-core-client`, and `test-plugin-duallink` cover persisted settings, input/UI to semantic API mapping, the runtime client and router behavior.
+The C++ `nomad_actuator_tests` and runtime IPC suite own actuator safety and sequencing. Follow the [Mission Planner build and installation guide](../mission_planner/README.md)
 and its [packaging guide](../mission_planner/packaging/README.md). Tagged
 releases use `.github/workflows/release.yml` to assemble separate plugin and
 router ZIP files; a manual workflow dispatch uploads artifacts without

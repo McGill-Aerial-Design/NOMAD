@@ -339,7 +339,7 @@ for each target before the overall completion message:
 
 | Target result | Meaning |
 |---|---|
-| `[APPLIED] env` | `config/nomad.env` was atomically replaced with the selected template and canonical MAVLink endpoint; existing `NOMAD_API_KEY` and `NOMAD_CLIENT_CREDENTIAL` values were preserved. |
+| `[APPLIED] env` | `config/nomad.env` was atomically replaced with profile-owned settings and the canonical MAVLink endpoint while retaining reviewed deployment-local settings. |
 | `[APPLIED] mission_planner` | Profile-owned MP settings were synced: `ActiveProfile`, `VideoUrl`, and supported legacy migration. Unrelated settings and the separately provisioned `CoreClientCredential` remain. Retired settings, including `CoreApiKey`, are removed. |
 | `[SKIPPED] mission_planner: config path unavailable` | MP sync is optional when neither `NOMAD_MP_CONFIG` nor `LOCALAPPDATA` supplies a path. Only env was applied; exit status is 0. Set `NOMAD_MP_CONFIG` to require a specific MP target. |
 | `[SKIPPED] ... unchanged` or `... rolled back` | That target was not applied because another target failed, or its change was restored. |
@@ -355,6 +355,27 @@ If env replacement fails, MP remains unchanged. If MP replacement fails after
 env replacement, env is restored atomically (or removed if it was newly created).
 Temporary files are cleaned up on handled failures. Backups contain credentials;
 keep them private as you would `nomad.env`.
+
+Profile-owned settings are identity/compute placement, service autostarts, runtime
+MAVLink and video endpoints, simulation/qualification inhibition, fences and
+velocity limits. Deployment-local settings include both credentials, protected
+credential/audit paths, CLI identity, runtime IPC port, host/data/log/run paths,
+GCS/Tailscale addresses and ports, UART devices and retained service settings.
+The reviewed key sets are in `scripts/profile_settings.py`; unknown and retired
+keys are discarded, rather than carried into a new deployment. Existing local
+assignments are retained verbatim. Missing local keys use the example defaults;
+an absent active env is created from those defaults and the selected profile.
+Blank required credential/audit paths still require provisioning before startup.
+Saving a profile writes only its owned keys, never local deployment settings.
+Profile diff compares only those owned assignments and omits credentials and
+deployment-local configuration from its output.
+
+`NOMAD_AUTOSTART_MAVLINK_ROUTER` enables the optional aircraft-side
+`mavlink-routerd`: the onboard profile enables it; both ground-station profiles
+disable it. The Windows standalone ground router owns its own `Links` and
+`Consumers` JSON configuration, independent of that service flag. Set `GCS_IP`
+in ignored `config/nomad.env` to direct aircraft-side telemetry to the ground
+station's Tailscale address; profile loading retains that local wiring.
 
 For example, an env-only load reports `[APPLIED] env`, `[SKIPPED] mission_planner`,
 then `[OK] Profile load completed` and exits 0. Invalid MP JSON reports
@@ -470,10 +491,72 @@ Mission Planner reports vehicle mutations using the
 [runtime outcome contract](runtime-ipc.md#vehicle-mutation-outcomes).
 Rejected means no eligible vehicle send; failed means a definite unsuccessful
 attempt; interrupted and unknown mean the final vehicle effect is uncertain.
-Do not retry an uncertain release or retract automatically. Observe the payload
-and follow the reviewed procedure before deciding on another action. Payload
-indicators record commanded state only; successful release/retract commands do
-not verify physical release or retraction.
+Do not retry an uncertain actuator mutation automatically. Read backend state,
+inspect the mechanism and use the configured safe action. Backend commanded state
+records software evidence only; a successful safe command is not physical proof.
+
+## Generic actuator configuration and frontend migration
+
+`nomad-runtime` owns output mapping, values, confirmations, timing and recovery.
+Mission Planner discovers names, labels, available actions and state with
+authenticated `get_actuators`; it sends `actuator_action` with a stable ID and
+operation. Position is normalized from 0 to 1; only the backend converts it to PWM.
+UI confirmations are discrete requests. USB HID uses the actual selected device,
+configured button indices, real neutral observations and backend-provided release
+metadata. There is no Python serial/virtual-gamepad helper. Input loss cancels
+unsent stale observations and sends a semantic safe intent once; uncertain begun
+mutations are never retried. Continuous HID position input is available only when
+runtime discovery advertises `continuous_axis_allowed`; unsupported bindings are
+disabled with the backend reason. Hazardous or confirmation-required positions use
+discrete UI confirmations, and the runtime independently rejects their HID position requests.
+Active semantic bindings must use unique physical HID button indices. The termination
+monitor button is configurable (default index 6) and must be disjoint from active
+actuator mappings when enabled; it still reports termination as unavailable.
+
+| Behavior | Configured actions |
+|---|---|
+| ServoToggle | Two PWM endpoints with operator-defined labels and an explicit safe endpoint |
+| ServoPosition | Bounded normalized position and a configured safe PWM |
+| ServoBidirectional | Negative/positive values, neutral safe value and short bounded runs |
+| RelayToggle | Configured ON/OFF labels |
+| RelayPulse | ON, configured wait, explicit OFF; any unsuccessful OFF requires recovery |
+
+Provision an absolute protected `NOMAD_ACTUATORS_FILE` outside the installation
+tree. A blank path configures no outputs. Begin with
+[`actuators.example.json`](../config/actuators.example.json), review every physical
+channel, value, label and hazard classification, and protect the file with the same
+ownership/permissions as runtime credentials. Validate without any vehicle connection:
+
+```sh
+nomad-runtime --validate-actuators <absolute-protected-actuators.json>
+```
+
+Actuator configuration uses `configure_actuators` under ordinary admitted authority
+and requires fresh disarmed state, no active/pending/recovery output, and a configured
+file path. Startup, replacement and authority/session changes require explicit safe
+commands. Ambiguous persistence, post-save arming/authority changes, or failed outcome
+auditing inhibit activation until restart and operator review. The API reports that
+the configuration changed or may have changed; it never fabricates vehicle-send evidence.
+
+Old nonempty Mission Planner `Payloads`/`Actuators` settings fail visibly and leave
+the original file unchanged. Export a supported legacy configuration to two new files:
+
+```sh
+python scripts/migrate_actuators.py <old-mp.json> <new-backend.json> <new-private-mp.json> --runtime <nomad-runtime>
+```
+
+The converter preserves exact channels, endpoints, reversal, pulse values, names and
+stable list-index IDs, and maps old switch actions to semantic IDs. It preserves the
+old direct-HID button indices (0–5); select the actual USB HID device explicitly.
+It preserves legacy termination monitoring on button index 6 and rejects an
+incompatible supplied index before exporting either file.
+Backend exports contain no frontend credentials. The private frontend output preserves
+independently provisioned credentials; it is not a portable profile template. The
+native backend validates the candidate before either export. Unsupported RC pass-through,
+disabled/ambiguous outputs, missing mapped targets, enabled virtual bridging, enabled
+relative-rate axes, conflicting legacy relay UI-toggle/HID-pulse actions, and waits
+beyond the reviewed 1500 ms limit require explicit review.
+No value is silently clamped or remapped. Review both exports before provisioning them.
 
 ## Managed runtime configuration
 

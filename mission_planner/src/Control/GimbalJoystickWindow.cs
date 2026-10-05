@@ -6,7 +6,7 @@
 // Rate-controlled 2D joystick requests pitch/roll targets through the NOMAD
 // runtime. Mode buttons also use runtime IPC.
 //
-// This is independent from the camera tilt servo (PayloadControlPanel), which is
+// This is independent from the camera tilt servo (ActuatorControlPanel), which is
 // just a SERVOx output. Angle integration lives in GimbalCommand and the shared
 // target/request state lives in GimbalController, so this window is pure UI.
 //

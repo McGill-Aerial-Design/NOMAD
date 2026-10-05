@@ -77,14 +77,18 @@ void test_authenticated_authority_events() {
     nomad::runtime::Runtime runtime(std::move(connection), config);
     start_ready(runtime, config.ipc_port);
     admit_authority(config.ipc_port);
-    Client client(config.ipc_port);
-    for (const auto *type : {"revoke_authority", "handback_authority"}) {
-        auto forged = authority_request(type, type);
-        forged.erase("credential");
-        CHECK(client.request(forged)["error"]["code"] == "authentication_failed");
+    {
+        Client client(config.ipc_port);
+        for (const auto *type : {"revoke_authority", "handback_authority"}) {
+            auto forged = authority_request(type, type);
+            forged.erase("credential");
+            CHECK(client.request(forged)["error"]["code"] == "authentication_failed");
+        }
     }
     test_revoke_and_handback(config.ipc_port, *observed);
     test_revoke_during_operation(config.ipc_port, *observed);
+    // Independent client phases can outlast the IPC idle deadline; start a new observation connection.
+    Client client(config.ipc_port);
     read_authority(client);
     const auto restored = client.request(authority_request("before-session-loss", "handback_authority"));
     CHECK(restored["ok"] == true);

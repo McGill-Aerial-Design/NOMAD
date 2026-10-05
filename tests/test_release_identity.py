@@ -94,6 +94,27 @@ def test_deployment_tools_load_target_without_source_checkout(tmp_path):
     assert result.stdout.strip() == MP_VERSION
 
 
+def test_changed_reviewed_target_reaches_generated_plugin_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr(identity, "MP_VERSION", "2.3.4")
+    component = identity.component_identity(release_identity(), "plugin", "windows", "any")
+    generated = tmp_path / "ReleaseIdentity.cs"
+    identity.write_csharp(generated, component)
+    assert 'MissionPlannerTarget = "2.3.4"' in generated.read_text(encoding="utf-8")
+    startup = (identity.ROOT / "mission_planner/src/Plugin/NOMADPlugin.Startup.cs").read_text(encoding="utf-8")
+    assert "MissionPlannerVersion.GetWarning(mpVersion, NomadRelease.MissionPlannerTarget)" in startup
+    assert "FileVersionInfo.GetVersionInfo(executable).FileVersion" in startup
+    assert "System.Version.TryParse(fileVersion, out var mpVersion)" in startup
+    assert "GetName()?.Version" not in startup
+    assert "1.3.80" not in startup
+
+
+def test_nonplugin_generated_metadata_does_not_claim_reviewed_plugin_target(tmp_path):
+    component = identity.component_identity(release_identity(), "router", "windows", "x86_64")
+    generated = tmp_path / "ReleaseIdentity.cs"
+    identity.write_csharp(generated, component)
+    assert 'MissionPlannerTarget = ""' in generated.read_text(encoding="utf-8")
+
+
 def test_missing_component_cannot_be_published(tmp_path, monkeypatch):
     monkeypatch.setattr(identity, "get_identity", lambda tag="": release_identity())
     create_package(tmp_path, "plugin", "windows", "any")

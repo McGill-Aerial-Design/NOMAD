@@ -6,6 +6,16 @@ ArduPilot remains responsible for stabilization, EKF, navigation execution and
 its own failsafes. The [qualification status](qualification.md) separates tested
 software and SITL behavior from aircraft-wide guarantees.
 
+Frontends own presentation and input translation only. All behavior required to
+safely and correctly execute a NOMAD operation lives behind the runtime API, so
+another frontend can provide equivalent control without reimplementing aircraft,
+actuator, safety, recovery, authority, or command-sequencing logic.
+
+Mission Planner reads ordinary USB HID joystick and keyboard input directly. It
+discovers configured actuator names, labels, actions and software state through
+authenticated runtime IPC and sends semantic operations. Channel/PWM mapping,
+confirmation policy, pulse sequencing and safe recovery belong to the runtime.
+
 ## Current command and observation paths
 
 ```mermaid
@@ -184,8 +194,8 @@ under the exclusive lifetime lock.
 
 | Component | Owns | Does not own |
 |---|---|---|
-| C++ core (`include/nomad/`, `src/`) | Reusable vehicle state, command validation, aircraft-class and operation policy, safety checks, payload interlocks and verified outcomes | UI rendering, ROS types, packet packing outside the MAVLink implementation |
-| Runtime (`tools/runtime/`, `src/runtime/`) | Long-lived `Vehicle`/MAVSDK composition, local IPC, request admission, authority lifecycle and client outcomes | Pilot/native-GCS arbitration, remote authentication, persistent mission execution |
+| C++ core (`include/nomad/`, `src/`) | Reusable vehicle state, command validation, aircraft-class and operation policy, safety checks and observed software outcomes | UI rendering, ROS types, packet packing outside the MAVLink implementation |
+| Runtime (`tools/runtime/`, `src/runtime/`) | Long-lived `Vehicle`/MAVSDK composition, local IPC, request admission, authority lifecycle, generic actuator behavior/authorization/recovery and client outcomes | Pilot/native-GCS arbitration, remote authentication, persistent mission execution |
 | MAVSDK boundary and pinned fork (`src/mavlink/`, `third_party/MAVSDK/`) | One production MAVLink transport, MAVSDK calls and reviewed ArduPilot command semantics | Mission choices, NOMAD policy or proof of physical outcomes |
 | Mission Planner (`mission_planner/src/`) | Operator UI, status, configuration, router management and supported typed runtime requests | Parallel policy or a fallback vehicle-command path for those requests |
 | ROS (`ros2/nomad_ros/`) | Validated receive-only GPS and battery observations | Vehicle commands, VIO submission, mission decisions or actuation |

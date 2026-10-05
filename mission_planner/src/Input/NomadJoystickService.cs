@@ -3,7 +3,7 @@
 // ============================================================
 // NOMAD Joystick Service
 // ============================================================
-// Drives the camera gimbal and camera tilt servo from up to two
+// Drives the camera gimbal and configured position input from up to two
 // physical DirectInput joysticks. Reuses Mission Planner's
 // MissionPlanner.Joystick.JoystickBase device wrapper so we don't
 // duplicate device enumeration / state polling, but DELIBERATELY
@@ -11,13 +11,8 @@
 // override loop that fights the autopilot for control. We only
 // acquire the device and poll GetCurrentState() ourselves.
 //
-// Routing:
-//   * Gimbal: stick (X,Y) → integrated pitch/roll target via
-//     GimbalController.ApplyStick → typed NOMAD runtime angle-target request.
-//   * Camera tilt: stick axis → integrated PWM target via
-//     OutputController.SendServoPwmAsync (core-mediated; drag streams go
-//     through the same boundary).
-// ============================================================
+// The gimbal receives input targets; configured actuator axes/buttons send semantic
+// IDs and normalized values to nomad-runtime. This client owns no actuator policy.
 
 using System;
 using System.Collections.Generic;
@@ -33,7 +28,7 @@ namespace NOMAD.MissionPlanner
 {
     /// <summary>
     /// Polls one or two DirectInput devices at 20 Hz and routes their stick
-    /// values to the gimbal target integrator and the camera tilt servo.
+    /// values to the gimbal target integrator and the configured position input.
     /// </summary>
     public sealed partial class NomadJoystickService : IDisposable
     {
@@ -47,20 +42,20 @@ namespace NOMAD.MissionPlanner
         // AcquireJoystick call internally locks an opened device handle.
         // We dedupe at acquire-time by sharing one base when device names match.
         private JoystickBase _gimbalJoy;
-        private JoystickBase _cameraTiltJoy;
-        // Dedicated button-source device. May alias _gimbalJoy / _cameraTiltJoy when
+        private JoystickBase _positionJoy;
+        // Dedicated button-source device. May alias _gimbalJoy / _positionJoy when
         // the configured switch device matches one of the axis devices, so we
         // only Acquire() once per physical handle.
         private JoystickBase _switchJoy;
-        private bool _switchJoyOwned; // true if we created it (vs. aliased gimbal/camera-tilt)
+        private bool _switchJoyOwned; // true if we created it (vs. aliased gimbal/position)
 
         // Cached property accessors on IMyJoystickState (X, Y, …) so we read
         // by axis-name string from config without per-tick reflection cost.
         private static readonly Dictionary<string, PropertyInfo> AxisProps = BuildAxisMap();
 
-        // Current camera tilt PWM target (μs). Initialised from PayloadControlPanel
-        // so a session that has already moved the slider doesn't snap on start.
-        private float _cameraTiltUs;
+        // Position input comes directly from a configured USB HID axis.
+
+
 
         public NomadJoystickService(NOMADConfig config)
         {
@@ -74,19 +69,16 @@ namespace NOMAD.MissionPlanner
         public void Start()
         {
             Stop(); // idempotent
+            _ = OutputController.GetActuatorsAsync();
 
-            try { AcquireDevices(); }
+            try
+            {
+                AcquireDevices();
+            }
             catch (Exception ex)
             {
                 Log.Debug($"device acquire failed — {ex.Message}");
             }
-
-            // Seed tilt integrator from the live shared value so the first stick
-            // motion is relative to where the slider/servo already is.
-            var tilt = _config.CameraTilt();
-            int tiltMin = tilt?.PwmMin ?? 700;
-            int tiltMax = tilt?.PwmMax ?? 1450;
-            _cameraTiltUs = Math.Max(tiltMin, Math.Min(tiltMax, PayloadControlPanel.LastTiltPulseUs));
 
             // The mount only honors absolute-angle requests in MAVLink targeting
             // mode. Without this ping the mount may
@@ -108,22 +100,33 @@ namespace NOMAD.MissionPlanner
             _timer.Start();
 
             Log.Debug($"started (gimbal={_config.JoystickGimbalEnabled} dev='{_config.JoystickGimbalDevice}', " +
-                              $"camera_tilt={_config.JoystickCameraTiltEnabled} dev='{_config.JoystickCameraTiltDevice}')");
+                              $"position={_config.JoystickPositionEnabled} dev='{_config.JoystickPositionDevice}')");
         }
 
         public void Stop()
         {
-            try { _timer?.Stop(); _timer?.Dispose(); } catch { }
+            ResetActuatorInput();
+            if (_lastPositionInput.HasValue && !string.IsNullOrEmpty(_config.JoystickPositionActuatorId))
+            { SendHid(_config.JoystickPositionActuatorId, "safe", 6); }
+            _lastPositionInput = null;
+            try
+            {
+                _timer?.Stop(); _timer?.Dispose();
+            }
+            catch
+            {
+
+            }
             _timer = null;
 
             // Release the dedicated switch device first if we own it; otherwise
-            // just drop the alias so ReleaseJoy on gimbal/camera-tilt below frees it.
+            // just drop the alias so ReleaseJoy on gimbal/position below frees it.
             if (_switchJoyOwned) ReleaseJoy(ref _switchJoy);
             else _switchJoy = null;
             _switchJoyOwned = false;
 
             ReleaseJoy(ref _gimbalJoy);
-            ReleaseJoy(ref _cameraTiltJoy);
+            ReleaseJoy(ref _positionJoy);
         }
 
         public void RestartWithConfig()
@@ -135,30 +138,34 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// True when the service has something to do — either an axis channel
         /// is enabled, or at least one switch slot is mapped to a real action
-        /// (so payload switches keep working even with no gimbal/camera-tilt routing).
+        /// (so configured buttons keep working even with no gimbal/position routing).
         /// </summary>
         public bool NeedsToRun()
         {
-            if (_config.JoystickGimbalEnabled || _config.JoystickCameraTiltEnabled) return true;
+            if (_config.JoystickGimbalEnabled || _config.JoystickPositionEnabled) return true;
             if (_config.JoystickKillSwitchEnabled) return true;
             return AnySwitchMapped();
         }
 
         private bool AnySwitchMapped()
         {
-            return GetSlotAction(0) != SwitchAction.None
-                || GetSlotAction(1) != SwitchAction.None
-                || GetSlotAction(2) != SwitchAction.None
-                || GetSlotAction(3) != SwitchAction.None
-                || GetSlotAction(4) != SwitchAction.None
-                || GetSlotAction(5) != SwitchAction.None;
+            return GetSlotAction(0) != "None"
+                || GetSlotAction(1) != "None"
+                || GetSlotAction(2) != "None"
+                || GetSlotAction(3) != "None"
+                || GetSlotAction(4) != "None"
+                || GetSlotAction(5) != "None";
         }
 
         public void UpdateConfig(NOMADConfig config)
         {
             if (config == null) return;
+            Stop();
             _config = config;
-            RestartWithConfig();
+            if (NeedsToRun())
+            {
+                Start();
+            }
         }
 
         public void Dispose() => Stop();
@@ -169,7 +176,10 @@ namespace NOMAD.MissionPlanner
 
         public static IList<string> EnumerateDevices()
         {
-            try { return JoystickBase.getDevices(); }
+            try
+            {
+                return JoystickBase.getDevices();
+            }
             catch (Exception ex)
             {
                 Log.Error($"enumerate failed — {ex.Message}");
@@ -182,23 +192,20 @@ namespace NOMAD.MissionPlanner
             "X", "Y", "Z", "Rx", "Ry", "Rz", "Slider1", "Slider2"
         };
 
-        /// <summary>
-        /// Resolve a configured device name to one actually present on the system.
-        /// When auto-select is on and the configured value is blank or unmatched,
-        /// returns the first available device so a freshly hot-plugged controller
-        /// (typically the vgamepad spawned by joystick.py) gets picked up
-        /// automatically.
-        /// </summary>
-        private string ResolveDeviceName(string configured, IList<string> available)
+        // Only re-acquire the explicitly selected USB HID device.
+        internal static string ResolveDeviceName(string configured, IList<string> available)
         {
-            if (!string.IsNullOrWhiteSpace(configured))
+            if (string.IsNullOrWhiteSpace(configured) || available == null)
             {
-                foreach (var d in available)
-                    if (string.Equals(d, configured, StringComparison.OrdinalIgnoreCase))
-                        return d;
+                return null;
             }
-            if (_config.JoystickAutoSelectDevice && available != null && available.Count > 0)
-                return available[0];
+            foreach (var name in available)
+            {
+                if (string.Equals(name, configured, StringComparison.OrdinalIgnoreCase))
+                {
+                    return name;
+                }
+            }
             return null;
         }
 
@@ -217,44 +224,37 @@ namespace NOMAD.MissionPlanner
                 if (dev != null) _gimbalJoy = CreateAndAcquire(dev);
             }
 
-            if (_config.JoystickCameraTiltEnabled && _cameraTiltJoy == null)
+            if (_config.JoystickPositionEnabled && _positionJoy == null)
             {
-                var dev = ResolveDeviceName(_config.JoystickCameraTiltDevice, available);
+                var dev = ResolveDeviceName(_config.JoystickPositionDevice, available);
                 if (dev != null)
                 {
                     if (_gimbalJoy != null && string.Equals(dev, _config.JoystickGimbalDevice, StringComparison.OrdinalIgnoreCase))
-                        _cameraTiltJoy = _gimbalJoy;
+                        _positionJoy = _gimbalJoy;
                     else
-                        _cameraTiltJoy = CreateAndAcquire(dev);
+                        _positionJoy = CreateAndAcquire(dev);
                 }
             }
 
-            // Resolve the button-source device. Explicit config wins; otherwise
-            // fall back to whichever axis device is already acquired so users
-            // with a single virtual gamepad don't need to configure twice.
-            if (_switchJoy != null) return;
-
+            // A missing selected switch device stays unavailable; never substitute another input source.
+            if (_switchJoy != null)
+            {
+                return;
+            }
             string switchDev = ResolveDeviceName(_config.JoystickSwitchDevice, available);
             if (switchDev == null)
             {
-                _switchJoy = _gimbalJoy ?? _cameraTiltJoy;
-                _switchJoyOwned = false;
+                return;
             }
-            else if (_gimbalJoy != null && string.Equals(switchDev, _config.JoystickGimbalDevice, StringComparison.OrdinalIgnoreCase))
+            if (_gimbalJoy != null && string.Equals(switchDev, _config.JoystickGimbalDevice, StringComparison.OrdinalIgnoreCase))
             {
                 _switchJoy = _gimbalJoy;
                 _switchJoyOwned = false;
             }
-            else if (_cameraTiltJoy != null && string.Equals(switchDev, _config.JoystickCameraTiltDevice, StringComparison.OrdinalIgnoreCase))
+            else if (_positionJoy != null && string.Equals(switchDev, _config.JoystickPositionDevice, StringComparison.OrdinalIgnoreCase))
             {
-                _switchJoy = _cameraTiltJoy;
+                _switchJoy = _positionJoy;
                 _switchJoyOwned = false;
-            }
-            else if (_gimbalJoy == null && _cameraTiltJoy == null && _config.JoystickAutoSelectDevice)
-            {
-                // Auto-select with no axis devices acquired — open switchDev directly.
-                _switchJoy = CreateAndAcquire(switchDev);
-                _switchJoyOwned = _switchJoy != null;
             }
             else
             {
@@ -283,7 +283,14 @@ namespace NOMAD.MissionPlanner
             catch (Exception ex)
             {
                 Log.Error($"acquire '{deviceName}' failed — {ex.Message}");
-                try { jb.Dispose(); } catch { }
+                try
+                {
+                    jb.Dispose();
+                }
+                catch
+                {
+
+                }
                 return null;
             }
             return jb;
@@ -292,8 +299,22 @@ namespace NOMAD.MissionPlanner
         private static void ReleaseJoy(ref JoystickBase joy)
         {
             if (joy == null) return;
-            try { joy.UnAcquireJoyStick(); } catch { }
-            try { joy.Dispose(); } catch { }
+            try
+            {
+                joy.UnAcquireJoyStick();
+            }
+            catch
+            {
+
+            }
+            try
+            {
+                joy.Dispose();
+            }
+            catch
+            {
+
+            }
             joy = null;
         }
 
@@ -314,38 +335,62 @@ namespace NOMAD.MissionPlanner
 
             // Hot-plug recovery: if we're missing a device we expect, retry
             // device enumeration every few seconds so a controller (or the
-            // joystick.py-spawned vgamepad) gets picked up without restarting
+            // selected USB HID device) gets picked up without restarting
             // the plugin. Skip when nothing needs a device.
             bool needSwitches = AnySwitchMapped() || _config.JoystickKillSwitchEnabled;
             bool missingAxis = (_config.JoystickGimbalEnabled && _gimbalJoy == null)
-                            || (_config.JoystickCameraTiltEnabled    && _cameraTiltJoy    == null);
+                            || (_config.JoystickPositionEnabled    && _positionJoy    == null);
             bool missingSwitch = needSwitches && _switchJoy == null;
             if ((missingAxis || missingSwitch) && (now - _lastReacquireAttempt).TotalSeconds >= REACQUIRE_INTERVAL_SEC)
             {
                 _lastReacquireAttempt = now;
-                try { AcquireDevices(); }
+                try
+                {
+                    AcquireDevices();
+                }
                 catch (Exception ex) { Log.Debug($"re-acquire failed — {ex.Message}"); }
             }
 
-            try { DriveGimbal(dt); }
+            try
+            {
+                DriveGimbal(dt);
+            }
             catch (Exception ex) { Log.Error($"gimbal: {ex.Message}"); }
 
-            try { DriveCameraTilt(dt); }
-            catch (Exception ex) { Log.Error($"camera tilt: {ex.Message}"); }
+            try
+            {
+                DrivePositionInput(dt);
+            }
+            catch (Exception ex) { Log.Error($"position input: {ex.Message}"); }
 
-            // Payload switch buttons emitted by joystick.py — read from whichever
-            // device is acquired (gimbal preferred, then camera tilt). Runs every tick so
+            // Configured USB HID button inputs — read from whichever
+            // device is acquired (explicitly selected device only). Runs every tick so
             // edge detection doesn't depend on stick motion or DriveGimbal early-returning.
             try
             {
-                var btnDev = _switchJoy ?? _gimbalJoy ?? _cameraTiltJoy;
+                var btnDev = _switchJoy;
                 if (btnDev != null)
                 {
                     var st = SafeGetState(btnDev);
-                    if (st != null) DrivePayloadButtons(st);
+                    if (st != null)
+                    {
+                        _ = DriveActuatorButtons(st);
+                    }
+                    else
+                    {
+                        ResetActuatorInput();
+                    }
+                }
+                else
+                {
+                    ResetActuatorInput();
                 }
             }
-            catch (Exception ex) { Log.Error($"buttons: {ex.Message}"); }
+            catch (Exception ex)
+            {
+                ResetActuatorInput();
+                Log.Error($"buttons: {ex.Message}");
+            }
         }
 
         private void DriveGimbal(float dt)
@@ -364,96 +409,33 @@ namespace NOMAD.MissionPlanner
             GimbalController.ApplyStick(roll, pitch, dt, send: true);
         }
 
-        private void DriveCameraTilt(float dt)
+        private void DrivePositionInput(float dt)
         {
-            if (_cameraTiltJoy == null || !_config.JoystickCameraTiltEnabled) return;
-            var st = SafeGetState(_cameraTiltJoy);
-            if (st == null) return;
-
-            float v = ReadAxisNorm(st, _config.JoystickCameraTiltAxis, _config.JoystickCameraTiltInvert, _config.JoystickCameraTiltDeadzone);
-            if (v == 0f) return;
-
-            var tilt = _config.CameraTilt();
-            if (tilt == null || tilt.Channel <= 0) return;
-
-            int pwmMin = tilt.PwmMin;
-            int pwmMax = tilt.PwmMax;
-            float target = _cameraTiltUs + v * _config.JoystickCameraTiltMaxRateUsPerSec * dt;
-            if (target < pwmMin) target = pwmMin;
-            if (target > pwmMax) target = pwmMax;
-
-            // Skip the send entirely if the integrated change is sub-microsecond — DO_SET_SERVO is a 16-bit value.
-            int newUs = (int)Math.Round(target);
-            int oldUs = (int)Math.Round(_cameraTiltUs);
-            _cameraTiltUs = target;
-            if (newUs == oldUs) return;
-
-            int channel = tilt.Channel;
-
-            _ = OutputController.SendServoPwmAsync(channel, newUs);
-            PayloadControlPanel.SetExternalTiltPulse(newUs);
+            if (!_config.JoystickPositionEnabled)
+            {
+                return;
+            }
+            var state = _positionJoy == null ? null : SafeGetState(_positionJoy);
+            bool valid = TryReadAxisNorm(state, _config.JoystickPositionAxis,
+                _config.JoystickPositionInvert, _config.JoystickPositionDeadzone, out var value);
+            TranslatePositionInput(valid, value);
         }
 
         private static IMyJoystickState SafeGetState(JoystickBase joy)
         {
-            try { return joy.GetCurrentState(); }
-            catch { return null; }
+            try
+            {
+                return joy.GetCurrentState();
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         // ============================================================
         // Axis decoding
         // ============================================================
 
-        private static Dictionary<string, PropertyInfo> BuildAxisMap()
-        {
-            var dict = new Dictionary<string, PropertyInfo>(StringComparer.OrdinalIgnoreCase);
-            var t = typeof(IMyJoystickState);
-            foreach (var name in new[] { "X", "Y", "Z", "Rx", "Ry", "Rz" })
-            {
-                var p = t.GetProperty(name);
-                if (p != null) dict[name] = p;
-            }
-            return dict;
-        }
-
-        /// <summary>
-        /// Read an axis by config name and return it normalized to [-1, 1].
-        /// DirectInput axes report [0, 65535] with 32767/8 as centre; sliders are
-        /// the same range and read through GetSlider(). Returns 0 inside the deadzone.
-        /// </summary>
-        private static float ReadAxisNorm(IMyJoystickState st, string axisName, bool invert, float deadzone)
-        {
-            if (string.IsNullOrWhiteSpace(axisName) || st == null) return 0f;
-
-            int raw;
-            if (axisName.Equals("Slider1", StringComparison.OrdinalIgnoreCase))
-            {
-                var s = st.GetSlider(); if (s == null || s.Length < 1) return 0f; raw = s[0];
-            }
-            else if (axisName.Equals("Slider2", StringComparison.OrdinalIgnoreCase))
-            {
-                var s = st.GetSlider(); if (s == null || s.Length < 2) return 0f; raw = s[1];
-            }
-            else if (AxisProps.TryGetValue(axisName, out var prop))
-            {
-                raw = (int)prop.GetValue(st, null);
-            }
-            else
-            {
-                return 0f;
-            }
-
-            // 0..65535 → -1..1 with centre at 32767.5
-            float norm = (raw - 32767.5f) / 32767.5f;
-            if (norm > 1f) norm = 1f; else if (norm < -1f) norm = -1f;
-            if (Math.Abs(norm) < deadzone) return 0f;
-
-            // Re-scale post-deadzone so the working range covers the full [-1,1].
-            float sign = norm < 0 ? -1f : 1f;
-            float scaled = (Math.Abs(norm) - deadzone) / (1f - deadzone);
-            return invert ? -sign * scaled : sign * scaled;
-        }
-
-        // Payload switch-button handling lives in NomadJoystickService.Switches.cs.
     }
 }

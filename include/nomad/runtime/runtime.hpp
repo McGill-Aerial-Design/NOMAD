@@ -2,6 +2,7 @@
 #pragma once
 
 #include "nomad/mavlink/connection.hpp"
+#include "nomad/runtime/actuator.hpp"
 #include "nomad/safety/geofence.hpp"
 #include "nomad/safety/velocity.hpp"
 
@@ -11,6 +12,7 @@
 #include <map>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace nomad::runtime {
 
@@ -24,6 +26,10 @@ struct RuntimeConfig {
     bool actuation_enabled{false};
     std::map<std::string, std::string> client_credentials;
     std::string audit_directory;
+    std::string actuator_config_file;
+    std::vector<ActuatorDefinition> actuators;
+    // A test may reject directory synchronization, never bypass its native barrier.
+    std::function<bool()> actuator_directory_sync_guard;
     // Optional test fault injector: may reject an append, never bypass its native durability barrier.
     std::function<bool(const std::string &)> audit_write_guard;
 };

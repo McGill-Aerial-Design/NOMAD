@@ -1619,7 +1619,6 @@ packages:
   requires_dist:
   - numpy>=1.26
   - pyserial>=3.5 ; extra == 'hardware'
-  - vgamepad>=0.1 ; sys_platform == 'win32' and extra == 'hardware'
   - pymavlink>=2.4 ; extra == 'dev'
   - psutil>=5.9 ; extra == 'dev'
   - ruff==0.15.16 ; extra == 'dev'

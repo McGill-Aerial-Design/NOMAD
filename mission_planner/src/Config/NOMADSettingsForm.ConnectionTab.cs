@@ -15,7 +15,7 @@ namespace NOMAD.MissionPlanner
             var tab = CreateTabPage("Core");
             int y = 15;
 
-            AddSectionLabel(tab, "C++ Core Command Boundary", ref y);
+            AddSectionLabel(tab, "Authenticated Runtime Command Boundary", ref y);
 
             AddLabel(tab, "Runtime IPC port:", 20, y);
             _numCoreRuntimePort = AddNumericUpDown(tab, 170, y, 90, 1, 65535, 14611);
@@ -93,7 +93,7 @@ namespace NOMAD.MissionPlanner
             int y = 15;
 
             AddSectionLabel(tab, "Standalone ground router", ref y);
-            _chkDualLinkEnabled = AddCheckBox(tab, "Connect to router status and controls", 20, y, Color.LimeGreen);
+            _chkRouterClientEnabled = AddCheckBox(tab, "Connect to router status and controls", 20, y, Color.LimeGreen);
             y += 40;
 
             AddLabel(tab, "Mission Planner UDP port:", 20, y);

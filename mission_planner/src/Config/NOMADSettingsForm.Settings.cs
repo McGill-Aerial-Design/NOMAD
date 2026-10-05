@@ -22,7 +22,7 @@ namespace NOMAD.MissionPlanner
             _chkVideoAutoStart.Checked = Config.VideoAutoStart;
             _chkAutoStartHudVideo.Checked = Config.AutoStartHudVideo;
 
-            _chkDualLinkEnabled.Checked = Config.DualLinkEnabled;
+            _chkRouterClientEnabled.Checked = Config.DualLinkEnabled;
             _numRouterLocalPort.Value = ClampValue(_numRouterLocalPort, Config.RouterLocalPort);
             _numManagementPort.Value = ClampValue(_numManagementPort, Config.ManagementPort);
 
@@ -51,25 +51,7 @@ namespace NOMAD.MissionPlanner
             _numLogLiveBufferPoints.Value = ClampValue(_numLogLiveBufferPoints, Config.LogLiveBufferPoints);
             _chkLogInjectHud.Checked = Config.LogInjectAlertsToHud;
 
-            LoadPayloads();
-            _numSprayRange.Value = (decimal)Config.SprayTargetCameraRangeM;
-            _numSprayRangeTol.Value = (decimal)Config.SprayRangeToleranceM;
-            _numSprayTriggerMax.Value = (decimal)Config.SprayTriggerMaxDistanceM;
-            _numSprayAimX.Value = Config.SprayAimPixelX;
-            _numSprayAimY.Value = Config.SprayAimPixelY;
-            _numSprayAimTol.Value = Config.SprayAimTolerancePx;
-            _numSprayServoAngle.Value = (decimal)Config.SprayServoFireAngleDeg;
-            _numSprayForwardGain.Value = (decimal)Config.SprayForwardGain;
-            _numSprayLateralGain.Value = (decimal)Config.SprayLateralGain;
-            _numSprayAltitudeGain.Value = (decimal)Config.SprayAltitudeGain;
-            _numSprayYawGain.Value = (decimal)Config.SprayYawGain;
-            _chkSprayUseYaw.Checked = Config.SprayUseYawAlignment;
-            _numSprayMaxForward.Value = (decimal)Config.SprayMaxForwardSpeedMps;
-            _numSprayMaxLateral.Value = (decimal)Config.SprayMaxLateralSpeedMps;
-            _numSprayMaxAltitude.Value = (decimal)Config.SprayMaxAltitudeSpeedMps;
-            _numSprayMaxYaw.Value = (decimal)Config.SprayMaxYawRateRadps;
-            _numSprayLockMs.Value = Config.SprayLockHoldMs;
-            _numSprayTimeout.Value = (decimal)Config.SprayAlignTimeoutS;
+
 
             LoadJoystickSettings();
         }
@@ -77,7 +59,7 @@ namespace NOMAD.MissionPlanner
         private void LoadJoystickSettings()
         {
             _chkJoyGimbalEnabled.Checked = Config.JoystickGimbalEnabled;
-            SetComboBoxValue(
+            SetDeviceComboValue(
                 _cmbJoyGimbalDevice,
                 string.IsNullOrEmpty(Config.JoystickGimbalDevice) ? "(none)" : Config.JoystickGimbalDevice);
             SetComboBoxValue(_cmbJoyGimbalPitchAxis, Config.JoystickGimbalPitchAxis);
@@ -87,32 +69,27 @@ namespace NOMAD.MissionPlanner
             _numJoyGimbalDeadzone.Value = ClampValue(_numJoyGimbalDeadzone, Config.JoystickGimbalDeadzone);
             _numJoyGimbalMaxRate.Value = ClampValue(_numJoyGimbalMaxRate, Config.JoystickGimbalMaxRateDegSec);
 
-            _chkJoyCameraTiltEnabled.Checked = Config.JoystickCameraTiltEnabled;
-            SetComboBoxValue(
-                _cmbJoyCameraTiltDevice,
-                string.IsNullOrEmpty(Config.JoystickCameraTiltDevice) ? "(none)" : Config.JoystickCameraTiltDevice);
-            SetComboBoxValue(_cmbJoyCameraTiltAxis, Config.JoystickCameraTiltAxis);
-            _chkJoyCameraTiltInvert.Checked = Config.JoystickCameraTiltInvert;
-            _numJoyCameraTiltDeadzone.Value = ClampValue(_numJoyCameraTiltDeadzone, Config.JoystickCameraTiltDeadzone);
-            _numJoyCameraTiltMaxRate.Value =
-                ClampValue(_numJoyCameraTiltMaxRate, Config.JoystickCameraTiltMaxRateUsPerSec);
-
-            SetComboBoxValue(
-                _cmbSwitchDevice,
-                string.IsNullOrEmpty(Config.JoystickSwitchDevice) ? "(none)" : Config.JoystickSwitchDevice);
-            SetComboBoxValue(_cmbSw1Up, LabelForActionId(Config.JoystickSw1UpAction));
-            SetComboBoxValue(_cmbSw1Down, LabelForActionId(Config.JoystickSw1DownAction));
-            SetComboBoxValue(_cmbSw2Up, LabelForActionId(Config.JoystickSw2UpAction));
-            SetComboBoxValue(_cmbSw2Down, LabelForActionId(Config.JoystickSw2DownAction));
-            SetComboBoxValue(_cmbSw3Up, LabelForActionId(Config.JoystickSw3UpAction));
-            SetComboBoxValue(_cmbSw3Down, LabelForActionId(Config.JoystickSw3DownAction));
-            _chkJoyAutoSelect.Checked = Config.JoystickAutoSelectDevice;
+            _chkJoyPositionEnabled.Checked = Config.JoystickPositionEnabled;
+            SetDeviceComboValue(
+                _cmbJoyPositionDevice,
+                string.IsNullOrEmpty(Config.JoystickPositionDevice) ? "(none)" : Config.JoystickPositionDevice);
+            SetComboBoxValue(_cmbJoyPositionAxis, Config.JoystickPositionAxis);
+            _chkJoyPositionInvert.Checked = Config.JoystickPositionInvert;
+            _numJoyPositionDeadzone.Value = ClampValue(_numJoyPositionDeadzone, Config.JoystickPositionDeadzone);
+            _txtJoyPositionActuatorId.Text = Config.JoystickPositionActuatorId;
+            SetDeviceComboValue(_cmbSwitchDevice, string.IsNullOrEmpty(Config.JoystickSwitchDevice) ? "(none)" : Config.JoystickSwitchDevice);
+            var actionCombos = new[] { _cmbSw1Up, _cmbSw1Down, _cmbSw2Up, _cmbSw2Down, _cmbSw3Up, _cmbSw3Down };
+            var actionIds = new[] { Config.JoystickSw1UpAction, Config.JoystickSw1DownAction, Config.JoystickSw2UpAction,
+                Config.JoystickSw2DownAction, Config.JoystickSw3UpAction, Config.JoystickSw3DownAction };
+            for (int index = 0; index < actionCombos.Length; index++)
+            {
+                actionCombos[index].Text = actionIds[index];
+                _switchButtons[index].Value = Config.JoystickButtonIndices[index];
+            }
             _chkKillSwitchEnabled.Checked = Config.JoystickKillSwitchEnabled;
-            _chkSerialBridgeEnabled.Checked = Config.SerialJoystickEnabled;
-            _cmbSerialBridgePort.Text = Config.SerialJoystickPort ?? "";
-            _numSerialBridgeBaud.Value = ClampValue(_numSerialBridgeBaud, Config.SerialJoystickBaud);
-            _txtSerialBridgePython.Text = Config.SerialJoystickPython ?? "python";
-            _txtSerialBridgeScript.Text = Config.SerialJoystickScriptPath ?? "";
+            _numTerminationButton.Value = Config.JoystickTerminationButtonIndex;
+            UpdatePositionEligibility();
+
         }
 
         private void SaveSettings()
@@ -126,7 +103,7 @@ namespace NOMAD.MissionPlanner
             Config.VideoAutoStart = _chkVideoAutoStart.Checked;
             Config.AutoStartHudVideo = _chkAutoStartHudVideo.Checked;
 
-            Config.DualLinkEnabled = _chkDualLinkEnabled.Checked;
+            Config.DualLinkEnabled = _chkRouterClientEnabled.Checked;
             Config.RouterLocalPort = (int)_numRouterLocalPort.Value;
             Config.ManagementPort = (int)_numManagementPort.Value;
 
@@ -155,25 +132,7 @@ namespace NOMAD.MissionPlanner
             Config.LogLiveBufferPoints = (int)_numLogLiveBufferPoints.Value;
             Config.LogInjectAlertsToHud = _chkLogInjectHud.Checked;
 
-            SavePayloads();
-            Config.SprayTargetCameraRangeM = (float)_numSprayRange.Value;
-            Config.SprayRangeToleranceM = (float)_numSprayRangeTol.Value;
-            Config.SprayTriggerMaxDistanceM = (float)_numSprayTriggerMax.Value;
-            Config.SprayAimPixelX = (int)_numSprayAimX.Value;
-            Config.SprayAimPixelY = (int)_numSprayAimY.Value;
-            Config.SprayAimTolerancePx = (int)_numSprayAimTol.Value;
-            Config.SprayServoFireAngleDeg = (float)_numSprayServoAngle.Value;
-            Config.SprayForwardGain = (float)_numSprayForwardGain.Value;
-            Config.SprayLateralGain = (float)_numSprayLateralGain.Value;
-            Config.SprayAltitudeGain = (float)_numSprayAltitudeGain.Value;
-            Config.SprayYawGain = (float)_numSprayYawGain.Value;
-            Config.SprayUseYawAlignment = _chkSprayUseYaw.Checked;
-            Config.SprayMaxForwardSpeedMps = (float)_numSprayMaxForward.Value;
-            Config.SprayMaxLateralSpeedMps = (float)_numSprayMaxLateral.Value;
-            Config.SprayMaxAltitudeSpeedMps = (float)_numSprayMaxAltitude.Value;
-            Config.SprayMaxYawRateRadps = (float)_numSprayMaxYaw.Value;
-            Config.SprayLockHoldMs = (int)_numSprayLockMs.Value;
-            Config.SprayAlignTimeoutS = (float)_numSprayTimeout.Value;
+
 
             SaveJoystickSettings();
         }
@@ -189,30 +148,38 @@ namespace NOMAD.MissionPlanner
             Config.JoystickGimbalDeadzone = (float)_numJoyGimbalDeadzone.Value;
             Config.JoystickGimbalMaxRateDegSec = (float)_numJoyGimbalMaxRate.Value;
             GimbalController.MaxRateDegSec = Config.JoystickGimbalMaxRateDegSec;
-            Config.JoystickCameraTiltEnabled = _chkJoyCameraTiltEnabled.Checked;
-            Config.JoystickCameraTiltDevice = NormalizeDevice(_cmbJoyCameraTiltDevice.SelectedItem?.ToString());
-            Config.JoystickCameraTiltAxis = _cmbJoyCameraTiltAxis.SelectedItem?.ToString() ?? "Y";
-            Config.JoystickCameraTiltInvert = _chkJoyCameraTiltInvert.Checked;
-            Config.JoystickCameraTiltDeadzone = (float)_numJoyCameraTiltDeadzone.Value;
-            Config.JoystickCameraTiltMaxRateUsPerSec = (float)_numJoyCameraTiltMaxRate.Value;
+            Config.JoystickPositionEnabled = _chkJoyPositionEnabled.Checked;
+            Config.JoystickPositionDevice = NormalizeDevice(_cmbJoyPositionDevice.SelectedItem?.ToString());
+            Config.JoystickPositionAxis = _cmbJoyPositionAxis.SelectedItem?.ToString() ?? "Y";
+            Config.JoystickPositionInvert = _chkJoyPositionInvert.Checked;
+            Config.JoystickPositionDeadzone = (float)_numJoyPositionDeadzone.Value;
+            Config.JoystickPositionActuatorId = _txtJoyPositionActuatorId.Text.Trim();
+            Config.JoystickButtonIndices = System.Array.ConvertAll(_switchButtons, control => (int)control.Value);
             Config.JoystickSwitchDevice = NormalizeDevice(_cmbSwitchDevice?.SelectedItem?.ToString());
-            Config.JoystickSw1UpAction = ActionIdForLabel(_cmbSw1Up?.SelectedItem?.ToString());
-            Config.JoystickSw1DownAction = ActionIdForLabel(_cmbSw1Down?.SelectedItem?.ToString());
-            Config.JoystickSw2UpAction = ActionIdForLabel(_cmbSw2Up?.SelectedItem?.ToString());
-            Config.JoystickSw2DownAction = ActionIdForLabel(_cmbSw2Down?.SelectedItem?.ToString());
-            Config.JoystickSw3UpAction = ActionIdForLabel(_cmbSw3Up?.SelectedItem?.ToString());
-            Config.JoystickSw3DownAction = ActionIdForLabel(_cmbSw3Down?.SelectedItem?.ToString());
-            Config.JoystickAutoSelectDevice = _chkJoyAutoSelect.Checked;
+            Config.JoystickSw1UpAction = ActionIdForLabel(_cmbSw1Up?.Text);
+            Config.JoystickSw1DownAction = ActionIdForLabel(_cmbSw1Down?.Text);
+            Config.JoystickSw2UpAction = ActionIdForLabel(_cmbSw2Up?.Text);
+            Config.JoystickSw2DownAction = ActionIdForLabel(_cmbSw2Down?.Text);
+            Config.JoystickSw3UpAction = ActionIdForLabel(_cmbSw3Up?.Text);
+            Config.JoystickSw3DownAction = ActionIdForLabel(_cmbSw3Down?.Text);
             Config.JoystickKillSwitchEnabled = _chkKillSwitchEnabled.Checked;
-            Config.SerialJoystickEnabled = _chkSerialBridgeEnabled.Checked;
-            Config.SerialJoystickPort = _cmbSerialBridgePort.Text.Trim();
-            Config.SerialJoystickBaud = (int)_numSerialBridgeBaud.Value;
-            Config.SerialJoystickPython = _txtSerialBridgePython.Text.Trim();
-            Config.SerialJoystickScriptPath = _txtSerialBridgeScript.Text.Trim();
+            Config.JoystickTerminationButtonIndex = (int)_numTerminationButton.Value;
+            Config.ValidateInputBindings();
+
         }
 
         private static string NormalizeDevice(string value)
             => string.IsNullOrEmpty(value) || value == "(none)" ? "" : value;
+
+        private static void SetDeviceComboValue(ComboBox combo, string value)
+        {
+            string selected = string.IsNullOrEmpty(value) ? "(none)" : value;
+            if (!combo.Items.Contains(selected))
+            {
+                combo.Items.Add(selected);
+            }
+            combo.SelectedItem = selected;
+        }
 
         private void SetComboBoxValue(ComboBox combo, string value)
         {

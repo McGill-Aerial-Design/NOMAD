@@ -12,7 +12,7 @@
 #     testing.
 #   - Mirrors Dockerfile.jetson minus the GPU/colcon layers:
 #     same COPY layout, same PYTHONPATH convention, same entrypoint.
-#   - Does NOT build on aarch64/Jetson â€” use Dockerfile.jetson for the device.
+#   - Does NOT build on aarch64/Jetson — use Dockerfile.jetson for the device.
 #
 # Build (repo root as context):
 #   docker build -f docker/Dockerfile.sim-ros -t nomad-sim-ros:latest .
@@ -78,7 +78,7 @@ RUN pip3 install --no-cache-dir \
 
 # ==============================================================
 # NOMAD source. Copied to a layer path on PYTHONPATH so the video bridge and
-# retained tools are importable without a workspace mount â€” mirrors
+# retained tools are importable without a workspace mount — mirrors
 # the self-contained COPY layout in Dockerfile.jetson.
 # tests/ is deliberately excluded (it is in .dockerignore and volume-mounted
 # at run time so the image stays small and the test suite is always fresh).
@@ -124,7 +124,7 @@ ENV ROS_LOCALHOST_ONLY=0
 WORKDIR /opt/nomad
 
 # ==============================================================
-# Entrypoint â€” sources ROS2 Humble, then exec's the CMD.
+# Entrypoint — sources ROS2 Humble, then exec's the CMD.
 # ==============================================================
 COPY docker/ros_entrypoint.sh /ros_entrypoint.sh
 RUN chmod +x /ros_entrypoint.sh

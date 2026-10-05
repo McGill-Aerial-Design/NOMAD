@@ -40,7 +40,7 @@ namespace NOMAD.MissionPlanner.Connectivity
         }
 
         internal async Task<NomadCoreRequestResult> RunAsync(string verb, string[] values,
-                                                             CancellationToken cancellationToken)
+                                                             CancellationToken cancellationToken, Func<bool> inputStillCurrent = null)
         {
             var command = BuildRuntimeRequest(verb, values);
             if (command == null)
@@ -54,9 +54,9 @@ namespace NOMAD.MissionPlanner.Connectivity
                     "missing_credential", "The NOMAD client credential setting is empty.");
             }
 
-            if (IsAuthorityVerb(verb))
+            if (IsAuthorityVerb(verb) || IsActuatorVerb(verb))
             {
-                return await SendRequestAsync(command, verb, cancellationToken).ConfigureAwait(false);
+                return await SendRequestAsync(command, verb, cancellationToken, inputStillCurrent).ConfigureAwait(false);
             }
 
             var state = GetRequestState();
@@ -68,7 +68,7 @@ namespace NOMAD.MissionPlanner.Connectivity
             }
             try
             {
-                return await SendRequestAsync(command, verb, cancellationToken).ConfigureAwait(false);
+                return await SendRequestAsync(command, verb, cancellationToken, inputStillCurrent).ConfigureAwait(false);
             }
             finally
             {
@@ -77,7 +77,7 @@ namespace NOMAD.MissionPlanner.Connectivity
         }
 
         private async Task<NomadCoreRequestResult> SendRequestAsync(Dictionary<string, object> command,
-            string verb, CancellationToken cancellationToken)
+            string verb, CancellationToken cancellationToken, Func<bool> inputStillCurrent)
         {
             var commandWriteStarted = false;
             try
@@ -95,6 +95,10 @@ namespace NOMAD.MissionPlanner.Connectivity
                 {
                     return failure;
                 }
+                if (inputStillCurrent != null && !inputStillCurrent())
+                {
+                    return StaleInput();
+                }
                 if (!BindAuthority(command, helloResponse))
                 {
                     return new NomadCoreRequestResult(NomadCoreRequestOutcome.FailedBeforeSend,
@@ -110,10 +114,24 @@ namespace NOMAD.MissionPlanner.Connectivity
                 command["auth_proof"] = MakeProof(_credential, "nomad-core:request:v1:" + payload);
                 var bytes = EncodeMessage(serializer.Serialize(command));
                 await WriteMessageAsync(client, stream, bytes, cancellationToken,
-                    () => commandWriteStarted = true).ConfigureAwait(false);
+                    () =>
+                    {
+                        if (inputStillCurrent != null && !inputStillCurrent())
+                        {
+                            throw new StaleInputException();
+                        }
+                        commandWriteStarted = true;
+                    }).ConfigureAwait(false);
                 var response = await ReadResponseAsync(client, stream, reader, serializer,
                     cancellationToken).ConfigureAwait(false);
-                return ReadCommandResult(response, command["id"].ToString(), verb);
+                var result = ReadCommandResult(response, command["id"].ToString(), verb,
+                    Convert.ToString(command["runtime_incarnation"]));
+                result.RequestSequence = Convert.ToUInt64(command["sequence"], CultureInfo.InvariantCulture);
+                return result;
+            }
+            catch (StaleInputException)
+            {
+                return StaleInput();
             }
             catch (Exception ex)
             {
@@ -126,6 +144,10 @@ namespace NOMAD.MissionPlanner.Connectivity
                         : ex.Message);
             }
         }
+
+        private sealed class StaleInputException : Exception { }
+        private static NomadCoreRequestResult StaleInput() => new NomadCoreRequestResult(
+            NomadCoreRequestOutcome.NotAttempted, "stale_input", "Physical input changed before transmission; no mutation request was sent.");
 
         private async Task<Dictionary<string, object>> GetHelloAsync(TcpClient client, Stream stream,
             ResponseBuffer reader, JavaScriptSerializer serializer, Dictionary<string, object> hello,
@@ -214,7 +236,7 @@ namespace NOMAD.MissionPlanner.Connectivity
             command["authority_generation"] = generation;
             command["command_source"] = _clientId;
             command["sequence"] = AllocateSequence(lowerBound);
-            command["expires_at_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 3000;
+            command["expires_at_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + (IsActuatorType(GetString(command, "type")) ? 5000 : 3000);
             return true;
         }
 
@@ -237,70 +259,6 @@ namespace NOMAD.MissionPlanner.Connectivity
             }
         }
 
-        private Dictionary<string, object> BuildRuntimeRequest(string verb, string[] values)
-        {
-            if (IsAuthorityVerb(verb) && values.Length == 0)
-            {
-                var authorityType = verb == "admit" ? "admit_authority" :
-                                    verb == "revoke" ? "revoke_authority" : "handback_authority";
-                return BaseRequest("", authorityType);
-            }
-            var type = verb switch
-            {
-                "servo" => "set_servo",
-                "relay" => "set_relay",
-                "motor-test" => "motor_test",
-                "gimbal-config" => "configure_gimbal",
-                "gimbal-target" => "set_gimbal_target",
-                _ => null,
-            };
-            if (type == null)
-            {
-                return null;
-            }
-            var request = BaseRequest("", type);
-            if (verb == "servo" && values.Length == 2)
-            {
-                request["channel"] = int.Parse(values[0], CultureInfo.InvariantCulture);
-                request["pwm_microseconds"] = int.Parse(values[1], CultureInfo.InvariantCulture);
-            }
-            else if (verb == "relay" && values.Length == 2)
-            {
-                request["relay_number"] = int.Parse(values[0], CultureInfo.InvariantCulture);
-                request["on"] = values[1] == "1";
-            }
-            else if (verb == "motor-test" && values.Length == 3)
-            {
-                request["motor_instance"] = int.Parse(values[0], CultureInfo.InvariantCulture);
-                request["pwm_microseconds"] = int.Parse(values[1], CultureInfo.InvariantCulture);
-                request["timeout_seconds"] = ParseProtocolNumber(values[2]);
-            }
-            else if (verb == "gimbal-config" && values.Length == 1)
-            {
-                request["mount_mode"] = int.Parse(values[0], CultureInfo.InvariantCulture);
-            }
-            else if (verb == "gimbal-target" && values.Length == 2)
-            {
-                request["pitch_deg"] = ParseProtocolNumber(values[0]);
-                request["roll_deg"] = ParseProtocolNumber(values[1]);
-            }
-            else
-            {
-                return null;
-            }
-            return request;
-        }
-
-        private static bool IsAuthorityVerb(string verb)
-        {
-            return verb == "admit" || verb == "revoke" || verb == "handback";
-        }
-
-        private static double ParseProtocolNumber(string value)
-        {
-            return double.Parse(value, NumberStyles.Float, CultureInfo.InvariantCulture);
-        }
-
         private static bool HasAcceptedHello(Dictionary<string, object> response, string requestId)
         {
             return GetBool(response, "ok") && GetString(response, "protocol") == "nomad-core" &&
@@ -309,7 +267,7 @@ namespace NOMAD.MissionPlanner.Connectivity
         }
 
         private NomadCoreRequestResult ReadCommandResult(Dictionary<string, object> response,
-            string requestId, string verb)
+            string requestId, string verb, string incarnation)
         {
             var outcome = NomadCoreRequestOutcome.UnknownOutcome;
             var errorCode = "";
@@ -321,6 +279,11 @@ namespace NOMAD.MissionPlanner.Connectivity
                 errorCode = "unknown_outcome";
                 messageText = "The runtime response did not match its protocol and ID; the outcome is unknown.";
                 return new NomadCoreRequestResult(outcome, errorCode, messageText);
+            }
+
+            if (IsActuatorVerb(verb))
+            {
+                return ReadActuatorResult(response, verb, incarnation);
             }
 
             if (TryReadError(response, out var code, out var message))

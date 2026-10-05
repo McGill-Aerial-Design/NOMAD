@@ -15,7 +15,16 @@ if (-not (Test-Path -LiteralPath $newtonsoftPath -PathType Leaf)) {
     throw "Mission Planner Newtonsoft.Json dependency not found: $newtonsoftPath"
 }
 
+$dependencyResolver = [ResolveEventHandler] {
+    param($sender, $eventArgs)
+    $name = ([Reflection.AssemblyName]$eventArgs.Name).Name
+    $dependency = Join-Path $missionPlannerDir ($name + '.dll')
+    if (Test-Path -LiteralPath $dependency -PathType Leaf) { return [Reflection.Assembly]::LoadFrom($dependency) }
+    return $null
+}
+[AppDomain]::CurrentDomain.add_AssemblyResolve($dependencyResolver)
 [Reflection.Assembly]::LoadFrom($newtonsoftPath) | Out-Null
+[Reflection.Assembly]::LoadFrom((Join-Path $missionPlannerDir 'MissionPlanner.exe')) | Out-Null
 $plugin = [Reflection.Assembly]::LoadFrom($pluginPath)
 $configType = $plugin.GetType('NOMAD.MissionPlanner.NOMADConfig', $true)
 $loadMethod = $configType.GetMethod('LoadFromFile')
@@ -98,7 +107,124 @@ try {
     Assert-ThrowsMessage $embedded "RouterMode 'Embedded' is unsupported"
     Assert-ThrowsMessage '{"RouterBindAddress":"0.0.0.0"}' 'RouterBindAddress must be 127.0.0.1'
     Assert-ThrowsMessage '{"ManagementBindAddress":"0.0.0.0"}' 'ManagementBindAddress must be 127.0.0.1'
+    Assert-ThrowsMessage '{"Payloads":[{"Channel":9}]}' 'must be migrated to the runtime'
+    Assert-ThrowsMessage '{"Actuators":[{"id":"existing"}]}' 'must be migrated to the runtime'
+    Assert-ThrowsMessage '{"SerialJoystickEnabled":true}' 'direct USB HID mappings'
+    Assert-ThrowsMessage '{"JoystickSw1UpAction":"DropToggleP1"}' 'Migrate legacy mappings'
+    Assert-ThrowsMessage '{"JoystickCameraTiltEnabled":true,"JoystickCameraTiltDevice":"direct-usb"}' 'Enabled legacy relative-rate'
+    Assert-ThrowsMessage '{"JoystickZedEnabled":true}' 'Enabled legacy relative-rate'
+    $disabledAxis = Load-Config '{"JoystickCameraTiltEnabled":false,"JoystickCameraTiltDevice":"direct-usb","JoystickCameraTiltAxis":"X"}'
+    if ($disabledAxis.JoystickPositionEnabled -or $disabledAxis.JoystickPositionDevice -ne 'direct-usb' -or $disabledAxis.JoystickPositionAxis -ne 'X') {
+        throw 'Disabled legacy axis preferences did not migrate safely.'
+    }
+    $explicitAxis = Load-Config '{"JoystickCameraTiltEnabled":true,"JoystickPositionEnabled":false}'
+    if ($explicitAxis.JoystickPositionEnabled) { throw 'Explicit position opt-out was overwritten.' }
+    Assert-ThrowsMessage '{"JoystickSw1UpAction":"a:activate","JoystickSw2UpAction":"b:activate","JoystickButtonIndices":[0,1,0,3,4,5]}' 'unique physical HID'
+    Assert-ThrowsMessage '{"JoystickSw1UpAction":"a:activate","JoystickButtonIndices":[6,1,2,3,4,5]}' 'disjoint'
+    Assert-ThrowsMessage '{"JoystickTerminationButtonIndex":6.5}' 'must be an integer'
+    Assert-ThrowsMessage '{"JoystickKillSwitchEnabled":"true"}' 'enabled flag must be boolean'
+    Assert-ThrowsMessage '{"JoystickButtonIndices":[0,1,2.5,3,4,5]}' 'must be integers'
+    Assert-ThrowsMessage '{"JoystickTerminationButtonIndex":128}' 'between 0 and 127'
+    $loadPaths = $configType.GetMethod('LoadFromPaths', [Reflection.BindingFlags]'Static,NonPublic')
+    $oversizedPrimary = Join-Path $temporary 'oversized-primary.json'
+    $validBackup = Join-Path $temporary 'valid-backup.json'
+    [IO.File]::WriteAllText($validBackup, '{"CoreRuntimePort":14631}')
+    foreach ($oversizedJson in @(
+        '{"JoystickTerminationButtonIndex":4294967296}',
+        '{"JoystickButtonIndices":[0,1,4294967296,3,4,5]}',
+        '{"JoystickTerminationButtonIndex":18446744073709551616}'
+    )) {
+        [IO.File]::WriteAllText($oversizedPrimary, $oversizedJson)
+        $rejected = $false
+        $pathArguments = New-Object object[] 2
+        $pathArguments[0] = [string]$oversizedPrimary
+        $pathArguments[1] = [string]$validBackup
+        try { $loadPaths.Invoke($null, $pathArguments) | Out-Null }
+        catch {
+            if (-not $_.Exception.ToString().Contains('between 0 and 127')) { throw }
+            $rejected = $true
+        }
+        if (-not $rejected) { throw 'Oversized primary HID integer silently fell back to valid backup/defaults.' }
+        if ([IO.File]::ReadAllText($oversizedPrimary) -cne $oversizedJson) { throw 'Invalid primary was overwritten.' }
+    }
+    $termDefaults = Load-Config '{}'
+    if ($termDefaults.JoystickTerminationButtonIndex -ne 6) { throw 'Missing termination index did not retain reviewed default6.' }
+    $termRemap = Load-Config '{"JoystickTerminationButtonIndex":10,"JoystickSw1UpAction":"a:activate"}'
+    if ($termRemap.JoystickTerminationButtonIndex -ne 10) { throw 'Explicit valid termination index was not preserved.' }
+    $inactiveAlias = Load-Config '{"JoystickSw1UpAction":"a:activate","JoystickButtonIndices":[0,0,0,0,0,0]}'
+    if ($inactiveAlias.JoystickButtonIndices[1] -ne 0) { throw 'Inactive index alias was silently remapped.' }
+    $empty = Load-Config '{"Payloads":[],"Actuators":[],"SerialJoystickEnabled":false}'
+    $emptyPath = Join-Path $temporary 'empty-retired-export.json'
+    $empty.ExportToFile($emptyPath)
+    $emptyJson = [IO.File]::ReadAllText($emptyPath)
+    if ($emptyJson.Contains('"Payloads"') -or $emptyJson.Contains('"Actuators"') -or $emptyJson.Contains('"SerialJoystick')) {
+        throw 'Empty/disabled retired ownership or bridge fields survived export.'
+    }
+    # Exercise real settings controls without opening a window or saving host configuration.
+    $formType = $plugin.GetType('NOMAD.MissionPlanner.NOMADSettingsForm', $true)
+    $config.JoystickSwitchDevice = 'selected-unplugged-usb-hid'
+    $formArguments = New-Object object[] 1
+    $formArguments[0] = $config
+    $form = $formType.GetConstructor([type[]]@($configType)).Invoke($formArguments)
+    try {
+        $privateFlags = [Reflection.BindingFlags]'Instance,NonPublic'
+        $device = $formType.GetField('_cmbSwitchDevice', $privateFlags).GetValue($form)
+        if ($device.SelectedItem -ne 'selected-unplugged-usb-hid') { throw 'Unplugged selected HID name was discarded.' }
+        $device.Items.Clear()
+        $device.Items.Add('(none)') | Out-Null
+        $setDevice = $formType.GetMethod('SetDeviceComboValue', [Reflection.BindingFlags]'Static,NonPublic')
+        $setDevice.Invoke($null, [object[]]@($device, 'selected-unplugged-usb-hid')) | Out-Null
+        if ($device.SelectedItem -ne 'selected-unplugged-usb-hid') { throw 'Device refresh discarded an explicit HID name.' }
+
+        $actorType = $plugin.GetType('NOMAD.MissionPlanner.Connectivity.NomadActuator', $true)
+        $actionType = $plugin.GetType('NOMAD.MissionPlanner.Connectivity.NomadActuatorAction', $true)
+        $actor = [Activator]::CreateInstance($actorType)
+        $action = [Activator]::CreateInstance($actionType)
+        $actorType.GetProperty('Id').SetValue($actor, 'stable-id', $null)
+        $actorType.GetProperty('Name').SetValue($actor, 'Original name', $null)
+        $actionType.GetProperty('Operation').SetValue($action, 'activate', $null)
+        $actionType.GetProperty('Control').SetValue($action, 'button', $null)
+        $actionType.GetProperty('Label').SetValue($action, 'Original label', $null)
+        $actions = [Array]::CreateInstance($actionType, 1)
+        $actions.SetValue($action, 0)
+        $actorType.GetProperty('Actions').SetValue($actor, $actions, $null)
+        $actors = [Array]::CreateInstance($actorType, 1)
+        $actors.SetValue($actor, 0)
+        $applyArguments = New-Object object[] 1
+        $applyArguments[0] = $actors
+        $apply = $formType.GetMethod('ApplyActuatorActions', $privateFlags)
+        $apply.Invoke($form, $applyArguments) | Out-Null
+        $combo = $formType.GetField('_cmbSw1Up', $privateFlags).GetValue($form)
+        $combo.Text = 'Original name / Original label [stable-id:activate]'
+        $actorType.GetProperty('Name').SetValue($actor, 'Renamed device', $null)
+        $actionType.GetProperty('Label').SetValue($action, 'Renamed action', $null)
+        $apply.Invoke($form, $applyArguments) | Out-Null
+        if ($combo.Text -ne 'Renamed device / Renamed action [stable-id:activate]') {
+            throw 'Backend label refresh did not preserve the stable semantic binding.'
+        }
+        $positionAction = [Activator]::CreateInstance($actionType)
+        $actionType.GetProperty('Operation').SetValue($positionAction, 'position', $null)
+        $actionType.GetProperty('Control').SetValue($positionAction, 'position', $null)
+        $actionType.GetProperty('Label').SetValue($positionAction, 'Set position', $null)
+        $actionType.GetProperty('ContinuousAxisAllowed').SetValue($positionAction, $false, $null)
+        $actionType.GetProperty('ContinuousAxisBlockedReason').SetValue($positionAction, 'Use discrete UI confirmations.', $null)
+        $eligibilityStore = $plugin.GetType('NOMAD.MissionPlanner.OutputController', $true).GetField('ContinuousAxisActions', [Reflection.BindingFlags]'Static,NonPublic').GetValue($null)
+        $eligibilityStore['stable-id'] = $positionAction
+        $positionId = $formType.GetField('_txtJoyPositionActuatorId', $privateFlags).GetValue($form)
+        $positionId.Text = 'stable-id'
+        $positionEnable = $formType.GetField('_chkJoyPositionEnabled', $privateFlags).GetValue($form)
+        $positionReason = $formType.GetField('_lblJoyPositionEligibility', $privateFlags).GetValue($form)
+        if ($positionEnable.Enabled -or $positionEnable.Checked -or $positionReason.Text -ne 'Use discrete UI confirmations.') {
+            throw 'Unsupported axis binding was not disabled with the backend reason.'
+        }
+        $actionType.GetProperty('ContinuousAxisAllowed').SetValue($positionAction, $true, $null)
+        $formType.GetMethod('UpdatePositionEligibility', $privateFlags).Invoke($form, @()) | Out-Null
+        if (-not $positionEnable.Enabled) { throw 'Backend allowed axis data did not enable the input option.' }
+        $positionId.Text = 'unknown-id'
+        if ($positionEnable.Enabled) { throw 'Unknown axis eligibility did not fail closed.' }
+    } finally { $form.Dispose() }
     Write-Host 'Mission Planner config migration passed: stable cleanup, client ownership, and fail-fast legacy rejection.'
 } finally {
+    [AppDomain]::CurrentDomain.remove_AssemblyResolve($dependencyResolver)
     Remove-Item -LiteralPath $temporary -Recurse -Force
 }

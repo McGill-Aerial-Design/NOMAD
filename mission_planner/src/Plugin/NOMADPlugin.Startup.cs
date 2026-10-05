@@ -21,10 +21,14 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var mpVersion = System.Reflection.Assembly.GetEntryAssembly()?.GetName()?.Version;
-                if (mpVersion != null && mpVersion < new System.Version("1.3.80"))
+                string executable = System.Reflection.Assembly.GetEntryAssembly()?.Location;
+                string fileVersion = string.IsNullOrEmpty(executable) ? null :
+                    System.Diagnostics.FileVersionInfo.GetVersionInfo(executable).FileVersion;
+                System.Version.TryParse(fileVersion, out var mpVersion);
+                string warning = MissionPlannerVersion.GetWarning(mpVersion, NomadRelease.MissionPlannerTarget);
+                if (warning != null)
                 {
-                    Log.Warn($"Untested Mission Planner version {mpVersion}. Recommend 1.3.80+. Some features may not work correctly.");
+                    Log.Warn(warning);
                 }
             }
             catch (Exception ex)
@@ -143,10 +147,10 @@ namespace NOMAD.MissionPlanner
                     $"McGill Aerial Design\n\n" +
                     $"Hover the NOMAD menu for tools; click it to open the\n" +
                     $"NOMAD screen (dashboard, flight boundaries, video,\n" +
-                    $"local log analysis and dual-link status).\n\n" +
+                    $"local log analysis and standalone router status).\n\n" +
                     $"Boundary monitoring with termination-unavailable alerts,\n" +
-                    $"plugin-wide alerts with toast overlays, MAVLink dual-link\n" +
-                    $"failover routing, and configurable payload controls.\n\n" +
+                    $"plugin-wide alerts with toast overlays, standalone-router\n" +
+                    $"management and status, and configurable payload controls.\n\n" +
                     $"Video: {_config.VideoUrl}\n" +
                     $"Multi-Link: {(_config.DualLinkEnabled ? "Enabled" : "Disabled")}\n" +
                     $"Log: %LOCALAPPDATA%\\Mission Planner\\plugins\\NOMAD\\nomad.log",

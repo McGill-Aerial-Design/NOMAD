@@ -79,7 +79,7 @@ establish pilot control. External mode changes do not revoke runtime ownership.
   [ROS integration suite](../tests/ros/test_nomad_ros_services.py) and
   [observer contract tests](../tests/test_ros_observation_boundary.py).
 - Core and adapter tests cover decision-specific telemetry freshness, invalid
-  values, payload release interlocks and failure handling. The pinned QuadPlane
+  values, generic actuator authorization, sequencing and recovery failure handling. The pinned QuadPlane
   landing operation requires post-command descent, landed-state telemetry,
   disarm and a stable final envelope; an ACK alone is not reported as touchdown.
   These are software and simulator proofs, not physical payload or aircraft

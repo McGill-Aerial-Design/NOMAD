@@ -161,6 +161,7 @@ test-plugin-config-migration = "powershell -ExecutionPolicy Bypass -File scripts
 
 # Requires Visual Studio's MSBuild/C# compiler; tests dispatch against a temporary deny-write installation.
 test-plugin-build-only = "powershell -ExecutionPolicy Bypass -File scripts/build/test_build_plugin_windows.ps1"
+test-plugin-version = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_version.ps1"
 
 # Dead-code lint for the plugin (Windows only) — fails on unused fields/locals,
 # unreachable code, etc. (C# compiler diagnostics promoted to errors).
@@ -170,12 +171,6 @@ lint-plugin = "powershell -ExecutionPolicy Bypass -File scripts/build/lint_plugi
 # Mission Planner-free GeoMath/GeofenceTypes with VS's csc and runs assertions
 # on polygon inset, point-in-polygon, and nearest-inside-point math.
 test-plugin-geometry = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_geometry.ps1"
-
-# Unit tests for the plugin's safety-critical payload-release interlock (Windows
-# only) — compiles the Mission Planner-free PayloadReleaseInterlock with VS's csc
-# and asserts the multi-click arm/confirm, rolling-window expiry, backwards-clock,
-# and reset behaviour (the GCS counterpart of tests/test_safety_payload.py).
-test-plugin-interlock = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_interlock.ps1"
 
 # Unit tests for Mission Planner's gimbal input math (Windows only) — compiles
 # the Mission Planner-free GimbalCommand and checks mode values, stick
@@ -221,12 +216,12 @@ test-ground-router = "pixi run build-ground-router && pixi run test-plugin-duall
 
 # ==================== Configuration Profiles ====================
 # Manage config/nomad.env via named profiles stored in config/profiles/.
-# Each profile is a complete environment file with all settings for a
-# specific deployment target (real drone, minimal dev).
+# Each profile owns product settings; deployment-local values remain in the active
+# environment. Only reviewed local keys survive a profile load.
 #
 # Quick start:
 #   pixi run profile-load onboard_companion  # Optional onboard compute placement
-#   pixi run profile-load groundstation_minimal  # Direct MAVLink + C++ core
+#   pixi run profile-load groundstation_minimal  # Runtime IPC + standalone ground router
 #   pixi run profile-show           # Show active profile
 #   pixi run profile-list           # List available profiles
 

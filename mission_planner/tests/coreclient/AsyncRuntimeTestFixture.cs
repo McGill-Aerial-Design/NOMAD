@@ -22,6 +22,7 @@ internal static partial class NomadCoreClientTests
         private readonly int _session;
         private int _generation;
         private readonly bool _delayHello;
+        private readonly Func<Dictionary<string, object>, Dictionary<string, object>> _semanticResponse;
         private readonly object _state = new object();
         private readonly List<Thread> _workers = new List<Thread>();
         private readonly ManualResetEventSlim _helloObserved = new ManualResetEventSlim();
@@ -50,13 +51,15 @@ internal static partial class NomadCoreClientTests
         internal List<Dictionary<string, object>> Commands { get; } = new List<Dictionary<string, object>>();
 
         internal AsyncRuntime(int count, int port = 0, ulong sequenceFloor = 1,
-            string incarnation = "async-runtime", int session = 1, int generation = 1, bool delayHello = false)
+            string incarnation = "async-runtime", int session = 1, int generation = 1, bool delayHello = false,
+            Func<Dictionary<string, object>, Dictionary<string, object>> semanticResponse = null)
         {
             _connectionCount = count;
             _incarnation = incarnation;
             _session = session;
             _generation = generation;
             _delayHello = delayHello;
+            _semanticResponse = semanticResponse;
             _nextSequence = sequenceFloor;
             _listener = new TcpListener(IPAddress.Loopback, port);
             _listener.Start();
@@ -217,6 +220,12 @@ internal static partial class NomadCoreClientTests
 
         private Dictionary<string, object> CreateCommandResponse(Dictionary<string, object> command, int channel)
         {
+            if (_semanticResponse != null)
+            {
+                var response = _semanticResponse(command);
+                response["runtime_incarnation"] = _incarnation;
+                return response;
+            }
             if (command.TryGetValue("authority_generation", out var generation) &&
                 Convert.ToInt32(generation) != AuthorityGeneration)
             {
@@ -273,6 +282,7 @@ internal static partial class NomadCoreClientTests
         }
 
         internal void ReleaseHello() => _helloReleased.Set();
+        internal void DelayHelloAgain() { _helloObserved.Reset(); _helloReleased.Reset(); }
         internal void ReleaseResponse(int channel) => _responses[channel].Set();
 
         internal void ReleaseResponses()
