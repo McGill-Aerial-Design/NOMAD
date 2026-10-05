@@ -89,7 +89,10 @@ def test_find_install_root_accepts_cpack_top_level_directory(tmp_path: Path) -> 
 
 
 def test_cpack_directory_selects_current_archives_and_requires_both(tmp_path: Path) -> None:
-    (tmp_path / "CPackConfig.cmake").write_text('set(CPACK_PACKAGE_FILE_NAME "nomad-core-current")\n')
+    (tmp_path / "CPackConfig.cmake").write_text(
+        'set(CPACK_PACKAGE_DIRECTORY "/tmp/\u5047")\nset(CPACK_PACKAGE_FILE_NAME "nomad-core-current")\n',
+        encoding="utf-8",
+    )
     archives = [tmp_path / ("nomad-core-current" + suffix) for suffix in (".zip", ".tar.gz")]
     for archive in archives:
         archive.write_bytes(b"test archive")
