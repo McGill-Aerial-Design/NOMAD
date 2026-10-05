@@ -259,19 +259,5 @@ namespace NOMAD.MissionPlanner
             return $"{action}: {evidence} {result.ErrorCode}: {result.Message}";
         }
 
-        private static string FormatOutcome(NomadCoreRequestOutcome outcome)
-        {
-            return outcome switch
-            {
-                NomadCoreRequestOutcome.Succeeded => "success",
-                NomadCoreRequestOutcome.Rejected => "rejected",
-                NomadCoreRequestOutcome.Failed => "failed",
-                NomadCoreRequestOutcome.Interrupted => "interrupted",
-                NomadCoreRequestOutcome.UnknownOutcome => "unknown",
-                NomadCoreRequestOutcome.FailedBeforeSend => "failed-before-send",
-                _ => "not-attempted",
-            };
-        }
-
     }
 }

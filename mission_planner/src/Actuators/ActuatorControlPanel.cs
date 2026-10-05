@@ -42,8 +42,6 @@ namespace NOMAD.MissionPlanner
         private readonly Dictionary<string, double?> _shownPositions = new Dictionary<string, double?>();
         private bool _disposed;
         internal string OperatorStatus => _status.Text;
-        public static event Action<bool> AutonomousModeChanged;
-        public static void RaiseAutonomousModeChanged(bool active) => AutonomousModeChanged?.Invoke(active);
 
         public ActuatorControlPanel(NOMADConfig config)
         {
