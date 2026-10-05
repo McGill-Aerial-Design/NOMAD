@@ -331,7 +331,7 @@ SR-PAY-02 | src/runtime/actuator_sequence.cpp:run_actuator_sequence | tests/actu
 SR-PAY-03 | src/runtime/actuator_state.cpp:ActuatorState::confirm_locked | tests/actuator_test.cpp::test_hid_and_authority_bound_confirmation
 SR-PAY-03 | src/runtime/runtime_actuators.cpp:execute_actuator_request | tests/runtime_actuator_cases.hpp::test_backend_actuator_authorization_and_raw_boundary
 SR-PAY-03 | src/runtime/actuator_state.cpp:ActuatorState::finish | tests/runtime_actuator_cases.hpp::test_backend_pulse_failure_and_explicit_recovery
-SR-PAY-03 | src/runtime/actuator_state.cpp:ActuatorState::release_input | tests/runtime_actuator_cases.hpp::test_hid_bidirectional_release_preserves_confirmations_and_stops
+SR-PAY-03 | src/runtime/actuator_state.cpp:ActuatorState::release_input | tests/runtime_actuator_pending_cases.hpp::test_hid_bidirectional_release_preserves_confirmations_and_stops
 SR-SEC-01 | src/vehicle/vehicle.cpp:send_command | tests/test_mavsdk_connection.py::test_command_wire_forms
 SR-SEC-01 | src/qualification/main.cpp:run_command | tests/test_cpp_command_surface.py::test_cpp_command_surface_has_no_failsafe_controls
 SR-SEC-02 | src/qualification/main.cpp:run_command | tests/test_qualification_cli.py::test_direct_actuation_refused_without_key_before_transport
