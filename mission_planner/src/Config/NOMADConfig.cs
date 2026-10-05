@@ -238,10 +238,9 @@ namespace NOMAD.MissionPlanner
         public string JoystickSw3UpAction   { get; set; } = "None";
         public string JoystickSw3DownAction { get; set; } = "None";
 
-        /// <summary>
-        /// Monitor button index 6 for termination requests. Aircraft-side
-        /// termination is unavailable; a press reports that failure visibly.
-        /// </summary>
+        /// <summary>Direct USB HID button index used only for the unavailable-termination monitor.</summary>
+        public int JoystickTerminationButtonIndex { get; set; } = 6;
+        /// <summary>Monitor the configured button and visibly report aircraft termination as unavailable.</summary>
         public bool JoystickKillSwitchEnabled { get; set; } = true;
 
     }

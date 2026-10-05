@@ -46,7 +46,7 @@ internal static partial class NomadCoreClientTests
             new Dictionary<string, object> { ["operation"] = "safe", ["label"] = "Close", ["control"] = "button" },
             new Dictionary<string, object> { ["operation"] = "positive", ["label"] = "In", ["control"] = "button", ["release_operation"] = "release_input" },
             new Dictionary<string, object> { ["operation"] = "negative", ["label"] = "Out", ["control"] = "button", ["release_operation"] = "release_input" },
-            new Dictionary<string, object> { ["operation"] = "position", ["label"] = "Set angle", ["control"] = "position" }
+            new Dictionary<string, object> { ["operation"] = "position", ["label"] = "Set angle", ["control"] = "position", ["continuous_axis_allowed"] = true, ["continuous_axis_blocked_reason"] = "" }
         }
     };
 
@@ -62,6 +62,7 @@ internal static partial class NomadCoreClientTests
         if (type == "get_actuators")
         {
             result["type"] = "actuators_response";
+            result["actuator_configuration_revision"] = 1UL;
             result["configuration_recovery_required"] = false;
             result["actuators"] = new object[] { DiscoveredActuator() };
         }
@@ -72,7 +73,8 @@ internal static partial class NomadCoreClientTests
             result["command_result"] = new Dictionary<string, object> { ["success"] = commandSuccess, ["acknowledged"] = commandSuccess };
             result["execution_attempted"] = attempted;
             result["actuator_state"] = DisplayState(request.ContainsKey("actuator_id") ? Convert.ToString(request["actuator_id"]) : "release", success: commandSuccess);
-            if (type == "configure_actuators") { result["actuators"] = new object[] { DiscoveredActuator() }; }
+            if (type == "configure_actuators")
+            { result["actuators"] = new object[] { DiscoveredActuator() }; result["actuator_configuration_revision"] = 2UL; }
         }
         return result;
     }

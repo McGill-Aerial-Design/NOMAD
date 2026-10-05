@@ -376,6 +376,24 @@ def test_sync_mission_planner_migration_is_deterministic(tmp_path: Path, monkeyp
     assert_retired_mp_fields_removed(first)
 
 
+@pytest.mark.parametrize("name", sorted(PROFILES))
+def test_profile_sync_preserves_deployment_local_hid_mapping(tmp_path: Path, monkeypatch, name: str) -> None:
+    cfg_file = tmp_path / "nomad_config.json"
+    local = {
+        "JoystickTerminationButtonIndex": 12,
+        "JoystickKillSwitchEnabled": True,
+        "JoystickButtonIndices": [0, 1, 2, 3, 4, 5],
+        "JoystickSw1UpAction": "deployment-light:activate",
+    }
+    cfg_file.write_text(json.dumps(local), encoding="utf-8")
+    monkeypatch.setenv("NOMAD_MP_CONFIG", str(cfg_file))
+    sync_mission_planner(name, _parse_env(PROFILES_DIR / f"{name}.env"))
+    result = json.loads(cfg_file.read_text(encoding="utf-8"))
+    assert {key: result[key] for key in local} == local
+    assert result["ActiveProfile"] == name
+    assert not any("Joystick" in key for key in profile.PROFILE_KEYS)
+
+
 def test_sync_mission_planner_migrates_router_enabled_to_client_setting(tmp_path: Path, monkeypatch) -> None:
     cfg_file = tmp_path / "nomad_config.json"
     cfg_file.write_text(json.dumps({"RouterEnabled": True}), encoding="utf-8")

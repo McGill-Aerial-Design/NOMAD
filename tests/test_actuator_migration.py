@@ -60,6 +60,37 @@ def test_migration_preserves_channel_endpoints_labels_and_stable_actions():
     assert "Payloads" not in frontend and "SerialJoystickEnabled" not in frontend
 
 
+@pytest.mark.parametrize("explicit_index", [False, True])
+@pytest.mark.parametrize("enabled", [None, True, False])
+def test_legacy_termination_input_preserves_compiled_index_and_monitor(explicit_index, enabled):
+    config = legacy_config()
+    if explicit_index:
+        config["JoystickTerminationButtonIndex"] = 6
+    if enabled is not None:
+        config["JoystickKillSwitchEnabled"] = enabled
+    _, frontend = migration.convert_config(config)
+    assert frontend["JoystickTerminationButtonIndex"] == 6
+    assert frontend["JoystickKillSwitchEnabled"] is (True if enabled is None else enabled)
+    assert frontend["JoystickTerminationButtonIndex"] not in frontend["JoystickButtonIndices"]
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [("JoystickTerminationButtonIndex", value) for value in (True, False, "6", 6.0, None, [], 0, 5, 7, -1, 128)]
+    + [("JoystickKillSwitchEnabled", value) for value in (0, 1, "true", None, [])],
+)
+def test_invalid_termination_input_is_rejected_before_export(tmp_path, key, value):
+    config = legacy_config()
+    config[key] = value
+    source, backend, frontend = (tmp_path / name for name in ("legacy.json", "backend.json", "frontend.json"))
+    source.write_text(json.dumps(config), encoding="utf-8")
+    original = source.read_bytes()
+    with pytest.raises(ValueError, match="Legacy|termination"):
+        migration.migrate(source, backend, frontend, tmp_path / "must-not-invoke-runtime")
+    assert source.read_bytes() == original
+    assert not backend.exists() and not frontend.exists()
+
+
 @pytest.mark.parametrize(
     "key,value", [("Kind", "Unknown"), ("Channel", True), ("RcChannel", 9), ("Enabled", False), ("PulseMs", -1)]
 )
@@ -123,6 +154,9 @@ def test_native_validated_export_is_private_deterministic_and_keeps_original(tmp
     migration.migrate(source, backend, frontend, runtime_binary())
     assert source.read_bytes() == original
     assert json.loads(backend.read_text()) == migration.convert_config(legacy_config())[0]
+    settings = json.loads(frontend.read_text())
+    assert settings["JoystickTerminationButtonIndex"] == 6
+    assert settings["JoystickKillSwitchEnabled"] is True
     assert "private-test-credential" not in backend.read_text()
     result = subprocess.run(
         [str(runtime_binary()), "--validate-actuators", str(backend.resolve())],

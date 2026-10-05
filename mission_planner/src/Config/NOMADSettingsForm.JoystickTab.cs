@@ -78,7 +78,11 @@ namespace NOMAD.MissionPlanner
 
             AddLabel(tab, "Actuator ID:", 20, y);
             _txtJoyPositionActuatorId = AddTextBox(tab, 110, y, 240);
-            y += 32;
+            _txtJoyPositionActuatorId.TextChanged += (s, e) => UpdatePositionEligibility();
+            y += 28;
+            _lblJoyPositionEligibility = new Label { Location = new Point(20, y), Size = new Size(680, 40), ForeColor = Color.Goldenrod };
+            tab.Controls.Add(_lblJoyPositionEligibility);
+            y += 48;
             _btnJoyRefreshDevices = new Button
             {
                 Text = "Refresh device list",
@@ -157,6 +161,9 @@ namespace NOMAD.MissionPlanner
             y += 24;
             _chkKillSwitchEnabled = AddCheckBox(tab, "Monitor button requests (reports unavailable)",
                 20, y, Color.IndianRed);
+            y += 28;
+            AddLabel(tab, "Termination button index:", 20, y);
+            _numTerminationButton = AddNumericUpDown(tab, 180, y, 65, 0, 127, 6);
             y += 36;
 
             AddSectionLabel(tab, "Direct USB HID button mapping", ref y);
@@ -203,7 +210,20 @@ namespace NOMAD.MissionPlanner
                 combo.Items.AddRange(_actionIds.Keys.ToArray());
                 combo.Text = _actionIds.FirstOrDefault(entry => entry.Value == keep).Key ?? keep;
             }
+            UpdatePositionEligibility();
         }
+        private void UpdatePositionEligibility()
+        {
+            if (_txtJoyPositionActuatorId == null || _lblJoyPositionEligibility == null) { return; }
+            var metadata = OutputController.GetContinuousAxisMetadata(_txtJoyPositionActuatorId.Text.Trim());
+            bool allowed = metadata?.ContinuousAxisAllowed == true;
+            _chkJoyPositionEnabled.Enabled = allowed;
+            if (!allowed) { _chkJoyPositionEnabled.Checked = false; }
+            _lblJoyPositionEligibility.Text = allowed ? "Runtime supports continuous HID position input for this actuator." :
+                !string.IsNullOrEmpty(metadata?.ContinuousAxisBlockedReason) ? metadata.ContinuousAxisBlockedReason :
+                "Continuous HID binding is unavailable. Load runtime actions and select an eligible actuator; use the UI for discrete confirmations.";
+        }
+
         private string ActionIdForLabel(string label) => _actionIds.TryGetValue(label ?? "", out var id) ? id : label ?? "None";
 
         private static string[] BuildDeviceComboList(System.Collections.Generic.IList<string> devices)

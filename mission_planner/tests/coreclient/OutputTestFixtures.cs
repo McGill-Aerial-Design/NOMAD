@@ -24,7 +24,7 @@ namespace NOMAD.MissionPlanner
         public static void Error(string message) { lock (Messages) { LastError = message; Messages.Add(message); } }
     }
 
-    public sealed class NOMADConfig
+    public sealed partial class NOMADConfig
     {
         public string CoreClientCredential = "test-key";
         public int CoreRuntimePort;
@@ -36,6 +36,7 @@ namespace NOMAD.MissionPlanner
         public string JoystickSw2DownAction = "None";
         public string JoystickSw3UpAction = "None";
         public string JoystickSw3DownAction = "None";
+        public int JoystickTerminationButtonIndex = 6;
         public bool JoystickKillSwitchEnabled;
     }
     internal static class UiAsync

@@ -70,6 +70,11 @@ namespace NOMAD.MissionPlanner.Connectivity
                     GetString(request, "message"), ReadAcknowledgement(response)) { RuntimeIncarnation = incarnation };
                 if (response.ContainsKey("actuators"))
                 {
+                    result.HasActuatorDefinitions = true;
+                    if (response.TryGetValue("actuator_configuration_revision", out var revision) &&
+                        ulong.TryParse(Convert.ToString(revision, CultureInfo.InvariantCulture), NumberStyles.None,
+                            CultureInfo.InvariantCulture, out var catalogRevision))
+                    { result.ActuatorConfigurationRevision = catalogRevision; }
                     result.Actuators = ReadActuators(response["actuators"]);
                 }
                 if (response.ContainsKey("actuator_state"))
@@ -112,7 +117,9 @@ namespace NOMAD.MissionPlanner.Connectivity
                         throw new FormatException("Unknown display control.");
                     }
                     actions.Add(new NomadActuatorAction { Operation = GetString(action, "operation"),
-                        Label = GetString(action, "label"), Control = control, ReleaseOperation = GetString(action, "release_operation") });
+                        Label = GetString(action, "label"), Control = control, ReleaseOperation = GetString(action, "release_operation"),
+                        ContinuousAxisAllowed = GetBool(action, "continuous_axis_allowed"),
+                        ContinuousAxisBlockedReason = GetString(action, "continuous_axis_blocked_reason") });
                 }
                 result.Add(new NomadActuator { Id = GetString(data, "id"), Name = GetString(data, "name"),
                     Actions = actions, State = ReadState(RequiredObject(data, "state")), Config = RequiredObject(data, "config") });

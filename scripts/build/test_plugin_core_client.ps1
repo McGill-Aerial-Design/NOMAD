@@ -5,7 +5,7 @@
 # ============================================================
 # Compiles the Mission Planner-free NomadCoreClient (the plugin's client for
 # the C++ runtime IPC boundary) together with the test runner using the Roslyn
-# csc bundled with Visual Studio's MSBuild — no .NET SDK or test-framework
+# csc bundled with Visual Studio's MSBuild â€” no .NET SDK or test-framework
 # packages required.
 #
 # The harness exercises typed runtime requests, fail-closed validation,
@@ -55,9 +55,11 @@ $sources = @(
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputOutcomeTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputTestFixtures.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\JoystickMappingTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\JoystickInputConfigurationTests.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Input\NomadJoystickService.Switches.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Input\NomadJoystickService.Axis.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Control\OutputController.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Config\NOMADConfig.Input.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadActuatorModels.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadCoreClient.Actuators.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Actuators.cs'),

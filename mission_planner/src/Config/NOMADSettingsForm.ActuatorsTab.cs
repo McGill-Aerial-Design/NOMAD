@@ -37,7 +37,7 @@ namespace NOMAD.MissionPlanner
                     }
                     _actuatorConfigStatus.Text = OutputController.DescribeConfigurationResult(result);
                     if (!result.PresentationCurrent)
-                    { _actuatorConfigStatus.Text += " Response belongs to an earlier runtime display; refresh the current configuration."; }
+                    { _actuatorConfigStatus.Text += " Response has no current backend catalog; refresh the runtime configuration."; }
                     else if (result.Succeeded)
                     {
                         ApplyActuatorActions(result.Actuators);

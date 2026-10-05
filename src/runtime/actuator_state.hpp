@@ -40,7 +40,8 @@ class ActuatorState {
     bool contains_output(int channel, bool relay) const;
     std::vector<ActuatorDefinition> definitions() const;
     Json discover(const std::string &authority,
-                  std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+                  std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now(),
+                  std::uint64_t *configuration_revision = nullptr);
     Json state(const std::string &id) const;
     ActuatorDecision begin(const ActuatorInput &input, std::chrono::steady_clock::time_point now);
     ActuatorDecision release_input(const ActuatorInput &input);
@@ -86,6 +87,7 @@ class ActuatorState {
     std::vector<ActuatorDefinition> definitions_;
     std::map<std::string, State> states_;
     std::uint64_t revision_{};
+    std::uint64_t configuration_revision_{};
 };
 
 } // namespace nomad::runtime::detail

@@ -94,7 +94,9 @@ Json Runtime::Implementation::configure_actuators(const Request &request) {
     auto response = actuator_response(request, true,
         "backend configuration saved; explicit safe commands required", false);
     response["runtime_incarnation"] = incarnation_;
-    response["actuators"] = actuators_.discover(actuator_authority());
+    std::uint64_t revision{};
+    response["actuators"] = actuators_.discover(actuator_authority(), Clock::now(), &revision);
+    response["actuator_configuration_revision"] = revision;
     return complete_configuration_save(request, response, "success", true);
 }
 

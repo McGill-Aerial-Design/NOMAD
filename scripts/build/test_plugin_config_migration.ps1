@@ -119,6 +119,40 @@ try {
     }
     $explicitAxis = Load-Config '{"JoystickCameraTiltEnabled":true,"JoystickPositionEnabled":false}'
     if ($explicitAxis.JoystickPositionEnabled) { throw 'Explicit position opt-out was overwritten.' }
+    Assert-ThrowsMessage '{"JoystickSw1UpAction":"a:activate","JoystickSw2UpAction":"b:activate","JoystickButtonIndices":[0,1,0,3,4,5]}' 'unique physical HID'
+    Assert-ThrowsMessage '{"JoystickSw1UpAction":"a:activate","JoystickButtonIndices":[6,1,2,3,4,5]}' 'disjoint'
+    Assert-ThrowsMessage '{"JoystickTerminationButtonIndex":6.5}' 'must be an integer'
+    Assert-ThrowsMessage '{"JoystickKillSwitchEnabled":"true"}' 'enabled flag must be boolean'
+    Assert-ThrowsMessage '{"JoystickButtonIndices":[0,1,2.5,3,4,5]}' 'must be integers'
+    Assert-ThrowsMessage '{"JoystickTerminationButtonIndex":128}' 'between 0 and 127'
+    $loadPaths = $configType.GetMethod('LoadFromPaths', [Reflection.BindingFlags]'Static,NonPublic')
+    $oversizedPrimary = Join-Path $temporary 'oversized-primary.json'
+    $validBackup = Join-Path $temporary 'valid-backup.json'
+    [IO.File]::WriteAllText($validBackup, '{"CoreRuntimePort":14631}')
+    foreach ($oversizedJson in @(
+        '{"JoystickTerminationButtonIndex":4294967296}',
+        '{"JoystickButtonIndices":[0,1,4294967296,3,4,5]}',
+        '{"JoystickTerminationButtonIndex":18446744073709551616}'
+    )) {
+        [IO.File]::WriteAllText($oversizedPrimary, $oversizedJson)
+        $rejected = $false
+        $pathArguments = New-Object object[] 2
+        $pathArguments[0] = [string]$oversizedPrimary
+        $pathArguments[1] = [string]$validBackup
+        try { $loadPaths.Invoke($null, $pathArguments) | Out-Null }
+        catch {
+            if (-not $_.Exception.ToString().Contains('between 0 and 127')) { throw }
+            $rejected = $true
+        }
+        if (-not $rejected) { throw 'Oversized primary HID integer silently fell back to valid backup/defaults.' }
+        if ([IO.File]::ReadAllText($oversizedPrimary) -cne $oversizedJson) { throw 'Invalid primary was overwritten.' }
+    }
+    $termDefaults = Load-Config '{}'
+    if ($termDefaults.JoystickTerminationButtonIndex -ne 6) { throw 'Missing termination index did not retain reviewed default6.' }
+    $termRemap = Load-Config '{"JoystickTerminationButtonIndex":10,"JoystickSw1UpAction":"a:activate"}'
+    if ($termRemap.JoystickTerminationButtonIndex -ne 10) { throw 'Explicit valid termination index was not preserved.' }
+    $inactiveAlias = Load-Config '{"JoystickSw1UpAction":"a:activate","JoystickButtonIndices":[0,0,0,0,0,0]}'
+    if ($inactiveAlias.JoystickButtonIndices[1] -ne 0) { throw 'Inactive index alias was silently remapped.' }
     $empty = Load-Config '{"Payloads":[],"Actuators":[],"SerialJoystickEnabled":false}'
     $emptyPath = Join-Path $temporary 'empty-retired-export.json'
     $empty.ExportToFile($emptyPath)
@@ -168,6 +202,26 @@ try {
         if ($combo.Text -ne 'Renamed device / Renamed action [stable-id:activate]') {
             throw 'Backend label refresh did not preserve the stable semantic binding.'
         }
+        $positionAction = [Activator]::CreateInstance($actionType)
+        $actionType.GetProperty('Operation').SetValue($positionAction, 'position', $null)
+        $actionType.GetProperty('Control').SetValue($positionAction, 'position', $null)
+        $actionType.GetProperty('Label').SetValue($positionAction, 'Set position', $null)
+        $actionType.GetProperty('ContinuousAxisAllowed').SetValue($positionAction, $false, $null)
+        $actionType.GetProperty('ContinuousAxisBlockedReason').SetValue($positionAction, 'Use discrete UI confirmations.', $null)
+        $eligibilityStore = $plugin.GetType('NOMAD.MissionPlanner.OutputController', $true).GetField('ContinuousAxisActions', [Reflection.BindingFlags]'Static,NonPublic').GetValue($null)
+        $eligibilityStore['stable-id'] = $positionAction
+        $positionId = $formType.GetField('_txtJoyPositionActuatorId', $privateFlags).GetValue($form)
+        $positionId.Text = 'stable-id'
+        $positionEnable = $formType.GetField('_chkJoyPositionEnabled', $privateFlags).GetValue($form)
+        $positionReason = $formType.GetField('_lblJoyPositionEligibility', $privateFlags).GetValue($form)
+        if ($positionEnable.Enabled -or $positionEnable.Checked -or $positionReason.Text -ne 'Use discrete UI confirmations.') {
+            throw 'Unsupported axis binding was not disabled with the backend reason.'
+        }
+        $actionType.GetProperty('ContinuousAxisAllowed').SetValue($positionAction, $true, $null)
+        $formType.GetMethod('UpdatePositionEligibility', $privateFlags).Invoke($form, @()) | Out-Null
+        if (-not $positionEnable.Enabled) { throw 'Backend allowed axis data did not enable the input option.' }
+        $positionId.Text = 'unknown-id'
+        if ($positionEnable.Enabled) { throw 'Unknown axis eligibility did not fail closed.' }
     } finally { $form.Dispose() }
     Write-Host 'Mission Planner config migration passed: stable cleanup, client ownership, and fail-fast legacy rejection.'
 } finally {

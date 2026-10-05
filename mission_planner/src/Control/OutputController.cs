@@ -22,6 +22,8 @@ namespace NOMAD.MissionPlanner
             {
                 DisplayStates.Clear();
                 ReleaseOperations.Clear();
+                ContinuousAxisActions.Clear();
+                _catalogRevision = null;
                 _displayIncarnation = "";
                 _displaySequence = 0;
                 RetiredIncarnations.Clear();
@@ -41,6 +43,8 @@ namespace NOMAD.MissionPlanner
         private static readonly object ProjectionGate = new object();
         private static readonly Dictionary<string, NomadActuatorState> DisplayStates = new Dictionary<string, NomadActuatorState>();
         private static readonly Dictionary<string, string> ReleaseOperations = new Dictionary<string, string>();
+        private static readonly Dictionary<string, NomadActuatorAction> ContinuousAxisActions = new Dictionary<string, NomadActuatorAction>();
+        private static ulong? _catalogRevision;
         private static readonly HashSet<string> RetiredIncarnations = new HashSet<string>();
         private static ulong _displaySequence;
         private static string _displayIncarnation = "";
@@ -67,16 +71,12 @@ namespace NOMAD.MissionPlanner
             }
             if (result.RuntimeIncarnation != "" && !ObserveIncarnation(result.RuntimeIncarnation, result.RequestSequence))
             { result.PresentationCurrent = false; return result; }
+            if (!AcceptCatalog(result)) { result.PresentationCurrent = false; return result; }
             foreach (var actuator in result.Actuators)
             {
                 if (!PublishState(result.RuntimeIncarnation, actuator.State, result.RequestSequence))
                 {
                     continue;
-                }
-                lock (ProjectionGate)
-                {
-                    foreach (var action in actuator.Actions)
-                    { ReleaseOperations[actuator.Id + ":" + action.Operation] = action.ReleaseOperation; }
                 }
             }
             if (result.ActuatorState != null)
@@ -88,6 +88,35 @@ namespace NOMAD.MissionPlanner
                 Log.Warn(configuration ? DescribeConfigurationResult(result) : DescribeFailure("Actuator request", result));
             }
             return result;
+        }
+
+        private static bool AcceptCatalog(NomadCoreRequestResult result)
+        {
+            if (!result.HasActuatorDefinitions) { return true; }
+            lock (ProjectionGate)
+            {
+                if (!result.ActuatorConfigurationRevision.HasValue)
+                { ContinuousAxisActions.Clear(); return false; }
+                ulong revision = result.ActuatorConfigurationRevision.Value;
+                if (_catalogRevision.HasValue && revision < _catalogRevision.Value) { return false; }
+                _catalogRevision = revision;
+                ReleaseOperations.Clear();
+                ContinuousAxisActions.Clear();
+                foreach (var actuator in result.Actuators)
+                {
+                    foreach (var action in actuator.Actions)
+                    {
+                        ReleaseOperations[actuator.Id + ":" + action.Operation] = action.ReleaseOperation;
+                        if (action.Control == "position") { ContinuousAxisActions[actuator.Id] = action; }
+                    }
+                }
+                return true;
+            }
+        }
+        internal static NomadActuatorAction GetContinuousAxisMetadata(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) { return null; }
+            lock (ProjectionGate) { return ContinuousAxisActions.TryGetValue(id, out var action) ? action : null; }
         }
 
         internal static string GetReleaseOperation(string binding)
@@ -120,6 +149,8 @@ namespace NOMAD.MissionPlanner
                     }
                     DisplayStates.Clear();
                     ReleaseOperations.Clear();
+                    ContinuousAxisActions.Clear();
+                    _catalogRevision = null;
                     _displayIncarnation = incarnation;
                 }
                 _displaySequence = Math.Max(_displaySequence, sequence);

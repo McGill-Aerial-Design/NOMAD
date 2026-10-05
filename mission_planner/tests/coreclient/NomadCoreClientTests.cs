@@ -27,6 +27,7 @@ internal static partial class NomadCoreClientTests
         {
             ActuatorClient_ReportsBackendEvidence();
             Joystick_AuthorizationTests();
+        Joystick_InputConfigurationTests();
             return _failures == 0 ? 0 : 1;
         }
         Runtime_AsyncTests();
@@ -47,6 +48,7 @@ internal static partial class NomadCoreClientTests
         Output_ReportsTruthfulOutcomeWording();
         ActuatorClient_ReportsBackendEvidence();
         Joystick_AuthorizationTests();
+        Joystick_InputConfigurationTests();
         Runtime_RejectsRogueRuntimeWithoutCredentialDisclosure();
         Runtime_AuditFailureAfterSendIsUnknown();
         Runtime_GimbalTarget_UsesTypedRequestAndRequiresAuthority();

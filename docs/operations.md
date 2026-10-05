@@ -505,8 +505,13 @@ UI confirmations are discrete requests. USB HID uses the actual selected device,
 configured button indices, real neutral observations and backend-provided release
 metadata. There is no Python serial/virtual-gamepad helper. Input loss cancels
 unsent stale observations and sends a semantic safe intent once; uncertain begun
-mutations are never retried. A hazardous absolute-position axis has no supported
-confirmation gesture; use the UI for that configuration instead of bypassing policy.
+mutations are never retried. Continuous HID position input is available only when
+runtime discovery advertises `continuous_axis_allowed`; unsupported bindings are
+disabled with the backend reason. Hazardous or confirmation-required positions use
+discrete UI confirmations, and the runtime independently rejects their HID position requests.
+Active semantic bindings must use unique physical HID button indices. The termination
+monitor button is configurable (default index 6) and must be disjoint from active
+actuator mappings when enabled; it still reports termination as unavailable.
 
 | Behavior | Configured actions |
 |---|---|
@@ -543,6 +548,8 @@ python scripts/migrate_actuators.py <old-mp.json> <new-backend.json> <new-privat
 The converter preserves exact channels, endpoints, reversal, pulse values, names and
 stable list-index IDs, and maps old switch actions to semantic IDs. It preserves the
 old direct-HID button indices (0–5); select the actual USB HID device explicitly.
+It preserves legacy termination monitoring on button index 6 and rejects an
+incompatible supplied index before exporting either file.
 Backend exports contain no frontend credentials. The private frontend output preserves
 independently provisioned credentials; it is not a portable profile template. The
 native backend validates the candidate before either export. Unsupported RC pass-through,

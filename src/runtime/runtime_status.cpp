@@ -31,10 +31,12 @@ Json Runtime::Implementation::handle_read_request(const Request &request) {
     }
     if (request.type == "get_actuators") {
         observe_vehicle_session();
+        std::uint64_t revision{};
+        auto catalog = actuators_.discover(actuator_authority(), Clock::now(), &revision);
         return {{"protocol", kProtocolName}, {"version", kProtocolVersion}, {"id", request.id},
                 {"ok", true}, {"type", "actuators_response"}, {"runtime_incarnation", incarnation_},
                 {"configuration_recovery_required", actuator_configuration_recovery_.load()},
-                {"actuators", actuators_.discover(actuator_authority())}};
+                {"actuator_configuration_revision", revision}, {"actuators", std::move(catalog)}};
     }
     if (request.type == "ping") {
         return {{"protocol", kProtocolName}, {"version", kProtocolVersion}, {"id", request.id},

@@ -109,6 +109,12 @@ def convert_binding(action: str, kinds: list[int], definitions: list[dict]) -> s
 def convert_config(config: dict) -> tuple[dict, dict]:
     if any(key not in config for key in SWITCH_KEYS):
         raise ValueError("Missing legacy switch settings require review; old compiled defaults are not guessed")
+    termination_enabled = read_value(config, "JoystickKillSwitchEnabled", True, bool)
+    termination_index = read_value(config, "JoystickTerminationButtonIndex", 6, int)
+    if termination_index != 6:
+        raise ValueError(
+            "Legacy termination input was compiled as button 6; a different index requires explicit review"
+        )
     if config.get("SerialJoystickEnabled") is True:
         raise ValueError("Virtual-gamepad input cannot be mapped to USB HID automatically; review physical inputs")
     if config.get("JoystickCameraTiltEnabled") is True or config.get("JoystickZedEnabled") is True:
@@ -130,6 +136,8 @@ def convert_config(config: dict) -> tuple[dict, dict]:
             frontend.pop(key)
     # These are the six exact button indices used by the retired direct-input switch mapper.
     frontend["JoystickButtonIndices"] = [0, 1, 2, 3, 4, 5]
+    frontend["JoystickTerminationButtonIndex"] = termination_index
+    frontend["JoystickKillSwitchEnabled"] = termination_enabled
     return {"actuator_configs": definitions}, frontend
 
 

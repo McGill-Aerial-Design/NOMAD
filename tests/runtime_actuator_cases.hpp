@@ -227,6 +227,110 @@ void test_hid_bidirectional_release_preserves_confirmations_and_stops() {
     runtime.stop();
 }
 
+void test_catalog_revision_orders_persistence_and_empty_replacement() {
+    auto config = test_config();
+    config.ipc_port = free_port();
+    config.actuation_enabled = true;
+    config.actuator_config_file = (std::filesystem::path(config.audit_directory) / "actuators.json").string();
+    auto p = runtime_actuator(nomad::runtime::ActuatorBehavior::ServoPosition);
+    p.hazardous = false;
+    p.confirmation_count = 0;
+    config.actuators = {p};
+    Json during_save;
+    config.actuator_directory_sync_guard = [&] {
+        Client observer(config.ipc_port);
+        during_save = observer.request(base_request("catalog-during-persistence", "get_actuators"));
+        return true;
+    };
+    auto connection = std::make_unique<FakeConnection>();
+    auto *observed = connection.get();
+    nomad::runtime::Runtime runtime(std::move(connection), config);
+    start_ready(runtime, config.ipc_port);
+    admit_authority(config.ipc_port);
+    Client client(config.ipc_port);
+    const auto before = client.request(base_request("catalog-before-persistence", "get_actuators"));
+    CHECK(client.request(actuator_request("catalog-config-safe", "safe"))["command_result"]["success"] == true);
+    auto request = authority_request("empty-catalog-configuration", "configure_actuators");
+    request["actuator_configs"] = Json::array();
+    const auto saved = client.request(request);
+    CHECK(saved["request_result"]["success"] == true);
+    CHECK(during_save["actuators"].size() == 1);
+    CHECK(during_save["actuator_configuration_revision"] == before["actuator_configuration_revision"]);
+    CHECK(saved["actuators"].empty());
+    CHECK(saved["actuator_configuration_revision"] > during_save["actuator_configuration_revision"]);
+    const auto after = client.request(base_request("catalog-after-persistence", "get_actuators"));
+    CHECK(after["actuators"].empty());
+    CHECK(after["actuator_configuration_revision"] == saved["actuator_configuration_revision"]);
+    CHECK(observed->command_count() == 1);
+    runtime.stop();
+}
+
+void test_continuous_axis_eligibility_is_owned_by_backend() {
+    for (const int confirmations : {0, 1, 2, 3}) {
+        auto config = test_config();
+        config.ipc_port = free_port();
+        config.actuation_enabled = true;
+        auto p = runtime_actuator(nomad::runtime::ActuatorBehavior::ServoPosition);
+        p.confirmation_count = confirmations;
+        p.hazardous = confirmations >= 2;
+        config.actuators = {p};
+        auto connection = std::make_unique<FakeConnection>();
+        auto *observed = connection.get();
+        nomad::runtime::Runtime runtime(std::move(connection), config);
+        start_ready(runtime, config.ipc_port);
+        admit_authority(config.ipc_port);
+        Client client(config.ipc_port);
+        const auto discovery = client.request(base_request("axis-discovery", "get_actuators"));
+        const auto action = discovery["actuators"][0]["actions"][0];
+        CHECK(action["continuous_axis_allowed"] == (confirmations == 0));
+        CHECK(action["continuous_axis_blocked_reason"].get<std::string>().empty() == (confirmations == 0));
+        CHECK(client.request(actuator_request("axis-safe", "safe"))["command_result"]["success"] == true);
+        auto axis = actuator_request("axis-position", "position", "hid", 6);
+        axis["value"] = 0.25;
+        const auto result = client.request(axis);
+        CHECK(observed->command_count() == (confirmations == 0 ? 2 : 1));
+        if (confirmations > 0) {
+            CHECK(result["error"]["code"] == "actuator_action_blocked");
+            CHECK(result["error"]["message"] == action["continuous_axis_blocked_reason"]);
+            CHECK(observed->command_count() == 1);
+        }
+        const int ui_requests = confirmations == 0 ? 1 : confirmations;
+        for (int count = 0; count < ui_requests; ++count) {
+            auto ui = actuator_request("axis-ui-confirm-" + std::to_string(count), "position");
+            ui["value"] = 0.25;
+            CHECK(client.request(ui)["execution_attempted"] == (count == ui_requests - 1));
+        }
+        CHECK(observed->command_count() == (confirmations == 0 ? 3 : 2));
+        runtime.stop();
+    }
+}
+
+void test_unknown_actuator_actions_are_rejected_without_state_change() {
+    auto config = test_config();
+    config.ipc_port = free_port();
+    config.actuation_enabled = true;
+    config.actuators = {runtime_actuator(nomad::runtime::ActuatorBehavior::ServoToggle)};
+    auto connection = std::make_unique<FakeConnection>();
+    auto *observed = connection.get();
+    nomad::runtime::Runtime runtime(std::move(connection), config);
+    start_ready(runtime, config.ipc_port);
+    admit_authority(config.ipc_port);
+    Client client(config.ipc_port);
+    const auto before = client.request(base_request("before-unknown", "get_actuators"))["actuators"];
+    for (const auto *operation : {"safe", "stop", "activate"}) {
+        auto request = actuator_request(std::string("unknown-") + operation, operation);
+        request["actuator_id"] = "stale-output";
+        const auto rejected = client.request(request);
+        CHECK(rejected["error"]["code"] == "actuator_action_blocked");
+        CHECK(rejected["outcome"] == "rejected");
+        CHECK(observed->command_count() == 0);
+    }
+    CHECK(client.request(base_request("after-unknown", "get_actuators"))["actuators"] == before);
+    CHECK(client.request(actuator_request("known-safe-after-unknown", "safe"))["command_result"]["success"] == true);
+    CHECK(observed->command_count() == 1);
+    runtime.stop();
+}
+
 void test_backend_actuator_authorization_and_raw_boundary() {
     auto config = test_config();
     config.ipc_port = free_port();

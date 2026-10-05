@@ -9,6 +9,8 @@ namespace NOMAD.MissionPlanner.Connectivity
         public string Operation { get; internal set; }
         public string Label { get; internal set; }
         public string Control { get; internal set; }
+        public bool ContinuousAxisAllowed { get; internal set; }
+        public string ContinuousAxisBlockedReason { get; internal set; } = "";
         public string ReleaseOperation { get; internal set; } = "";
     }
     public sealed class NomadActuatorState

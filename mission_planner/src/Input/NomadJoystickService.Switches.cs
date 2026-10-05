@@ -13,9 +13,12 @@ namespace NOMAD.MissionPlanner
         private readonly bool[] _previousButtons = new bool[6];
         private readonly bool[] _previousNeutral = new bool[3];
         private long _inputGeneration;
+        private readonly HashSet<string> _previousConflictingIds = new HashSet<string>();
         private readonly long[] _pairGeneration = new long[3];
         private bool _haveValidButtons;
         private bool _previousKill;
+        private string _mappingError = "";
+        private readonly Dictionary<string, int> _lastValidInputTargets = new Dictionary<string, int>();
 
         private string GetSlotAction(int slot)
         {
@@ -45,6 +48,15 @@ namespace NOMAD.MissionPlanner
 
         private Task DriveActuatorButtons(IMyJoystickState state)
         {
+            string mappingError = _config.GetInputMappingError();
+            if (mappingError != null)
+            {
+                ResetActuatorInput();
+                if (_mappingError != mappingError) { Log.Warn("USB HID mapping rejected: " + mappingError); }
+                _mappingError = mappingError;
+                return Task.CompletedTask;
+            }
+            _mappingError = "";
             bool[] buttons;
             try
             {
@@ -56,10 +68,16 @@ namespace NOMAD.MissionPlanner
             }
             if (buttons == null || _config.JoystickButtonIndices == null || _config.JoystickButtonIndices.Length != 6)
             { ResetActuatorInput(); return Task.CompletedTask; }
+            var activeIndices = new HashSet<int>();
+            for (int slot = 0; slot < 6; slot++)
+            { if (TryBinding(GetSlotAction(slot), out _, out _)) { activeIndices.Add(_config.JoystickButtonIndices[slot]); } }
             var pressed = new bool[6];
             for (int slot = 0; slot < pressed.Length; slot++)
             {
                 int index = _config.JoystickButtonIndices[slot];
+                bool active = TryBinding(GetSlotAction(slot), out _, out _);
+                if (!active && (activeIndices.Contains(index) ||
+                    (_config.JoystickKillSwitchEnabled && index == _config.JoystickTerminationButtonIndex))) { continue; }
                 if (index < 0 || index >= buttons.Length)
                 {
                     if (TryBinding(GetSlotAction(slot), out _, out _))
@@ -70,10 +88,13 @@ namespace NOMAD.MissionPlanner
                 }
                 pressed[slot] = buttons[index];
             }
+            _lastValidInputTargets.Clear();
+            for (int slot = 0; slot < 6; slot++)
+            { if (TryBinding(GetSlotAction(slot), out var id, out _)) { _lastValidInputTargets[id] = slot / 2; } }
             var dispatch = TranslateButtons(pressed);
-            if (_config.JoystickKillSwitchEnabled && buttons.Length > 6)
+            if (_config.JoystickKillSwitchEnabled && buttons.Length > _config.JoystickTerminationButtonIndex)
             {
-                bool now = buttons[6];
+                bool now = buttons[_config.JoystickTerminationButtonIndex];
                 if (now && !_previousKill)
                 {
                     Log.Warn("Termination button pressed.");
@@ -94,20 +115,29 @@ namespace NOMAD.MissionPlanner
                 if (pressed[slot] && TryBinding(GetSlotAction(slot), out var id, out _) && !held.Add(id))
                 { conflicting.Add(id); }
             }
-            if (conflicting.Count > 0 || (pressed[0] && pressed[1]) ||
-                (pressed[2] && pressed[3]) || (pressed[4] && pressed[5]))
-            { Interlocked.Increment(ref _inputGeneration); }
+            for (int pair = 0; pair < 3; pair++)
+            {
+                int first = pair * 2;
+                if (!pressed[first] || !pressed[first + 1]) { continue; }
+                for (int slot = first; slot < first + 2; slot++)
+                { if (TryBinding(GetSlotAction(slot), out var id, out _)) { conflicting.Add(id); } }
+            }
+            if (conflicting.Count > 0) { Interlocked.Increment(ref _inputGeneration); }
+            var newlyConflicting = new HashSet<string>(conflicting);
+            newlyConflicting.ExceptWith(_previousConflictingIds);
             var batches = new List<Task>();
             for (int pair = 0; pair < 3; pair++)
             {
-                batches.Add(TranslatePair(pressed, pair, conflicting));
+                batches.Add(TranslatePair(pressed, pair, conflicting, newlyConflicting));
             }
+            _previousConflictingIds.Clear();
+            _previousConflictingIds.UnionWith(conflicting);
             Array.Copy(pressed, _previousButtons, pressed.Length);
             _haveValidButtons = true;
             return Task.WhenAll(batches);
         }
 
-        private Task TranslatePair(bool[] pressed, int pair, HashSet<string> conflicting)
+        private Task TranslatePair(bool[] pressed, int pair, HashSet<string> conflicting, HashSet<string> newlyConflicting)
         {
             int first = pair * 2;
             if (!_haveValidButtons || pressed[first] != _previousButtons[first] || pressed[first + 1] != _previousButtons[first + 1])
@@ -128,7 +158,7 @@ namespace NOMAD.MissionPlanner
                 { events.Add((id, release, pair, true)); }
                 if (contradiction || conflicting.Contains(id))
                 {
-                    if ((!_haveValidButtons || !_previousButtons[slot]) && safeTargets.Add(id))
+                    if (newlyConflicting.Remove(id) && safeTargets.Add(id))
                     {
                         events.Add((id, "safe", pair, true));
                     }
@@ -161,15 +191,10 @@ namespace NOMAD.MissionPlanner
             Interlocked.Increment(ref _inputGeneration);
             if (_haveValidButtons)
             {
-                var targets = new HashSet<string>();
-                for (int slot = 0; slot < 6; slot++)
-                {
-                    if (TryBinding(GetSlotAction(slot), out var id, out _) && targets.Add(id))
-                    {
-                        SendHid(id, "safe", slot / 2);
-                    }
-                }
+                foreach (var target in _lastValidInputTargets) { SendHid(target.Key, "safe", target.Value); }
             }
+            _lastValidInputTargets.Clear();
+            _previousConflictingIds.Clear();
             Array.Clear(_previousButtons, 0, _previousButtons.Length);
             Array.Clear(_previousNeutral, 0, _previousNeutral.Length);
             _haveValidButtons = false;

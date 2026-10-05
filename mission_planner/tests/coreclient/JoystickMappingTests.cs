@@ -176,16 +176,17 @@ internal static partial class NomadCoreClientTests
         Expect(!NomadJoystickService.TryReadAxisNorm(state, "X", false, float.NaN, out _), "invalid physical deadzone is rejected");
         Expect(NomadJoystickService.TryReadAxisNorm(state, "X", false, 0.08f, out var center) && center == 0,
             "positively observed center remains a valid axis reading");
-        using var runtime = new MockRuntime(2, semanticResponse: request => SemanticResponse(request));
+        using var runtime = new MockRuntime(3, semanticResponse: request => SemanticResponse(request));
         var config = HidConfig(runtime.Port);
         config.JoystickPositionActuatorId = "release";
         OutputController.Initialize(config);
         var service = new NomadJoystickService(config);
-        service.TranslatePositionInput(true, 0.75f); WaitForHid(runtime, 1);
-        service.TranslatePositionInput(false, 0); WaitForHid(runtime, 2);
+        OutputController.GetActuatorsAsync().GetAwaiter().GetResult();
+        service.TranslatePositionInput(true, 0.75f); WaitForHid(runtime, 2);
+        service.TranslatePositionInput(false, 0); WaitForHid(runtime, 3);
         service.TranslatePositionInput(false, 0);
         runtime.Wait();
-        Expect(Convert.ToDouble(runtime.Commands[0]["value"]) == 0.875 && runtime.Commands[1]["operation"].ToString() == "safe",
+        Expect(Convert.ToDouble(runtime.Commands[1]["value"]) == 0.875 && runtime.Commands[2]["operation"].ToString() == "safe",
             "invalid reading after valid position emits one safe intent and no midpoint command");
     }
 
@@ -281,12 +282,15 @@ internal static partial class NomadCoreClientTests
 
     private static void Axis_DelayedHelloDiscardsStalePosition(bool reset)
     {
-        using var runtime = new AsyncRuntime(2, delayHello: true, semanticResponse: request => SemanticResponse(request));
+        using var runtime = new AsyncRuntime(3, delayHello: true, semanticResponse: request => SemanticResponse(request));
         runtime.ReleaseResponses();
         var config = HidConfig(runtime.Port);
         config.JoystickPositionActuatorId = "release";
         OutputController.Initialize(config);
         var service = new NomadJoystickService(config);
+        runtime.ReleaseHello();
+        OutputController.GetActuatorsAsync().GetAwaiter().GetResult();
+        runtime.DelayHelloAgain();
         service.TranslatePositionInput(true, 0.75f);
         runtime.WaitForHello();
         if (reset)
@@ -296,7 +300,7 @@ internal static partial class NomadCoreClientTests
         service.TranslatePositionInput(false, 0);
         runtime.ReleaseHello();
         runtime.Wait();
-        Expect(runtime.Commands.Count == 1 && runtime.Commands[0]["operation"].ToString() == "safe",
+        Expect(runtime.Commands.Count == 2 && runtime.Commands[1]["operation"].ToString() == "safe",
             "delayed old position is never transmitted after physical " + (reset ? "reset" : "loss") + "; safe intent remains available");
     }
 

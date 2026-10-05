@@ -387,6 +387,9 @@ void run_runtime_scenarios() {
     run_scenario("socket_failure_classification", test_socket_failure_classification);
     run_scenario("backend_actuator_authorization", test_backend_actuator_authorization_and_raw_boundary);
     run_scenario("backend_pulse_recovery", test_backend_pulse_failure_and_explicit_recovery);
+    run_scenario("unknown_actuator_actions", test_unknown_actuator_actions_are_rejected_without_state_change);
+    run_scenario("continuous_axis_eligibility", test_continuous_axis_eligibility_is_owned_by_backend);
+    run_scenario("catalog_revision", test_catalog_revision_orders_persistence_and_empty_replacement);
     run_scenario("backend_actuator_configuration_uncertainty", test_backend_configuration_persistence_uncertainty);
     run_scenario("backend_pending_neutral_and_safe_interrupt", test_backend_pending_neutral_and_safe_interrupt);
     run_scenario("backend_configuration_authority_recovery", test_configuration_requires_current_authority_recovery);
@@ -436,6 +439,9 @@ void run_runtime_scenarios() {
 int main(int argc, char **argv) {
     return nomad::test::run_tests([argc, argv] {
         if (argc == 2 && std::string_view(argv[1]) == "--actuator-tests") {
+            test_unknown_actuator_actions_are_rejected_without_state_change();
+            test_continuous_axis_eligibility_is_owned_by_backend();
+            test_catalog_revision_orders_persistence_and_empty_replacement();
             test_backend_actuator_authorization_and_raw_boundary();
             test_backend_pulse_failure_and_explicit_recovery();
             test_backend_configuration_persistence_uncertainty();

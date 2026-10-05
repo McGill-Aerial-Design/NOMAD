@@ -288,7 +288,15 @@ boundary. Raw servo/relay requests reject configured logical outputs.
 `get_actuators` returns `actuators_response`, the runtime incarnation, configuration
 recovery flag and entries with stable IDs, names, backend-built action labels/control
 types, configuration data and software state. No frontend needs to know channels/PWM
-to operate an entry. `configure_actuators` carries a typed `actuator_configs` array;
+to operate an entry. Position actions also provide `continuous_axis_allowed` and
+`continuous_axis_blocked_reason`; missing metadata is not permission to stream.
+Every full catalog includes `actuator_configuration_revision`, captured with its
+array under the backend state lock and incremented on definition replacement, including
+an empty replacement. Frontend catalog ordering uses this server revision within a
+runtime incarnation, not the client request sequence; missing revisions fail closed.
+The runtime rejects HID position requests for hazardous or confirmation-required
+definitions independently of frontend controls. UI position requests retain discrete
+confirmation support. `configure_actuators` carries a typed `actuator_configs` array;
 the schema is the complete set in [ActuatorDefinition](../include/nomad/runtime/actuator.hpp).
 The protected file wrapper contains only that array. Unknown/missing/wrong-typed fields,
 duplicate IDs/outputs and invalid bounds fail visibly; no automatic remapping occurs.

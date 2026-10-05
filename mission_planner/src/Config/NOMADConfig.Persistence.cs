@@ -3,6 +3,7 @@
 
 using System;
 using System.IO;
+using System.Globalization;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -28,9 +29,11 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static NOMADConfig Load()
         {
-            var primary = ConfigPath;
-            var backup = primary + ".bak";
+            return LoadFromPaths(ConfigPath, ConfigPath + ".bak");
+        }
 
+        internal static NOMADConfig LoadFromPaths(string primary, string backup)
+        {
             foreach (var path in new[]
             {
                 primary, backup
@@ -161,6 +164,7 @@ namespace NOMAD.MissionPlanner
         {
             var document = JObject.Parse(json);
             RejectRetiredActuatorOwnership(document);
+            ValidateInputDocument(document);
             bool legacyAxisEnabled = document["JoystickCameraTiltEnabled"]?.Value<bool>() == true ||
                 document["JoystickZedEnabled"]?.Value<bool>() == true;
             if (legacyAxisEnabled && document["JoystickPositionEnabled"] == null)
@@ -293,6 +297,35 @@ namespace NOMAD.MissionPlanner
                 "SerialJoystickPython", "SerialJoystickScriptPath" }) { document.Remove(key); }
         }
 
+        private static void ValidateInputDocument(JObject document)
+        {
+            var termination = document["JoystickTerminationButtonIndex"];
+            var monitor = document["JoystickKillSwitchEnabled"];
+            if ((termination != null && termination.Type != JTokenType.Integer) ||
+                (monitor != null && monitor.Type != JTokenType.Boolean))
+            {
+                throw new UnsupportedConfigurationMigrationException(
+                    "HID termination index must be an integer and its enabled flag must be boolean.");
+            }
+            if (termination != null) { ValidatePhysicalIndex(termination, "HID termination index"); }
+            if (document["JoystickButtonIndices"] == null) { return; }
+            if (!(document["JoystickButtonIndices"] is JArray indices))
+            { throw new UnsupportedConfigurationMigrationException("HID button indices must be an integer array."); }
+            foreach (var index in indices)
+            {
+                if (index.Type != JTokenType.Integer)
+                { throw new UnsupportedConfigurationMigrationException("HID button indices must be integers."); }
+                ValidatePhysicalIndex(index, "HID button indices");
+            }
+        }
+
+        private static void ValidatePhysicalIndex(JToken token, string name)
+        {
+            if (!int.TryParse(token.ToString(Formatting.None), NumberStyles.Integer, CultureInfo.InvariantCulture,
+                out int value) || value < 0 || value > 127)
+            { throw new UnsupportedConfigurationMigrationException(name + " must be an integer between 0 and 127."); }
+        }
+
         private static void ValidateLegacyLoopbackSetting(JObject document, string key)
         {
             var address = document[key]?.Value<string>();
@@ -309,10 +342,6 @@ namespace NOMAD.MissionPlanner
         private void MigrateDefaults()
         {
             ValidateInputBindings();
-            if (JoystickButtonIndices == null || JoystickButtonIndices.Length != 6 ||
-                System.Array.Exists(JoystickButtonIndices, index => index < 0 || index > 127))
-            { throw new UnsupportedConfigurationMigrationException("Direct USB HID button indices require six values from 0 to 127."); }
-
             if (CoreRuntimePort < 1 || CoreRuntimePort > 65535)
             {
                 CoreRuntimePort = Connectivity.NomadCoreClient.DefaultRuntimePort;
@@ -364,18 +393,8 @@ namespace NOMAD.MissionPlanner
 
         internal void ValidateInputBindings()
         {
-            foreach (var binding in new[] { JoystickSw1UpAction, JoystickSw1DownAction, JoystickSw2UpAction,
-                JoystickSw2DownAction, JoystickSw3UpAction, JoystickSw3DownAction })
-            {
-                if (string.IsNullOrEmpty(binding) || binding == "None")
-                {
-                    continue;
-                }
-                int separator = binding.LastIndexOf(':');
-                if (separator <= 0 || separator == binding.Length - 1)
-                { throw new UnsupportedConfigurationMigrationException(
-                    "Joystick actions must refer to runtime actuator IDs and operations. Migrate legacy mappings before loading."); }
-            }
+            string error = GetInputMappingError();
+            if (error != null) { throw new UnsupportedConfigurationMigrationException(error); }
         }
 
         private static float Clamp(float value, float min, float max, float fallback)

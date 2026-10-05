@@ -83,6 +83,7 @@ namespace NOMAD.MissionPlanner
 
         private double? _lastPositionInput;
         private long _positionGeneration;
+        private string _axisBlockedReason = "";
         internal void TranslatePositionInput(bool valid, float normalized)
         {
             if (!valid)
@@ -93,6 +94,17 @@ namespace NOMAD.MissionPlanner
                 _lastPositionInput = null;
                 return;
             }
+            var eligibility = OutputController.GetContinuousAxisMetadata(_config.JoystickPositionActuatorId);
+            if (eligibility == null || !eligibility.ContinuousAxisAllowed)
+            {
+                string reason = eligibility?.ContinuousAxisBlockedReason;
+                if (string.IsNullOrEmpty(reason)) { reason = "Load runtime action metadata and select a supported continuous-axis binding."; }
+                if (_axisBlockedReason != reason) { Log.Warn("Position HID input unavailable: " + reason); }
+                _axisBlockedReason = reason;
+                TranslatePositionInput(false, 0);
+                return;
+            }
+            _axisBlockedReason = "";
             if (string.IsNullOrWhiteSpace(_config.JoystickPositionActuatorId))
             {
                 return;
@@ -107,7 +119,8 @@ namespace NOMAD.MissionPlanner
             long resetGeneration = Interlocked.Read(ref _inputGeneration);
             string id = _config.JoystickPositionActuatorId;
             _ = SendPositionInputAsync(id, position, () => positionGeneration == Interlocked.Read(ref _positionGeneration) &&
-                resetGeneration == Interlocked.Read(ref _inputGeneration));
+                resetGeneration == Interlocked.Read(ref _inputGeneration) &&
+                OutputController.GetContinuousAxisMetadata(id)?.ContinuousAxisAllowed == true);
         }
 
         private async Task SendPositionInputAsync(string id, double position, Func<bool> inputStillCurrent)

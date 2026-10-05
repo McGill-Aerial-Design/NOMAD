@@ -282,6 +282,7 @@ internal static partial class NomadCoreClientTests
         }
 
         internal void ReleaseHello() => _helloReleased.Set();
+        internal void DelayHelloAgain() { _helloObserved.Reset(); _helloReleased.Reset(); }
         internal void ReleaseResponse(int channel) => _responses[channel].Set();
 
         internal void ReleaseResponses()

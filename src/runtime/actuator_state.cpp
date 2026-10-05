@@ -7,6 +7,10 @@
 namespace nomad::runtime::detail {
 namespace {
 
+bool allows_continuous_axis(const ActuatorDefinition &p) {
+    return p.behavior == ActuatorBehavior::ServoPosition && !p.hazardous && p.confirmation_count == 0;
+}
+
 Json actions(const ActuatorDefinition &p) {
     auto result = Json::array();
     const auto add = [&](const std::string &operation, const std::string &label, const char *control = "button") {
@@ -16,6 +20,9 @@ Json actions(const ActuatorDefinition &p) {
     };
     if (p.behavior == ActuatorBehavior::ServoPosition) {
         add("position", p.primary_label, "position");
+        result.back()["continuous_axis_allowed"] = allows_continuous_axis(p);
+        result.back()["continuous_axis_blocked_reason"] = allows_continuous_axis(p) ? "" :
+            "continuous HID position input cannot confirm this action; use discrete UI confirmations";
     } else if (p.behavior == ActuatorBehavior::ServoBidirectional) {
         add("negative", p.negative_label);
         add("positive", p.positive_label);
@@ -77,6 +84,7 @@ ActuatorState::ActuatorState(std::vector<ActuatorDefinition> definitions) {
 
 void ActuatorState::replace(std::vector<ActuatorDefinition> definitions) {
     std::lock_guard lock(mutex_);
+    ++configuration_revision_;
     definitions_ = std::move(definitions);
     states_.clear();
     for (const auto &p : definitions_) {
@@ -122,8 +130,12 @@ Json ActuatorState::state(const std::string &id) const {
     return Json(nullptr);
 }
 
-Json ActuatorState::discover(const std::string &authority, std::chrono::steady_clock::time_point now) {
+Json ActuatorState::discover(const std::string &authority, std::chrono::steady_clock::time_point now,
+                            std::uint64_t *configuration_revision) {
     std::lock_guard lock(mutex_);
+    if (configuration_revision != nullptr) {
+        *configuration_revision = configuration_revision_;
+    }
     auto result = Json::array();
     const auto configs = serialize_actuator_definitions(definitions_);
     for (std::size_t index = 0; index < definitions_.size(); ++index) {
@@ -186,6 +198,10 @@ ActuatorDecision ActuatorState::begin(const ActuatorInput &input, std::chrono::s
     ActuatorDecision decision;
     if (found == definitions_.end() || input.operation == "release_input" || !matches_operation(*found, input)) {
         decision.message = "configured actuator/action is unavailable or value is invalid";
+        return decision;
+    }
+    if (input.source == "hid" && input.operation == "position" && !allows_continuous_axis(*found)) {
+        decision.message = "continuous HID position input cannot confirm this action; use discrete UI confirmations";
         return decision;
     }
     return begin_locked(input, *found, states_.at(input.id), now);

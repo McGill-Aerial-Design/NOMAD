@@ -23,6 +23,8 @@ namespace NOMAD.MissionPlanner.Connectivity
         public string ErrorCode { get; }
         public string Message { get; }
         public bool? Acknowledged { get; }
+        public ulong? ActuatorConfigurationRevision { get; internal set; }
+        public bool HasActuatorDefinitions { get; internal set; }
         public IReadOnlyList<NomadActuator> Actuators { get; internal set; } = new List<NomadActuator>();
         public NomadActuatorState ActuatorState { get; internal set; }
         public ulong RequestSequence { get; internal set; }
