@@ -304,6 +304,12 @@ SR-PAY-02 | src/safety/payload.cpp:clamp_release_duration | tests/safety_test.cp
 SR-PAY-02 | src/vehicle/vehicle_payload.cpp:release_payload | tests/safety_test.cpp::test_vehicle_payload_on_failure_still_attempts_off
 SR-PAY-02 | src/vehicle/vehicle_payload.cpp:release_payload | tests/safety_test.cpp::test_vehicle_payload_off_failure_is_reported
 SR-PAY-03 | src/safety/payload.cpp:ReleaseInterlock::evaluate_release | tests/safety_test.cpp::test_payload_validation_and_interlock
+SR-PAY-03 | mission_planner/src/Payload/PayloadReleaseInterlock.cs:RegisterClick | mission_planner/tests/payload/PayloadReleaseInterlockTests.cs::Authorization_IsBoundedConsumingAndRevocable
+SR-PAY-03 | mission_planner/src/Input/NomadJoystickService.Switches.cs:DrivePayloadButtons | mission_planner/tests/coreclient/JoystickAuthorizationTests.cs::Joystick_OneEdgeAndHeldButtonSendNothing
+SR-PAY-03 | mission_planner/src/Input/NomadJoystickService.Switches.cs:DrivePayloadButtons | mission_planner/tests/coreclient/JoystickAuthorizationTests.cs::Joystick_ResetExpiryAndInvalidInputFailClosed
+SR-PAY-03 | mission_planner/src/Payload/PayloadActions.cs:Drop | mission_planner/tests/coreclient/JoystickAuthorizationTests.cs::Joystick_AuthorizedDropSendsOnceAndSharesState
+SR-PAY-03 | mission_planner/src/Payload/PayloadActions.cs:FireRelay | mission_planner/tests/coreclient/JoystickAuthorizationTests.cs::Joystick_AuthorizedPumpFiresOnce
+SR-PAY-03 | mission_planner/src/Payload/PayloadActions.cs:SendOutput | mission_planner/tests/coreclient/JoystickAuthorizationTests.cs::PayloadBoundary_ReservesOutputUntilUncertaintyRecorded
 SR-SEC-01 | src/vehicle/vehicle.cpp:send_command | tests/test_mavsdk_connection.py::test_command_wire_forms
 SR-SEC-01 | src/qualification/main.cpp:run_command | tests/test_cpp_command_surface.py::test_cpp_command_surface_has_no_failsafe_controls
 SR-SEC-02 | src/qualification/main.cpp:run_command | tests/test_qualification_cli.py::test_direct_actuation_refused_without_key_before_transport
