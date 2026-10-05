@@ -229,7 +229,7 @@ namespace NOMAD.MissionPlanner
 
         internal static string DescribeConfigurationResult(NomadCoreRequestResult result)
         {
-            if (result.ConfigurationChanged || result.ConfigurationRecoveryRequired)
+            if (result.ConfigurationRecoveryRequired || (result.ConfigurationChanged && !result.Succeeded))
             {
                 return "Runtime configuration changed or may have changed. Restart and review the persisted configuration before further operation. " + result.Message;
             }

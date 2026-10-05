@@ -134,6 +134,10 @@ internal static partial class NomadCoreClientTests
         Expect(result.ConfigurationChanged && result.ConfigurationRecoveryRequired &&
             description.Contains("Restart and review") && !description.Contains("vehicle state"),
             "configuration error preserves backend changed/recovery facts without claiming vehicle uncertainty");
+        var saved = new NomadCoreRequestResult(NomadCoreRequestOutcome.Succeeded, "",
+            "Backend configuration saved; explicit safe commands required.") { ConfigurationChanged = true };
+        Expect(OutputController.DescribeConfigurationResult(saved) == saved.Message,
+            "known successful live configuration reports backend success without requiring restart");
     }
 
     private static void Panel_RendersBackendLabelsAndState()
