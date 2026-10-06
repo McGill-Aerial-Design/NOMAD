@@ -47,6 +47,24 @@ def test_payload_harness_checks_acknowledgement_not_physical_release() -> None:
         payload.validate_relay_pulse_output("payload release verified\n")
 
 
+def test_payload_harness_does_not_replay_an_uncertain_relay_pulse(monkeypatch, capsys) -> None:
+    calls = []
+    monkeypatch.setattr(payload, "get_sitl_port", lambda: "14570")
+    monkeypatch.setattr(payload, "find_binary", lambda: Path("nomad"))
+    monkeypatch.setattr(payload, "print_watch_hint", lambda: None)
+    monkeypatch.setattr(payload, "wait_for_status", lambda *args: {"connected": "true", "armed": "false"})
+
+    def fail_pulse(binary, port, *arguments, **options):
+        calls.append((binary, port, arguments, options))
+        raise payload.ScenarioError("relay outcome is unknown")
+
+    monkeypatch.setattr(payload, "run_cli", fail_pulse)
+
+    assert payload.main() == 1
+    assert calls == [(Path("nomad"), "14570", ("payload-demo", "0", "0.1"), {"attempts": 1})]
+    assert "relay outcome is unknown" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("port, expected", [("1", (1, 2, 3)), ("65533", (65533, 65534, 65535))])
 def test_zero_delivery_relay_ports_allow_only_safe_boundaries(port: str, expected: tuple[int, int, int]) -> None:
     assert zero_delivery.get_relay_ports(port) == expected

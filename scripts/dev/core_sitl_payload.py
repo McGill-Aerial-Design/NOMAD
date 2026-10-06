@@ -28,7 +28,8 @@ def main() -> int:
         initial = wait_for_status(binary, port, {"connected": "true"}, 15.0)
         if initial.get("armed") == "true":
             raise ScenarioError("SITL must start disarmed for payload acceptance")
-        output = run_cli(binary, port, "payload-demo", "0", "0.1")
+        # A relay pulse is not idempotent; an unknown outcome must not replay it.
+        output = run_cli(binary, port, "payload-demo", "0", "0.1", attempts=1)
         validate_relay_pulse_output(output)
         print("C++ SITL relay pulse ACK passed; physical relay state is not verified", flush=True)
         return 0
