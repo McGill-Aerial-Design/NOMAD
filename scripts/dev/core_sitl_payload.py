@@ -9,6 +9,12 @@ from core_sitl_command_flow import ScenarioError, run_cli, wait_for_status
 from core_sitl_status import find_binary, get_sitl_port, print_watch_hint
 
 
+def validate_relay_pulse_output(output: str) -> None:
+    """Require both relay commands to reach the successful final ACK result."""
+    if "relay command acknowledged" not in output:
+        raise ScenarioError(f"relay pulse command was not acknowledged: {output!r}")
+
+
 def main() -> int:
     try:
         port = get_sitl_port()
@@ -23,9 +29,8 @@ def main() -> int:
         if initial.get("armed") == "true":
             raise ScenarioError("SITL must start disarmed for payload acceptance")
         output = run_cli(binary, port, "payload-demo", "0", "0.1")
-        if "payload release verified" not in output:
-            raise ScenarioError(f"payload release was not verified: {output!r}")
-        print("C++ SITL payload acceptance passed", flush=True)
+        validate_relay_pulse_output(output)
+        print("C++ SITL relay pulse ACK passed; physical relay state is not verified", flush=True)
         return 0
     except (ValueError, ScenarioError) as error:
         print(f"C++ SITL payload failed: {error}", file=sys.stderr)

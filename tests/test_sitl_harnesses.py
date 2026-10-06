@@ -19,6 +19,7 @@ sys.path.insert(0, str(SCRIPTS))
 import core_sitl_command_flow as command_flow  # noqa: E402
 import core_sitl_containment as containment  # noqa: E402
 import core_sitl_gcs_heartbeat as gcs_heartbeat  # noqa: E402
+import core_sitl_payload as payload  # noqa: E402
 import core_sitl_zero_delivery as zero_delivery  # noqa: E402
 
 
@@ -37,6 +38,13 @@ def test_run_cli_rejection_rejects_a_successful_command(monkeypatch) -> None:
 
     with pytest.raises(command_flow.ScenarioError, match="expected command to fail"):
         command_flow.run_cli_rejection(Path("nomad"), "14570", "outside the geofence", "goto", "1", "2", "3")
+
+
+def test_payload_harness_checks_acknowledgement_not_physical_release() -> None:
+    payload.validate_relay_pulse_output("relay command acknowledged\n")
+
+    with pytest.raises(payload.ScenarioError, match="relay pulse command was not acknowledged"):
+        payload.validate_relay_pulse_output("payload release verified\n")
 
 
 @pytest.mark.parametrize("port, expected", [("1", (1, 2, 3)), ("65533", (65533, 65534, 65535))])

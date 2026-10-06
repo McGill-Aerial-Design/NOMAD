@@ -144,7 +144,7 @@ jobs:
       - name: C++ velocity watchdog scenario (H-01..H-04)
         run: pixi run core-sitl-velocity-watchdog
 
-      - name: C++ payload relay scenario (H-06, SR-PAY-01..03)
+      - name: C++ relay pulse acknowledgements (H-06, SR-PAY-01..03)
         run: pixi run core-sitl-payload
 
       - name: C++ link-loss injection scenario (H-03, SR-LNK-01/03)
