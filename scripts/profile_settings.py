@@ -18,11 +18,6 @@ PROFILE_KEYS = frozenset(
         "NOMAD_VIDEO_RTSP_URL",
         "NOMAD_INTEGRATED_FLIGHT",
         "NOMAD_SIM_MODE",
-        "NOMAD_FENCE_POLYGON",
-        "NOMAD_FENCE_MARGIN_M",
-        "NOMAD_VELOCITY_MAX_XY",
-        "NOMAD_VELOCITY_MAX_Z",
-        "NOMAD_VELOCITY_MAX_YAW_RATE",
     }
 )
 

@@ -203,6 +203,14 @@ under the exclusive lifetime lock.
 | Aircraft-side router (`infra/transport/mavlink_router/`) | Serial/IP forwarding on the aircraft-side host | The standalone ground router's multi-link selection or NOMAD policy |
 | Qualification tooling (`tests/`, `scripts/dev/`) | Fake peers, deterministic wire fixtures and isolated SITL scenarios | Installed production operation or evidence beyond each test's declared scope |
 
+Runtime protocol v1 does not expose boundary configuration, evaluation or status.
+Mission Planner's saved outlines and altitude color threshold are local display
+data; they are not installed on the runtime or aircraft, and crossing an outline
+does not dispatch a command. The reusable `Vehicle` fence policy remains available
+to direct C++ qualification callers, while runtime-owned navigation and boundary
+enforcement require a typed API and separate qualification before becoming an
+operator-facing NOMAD safety feature.
+
 ## Mission Planner video lifetime
 
 Each embedded player and the plugin's HUD player owns one `VideoSession`. The

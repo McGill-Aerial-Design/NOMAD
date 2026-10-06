@@ -56,8 +56,8 @@ namespace NOMAD.MissionPlanner
         private MAVLinkConnectionManager _connectionManager;
         private NOMADConfig _config;
         private GeofenceConfig _geofenceConfig;
-        private BoundaryMonitor _boundaryMonitor;
-        private bool _ownsBoundaryMonitor;   // true only when no plugin-owned monitor was provided
+        private AdvisoryBoundaryMonitor _advisoryBoundaryMonitor;
+        private bool _ownsAdvisoryBoundaryMonitor;
         private Label _profileLabel;
 
         // Layout panels
@@ -98,21 +98,25 @@ namespace NOMAD.MissionPlanner
         private static NOMADConfig _staticConfig;
         private static MAVLinkConnectionManager _staticConnectionManager;
         private static GeofenceConfig _staticGeofenceConfig;
-        private static BoundaryMonitor _staticBoundaryMonitor;
+        private static AdvisoryBoundaryMonitor _staticAdvisoryBoundaryMonitor;
         private static ModuleHost _staticModuleHost;
 
         /// <summary>
         /// Sets the static configuration used by the MainSwitcher-created instance.
         /// Call this from the plugin before showing the NOMAD screen.
-        /// The geofence config + boundary monitor are plugin-owned so monitoring
-        /// keeps running when MainSwitcher disposes/recreates this screen.
+        /// Advisory outline config and preview are plugin-owned so they remain
+        /// available when MainSwitcher recreates this screen.
         /// </summary>
-        public static void SetStaticConfig(NOMADConfig config, MAVLinkConnectionManager connectionManager = null, GeofenceConfig geofenceConfig = null, BoundaryMonitor boundaryMonitor = null)
+        public static void SetStaticConfig(
+            NOMADConfig config,
+            MAVLinkConnectionManager connectionManager = null,
+            GeofenceConfig geofenceConfig = null,
+            AdvisoryBoundaryMonitor advisoryBoundaryMonitor = null)
         {
             _staticConfig = config;
             _staticConnectionManager = connectionManager;
             _staticGeofenceConfig = geofenceConfig;
-            _staticBoundaryMonitor = boundaryMonitor;
+            _staticAdvisoryBoundaryMonitor = advisoryBoundaryMonitor;
         }
 
         /// <summary>
@@ -141,16 +145,16 @@ namespace NOMAD.MissionPlanner
             _config = config ?? NOMADConfig.Load(); // Fallback to loading config if null
             _connectionManager = connectionManager;
 
-            // Geofence config + boundary monitor shared by the boundary view and
+            // Advisory outline config + preview shared by the boundary view and
             // the dashboard's notification service. Prefer the plugin-owned
             // instances so monitoring/alerts survive screen disposal; fall back
             // to screen-owned ones (and dispose them) when none were provided.
             _geofenceConfig = _staticGeofenceConfig ?? GeofenceConfig.Load();
-            _boundaryMonitor = _staticBoundaryMonitor;
-            if (_boundaryMonitor == null)
+            _advisoryBoundaryMonitor = _staticAdvisoryBoundaryMonitor;
+            if (_advisoryBoundaryMonitor == null)
             {
-                _boundaryMonitor = new BoundaryMonitor(_geofenceConfig, _config);
-                _ownsBoundaryMonitor = true;
+                _advisoryBoundaryMonitor = new AdvisoryBoundaryMonitor(_geofenceConfig);
+                _ownsAdvisoryBoundaryMonitor = true;
             }
 
             // Optional module host (set by the plugin). Inert unless it has modules.
@@ -301,15 +305,18 @@ namespace NOMAD.MissionPlanner
                     if (_dashboardView == null)
                     {
                         _dashboardView = new NOMADDashboardView(_config, _connectionManager, _videoShutdown);
-                        if (_boundaryMonitor != null)
+                        if (_advisoryBoundaryMonitor != null)
                         {
-                            _dashboardView.SetBoundaryMonitor(_boundaryMonitor);
+                            _dashboardView.SetAdvisoryBoundaryMonitor(_advisoryBoundaryMonitor);
                         }
                     }
                     newView = _dashboardView;
                     break;
                 case "Boundaries":
-                    if (_boundaryView == null) _boundaryView = new NOMADBoundaryView(_geofenceConfig, _config, _boundaryMonitor);
+                    if (_boundaryView == null)
+                    {
+                        _boundaryView = new NOMADBoundaryView(_geofenceConfig, _advisoryBoundaryMonitor);
+                    }
                     newView = _boundaryView;
                     break;
                 case "Video":
@@ -414,7 +421,7 @@ namespace NOMAD.MissionPlanner
                 _updateTimer?.Stop();
                 _updateTimer?.Dispose();
 
-                if (_ownsBoundaryMonitor) _boundaryMonitor?.Dispose();
+                if (_ownsAdvisoryBoundaryMonitor) _advisoryBoundaryMonitor?.Dispose();
                 _dashboardView?.Dispose();
                 _boundaryView?.Dispose();
                 _videoView?.Dispose();

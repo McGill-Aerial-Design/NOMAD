@@ -92,13 +92,13 @@ namespace NOMAD.MissionPlanner.Connectivity
         /// Select the gimbal mount mode through the runtime.
         /// </summary>
         public async Task<NomadCoreRequestResult> GimbalConfigureAsync(int mountMode,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default, Func<bool> inputStillCurrent = null)
         {
             if (mountMode < 0 || mountMode > 4)
             {
                 return RejectLocal("Gimbal mount mode must be between 0 and 4.");
             }
-            return await RunCoreAsync("gimbal-config", cancellationToken,
+            return await RunCoreAsync("gimbal-config", cancellationToken, inputStillCurrent,
                 mountMode.ToString(CultureInfo.InvariantCulture)).ConfigureAwait(false);
         }
 
@@ -106,7 +106,7 @@ namespace NOMAD.MissionPlanner.Connectivity
         /// Set a finite absolute gimbal angle through the runtime.
         /// </summary>
         public async Task<NomadCoreRequestResult> GimbalTargetAsync(double pitchDeg, double rollDeg,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default, Func<bool> inputStillCurrent = null)
         {
             if (!IsFinite(pitchDeg) || pitchDeg < -90.0 || pitchDeg > 90.0)
             {
@@ -117,7 +117,33 @@ namespace NOMAD.MissionPlanner.Connectivity
                 return RejectLocal("Gimbal roll must be finite and between -30 and 30 degrees.");
             }
             return await RunCoreAsync(
-                "gimbal-target", cancellationToken,
+                "gimbal-target", cancellationToken, inputStillCurrent,
+                pitchDeg.ToString("R", CultureInfo.InvariantCulture),
+                rollDeg.ToString("R", CultureInfo.InvariantCulture)).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Configure the mount and set its first absolute-angle target as one
+        /// runtime operation, so the runtime owns the required command order.
+        /// </summary>
+        public async Task<NomadCoreRequestResult> GimbalConfigureAndTargetAsync(int mountMode,
+            double pitchDeg, double rollDeg, CancellationToken cancellationToken = default,
+            Func<bool> inputStillCurrent = null)
+        {
+            if (mountMode < 0 || mountMode > 4)
+            {
+                return RejectLocal("Gimbal mount mode must be between 0 and 4.");
+            }
+            if (!IsFinite(pitchDeg) || pitchDeg < -90.0 || pitchDeg > 90.0)
+            {
+                return RejectLocal("Gimbal pitch must be finite and between -90 and 90 degrees.");
+            }
+            if (!IsFinite(rollDeg) || rollDeg < -30.0 || rollDeg > 30.0)
+            {
+                return RejectLocal("Gimbal roll must be finite and between -30 and 30 degrees.");
+            }
+            return await RunCoreAsync("gimbal-config-target", cancellationToken, inputStillCurrent,
+                mountMode.ToString(CultureInfo.InvariantCulture),
                 pitchDeg.ToString("R", CultureInfo.InvariantCulture),
                 rollDeg.ToString("R", CultureInfo.InvariantCulture)).ConfigureAwait(false);
         }
@@ -136,6 +162,12 @@ namespace NOMAD.MissionPlanner.Connectivity
                                                          params string[] values)
         {
             return _runtimeClient.RunAsync(verb, values, cancellationToken);
+        }
+
+        private Task<NomadCoreRequestResult> RunCoreAsync(string verb, CancellationToken cancellationToken,
+            Func<bool> inputStillCurrent, params string[] values)
+        {
+            return _runtimeClient.RunAsync(verb, values, cancellationToken, inputStillCurrent);
         }
 
         // Compatibility only. Production callers await the immutable request result.

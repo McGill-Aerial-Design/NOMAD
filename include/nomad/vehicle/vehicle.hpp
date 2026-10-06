@@ -87,6 +87,7 @@ class Vehicle {
     CommandResult motor_test(int motor_instance, int pwm_microseconds, float timeout_seconds);
     CommandResult configure_gimbal(int mount_mode);
     CommandResult set_gimbal_target(double pitch_deg, double roll_deg);
+    CommandResult configure_gimbal_and_set_target(int mount_mode, double pitch_deg, double roll_deg);
     CommandResult stop_velocity();
     bool velocity_control_active() const;
     safety::WatchdogReason last_velocity_stop_reason() const;

@@ -14,10 +14,6 @@
     "mission_planner/src/Logs/LogAnalysis.cs": {
       "max_lines": 692,
       "reason": "Existing file debt; cap growth at its measured baseline until migration splits the file."
-    },
-    "mission_planner/src/Views/NOMADBoundaryView.cs": {
-      "max_lines": 539,
-      "reason": "Existing file debt; cap growth at its measured baseline until migration splits the file."
     }
   },
   "function_line_caps": {

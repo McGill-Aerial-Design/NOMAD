@@ -13,8 +13,7 @@ namespace {
 
 const std::set<std::string> allowed{
     "NOMAD_MAVLINK_ENDPOINT", "NOMAD_RUNTIME_IPC_PORT", "NOMAD_CLIENT_CREDENTIALS_FILE",
-    "NOMAD_AUDIT_DIRECTORY", "NOMAD_ACTUATORS_FILE", "NOMAD_API_KEY", "NOMAD_FENCE_POLYGON", "NOMAD_FENCE_MARGIN_M",
-    "NOMAD_VELOCITY_MAX_XY", "NOMAD_VELOCITY_MAX_Z", "NOMAD_VELOCITY_MAX_YAW_RATE"};
+    "NOMAD_AUDIT_DIRECTORY", "NOMAD_ACTUATORS_FILE", "NOMAD_API_KEY"};
 
 nlohmann::json parse_configuration(const std::string &text) {
     std::set<std::string> keys;

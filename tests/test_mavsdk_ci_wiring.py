@@ -35,11 +35,27 @@ def test_ros_workflow_does_not_claim_runtime_qualification() -> None:
     assert "This is compile evidence only" in workflow
 
 
-def test_sitl_workflow_retains_per_process_runtime_metrics() -> None:
+def test_safety_changes_require_full_copter_and_quadplane_sitl() -> None:
     workflow = (ROOT / ".github" / "workflows" / "sitl.yml").read_text(encoding="utf-8")
-    assert workflow.count("mavsdk-connectivity-runtime.txt") == 4
-    assert workflow.count("name: mavsdk-connectivity-runtime") == 2
-    assert workflow.count("if-no-files-found: error") == 2
+    assert workflow.startswith("name: safety-qualification")
+    assert "pull_request:" in workflow and "branches: [main]" in workflow
+    assert "workflow_dispatch:" in workflow and "schedule:" in workflow
+    assert "scripts/ci/sitl_scope.py" in workflow
+    assert "needs.qualification-scope.outputs.required == 'true'" in workflow
+    assert workflow.count("if: needs.qualification-scope.outputs.required == 'true'") == 2
+    assert "name: Safety qualification gate" in workflow
+    assert "needs: [qualification-scope, sitl, quadplane-observation]" in workflow
+    assert "mavsdk-connectivity-smoke" not in workflow
+    assert "mavsdk-connectivity-runtime.txt" in workflow
+
+
+def test_connectivity_smoke_has_a_distinct_non_qualification_workflow() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "mavsdk-sitl-smoke.yml").read_text(encoding="utf-8")
+    assert workflow.startswith("name: mavsdk-connectivity-smoke")
+    assert "branches: [main]" in workflow
+    assert "MAVSDK connect/status smoke" in workflow
+    assert "SITL qualification" in workflow
+    assert "name: Safety qualification gate" not in workflow
 
 
 def test_renamed_peer_tasks_keep_each_qualification_gate() -> None:

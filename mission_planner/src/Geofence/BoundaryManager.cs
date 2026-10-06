@@ -1,360 +1,151 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// NOMAD Flight Boundary Manager
+// Mission Planner advisory outline preview
 // ============================================================
-// Monitors the drone against the configured geofence.
-// Supports soft (warning) and hard (kill required) boundaries.
-// Provides real-time boundary checking and warnings.
+// Reads Mission Planner telemetry to show the current position relative to
+// locally saved outlines. This class makes no vehicle or safety decisions.
 // ============================================================
 
 using System;
-using System.Collections.Generic;
-using System.Drawing;
-using System.IO;
-using System.Linq;
-using System.Media;
 using System.Timers;
-using System.Windows.Forms;
 using MissionPlanner;
-using MissionPlanner.Utilities;
-using Newtonsoft.Json;
 
 namespace NOMAD.MissionPlanner
 {
-    /// <summary>
-    /// Boundary violation event arguments.
-    /// </summary>
-    public class BoundaryViolationEventArgs : EventArgs
+    public class AdvisoryBoundaryStatusEventArgs : EventArgs
     {
-        public string BoundaryType { get; set; } // "soft" or "hard"
-        public string BoundaryName { get; set; }
-        public GpsPoint DronePosition { get; set; }
-        public double? AltitudeAgl { get; set; }
-        public string RequiredAction { get; set; }
-        public DateTime Timestamp { get; set; }
+        public AdvisoryOutlineStatus Status { get; set; }
+        public string OutlineName { get; set; }
     }
 
-    /// <summary>
-    /// Boundary status changed event arguments.
-    /// </summary>
-    public class BoundaryStatusEventArgs : EventArgs
+    public sealed class AdvisoryBoundaryMonitor : IDisposable
     {
-        public string Status { get; set; } // "inside", "soft_violation", "hard_violation"
-        public double? DistanceToBoundaryMeters { get; set; }
-        public string NearestBoundaryName { get; set; }
-    }
+        private readonly GeofenceConfig _config;
+        private Timer _timer;
+        private bool _disposed;
 
-    /// <summary>
-    /// Manages flight boundaries and provides violation monitoring.
-    /// </summary>
-    public class BoundaryMonitor : IDisposable
-    {
-        private readonly GeofenceConfig _geofence;
-        private readonly NOMADConfig _config;
-        private System.Timers.Timer _monitorTimer;
-        private string _lastStatus = "inside";
-        private DateTime? _hardViolationStart;
-        private bool _terminationReported;   // one request report per violation episode
-        private bool _returnUnavailableReported; // one unavailable notice per episode
-        private bool _isDisposed;
+        public event EventHandler<AdvisoryBoundaryStatusEventArgs> StatusChanged;
 
-        /// <summary>
-        /// Fired when a boundary violation is detected.
-        /// </summary>
-        public event EventHandler<BoundaryViolationEventArgs> BoundaryViolation;
+        public AdvisoryOutlineStatus CurrentStatus { get; private set; } = AdvisoryOutlineStatus.NoPosition;
 
-        /// <summary>
-        /// Fired when boundary status changes.
-        /// </summary>
-        public event EventHandler<BoundaryStatusEventArgs> BoundaryStatusChanged;
-
-        /// <summary>
-        /// Current boundary status.
-        /// </summary>
-        public string CurrentStatus { get; private set; } = "inside";
-
-        /// <summary>
-        /// Is boundary monitoring active.
-        /// </summary>
         public bool IsMonitoring { get; private set; }
 
-        public BoundaryMonitor(GeofenceConfig geofenceConfig, NOMADConfig config)
+        public AdvisoryBoundaryMonitor(GeofenceConfig config)
         {
-            _geofence = geofenceConfig;
-            _config = config;
+            _config = config ?? new GeofenceConfig();
         }
 
-        /// <summary>
-        /// Start boundary monitoring.
-        /// </summary>
-        public void StartMonitoring(int intervalMs = 500)
+        public void StartMonitoring(int intervalMs = 1000)
         {
-            if (IsMonitoring) return;
-
-            _monitorTimer = new System.Timers.Timer(intervalMs);
-            _monitorTimer.Elapsed += MonitorTimer_Elapsed;
-            _monitorTimer.AutoReset = true;
-            _monitorTimer.Start();
-            IsMonitoring = true;
-
-            Log.Debug("Boundary monitoring started");
-        }
-
-        /// <summary>
-        /// Stop boundary monitoring.
-        /// </summary>
-        public void StopMonitoring()
-        {
-            if (!IsMonitoring) return;
-
-            _monitorTimer?.Stop();
-            _monitorTimer?.Dispose();
-            _monitorTimer = null;
-            IsMonitoring = false;
-            _hardViolationStart = null;
-
-            Log.Debug("Boundary monitoring stopped");
-        }
-
-        private void MonitorTimer_Elapsed(object sender, ElapsedEventArgs e)
-        {
-            try
+            if (_disposed || IsMonitoring)
             {
-                CheckBoundaries();
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"Boundary check error — {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Check boundaries for current drone position.
-        /// </summary>
-        public void CheckBoundaries()
-        {
-            // Get current position from Mission Planner
-            var lat = MainV2.comPort?.MAV?.cs?.lat ?? 0;
-            var lon = MainV2.comPort?.MAV?.cs?.lng ?? 0;
-            var altAgl = MainV2.comPort?.MAV?.cs?.alt ?? 0; // Alt above home
-
-            // If no valid position, update status to indicate waiting for GPS
-            if (lat == 0 && lon == 0)
-            {
-                if (CurrentStatus != "no_position")
-                {
-                    CurrentStatus = "no_position";
-                    BoundaryStatusChanged?.Invoke(this, new BoundaryStatusEventArgs
-                    {
-                        Status = "no_position",
-                        NearestBoundaryName = "",
-                    });
-                }
                 return;
             }
 
-            var position = new GpsPoint(lat, lon);
-            var status = _geofence.CheckBoundaryStatus(position, altAgl);
+            _timer = new Timer(intervalMs);
+            _timer.Elapsed += OnTimerElapsed;
+            _timer.AutoReset = true;
+            _timer.Start();
+            IsMonitoring = true;
+            Log.Debug("Local advisory outline preview started");
+        }
 
-            // Handle status change
-            if (status != _lastStatus)
+        public void StopMonitoring()
+        {
+            if (!IsMonitoring)
             {
-                HandleStatusChange(status, position, altAgl);
-                _lastStatus = status;
+                return;
             }
 
-            // Report the unavailable hard-boundary request once at the configured time.
-            // Termination is unavailable;
-            // the request reports failure and never dispatches a substitute mode.
-            if (status == "hard_violation")
-            {
-                if (_hardViolationStart.HasValue)
-                {
-                    var elapsed = (DateTime.Now - _hardViolationStart.Value).TotalSeconds;
-                    var delayElapsed = elapsed >= _geofence.Failsafe.HardBoundaryKillDelaySec;
+            _timer?.Stop();
+            _timer?.Dispose();
+            _timer = null;
+            IsMonitoring = false;
+            Log.Debug("Local advisory outline preview stopped");
+        }
 
-                    var hardAction = (_geofence.Failsafe.HardBoundaryAction ?? "warn_and_kill").ToLower();
-                    if (!_terminationReported && hardAction != "warn_only"
-                        && (hardAction == "auto_kill" || delayElapsed))
-                    {
-                        _terminationReported = true;
-                        RequestTermination();
-                    }
-                }
-            }
-            else
+        private void OnTimerElapsed(object sender, ElapsedEventArgs e)
+        {
+            try
             {
-                _hardViolationStart = null;
-                _terminationReported = false;
+                ReadCurrentPosition();
             }
-            if (status == "inside") _returnUnavailableReported = false;
+            catch (Exception ex)
+            {
+                Log.Error($"Advisory outline preview failed — {ex.Message}");
+            }
+        }
+
+        private void ReadCurrentPosition()
+        {
+            var state = MainV2.comPort?.MAV?.cs;
+            if (state == null || (state.lat == 0 && state.lng == 0))
+            {
+                SetStatus(AdvisoryOutlineStatus.NoPosition);
+                return;
+            }
+
+            var position = new GpsPoint(state.lat, state.lng);
+            var status = GeoMath.GetAdvisoryOutlineStatus(
+                _config.SoftBoundary?.Vertices,
+                _config.HardBoundary?.Vertices,
+                position);
+            SetStatus(status);
+        }
+
+        private void SetStatus(AdvisoryOutlineStatus status)
+        {
+            if (status == CurrentStatus)
+            {
+                return;
+            }
 
             CurrentStatus = status;
-        }
-
-        private void HandleStatusChange(string newStatus, GpsPoint position, double altAgl)
-        {
-            CurrentStatus = newStatus;
-
-            // Fire status changed event
-            BoundaryStatusChanged?.Invoke(this, new BoundaryStatusEventArgs
+            StatusChanged?.Invoke(this, new AdvisoryBoundaryStatusEventArgs
             {
-                Status = newStatus,
-                NearestBoundaryName = newStatus == "soft_violation"
-                    ? _geofence.SoftBoundary.Name
-                    : _geofence.HardBoundary.Name,
+                Status = status,
+                OutlineName = GetOutlineName(status),
             });
 
-            if (newStatus == "soft_violation")
+            if (IsOutsideOutline(status) && _config.AdvisoryAudioAlertsEnabled)
             {
-                HandleSoftViolation(position, altAgl);
-            }
-            else if (newStatus == "hard_violation")
-            {
-                HandleHardViolation(position, altAgl);
-            }
-            else
-            {
-                // Back inside boundaries
-                _hardViolationStart = null;
-            }
-        }
-
-        private void HandleSoftViolation(GpsPoint position, double altAgl)
-        {
-            var args = new BoundaryViolationEventArgs
-            {
-                BoundaryType = "soft",
-                BoundaryName = _geofence.SoftBoundary.Name,
-                DronePosition = position,
-                AltitudeAgl = altAgl,
-                RequiredAction = "Turn around - approaching boundary",
-                Timestamp = DateTime.Now,
-            };
-
-            // Log violation
-            _geofence.BoundaryViolations.Add(new BoundaryViolation
-            {
-                Timestamp = args.Timestamp,
-                BoundaryName = args.BoundaryName,
-                BoundaryType = args.BoundaryType,
-                DronePosition = position,
-                Action = args.RequiredAction,
-            });
-            _geofence.Save();
-
-            // Fire event
-            BoundaryViolation?.Invoke(this, args);
-
-            var softAction = (_geofence.Failsafe.SoftBoundaryAction ?? "warn_both").ToLower();
-
-            // Audio warning ("warn_visual" stays silent; everything else beeps)
-            if (_geofence.Failsafe.EnableAudioWarnings && softAction != "warn_visual")
-            {
-                PlayWarningSound(false);
-                AudioAlerts.Speak("Approaching boundary. Turn around.", component: "boundary");
-            }
-
-            // "return_to_boundary" is currently unavailable because runtime
-            // protocol v1 has no typed navigation request. Report it once per
-            // violation episode and require the pilot to take manual control.
-            if (softAction == "return_to_boundary" && !_returnUnavailableReported)
-            {
-                _returnUnavailableReported = true;
-                var boundary = _geofence.SoftBoundary?.Vertices?.Count >= 3
-                    ? _geofence.SoftBoundary : _geofence.HardBoundary;
-                var target = GeoMath.NearestPointInside(boundary?.Vertices, position, ReturnInsideMarginMeters);
-                if (target == null)
-                {
-                    Log.Warn("Automatic boundary return unavailable: no boundary target is available. " +
-                             "Take manual control.");
-                    AudioAlerts.Speak("Boundary return unavailable. Take manual control.", component: "boundary");
-                    return;
-                }
-
-                double alt = Math.Max(5.0, altAgl); // retain a safe advisory altitude in the log
-                if (!FlightModeController.GuidedGoto(target.Lat, target.Lon, alt))
-                {
-                    Log.Warn($"Soft boundary return unavailable — planned point {target.Lat:F6}, {target.Lon:F6} " +
-                             $"@ {alt:F0}m was not sent. Take manual control.");
-                    AudioAlerts.Speak(
-                        "Automatic boundary return unavailable. Take manual control.", component: "boundary");
-                    return;
-                }
-                AudioAlerts.Speak("Returning inside boundary.", component: "boundary");
-            }
-        }
-
-        /// <summary>
-        /// How far inside the boundary the unavailable return target is planned.
-        /// (Geometry lives in GeoMath.NearestPointInside.)
-        /// </summary>
-        private const double ReturnInsideMarginMeters = 1.0;
-
-        private void RequestTermination()
-        {
-            Log.Warn("Hard boundary violation requires aircraft termination.");
-            if (!FlightModeController.RequestTermination())
-            {
-                AudioAlerts.Speak("Termination unavailable. Take manual control.", component: "boundary");
-            }
-        }
-
-        private void HandleHardViolation(GpsPoint position, double altAgl)
-        {
-            if (!_hardViolationStart.HasValue)
-            {
-                _hardViolationStart = DateTime.Now;
-            }
-
-            var args = new BoundaryViolationEventArgs
-            {
-                BoundaryType = "hard",
-                BoundaryName = _geofence.HardBoundary.Name,
-                DronePosition = position,
-                AltitudeAgl = altAgl,
-                RequiredAction = "TERMINATION REQUIRED; plugin activation unavailable!",
-                Timestamp = DateTime.Now,
-            };
-
-            // Log violation
-            _geofence.BoundaryViolations.Add(new BoundaryViolation
-            {
-                Timestamp = args.Timestamp,
-                BoundaryName = args.BoundaryName,
-                BoundaryType = args.BoundaryType,
-                DronePosition = position,
-                Action = args.RequiredAction,
-            });
-            _geofence.Save();
-
-            // Fire event
-            BoundaryViolation?.Invoke(this, args);
-
-            // Urgent audio warning
-            if (_geofence.Failsafe.EnableAudioWarnings)
-            {
-                PlayWarningSound(true);
-                AudioAlerts.Speak("Hard boundary violation. Termination required. Plugin termination unavailable.",
+                AudioAlerts.Speak(
+                    "Position is outside the local advisory outline. This outline is not enforced by NOMAD runtime.",
                     component: "boundary");
             }
         }
 
-        private void PlayWarningSound(bool urgent)
+        private string GetOutlineName(AdvisoryOutlineStatus status)
         {
-            AudioAlerts.Play(urgent ? AlertKind.BoundaryHard : AlertKind.BoundarySoft);
+            if (status == AdvisoryOutlineStatus.OutsideInnerOutline)
+            {
+                return "Inner advisory outline";
+            }
+
+            if (status == AdvisoryOutlineStatus.OutsideOuterOutline)
+            {
+                return "Outer advisory outline";
+            }
+
+            return string.Empty;
+        }
+
+        private static bool IsOutsideOutline(AdvisoryOutlineStatus status)
+        {
+            return status == AdvisoryOutlineStatus.OutsideInnerOutline ||
+                status == AdvisoryOutlineStatus.OutsideOuterOutline;
         }
 
         public void Dispose()
         {
-            if (_isDisposed) return;
-            _isDisposed = true;
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
             StopMonitoring();
         }
     }
-
-    // BoundaryConfigPanel has been consolidated into NOMADBoundaryView in NOMADViews.cs.
-    // Import functionality (KML, Google Maps, MP Fence) and violation action
-    // configuration are now integrated directly into the boundary view.
 }

@@ -227,7 +227,7 @@ namespace NOMAD.MissionPlanner
                         if (points.Count > 0)
                         {
                             var result = CustomMessageBox.Show(
-                                $"Import {points.Count} points as Soft (Yes) or Hard (No) boundary?",
+                                $"Import {points.Count} points as inner advisory (Yes) or outer advisory (No) outline?",
                                 "Select Boundary Type",
                                 CustomMessageBox.MessageBoxButtons.YesNo);
 
@@ -337,7 +337,7 @@ namespace NOMAD.MissionPlanner
                     BackColor = Color.FromArgb(50, 50, 53),
                     ForeColor = Color.White,
                 };
-                cmbTarget.Items.AddRange(new object[] { "Soft Boundary", "Hard Boundary" });
+                cmbTarget.Items.AddRange(new object[] { "Inner advisory outline", "Outer advisory outline" });
                 cmbTarget.SelectedIndex = 0;
                 inputForm.Controls.Add(cmbTarget);
 

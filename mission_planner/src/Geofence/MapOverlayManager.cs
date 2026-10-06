@@ -3,8 +3,8 @@
 // ============================================================
 // NOMAD Map Overlay Manager
 // ============================================================
-// Manages NOMAD boundary visualization on Mission Planner's map.
-// Draws soft (yellow) and hard (red) boundary polygons.
+// Manages NOMAD local advisory outline visualization on Mission Planner's map.
+// Draws the inner (yellow) and outer (red) polygons.
 // Uses reflection to access GMap.NET types for compatibility.
 //
 // NOTE: This class uses .NET Reflection to access internal Mission Planner and GMap.NET fields.
@@ -318,7 +318,7 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Draw safety zones from the saved geofence config on the Data and Plan maps.
+        /// Draw local advisory outlines from the saved Mission Planner config.
         /// </summary>
         public static void DrawBoundaries(GeofenceConfig config)
         {
@@ -334,8 +334,8 @@ namespace NOMAD.MissionPlanner
             polygons?.Clear();
 
             ConfigureBoundaryZoneRendering(config);
-            Log.Info($"Drew boundary zones (soft: {config.SoftBoundary?.Vertices?.Count ?? 0} pts, "
-                + $"hard: {config.HardBoundary?.Vertices?.Count ?? 0} pts, maps: {EnsureBoundaryMaps()})");
+            Log.Info($"Drew local advisory outlines (inner: {config.SoftBoundary?.Vertices?.Count ?? 0} pts, "
+                + $"outer: {config.HardBoundary?.Vertices?.Count ?? 0} pts, maps: {EnsureBoundaryMaps()})");
         }
 
         /// <summary>

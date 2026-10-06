@@ -67,7 +67,7 @@ namespace NOMAD.MissionPlanner
                 // refresh the statics so the next MainSwitcher-created NOMAD
                 // screen (and its Links view) sees the live instance instead of
                 // the stale one captured at plugin load.
-                NOMADMainScreen.SetStaticConfig(_config, _connectionManager, _geofenceConfig, _boundaryMonitor);
+                NOMADMainScreen.SetStaticConfig(_config, _connectionManager, _geofenceConfig, _advisoryBoundaryMonitor);
                 NOMADMainScreen.SetStaticModuleHost(BuildModuleHost());
             }
         }

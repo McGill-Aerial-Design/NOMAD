@@ -131,6 +131,9 @@ vehicle::CommandResult Runtime::Implementation::invoke_vehicle(const Request &re
     if (request.type == "set_gimbal_target") {
         return vehicle_.set_gimbal_target(request.pitch_deg, request.roll_deg);
     }
+    if (request.type == "configure_gimbal_target") {
+        return vehicle_.configure_gimbal_and_set_target(request.mount_mode, request.pitch_deg, request.roll_deg);
+    }
     return {false, "request type is not supported in protocol v1"};
 }
 

@@ -168,9 +168,9 @@ test-plugin-version = "powershell -ExecutionPolicy Bypass -File scripts/build/te
 lint-plugin = "powershell -ExecutionPolicy Bypass -File scripts/build/lint_plugin_deadcode.ps1"
 test-plugin-local-messages = "powershell -NoProfile -File scripts/build/test_plugin_local_messages.ps1"
 
-# Unit tests for the plugin's geofence geometry (Windows only) — compiles the
-# Mission Planner-free GeoMath/GeofenceTypes with VS's csc and runs assertions
-# on polygon inset, point-in-polygon, and nearest-inside-point math.
+# Unit tests for local advisory outline geometry (Windows only) — compiles the
+# Mission Planner-free GeoMath/GeofenceTypes with VS's csc and checks polygon
+# inset, visual outline status and the configured altitude display threshold.
 test-plugin-geometry = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_geometry.ps1"
 
 # Unit tests for Mission Planner's gimbal input math (Windows only) — compiles

@@ -72,38 +72,37 @@ requirements below. They have no complete implementation mapping yet.
 |---|---|---|
 | AE27-OPS-015 through AE27-OPS-020/035 | Aircraft termination is available in every mode independently of ground core; failure of the termination/C2 path causes self-termination | Remove path/power/core under load in Copter, fixed-wing and transition states; observe actual state/output, five-second activation entry and approved rapid self-termination; G7 |
 | AE27-OPS-016/017 | Fixed-wing motor-off/full surfaces differs from rotary vertical descent of at least 2 m/s to touchdown | Independently observe surface outputs and measured descent/touchdown; LAND dispatch or configured speed is not proof; Q02/G7 |
-| AE27-OPS-005/006/020/037/038 | All-mode containment includes non-convex boundary and 100 m AGL | Verified hard polygon and internal inset per U-FEN-01, altitude datum/terrain validation, actual hard-breach and loss-of-navigation tests; G7 |
+| AE27-OPS-005/006/020/037/038 | All-mode containment includes non-convex boundary and 100 m AGL | Runtime-owned boundary and altitude enforcement, validated datum/terrain inputs, actual breach and loss-of-navigation tests; Mission Planner's local outlines are visual advisory data only and do not satisfy this gate; G7 |
 | AE27-NET-007/008 | Stay outside supplied traffic cylinders; stale traffic is unknown | Inject delayed/malformed tracks and prove operator response avoids intrusion; settle extent/datum/freshness Q04 before flight; G4/G7 |
 | AE27-T2-005/006 | Exactly one tracker attachment and at least 100 m horizontal offset after withdrawal through rest of window | Wrong/duplicate tracker and target moving toward sampling/return path; prove detection and approved intervention before encroachment; G6/G7 |
 | AE27-OPS-024/031 | Under-15-kg project margin and physical ground propeller inhibit | Independent weighing and props-safe inhibit fault tests; G7 |
 
 The C++ watchdog's delivered zero command is not a competition termination
 mechanism. The plugin's LAND-as-termination dispatch and descent-parameter
-recipes have been removed. Its button and hard-boundary request now explicitly
-report termination unavailable, with no aircraft command. The plugin's direct
-vehicle-fence upload/clear writer is deleted because it could disable the fence
-without qualified maintenance ownership or failure restoration. Visual Plan map
-export remains; it sends no aircraft request. This removes a misleading independent writer, not a
-safety mechanism that can satisfy AE27-OPS-015 through AE27-OPS-019. Aircraft
-termination, hard-breach response and flight qualification remain blocked.
-Preserve ArduPilot failsafes and qualify their interaction with the approved
-termination mechanism; no substitute emergency recipe is approved.
+recipes have been removed. Its termination button reports termination
+unavailable and sends no aircraft command. The plugin's direct vehicle-fence
+upload/clear writer is deleted because it could disable the fence without
+qualified maintenance ownership or failure restoration. Visual Plan map export
+remains; it sends no aircraft request. Mission Planner's saved inner/outer
+outlines and configurable altitude color threshold are local advisory display
+data only. Protocol v1 has no boundary configuration, evaluation or status API;
+the outlines are not installed on the runtime or aircraft and cannot satisfy a
+containment requirement. No outline crossing requests return, termination or
+another vehicle action. This removes misleading frontend policy without
+providing a substitute safety mechanism. Aircraft termination, hard-breach
+response and flight qualification remain blocked. Preserve ArduPilot failsafes
+and qualify their interaction with an approved termination mechanism; no
+substitute emergency recipe is approved.
 
-The soft-boundary `return_to_boundary` action is unavailable until runtime
-protocol v1 has a typed navigation request. Mission Planner reports that no
-command was sent and directs the pilot to take manual control. This does not
-change the hard-boundary termination policy above.
-
-Q01 is resolved by the project owner: hard-boundary violation triggers
-termination; the soft boundary is an internal configurable inward margin from
-the hard polygon, e.g. 5 m. Keep the existing plugin inset implementation as-is.
-Crossing that internal margin alone is not a termination trigger. Appendix C's
-inconsistent labels remain a source note; a second official polygon is not a
-release dependency. Test inset geometry separately from hard-breach termination,
-including concave/narrow shapes and infeasible margins, without changing the
-plugin in this pass. Q02 still concerns QuadPlane transition termination and
-fixed-wing surface behavior. The plugin's existing 122 m defaults/displays remain
-a separate gap against the official 100 m AGL ceiling.
+Q01 is resolved by project direction: the plugin may derive an inner outline
+from an outer outline for visual preview, but neither polygon is an authoritative
+safety boundary. Crossing an internal margin is not a termination trigger.
+Appendix C's inconsistent labels remain a source note; a second official polygon
+is not a release dependency. Any future runtime enforcement needs a typed API,
+runtime-owned policy and complete fault-path tests. Q02 still concerns QuadPlane
+transition termination and fixed-wing surface behavior. The plugin's default
+122 m altitude reference is configurable and display-only; it is not enforcement
+of the official 100 m AGL ceiling, which remains a separate open requirement.
 
 The original SR-PAY-03 explicit operator interlock remains binding project policy.
 Configured hazardous actuator authorization is enforced by `nomad-runtime` under

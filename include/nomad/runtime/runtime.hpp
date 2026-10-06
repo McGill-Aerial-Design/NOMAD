@@ -3,8 +3,6 @@
 
 #include "nomad/mavlink/connection.hpp"
 #include "nomad/runtime/actuator.hpp"
-#include "nomad/safety/geofence.hpp"
-#include "nomad/safety/velocity.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -21,8 +19,6 @@ struct RuntimeConfig {
     std::chrono::milliseconds discovery_timeout{std::chrono::seconds(6)};
     std::chrono::milliseconds reconnect_delay{std::chrono::seconds(1)};
     std::string version{"0.1.0"};
-    safety::GlobalFencePolicy fence_policy{};
-    safety::VelocityLimits velocity_limits{};
     bool actuation_enabled{false};
     std::map<std::string, std::string> client_credentials;
     std::string audit_directory;

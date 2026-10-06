@@ -1,92 +1,57 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// NOMAD Geofence Configuration
+// Mission Planner advisory boundary configuration
 // ============================================================
-// General, reusable flight-geofence and failsafe configuration.
-// Holds soft/hard boundary polygons, altitude limits, failsafe
-// behavior, and boundary-violation checking. Task-agnostic.
-//
-// Data types live in GeofenceTypes.cs; pure polygon math lives in
-// GeoMath.cs (both Mission Planner-free and unit-tested via
-// `pixi run test-plugin-geometry`).
+// Stores local polygons for map drawing and position preview. The runtime
+// protocol does not expose boundary enforcement or evaluation.
 // ============================================================
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace NOMAD.MissionPlanner
 {
     /// <summary>
-    /// General geofence + failsafe configuration with boundary checking and
-    /// JSON persistence. Task-agnostic; adapt as needed per deployment.
+    /// Mission Planner-only boundary outlines and display preferences.
+    /// These values are not sent to the runtime or flight controller.
     /// </summary>
     public class GeofenceConfig
     {
-        /// <summary>
-        /// Soft flight boundary (yellow - warning).
-        /// </summary>
         public FlightBoundary SoftBoundary { get; set; } = new FlightBoundary
         {
-            Name = "Soft Boundary",
-            BoundaryType = "soft",
-            DisplayColor = "#FFFF00"
+            Name = "Inner Advisory Outline",
         };
 
-        /// <summary>
-        /// Hard flight boundary (red - termination required; plugin activation unavailable).
-        /// </summary>
         public FlightBoundary HardBoundary { get; set; } = new FlightBoundary
         {
-            Name = "Hard Boundary",
-            BoundaryType = "hard",
-            DisplayColor = "#FF0000"
+            Name = "Outer Advisory Outline",
         };
 
-        /// <summary>
-        /// Return point for geofence breach (centroid used if null).
-        /// </summary>
-        public GpsPoint ReturnPoint { get; set; }
+        /// <summary>Altitude display threshold for Mission Planner-reported altitude telemetry.</summary>
+        public double AdvisoryAltitudeDisplayThresholdMeters { get; set; } = 122.0;
+
+        /// <summary>Whether to show local position relative to the saved outlines.</summary>
+        public bool AdvisoryPreviewEnabled { get; set; }
+
+        /// <summary>Whether a local advisory-outline transition can speak an alert.</summary>
+        public bool AdvisoryAudioAlertsEnabled { get; set; } = true;
 
         /// <summary>
-        /// Maximum altitude AGL (400ft = 122m default).
-        /// </summary>
-        public double MaxAltitudeAglMeters { get; set; } = 122.0;
-
-        /// <summary>
-        /// Failsafe behavior settings.
-        /// </summary>
-        public FailsafeBehavior Failsafe { get; set; } = new FailsafeBehavior();
-
-        /// <summary>
-        /// Whether real-time boundary monitoring is active. Persisted so the
-        /// monitor survives Mission Planner page switches and restarts.
-        /// </summary>
-        public bool MonitoringEnabled { get; set; }
-
-        /// <summary>
-        /// When true the soft boundary is derived automatically by insetting
-        /// the hard boundary by <see cref="SoftBoundaryInsetMeters"/> instead
-        /// of using manually entered coordinates.
+        /// When true, derive the inner display outline from the outer outline.
+        /// This changes only Mission Planner's saved map geometry.
         /// </summary>
         public bool SoftBoundaryFromHard { get; set; }
 
-        /// <summary>
-        /// Inward offset (meters) applied to the hard boundary to produce the
-        /// derived soft boundary when <see cref="SoftBoundaryFromHard"/> is on.
-        /// </summary>
         public double SoftBoundaryInsetMeters { get; set; } = 5.0;
 
-        /// <summary>
-        /// Boundary violations log.
-        /// </summary>
-        public List<BoundaryViolation> BoundaryViolations { get; set; } = new List<BoundaryViolation>();
-
-        // ============================================================
-        // Persistence
-        // ============================================================
+        /// <summary>Shown to the operator after legacy boundary settings are migrated.</summary>
+        [JsonIgnore]
+        public string MigrationNotice { get; private set; }
 
         private static readonly string ConfigDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -94,60 +59,100 @@ namespace NOMAD.MissionPlanner
 
         private static readonly string ConfigPath = Path.Combine(ConfigDir, "geofence_config.json");
 
-        /// <summary>
-        /// Load geofence configuration from file (defaults if missing/invalid).
-        /// </summary>
         public static GeofenceConfig Load()
         {
+            if (!File.Exists(ConfigPath))
+            {
+                return new GeofenceConfig();
+            }
+
             try
             {
-                if (File.Exists(ConfigPath))
+                var config = LoadFromJson(File.ReadAllText(ConfigPath), out bool migrated);
+                if (migrated && !config.Save())
                 {
-                    var json = File.ReadAllText(ConfigPath);
-                    return JsonConvert.DeserializeObject<GeofenceConfig>(json) ?? new GeofenceConfig();
+                    config.MigrationNotice += " The migrated settings could not be saved; " +
+                        "review them again next start.";
                 }
+
+                return config;
             }
             catch (Exception ex)
             {
-                Log.Error($"Failed to load geofence config — {ex.Message}");
+                Log.Error($"Failed to load advisory boundary config — {ex.Message}");
+                return new GeofenceConfig
+                {
+                    MigrationNotice = "Saved boundary settings could not be read. Defaults are shown; " +
+                        "review the advisory outlines.",
+                };
             }
-            return new GeofenceConfig();
         }
 
-        /// <summary>
-        /// Save geofence configuration to file.
-        /// </summary>
-        public void Save()
+        internal static GeofenceConfig LoadFromJson(string json, out bool migrated)
+        {
+            var source = JObject.Parse(json);
+            var safeSource = (JObject)source.DeepClone();
+            SanitizeAltitudeThreshold(safeSource);
+            var config = safeSource.ToObject<GeofenceConfig>() ?? new GeofenceConfig();
+            var changes = new List<string>();
+
+            config.SoftBoundary ??= new FlightBoundary { Name = "Inner Advisory Outline" };
+            config.HardBoundary ??= new FlightBoundary { Name = "Outer Advisory Outline" };
+            config.SoftBoundary.Vertices ??= new List<GpsPoint>();
+            config.HardBoundary.Vertices ??= new List<GpsPoint>();
+
+            MigrateAltitudeThreshold(source, config, changes);
+            MigratePreviewEnabled(source, config, changes);
+            MigrateAudioPreference(source, config, changes);
+            ReportRemovedSettings(source, changes);
+
+            migrated = changes.Count > 0;
+            if (migrated)
+            {
+                config.MigrationNotice = "Legacy boundary settings were migrated: " + string.Join(", ", changes) +
+                    ". Saved outlines and altitude are visual advisory data only; they are not installed on the " +
+                    "runtime or aircraft. Review them before use.";
+            }
+
+            return config;
+        }
+
+        private static void SanitizeAltitudeThreshold(JObject source)
+        {
+            var propertyName = nameof(AdvisoryAltitudeDisplayThresholdMeters);
+            var value = source[propertyName];
+            if (value == null)
+            {
+                return;
+            }
+
+            source[propertyName] = GetFiniteNumber(value) ?? 122.0;
+        }
+
+        public bool Save()
         {
             try
             {
-                if (!Directory.Exists(ConfigDir))
-                {
-                    Directory.CreateDirectory(ConfigDir);
-                }
-
+                Directory.CreateDirectory(ConfigDir);
                 var json = JsonConvert.SerializeObject(this, Formatting.Indented);
                 File.WriteAllText(ConfigPath, json);
+                return true;
             }
             catch (Exception ex)
             {
-                Log.Error($"Failed to save geofence config — {ex.Message}");
+                Log.Error($"Failed to save advisory boundary config — {ex.Message}");
+                return false;
             }
         }
 
-        // ============================================================
-        // Derived soft boundary (hard boundary inset)
-        // ============================================================
-
-        /// <summary>
-        /// Recompute the soft boundary from the hard boundary when
-        /// <see cref="SoftBoundaryFromHard"/> is enabled. Returns true if the
-        /// soft boundary was (re)generated. Caller is responsible for Save().
-        /// </summary>
         public bool RegenerateSoftFromHard()
         {
-            if (!SoftBoundaryFromHard) return false;
+            if (!SoftBoundaryFromHard)
+            {
+                return false;
+            }
 
+            SoftBoundary ??= new FlightBoundary { Name = "Inner Advisory Outline" };
             if (HardBoundary?.Vertices == null || HardBoundary.Vertices.Count < 3)
             {
                 SoftBoundary.Vertices.Clear();
@@ -158,40 +163,139 @@ namespace NOMAD.MissionPlanner
             return true;
         }
 
-        // ============================================================
-        // Boundary checking
-        // ============================================================
-
-        /// <summary>
-        /// Check if a GPS point is inside a boundary polygon (ray casting).
-        /// </summary>
-        public bool IsInsideBoundary(GpsPoint point, FlightBoundary boundary)
+        private static void MigrateAltitudeThreshold(JObject source, GeofenceConfig config, List<string> changes)
         {
-            return GeoMath.IsInside(boundary?.Vertices, point);
+            var currentThreshold = source[nameof(AdvisoryAltitudeDisplayThresholdMeters)];
+            var advisoryThreshold = GetFiniteNumber(source[nameof(AdvisoryAltitudeDisplayThresholdMeters)]);
+            if (advisoryThreshold.HasValue)
+            {
+                config.AdvisoryAltitudeDisplayThresholdMeters = advisoryThreshold.Value;
+            }
+            else if (currentThreshold != null)
+            {
+                config.AdvisoryAltitudeDisplayThresholdMeters = 122.0;
+                changes.Add("an invalid advisory altitude value was reset to the display default");
+            }
+
+            var oldThreshold = GetFiniteNumber(source["MaxAltitudeAglMeters"]);
+            if (source["MaxAltitudeAglMeters"] != null)
+            {
+                if (currentThreshold == null && oldThreshold.HasValue)
+                {
+                    config.AdvisoryAltitudeDisplayThresholdMeters = oldThreshold.Value;
+                    changes.Add("the saved altitude reference was retained only as a display threshold " +
+                        "for Mission Planner-reported altitude");
+                }
+                else if (!oldThreshold.HasValue)
+                {
+                    changes.Add("an invalid retired altitude value was ignored");
+                }
+                else
+                {
+                    changes.Add("the retired altitude-policy field was removed");
+                }
+            }
+
+            if (HasAltitudePolicy(source["SoftBoundary"]) || HasAltitudePolicy(source["HardBoundary"]))
+            {
+                changes.Add("per-outline altitude rules were removed");
+            }
+
+            if (HasUnusedOutlineMetadata(source["SoftBoundary"]) || HasUnusedOutlineMetadata(source["HardBoundary"]))
+            {
+                changes.Add("unused outline type and color fields were removed");
+            }
         }
 
-        /// <summary>
-        /// Check boundary status for a GPS point.
-        /// Returns: "inside", "soft_violation", "hard_violation".
-        /// </summary>
-        public string CheckBoundaryStatus(GpsPoint point, double? altitudeAgl = null)
+        private static void MigratePreviewEnabled(JObject source, GeofenceConfig config, List<string> changes)
         {
-            if (altitudeAgl.HasValue && altitudeAgl > MaxAltitudeAglMeters)
+            var advisoryEnabled = source[nameof(AdvisoryPreviewEnabled)];
+            if (advisoryEnabled != null && advisoryEnabled.Type == JTokenType.Boolean)
             {
-                return "hard_violation";
+                config.AdvisoryPreviewEnabled = advisoryEnabled.Value<bool>();
             }
 
-            if (!IsInsideBoundary(point, HardBoundary))
+            var oldEnabled = source["MonitoringEnabled"];
+            if (oldEnabled != null && oldEnabled.Type == JTokenType.Boolean)
             {
-                return "hard_violation";
+                if (advisoryEnabled == null)
+                {
+                    config.AdvisoryPreviewEnabled = oldEnabled.Value<bool>();
+                    changes.Add("the saved monitor choice was retained as a local advisory preview preference");
+                }
+                else
+                {
+                    changes.Add("the retired monitor field was removed");
+                }
+            }
+        }
+
+        private static void MigrateAudioPreference(JObject source, GeofenceConfig config, List<string> changes)
+        {
+            var advisoryAudio = source[nameof(AdvisoryAudioAlertsEnabled)];
+            if (advisoryAudio != null && advisoryAudio.Type == JTokenType.Boolean)
+            {
+                config.AdvisoryAudioAlertsEnabled = advisoryAudio.Value<bool>();
             }
 
-            if (!IsInsideBoundary(point, SoftBoundary))
+            var oldAudio = source["Failsafe"]?["EnableAudioWarnings"];
+            if (oldAudio != null && oldAudio.Type == JTokenType.Boolean)
             {
-                return "soft_violation";
+                if (advisoryAudio == null)
+                {
+                    config.AdvisoryAudioAlertsEnabled = oldAudio.Value<bool>();
+                    changes.Add("the audio preference was retained for local alerts");
+                }
+                else
+                {
+                    changes.Add("the retired audio setting was removed");
+                }
+            }
+        }
+
+        private static void ReportRemovedSettings(JObject source, List<string> changes)
+        {
+            if (source["ReturnPoint"] != null)
+            {
+                changes.Add("the unused return location was removed");
             }
 
-            return "inside";
+            var failsafe = source["Failsafe"] as JObject;
+            if (failsafe != null && (failsafe["SoftBoundaryAction"] != null ||
+                failsafe["HardBoundaryAction"] != null || failsafe["HardBoundaryKillDelaySec"] != null))
+            {
+                changes.Add("frontend boundary actions and termination timing were removed");
+            }
+
+            if (source["BoundaryViolations"] != null)
+            {
+                changes.Add("the local violation history was removed");
+            }
+        }
+
+        private static bool HasAltitudePolicy(JToken boundary)
+        {
+            var item = boundary as JObject;
+            return item != null && (item["MaxAltitudeAgl"] != null || item["MinAltitudeAgl"] != null);
+        }
+
+        private static bool HasUnusedOutlineMetadata(JToken boundary)
+        {
+            var item = boundary as JObject;
+            return item != null && (item["BoundaryType"] != null || item["DisplayColor"] != null);
+        }
+
+        private static double? GetFiniteNumber(JToken value)
+        {
+            if (value == null || !double.TryParse(value.ToString(), NumberStyles.Float,
+                CultureInfo.InvariantCulture, out double result))
+            {
+                return null;
+            }
+
+            return double.IsNaN(result) || double.IsInfinity(result) || result < 0 || result > 10000
+                ? (double?)null
+                : result;
         }
     }
 }

@@ -27,7 +27,9 @@ $dependencyResolver = [ResolveEventHandler] {
 [Reflection.Assembly]::LoadFrom((Join-Path $missionPlannerDir 'MissionPlanner.exe')) | Out-Null
 $plugin = [Reflection.Assembly]::LoadFrom($pluginPath)
 $configType = $plugin.GetType('NOMAD.MissionPlanner.NOMADConfig', $true)
-$loadMethod = $configType.GetMethod('LoadFromFile')
+    $loadMethod = $configType.GetMethod('LoadFromFile')
+    $geofenceType = $plugin.GetType('NOMAD.MissionPlanner.GeofenceConfig', $true)
+    $geofenceLoadMethod = $geofenceType.GetMethod('LoadFromJson', [Reflection.BindingFlags]'Static,NonPublic')
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('nomad-config-test-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temporary | Out-Null
 
@@ -151,6 +153,102 @@ try {
     if ($termDefaults.JoystickTerminationButtonIndex -ne 6) { throw 'Missing termination index did not retain reviewed default6.' }
     $termRemap = Load-Config '{"JoystickTerminationButtonIndex":10,"JoystickSw1UpAction":"a:activate"}'
     if ($termRemap.JoystickTerminationButtonIndex -ne 10) { throw 'Explicit valid termination index was not preserved.' }
+
+    $legacyBoundaryJson = @'
+{
+  "SoftBoundary": { "Vertices": [], "MaxAltitudeAgl": 60 },
+  "HardBoundary": { "Vertices": [], "MinAltitudeAgl": 5 },
+  "MaxAltitudeAglMeters": 75,
+  "MonitoringEnabled": true,
+  "ReturnPoint": { "Lat": 45.0, "Lon": -75.0 },
+  "Failsafe": {
+    "SoftBoundaryAction": "return_to_boundary",
+    "HardBoundaryAction": "auto_kill",
+    "HardBoundaryKillDelaySec": 8,
+    "EnableAudioWarnings": false
+  },
+  "BoundaryViolations": [{ "BoundaryType": "hard" }]
+}
+'@
+    $boundaryArguments = New-Object object[] 2
+    $boundaryArguments[0] = [string]$legacyBoundaryJson
+    $boundaryArguments[1] = $false
+    $boundary = $geofenceLoadMethod.Invoke($null, $boundaryArguments)
+    if (-not [bool]$boundaryArguments[1]) { throw 'Legacy boundary config did not report a migration.' }
+    if ($boundary.AdvisoryAltitudeDisplayThresholdMeters -ne 75) {
+        throw 'Legacy altitude was not retained as an advisory display threshold.'
+    }
+    if (-not $boundary.AdvisoryPreviewEnabled) {
+        throw 'Legacy monitor preference was not retained as a local preview.'
+    }
+    if ($boundary.AdvisoryAudioAlertsEnabled) { throw 'Legacy audio preference was not retained.' }
+    if (-not $boundary.MigrationNotice.Contains('visual advisory data')) {
+        throw 'Boundary config migration did not produce a visible advisory-only notice.'
+    }
+    $serializedBoundary = [Newtonsoft.Json.JsonConvert]::SerializeObject($boundary)
+    foreach ($field in @('ReturnPoint', 'Failsafe', 'BoundaryViolations', 'MaxAltitudeAglMeters', 'MonitoringEnabled')) {
+        if ($serializedBoundary.Contains('"' + $field + '"')) {
+            throw "Legacy boundary field remained after migration: $field"
+        }
+    }
+    $migratedBoundaryArguments = New-Object object[] 2
+    $migratedBoundaryArguments[0] = [string]$serializedBoundary
+    $migratedBoundaryArguments[1] = $false
+    $reloadedBoundary = $geofenceLoadMethod.Invoke($null, $migratedBoundaryArguments)
+    if ([bool]$migratedBoundaryArguments[1]) { throw 'Boundary config migration was not stable after serialization.' }
+    if ($reloadedBoundary.AdvisoryAltitudeDisplayThresholdMeters -ne 75) {
+        throw 'Migrated advisory threshold changed after reload.'
+    }
+
+    $invalidBoundaryArguments = New-Object object[] 2
+    $invalidBoundaryArguments[0] = '{"AdvisoryAltitudeDisplayThresholdMeters":10001}'
+    $invalidBoundaryArguments[1] = $false
+    $invalidBoundary = $geofenceLoadMethod.Invoke($null, $invalidBoundaryArguments)
+    if ([bool]$invalidBoundaryArguments[1] -ne $true) { throw 'Out-of-range advisory altitude was not reported.' }
+    if ($invalidBoundary.AdvisoryAltitudeDisplayThresholdMeters -ne 122) {
+        throw 'Out-of-range advisory altitude did not fall back to the reviewed display default.'
+    }
+    if (-not $invalidBoundary.MigrationNotice.Contains('invalid advisory altitude')) {
+        throw 'Out-of-range advisory altitude did not produce a visible migration notice.'
+    }
+
+    $malformedThresholdJson = @'
+{
+  "SoftBoundary": {
+    "Vertices": [
+      { "Lat": 45.0, "Lon": -75.0 },
+      { "Lat": 45.1, "Lon": -75.0 },
+      { "Lat": 45.0, "Lon": -74.9 }
+    ]
+  },
+  "HardBoundary": {
+    "Vertices": [
+      { "Lat": 44.9, "Lon": -75.1 },
+      { "Lat": 45.2, "Lon": -75.1 },
+      { "Lat": 45.0, "Lon": -74.8 }
+    ]
+  },
+  "AdvisoryAltitudeDisplayThresholdMeters": { "unexpected": "object" }
+}
+'@
+    $malformedThresholdArguments = New-Object object[] 2
+    $malformedThresholdArguments[0] = [string]$malformedThresholdJson
+    $malformedThresholdArguments[1] = $false
+    $malformedThresholdBoundary = $geofenceLoadMethod.Invoke($null, $malformedThresholdArguments)
+    if ([bool]$malformedThresholdArguments[1] -ne $true) {
+        throw 'Malformed advisory threshold did not report a visible migration.'
+    }
+    if ($malformedThresholdBoundary.AdvisoryAltitudeDisplayThresholdMeters -ne 122) {
+        throw 'Malformed advisory threshold did not use the reviewed display default.'
+    }
+    if ($malformedThresholdBoundary.SoftBoundary.Vertices.Count -ne 3 -or
+        $malformedThresholdBoundary.HardBoundary.Vertices.Count -ne 3) {
+        throw 'Valid saved boundary geometry was lost while sanitizing a malformed altitude threshold.'
+    }
+    if (-not $malformedThresholdBoundary.MigrationNotice.Contains('invalid advisory altitude')) {
+        throw 'Malformed advisory threshold did not produce a visible migration notice.'
+    }
+
     $inactiveAlias = Load-Config '{"JoystickSw1UpAction":"a:activate","JoystickButtonIndices":[0,0,0,0,0,0]}'
     if ($inactiveAlias.JoystickButtonIndices[1] -ne 0) { throw 'Inactive index alias was silently remapped.' }
     $empty = Load-Config '{"Payloads":[],"Actuators":[],"SerialJoystickEnabled":false}'

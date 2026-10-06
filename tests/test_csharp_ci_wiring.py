@@ -7,7 +7,7 @@ import fnmatch
 import re
 from pathlib import Path
 
-import pytest
+from scripts.ci.csharp_scope import QUALIFICATION_PATH_PATTERNS
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/csharp.yml"
@@ -65,17 +65,10 @@ def get_python_dependencies(seeds: set[Path]) -> set[Path]:
     return visited
 
 
-def get_event_paths(workflow: str, event: str) -> list[str]:
-    events = workflow.split("\non:\n", maxsplit=1)[1].split("\npermissions:", maxsplit=1)[0]
-    block = re.search(rf"^  {event}:\n(.*?)(?=^  \w+:|\Z)", events, re.MULTILINE | re.DOTALL)
-    assert block is not None, f"Missing {event} workflow event"
-    return re.findall(r'^\s+- "([^"]+)"', block.group(1), re.MULTILINE)
-
-
-@pytest.mark.parametrize("event", ["push", "pull_request"])
-def test_csharp_filters_cover_transitive_qualification_dependencies(event):
+def test_csharp_scope_covers_transitive_qualification_dependencies():
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    paths = get_event_paths(workflow, event)
+    assert "scripts/ci/csharp_scope.py" in workflow
+    paths = QUALIFICATION_PATH_PATTERNS
     seeds = {ROOT / path for path in re.findall(r"\bpython\s+(scripts/[^\s]+\.py)", workflow)}
     for script in ("build_ground_router.ps1", "build_plugin_windows.ps1"):
         assert script in workflow, f"Hosted workflow bypasses {script}"
@@ -94,7 +87,20 @@ def test_csharp_filters_cover_transitive_qualification_dependencies(event):
     }
     assert expected <= dependencies, f"Dependency scan missed {sorted(expected - dependencies)}"
     missing = sorted(path for path in dependencies if not any(fnmatch.fnmatchcase(path, pattern) for pattern in paths))
-    assert not missing, f"{event} filters omit qualification inputs: {missing}"
+    assert not missing, f"C# path scope omits qualification inputs: {missing}"
+
+
+def test_csharp_required_gate_runs_for_every_pull_request():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "pull_request:\n    branches: [main]" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "name: Mission Planner and router qualification gate" in workflow
+    assert "if: always()" in workflow
+    assert "needs: [csharp-scope, plugin-tests, router-tests, plugin-build]" in workflow
+    assert workflow.count("if: needs.csharp-scope.outputs.required == 'true'") == 3
+    gate = workflow.split("  csharp-qualification-gate:", maxsplit=1)[1]
+    assert "shell: bash" in gate
+    assert "PLUGIN_BUILD_RESULT" in workflow and "ROUTER_TEST_RESULT" in workflow
 
 
 def test_plugin_settings_stop_old_joystick_before_replacing_output_transport():
@@ -113,3 +119,10 @@ def test_dead_code_and_local_notification_checks_run_in_ci():
     assert "test_plugin_local_messages.ps1" in workflow
     lint = (ROOT / "scripts/build/lint_plugin_deadcode.ps1").read_text(encoding="utf-8")
     assert "/t:Rebuild" in lint and "/warnaserror:$deadCodeWarnings" in lint
+
+
+def test_direct_command_architecture_guard_runs_for_plugin_changes():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "tests/test_mission_planner_command_boundary.py" in QUALIFICATION_PATH_PATTERNS
+    assert "Mission Planner direct-command architectural guard" in workflow
+    assert "pixi run python -m pytest tests/test_mission_planner_command_boundary.py -q" in workflow

@@ -14,6 +14,16 @@ CommandResult verified(const CommandResult &result, const char *message) {
     return result.success ? CommandResult{true, message, result.acknowledged} : result;
 }
 
+const char *gimbal_target_error(double pitch_deg, double roll_deg) {
+    if (!std::isfinite(pitch_deg) || pitch_deg < -90.0 || pitch_deg > 90.0) {
+        return "gimbal pitch must be finite and between -90 and 90 degrees";
+    }
+    if (!std::isfinite(roll_deg) || roll_deg < -30.0 || roll_deg > 30.0) {
+        return "gimbal roll must be finite and between -30 and 30 degrees";
+    }
+    return nullptr;
+}
+
 } // namespace
 
 CommandResult Vehicle::set_servo(int channel, int pwm_microseconds) {
@@ -85,11 +95,8 @@ CommandResult Vehicle::configure_gimbal(int mount_mode) {
 }
 
 CommandResult Vehicle::set_gimbal_target(double pitch_deg, double roll_deg) {
-    if (!std::isfinite(pitch_deg) || pitch_deg < -90.0 || pitch_deg > 90.0) {
-        return {false, "gimbal pitch must be finite and between -90 and 90 degrees"};
-    }
-    if (!std::isfinite(roll_deg) || roll_deg < -30.0 || roll_deg > 30.0) {
-        return {false, "gimbal roll must be finite and between -30 and 30 degrees"};
+    if (const auto *error = gimbal_target_error(pitch_deg, roll_deg)) {
+        return {false, error};
     }
     const auto admission = require_operation(VehicleOperation::SetGimbalTarget);
     if (!admission.success) {
@@ -100,6 +107,21 @@ CommandResult Vehicle::set_gimbal_target(double pitch_deg, double roll_deg) {
                                             2.0F}),
         "set gimbal target");
     return verified(result, "gimbal target command acknowledged");
+}
+
+CommandResult Vehicle::configure_gimbal_and_set_target(int mount_mode, double pitch_deg, double roll_deg) {
+    if (const auto *error = gimbal_target_error(pitch_deg, roll_deg)) {
+        return {false, error};
+    }
+    const auto configured = configure_gimbal(mount_mode);
+    if (!configured.success) {
+        return configured;
+    }
+    auto target = set_gimbal_target(pitch_deg, roll_deg);
+    if (!target.success) {
+        target.message = "gimbal mode configured; " + target.message;
+    }
+    return target;
 }
 
 } // namespace nomad::vehicle

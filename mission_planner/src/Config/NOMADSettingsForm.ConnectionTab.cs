@@ -31,7 +31,7 @@ namespace NOMAD.MissionPlanner
                 Text = "Core command actions use authenticated loopback IPC. The credential identifies " +
                        "mission-planner; runtime authority admission is still required. A separately supervised " +
                        "nomad-runtime process must be running; these commands fail closed when it is " +
-                       "unavailable. GuidedGoto is unavailable until the runtime adds a typed request.",
+                       "unavailable. Runtime protocol v1 does not expose navigation requests.",
                 Font = new Font("Segoe UI", 8, FontStyle.Italic),
                 ForeColor = Color.FromArgb(170, 170, 170),
                 Location = new Point(20, y),

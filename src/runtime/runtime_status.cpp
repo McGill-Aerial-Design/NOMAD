@@ -26,7 +26,8 @@ Json Runtime::Implementation::handle_read_request(const Request &request) {
                 {"capabilities",
                  {"hello", "ping", "status", "get_actuators", "configure_actuators", "actuator_action",
                   "set_servo", "set_relay", "motor_test",
-                  "configure_gimbal", "set_gimbal_target", "admit_authority", "revoke_authority",
+                  "configure_gimbal", "set_gimbal_target", "configure_gimbal_target",
+                  "admit_authority", "revoke_authority",
                   "handback_authority"}}};
     }
     if (request.type == "get_actuators") {

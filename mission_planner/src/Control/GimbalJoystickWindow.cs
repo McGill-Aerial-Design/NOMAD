@@ -536,7 +536,8 @@ namespace NOMAD.MissionPlanner
         }
 
         // ============================================================
-        // Mode preset — latches a flag combo and pings the gimbal manager once
+        // Mode preset — apply the selected mode immediately. Target requests wait
+        // for this mode result before they are sent.
         // ============================================================
         private void SetModePreset(string label, MountMode mode)
         {
@@ -571,16 +572,17 @@ namespace NOMAD.MissionPlanner
 
         private void SnapAngles(float pitch, float roll)
         {
+            _targetPitch = pitch;
+            _targetRoll = roll;
             if (_mountMode != MountMode.MavlinkTargeting)
             {
                 _mountMode = MountMode.MavlinkTargeting;
                 _modeLabel = "MAVLINK";
                 UpdateModeLabel();
                 HighlightModeButtons();
-                GimbalController.SetMode(_mountMode);
+                GimbalController.SetModeAndTargetAsync(_mountMode, pitch, roll);
+                return;
             }
-            _targetPitch = pitch;
-            _targetRoll = roll;
             RequestPitchRollTarget(pitch, roll);
         }
 

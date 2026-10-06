@@ -325,11 +325,14 @@ verification (`core-release`). Each job builds its own inputs. MAVSDK peer and w
 qualification remains in its own Linux/Windows matrix. The Python job runs tools
 and regression guards; service and release pytest suites belong to `core-release`.
 
-`csharp.yml` separates pure plugin logic (`plugin-tests`), standalone router build,
+`csharp.yml` reports a scope and qualification gate on every pull request. Its
+path selector runs pure plugin logic (`plugin-tests`), standalone router build,
 dual-link/process tests and release rollback qualification (`router-tests`), and
 Mission Planner reference staging, plugin build, build dispatch and UI/video/log
-adapter integration (`plugin-build`). Router and plugin artifacts stay with their
-owning jobs. Existing path triggers apply to all three jobs.
+adapter integration (`plugin-build`) when those inputs change. The gate requires
+all three Windows jobs for a relevant change and clearly records when they were
+skipped for an unrelated change. Router and plugin artifacts stay with their
+owning jobs.
 
 `lint.yml` owns static and quality checks; native core tests belong to `test.yml`.
 Resource measurement, budget checks and retained evidence stay together in
@@ -337,10 +340,15 @@ Resource measurement, budget checks and retained evidence stay together in
 and verifying the complete release set.
 
 Hosted `test.yml`, `lint.yml`, `ros-sim.yml` and `csharp.yml` run pull-request
-checks for their configured scopes. `sitl.yml` runs a path-triggered reduced
-connectivity smoke on selected pushes to `main`; its full Copter and QuadPlane
-jobs run nightly or by manual dispatch, not on every PR. `docker.yml` is manual
-and targets self-hosted Jetson/GPU runners. The
+checks for their configured scopes; `csharp.yml` also reports its required gate
+for unrelated changes. `sitl.yml` runs the full Copter and QuadPlane
+qualification for safety-sensitive pull requests and main pushes. Its scope
+gate skips both simulator builds for unrelated changes, and a required gate
+fails if either full suite does not pass when those paths change. Scheduled and
+manual runs always perform both suites. The separate
+[`mavsdk-sitl-smoke.yml`](../.github/workflows/mavsdk-sitl-smoke.yml) checks
+connectivity only and is not reported as full SITL qualification. `docker.yml`
+is manual and targets self-hosted Jetson/GPU runners. The
 [qualification page](qualification.md) records the exact current-base run and
 its limits.
 

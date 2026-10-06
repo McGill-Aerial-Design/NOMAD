@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
 # ============================================================
-# Geometry unit tests for the Mission Planner plugin
+# Advisory-outline geometry tests for the Mission Planner plugin
 # ============================================================
-# Compiles the Mission Planner-free geofence geometry
+# Compiles Mission Planner-free advisory outline geometry
 # (GeoMath.cs + GeofenceTypes.cs) together with the test runner
 # using the Roslyn csc bundled with Visual Studio's MSBuild —
 # no .NET SDK or test-framework packages required.

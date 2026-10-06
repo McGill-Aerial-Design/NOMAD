@@ -190,9 +190,11 @@ namespace NOMAD.MissionPlanner
             return true;
         }
 
-        internal static async Task<NomadCoreRequestResult> SendGimbalTargetAsync(double pitchDeg, double rollDeg)
+        internal static async Task<NomadCoreRequestResult> SendGimbalTargetAsync(
+            double pitchDeg, double rollDeg, Func<bool> inputStillCurrent = null)
         {
-            var result = await SendGimbalAsync(client => client.GimbalTargetAsync(pitchDeg, rollDeg))
+            var result = await SendGimbalAsync(client =>
+                client.GimbalTargetAsync(pitchDeg, rollDeg, inputStillCurrent: inputStillCurrent))
                 .ConfigureAwait(false);
             if (result.Succeeded)
             {
@@ -205,9 +207,28 @@ namespace NOMAD.MissionPlanner
             return result;
         }
 
-        internal static async Task<NomadCoreRequestResult> ConfigureGimbalAsync(int mountMode)
+        internal static async Task<NomadCoreRequestResult> ConfigureGimbalAndSendTargetAsync(
+            int mountMode, double pitchDeg, double rollDeg, Func<bool> inputStillCurrent = null)
         {
-            var result = await SendGimbalAsync(client => client.GimbalConfigureAsync(mountMode)).ConfigureAwait(false);
+            var result = await SendGimbalAsync(client =>
+                client.GimbalConfigureAndTargetAsync(mountMode, pitchDeg, rollDeg,
+                    inputStillCurrent: inputStillCurrent)).ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                ClearGimbalFailure();
+            }
+            else
+            {
+                ReportGimbalFailure(DescribeFailure("Gimbal mode and target", result));
+            }
+            return result;
+        }
+
+        internal static async Task<NomadCoreRequestResult> ConfigureGimbalAsync(
+            int mountMode, Func<bool> inputStillCurrent = null)
+        {
+            var result = await SendGimbalAsync(client => client.GimbalConfigureAsync(mountMode,
+                inputStillCurrent: inputStillCurrent)).ConfigureAwait(false);
             if (!result.Succeeded)
             {
                 Log.Warn(DescribeFailure("Gimbal configure", result));
