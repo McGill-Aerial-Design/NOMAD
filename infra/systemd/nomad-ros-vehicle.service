@@ -1,8 +1,7 @@
 [Unit]
-Description=NOMAD ROS vehicle adapter node (in container)
-After=nomad-isaac-ros-container.service nomad-edge-core.service
+Description=NOMAD ROS telemetry observer node (in container)
+After=nomad-isaac-ros-container.service
 Requires=nomad-isaac-ros-container.service
-Wants=nomad-edge-core.service
 PartOf=nomad.target
 
 [Service]

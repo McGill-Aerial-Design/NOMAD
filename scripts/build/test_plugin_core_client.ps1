@@ -4,15 +4,13 @@
 # NomadCoreClient boundary tests for the Mission Planner plugin
 # ============================================================
 # Compiles the Mission Planner-free NomadCoreClient (the plugin's client for
-# the C++ core CLI boundary) together with the test runner using the Roslyn
-# csc bundled with Visual Studio's MSBuild — no .NET SDK or test-framework
+# the C++ runtime IPC boundary) together with the test runner using the Roslyn
+# csc bundled with Visual Studio's MSBuild â€” no .NET SDK or test-framework
 # packages required.
 #
-# The pure checks (argument vector, invariant formatting, fail-closed input
-# validation, unavailable-core fail-closed) always run. When the C++ core
-# binary has been built (pixi run build-core), the harness also exercises the
-# live CLI authentication gate: an actuation verb without NOMAD_API_KEY must
-# be refused before any socket work. The gate check is skipped otherwise.
+# The harness exercises typed runtime requests, fail-closed validation,
+# explicit GuidedGoto unavailability, authority controls, protocol negotiation,
+# and unknown-outcome no-replay behavior without Mission Planner assemblies.
 #
 # Usage: pixi run test-plugin-core-client
 # Exits non-zero on compile error or test failure.
@@ -43,24 +41,48 @@ if (-not (Test-Path $csc)) {
 # ---- Compile ----
 $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadCoreClient.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientTests.cs')
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadCoreRequestResult.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Network.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Requests.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Control\FlightModeController.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\TerminationRequestTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientRuntimeTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientAsyncTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\AsyncRuntimeTestFixture.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientOutcomeTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputOutcomeTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputTestFixtures.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\JoystickMappingTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\JoystickInputConfigurationTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Input\NomadJoystickService.Switches.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Input\NomadJoystickService.Axis.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Control\OutputController.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Config\NOMADConfig.Input.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadActuatorModels.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadCoreClient.Actuators.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Actuators.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Actuators\ActuatorControlPanel.cs')
 )
 $outDir = Join-Path $repoRoot 'mission_planner\tests\coreclient\bin'
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $exe = Join-Path $outDir 'NomadCoreClientTests.exe'
 
 Write-Host "Compiling core-client tests..." -ForegroundColor Yellow
-& $csc /nologo /target:exe /langversion:latest "/out:$exe" @sources
+$frameworkReferenceDirectory = Join-Path "${env:ProgramFiles(x86)}" 'Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8'
+$systemWebExtensions = Join-Path $frameworkReferenceDirectory 'System.Web.Extensions.dll'
+if (-not (Test-Path $systemWebExtensions)) {
+    Write-Host "ERROR: .NET Framework 4.8 reference assembly not found at $systemWebExtensions" -ForegroundColor Red
+    exit 1
+}
+& $csc /nologo /target:exe /langversion:latest /reference:System.Drawing.dll /reference:System.Windows.Forms.dll "/reference:$systemWebExtensions" "/out:$exe" @sources
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Compile FAILED." -ForegroundColor Red
     exit 1
 }
 
 # ---- Run ----
-# The auth-gate check inside the test refuses to run while NOMAD_API_KEY is
-# set (the gate needs an unset key to observe the refusal), so clear it here.
-Remove-Item Env:NOMAD_API_KEY -ErrorAction SilentlyContinue
-
 Write-Host "Running core-client tests..." -ForegroundColor Yellow
 & $exe
 $result = $LASTEXITCODE

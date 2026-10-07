@@ -1,0 +1,31 @@
+name: nomad-quadplane
+
+services:
+  quadplane_sitl:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.sitl-plane
+      args:
+        ARDUPILOT_REVISION: dbe792162d06cab66c3475fd5556bf7a120f119e
+        MAVPROXY_VERSION: 1.8.74
+        PYMAVLINK_VERSION: 2.4.49
+    image: nomad-sitl:plane-4.7.1-quadplane-tilttri
+    entrypoint: ["/bin/sh", "/nomad/sitl-quadplane-entrypoint.sh"]
+    volumes:
+      - ./sitl-quadplane-entrypoint.sh:/nomad/sitl-quadplane-entrypoint.sh:ro
+      - ./quadplane-tilttri.parm:/nomad/quadplane-tilttri.parm:ro
+    tty: true
+    stdin_open: true
+    environment:
+      SITL_PROFILE_DEFAULTS: /nomad/quadplane-tilttri.parm
+      INSTANCE: "0"
+      LAT: "42.3898"
+      LON: "-71.1476"
+      ALT: "14"
+      DIR: "270"
+      SPEEDUP: "1"
+      SITL_UDP_OUTPUT_ADDRESS: udp:host.docker.internal:14580
+      SITL_UDP_OBSERVER_ADDRESS: udp:host.docker.internal:14581
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

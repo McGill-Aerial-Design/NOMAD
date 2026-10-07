@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "nomad/safety/velocity.hpp"
+
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -34,6 +36,7 @@ struct WatchdogInput {
     bool vio_healthy{false};
     bool vio_fresh{false};
     float vio_confidence{};
+    std::uint32_t guided_mode{kGuidedMode};
 };
 
 struct WatchdogDecision {

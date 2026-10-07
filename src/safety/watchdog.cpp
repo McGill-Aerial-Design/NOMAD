@@ -45,8 +45,8 @@ WatchdogDecision evaluate_watchdog(const WatchdogPolicy& policy, const WatchdogI
     if (!input.armed) {
         return stop_for(WatchdogReason::disarmed, "vehicle is disarmed");
     }
-    if (input.custom_mode != kGuidedMode) {
-        return stop_for(WatchdogReason::wrong_mode, "vehicle left GUIDED mode");
+    if (input.guided_mode == 0 || input.custom_mode != input.guided_mode) {
+        return stop_for(WatchdogReason::wrong_mode, "vehicle left the required GUIDED mode");
     }
     if (!has_usable_vio(policy, input)) {
         return stop_for(WatchdogReason::vio_stale, "VIO is unhealthy, stale, or low confidence");

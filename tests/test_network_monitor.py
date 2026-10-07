@@ -2,11 +2,11 @@
 # Copyright 2026 The NOMAD Authors
 """Tests for infra.tailscale.network_monitor.
 
-Every modem/connectivity probe funnels through the module-level ``_run`` shell
-wrapper, so the readers are exercised with ``_run`` patched to a command-
-dispatching stub returning ``(exit_code, stdout)``. ``_check_modem_status``'s
-merge logic is tested with the individual query methods stubbed; ``_run`` itself
-is tested against a faked ``subprocess.run``.
+Every modem/connectivity probe funnels through the shared ``_run`` shell wrapper
+(``infra.tailscale.shell``), so the readers are exercised with ``_run`` patched
+to a command-dispatching stub returning ``(exit_code, stdout)``.
+``_check_modem_status``'s merge logic is tested with the individual query methods
+stubbed; the wrapper itself is pinned in ``test_tailscale_shell.py``.
 """
 
 from __future__ import annotations
@@ -64,32 +64,6 @@ def test_modem_status_to_dict():
     assert d["signal_quality"] == "good"
     assert d["signal_strength_dbm"] == -85
     assert set(d) >= {"carrier", "interface", "imei", "apn", "nm_connection_state"}
-
-
-# --------------------------------------------------------------------------- #
-# _run
-# --------------------------------------------------------------------------- #
-
-
-def test_run_returns_code_and_stdout(monkeypatch):
-    monkeypatch.setattr(nm.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="hi"))
-    assert nm._run(["echo", "hi"]) == (0, "hi")
-
-
-def test_run_missing_binary_returns_127(monkeypatch):
-    def boom(*a, **k):
-        raise FileNotFoundError("nmcli")
-
-    monkeypatch.setattr(nm.subprocess, "run", boom)
-    assert nm._run(["nmcli"]) == (127, "")
-
-
-def test_run_generic_error_returns_1(monkeypatch):
-    def boom(*a, **k):
-        raise OSError("kaboom")
-
-    monkeypatch.setattr(nm.subprocess, "run", boom)
-    assert nm._run(["ping"]) == (1, "")
 
 
 # --------------------------------------------------------------------------- #

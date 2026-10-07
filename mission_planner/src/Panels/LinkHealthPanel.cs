@@ -3,11 +3,8 @@
 // ============================================================
 // MAVLink Link Status panel
 // ============================================================
-// Real-time UI for the dual-link router. Shows live per-link
-// metrics (latency, loss, throughput, RSSI, heartbeat age) for
-// both LTE and RadioMaster, plus router controls, a throughput
-// sparkline per link, failover settings and event log. All data
-// comes from MAVLinkConnectionManager / GroundLinkRouter.
+// Real-time UI for the multi-link router. Shows live per-link
+// metrics and the active route controls reported by the standalone host.
 // ============================================================
 
 using System;
@@ -25,7 +22,7 @@ namespace NOMAD.MissionPlanner
         // Fields
         // ============================================================
 
-        private readonly MAVLinkConnectionManager _cm;
+        private readonly IRouterStatusProvider _provider;
         private readonly NOMADConfig _config;
         private readonly Timer _refresh;
 
@@ -37,17 +34,12 @@ namespace NOMAD.MissionPlanner
         private Label _lblCopied;
 
         // Link cards
-        private LinkCard _lteCard;
-        private LinkCard _radioCard;
+        private FlowLayoutPanel _linkRow;
+        private readonly Dictionary<string, LinkCard> _cards = new Dictionary<string, LinkCard>();
 
-        // Settings row
-        private CheckBox _chkAuto;
-        private ComboBox _cmbPreferred;
-        private CheckBox _chkDedup;
-        private CheckBox _chkAutoReconnect;
+        // Route selection
         private Label _lblManualOverride;
         private Button _btnReleaseOverride;
-        private Button _btnReset;
 
         // Log
         private ListBox _lstLog;
@@ -56,9 +48,9 @@ namespace NOMAD.MissionPlanner
         // Ctor
         // ============================================================
 
-        public LinkHealthPanel(MAVLinkConnectionManager connectionManager, NOMADConfig config)
+        public LinkHealthPanel(IRouterStatusProvider connectionManager, NOMADConfig config)
         {
-            _cm = connectionManager ?? throw new ArgumentNullException(nameof(connectionManager));
+            _provider = connectionManager ?? throw new ArgumentNullException(nameof(connectionManager));
             _config = config ?? throw new ArgumentNullException(nameof(config));
 
             BackColor = NOMADTheme.BG_DARK;
@@ -112,8 +104,7 @@ namespace NOMAD.MissionPlanner
             Controls.Add(root);
         }
 
-        // Bottom strip: settings on the left, failover log on the right, an even
-        // 50/50 split. Keeps both compact so the link graphs above get the height.
+        // Bottom strip: route controls on the left and the failover log on the right.
         private TableLayoutPanel BuildBottomRow()
         {
             var row = new TableLayoutPanel
@@ -243,42 +234,30 @@ namespace NOMAD.MissionPlanner
 
         private Panel BuildLinkRow()
         {
-            var row = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 2,
-                RowCount = 1,
-                BackColor = Color.Transparent,
-                Margin = new Padding(0, 6, 0, 0),
-            };
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-            _lteCard = new LinkCard("LTE / Tailscale", LinkType.LTE)
-            {
-                Dock = DockStyle.Fill,
-                Margin = new Padding(0, 0, 6, 0),
-            };
-            _lteCard.SetActiveRequested += (s, e) => _cm.SwitchToLink(LinkType.LTE);
-
-            _radioCard = new LinkCard("RadioMaster", LinkType.RadioMaster)
-            {
-                Dock = DockStyle.Fill,
-                Margin = new Padding(6, 0, 0, 0),
-            };
-            _radioCard.SetActiveRequested += (s, e) => _cm.SwitchToLink(LinkType.RadioMaster);
-
-            row.Controls.Add(_lteCard, 0, 0);
-            row.Controls.Add(_radioCard, 1, 0);
+            var row = new FlowLayoutPanel
+            { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true, BackColor = Color.Transparent };
+            _linkRow = row;
+            RebuildLinkCards(_provider.LinkStatistics);
             return row;
+        }
+
+        private void RebuildLinkCards(IReadOnlyList<LinkStatistics> links)
+        {
+            foreach (var card in _cards.Values) { card.Dispose(); }
+            _cards.Clear();
+            _linkRow.Controls.Clear();
+            foreach (var stats in links)
+            {
+                var id = stats.Type;
+                var card = new LinkCard(stats.Name, id) { Width = 330, Height = 270 };
+                card.SetActiveRequested += (sender, args) => _provider.SwitchToLink(id);
+                _cards.Add(id, card);
+                _linkRow.Controls.Add(card);
+            }
         }
 
         private Panel BuildSettingsRow()
         {
-            // AutoSize card holding one wrapping flow of every setting, so the
-            // controls re-pack onto multiple lines when the panel is narrow instead
-            // of overlapping at fixed x positions.
             var panel = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -302,74 +281,9 @@ namespace NOMAD.MissionPlanner
                 Padding = new Padding(0),
             };
 
-            _chkAuto = SettingCheck("Auto-failover", _cm.Config.AutoFailoverEnabled);
-            _chkAuto.CheckedChanged += (s, e) =>
-            {
-                _cm.SetAutoFailoverEnabled(_chkAuto.Checked);
-                _config.AutoFailoverEnabled = _chkAuto.Checked;
-                PersistConfig();
-            };
-
-            _chkAutoReconnect = SettingCheck("Return to preferred when healthy", _cm.Config.AutoReconnectPreferred);
-            _chkAutoReconnect.CheckedChanged += (s, e) =>
-            {
-                _cm.SetAutoReconnectPreferred(_chkAutoReconnect.Checked);
-                _config.AutoReconnectToPreferred = _chkAutoReconnect.Checked;
-                PersistConfig();
-            };
-
-            _chkDedup = SettingCheck("Deduplicate cross-link packets", _cm.Config.RouterDedupEnabled);
-            _chkDedup.CheckedChanged += (s, e) =>
-            {
-                _cm.SetDedupEnabled(_chkDedup.Checked);
-                _config.RouterDedupEnabled = _chkDedup.Checked;
-                PersistConfig();
-            };
-
-            var lblPref = new Label { Text = "Preferred:", ForeColor = NOMADTheme.TEXT_SECONDARY, Font = NOMADTheme.Font(), AutoSize = true, Margin = new Padding(0, 5, NOMADTheme.GAP, 0) };
-            _cmbPreferred = new ComboBox
-            {
-                Width = 110,
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = NOMADTheme.CONTROL_BG,
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Font = NOMADTheme.Font(),
-                Margin = new Padding(0, 2, NOMADTheme.PAD, 0),
-            };
-            _cmbPreferred.Items.AddRange(new object[] { "LTE", "RadioMaster", "None" });
-            _cmbPreferred.SelectedIndex = _cm.Config.PreferredLink switch
-            {
-                LinkType.LTE => 0,
-                LinkType.RadioMaster => 1,
-                _ => 2,
-            };
-            _cmbPreferred.SelectedIndexChanged += (s, e) =>
-            {
-                var pref = _cmbPreferred.SelectedIndex switch
-                {
-                    0 => LinkType.LTE,
-                    1 => LinkType.RadioMaster,
-                    _ => LinkType.None,
-                };
-                _cm.SetPreferredLink(pref);
-                _config.PreferredMavlinkLink = pref switch
-                {
-                    LinkType.LTE => "LTE",
-                    LinkType.RadioMaster => "RadioMaster",
-                    _ => "None",
-                };
-                PersistConfig();
-            };
-            var prefGroup = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, BackColor = Color.Transparent, Margin = new Padding(0), Padding = new Padding(0) };
-            prefGroup.Controls.Add(lblPref);
-            prefGroup.Controls.Add(_cmbPreferred);
-
-            _btnReset = SettingButton("Reset counters");
-            _btnReset.Click += (s, e) => _cm.ResetCounters();
-
             _btnReleaseOverride = SettingButton("Release override");
             _btnReleaseOverride.Visible = false;
-            _btnReleaseOverride.Click += (s, e) => _cm.SwitchToLink(LinkType.None);
+            _btnReleaseOverride.Click += (s, e) => _provider.SwitchToLink(LinkType.None);
 
             _lblManualOverride = new Label
             {
@@ -380,27 +294,12 @@ namespace NOMAD.MissionPlanner
                 Margin = new Padding(NOMADTheme.GAP, 5, 0, 0),
             };
 
-            flow.Controls.Add(_chkAuto);
-            flow.Controls.Add(_chkAutoReconnect);
-            flow.Controls.Add(prefGroup);
-            flow.Controls.Add(_chkDedup);
-            flow.Controls.Add(_btnReset);
             flow.Controls.Add(_btnReleaseOverride);
             flow.Controls.Add(_lblManualOverride);
 
             panel.Controls.Add(flow);
             return panel;
         }
-
-        private static CheckBox SettingCheck(string text, bool isChecked) => new CheckBox
-        {
-            Text = text,
-            ForeColor = NOMADTheme.TEXT_PRIMARY,
-            Font = NOMADTheme.Font(),
-            AutoSize = true,
-            Checked = isChecked,
-            Margin = new Padding(0, 3, NOMADTheme.PAD, 0),
-        };
 
         private static Button SettingButton(string text)
         {
@@ -486,19 +385,19 @@ namespace NOMAD.MissionPlanner
 
         private void HookEvents()
         {
-            _cm.LinkStatusChanged += (s, e) =>
+            _provider.LinkStatusChanged += (s, e) =>
             {
                 UiAsync.RunSync(this, () => RefreshAll(), "LinkStatusChanged");
             };
-            _cm.FailoverOccurred += (s, e) =>
+            _provider.FailoverOccurred += (s, e) =>
             {
                 UiAsync.RunSync(this, () => AppendLog(e), "FailoverOccurred");
             };
-            _cm.ActiveLinkChanged += (s, t) =>
+            _provider.ActiveLinkChanged += (s, t) =>
             {
                 UiAsync.RunSync(this, () => RefreshAll(), "ActiveLinkChanged");
             };
-            _cm.LogMessage += (s, msg) =>
+            _provider.LogMessage += (s, msg) =>
             {
                 UiAsync.RunSync(this, () => _lstLog.Items.Add($"[{DateTime.Now:HH:mm:ss}] {msg}"), "LogMessage");
             };
@@ -512,26 +411,33 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var lte = _cm.LteStatistics;
-                var radio = _cm.RadioMasterStatistics;
-                var active = _cm.ActiveLink;
-                var ovr = _cm.ManualOverride;
+                var links = _provider.LinkStatistics;
+                var active = _provider.ActiveLink;
+                var ovr = _provider.ManualOverride;
 
-                _lblActive.Text = $"Active: {(active == LinkType.None ? "—" : active.ToString())}";
-                _lblActive.ForeColor = active switch
+                _lblActive.Text = !_provider.IsRouterAvailable
+                    ? "Active: unavailable"
+                    : $"Active: {(active == LinkType.None ? "—" : active.ToString())}";
+                _lblActive.ForeColor = !_provider.IsRouterAvailable || string.IsNullOrEmpty(active)
+                    ? NOMADTheme.WARNING : NOMADTheme.TEXT_PRIMARY;
+
+                bool running = _provider.IsMonitoring;
+                _lblRouterStatus.Text = LinkStatusDisplay.FormatRouterStatus(
+                    running, _provider.IsRouterAvailable, links);
+                _lblRouterStatus.ForeColor = _provider.IsRouterAvailable
+                    ? NOMADTheme.TEXT_SECONDARY : NOMADTheme.ERROR;
+                _lblLocalEndpoint.Text = $"Mode: {_provider.RouterMode}   Local: {_provider.LocalMergedEndpoint}   " +
+                    "(set Mission Planner to UDP Client / UDPCl to this port)";
+
+                if (LinkStatusDisplay.HasMembershipChanged(links, _cards.Keys))
                 {
-                    LinkType.LTE => NOMADTheme.SUCCESS,
-                    LinkType.RadioMaster => Color.MediumTurquoise,
-                    _ => NOMADTheme.WARNING,
-                };
-
-                bool running = _cm.IsMonitoring;
-                _lblRouterStatus.Text = running ? "Router: running — both links open" : "Router: stopped";
-                _lblRouterStatus.ForeColor = running ? NOMADTheme.TEXT_SECONDARY : NOMADTheme.ERROR;
-                _lblLocalEndpoint.Text = $"Local: {_cm.LocalMergedEndpoint}   (set Mission Planner to UDP Client / UDPCl to this port)";
-
-                _lteCard.Update(lte, isActive: active == LinkType.LTE, isOverride: ovr == LinkType.LTE);
-                _radioCard.Update(radio, isActive: active == LinkType.RadioMaster, isOverride: ovr == LinkType.RadioMaster);
+                    RebuildLinkCards(links);
+                }
+                foreach (var stats in links)
+                {
+                    if (_cards.TryGetValue(stats.Type, out var card))
+                    { card.Update(stats, active == stats.Type, ovr == stats.Type); }
+                }
 
                 if (ovr == LinkType.None)
                 {
@@ -558,17 +464,11 @@ namespace NOMAD.MissionPlanner
             _lstLog.TopIndex = Math.Max(0, _lstLog.Items.Count - 1);
         }
 
-        private void PersistConfig()
-        {
-            try { _config.Save(); }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"NOMAD: persist failed - {ex.Message}"); }
-        }
-
         private void CopyEndpoint()
         {
             try
             {
-                Clipboard.SetText(_cm.LocalMergedEndpoint);
+                Clipboard.SetText(_provider.LocalMergedEndpoint);
                 _lblCopied.Text = "copied";
                 var t = new Timer { Interval = 1500 };
                 t.Tick += (s, e) => { _lblCopied.Text = ""; t.Stop(); t.Dispose(); };

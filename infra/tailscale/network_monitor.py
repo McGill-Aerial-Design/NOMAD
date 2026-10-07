@@ -15,12 +15,13 @@ from __future__ import annotations
 import logging
 import os
 import re
-import subprocess
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any
+
+from .shell import run_command as _run
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,89 @@ def _rsrp_to_percent(rsrp: int | None) -> int:
     return max(0, min(100, int(((rsrp + 140) / 96) * 100)))
 
 
+def _apply_nm_info(status: ModemStatus, nm_info: dict[str, Any]) -> None:
+    """Copy the NetworkManager connection profile into the modem status."""
+    status.nm_connection_name = nm_info.get("name")
+    status.nm_connection_state = nm_info.get("state")
+    status.interface = nm_info.get("interface")
+    status.ip_address = nm_info.get("ip4")
+    status.apn = nm_info.get("apn")
+    if nm_info.get("state") == "activated":  # activated => data session is up
+        status.connected = True
+
+
+def _apply_mm_info(status: ModemStatus, mm_info: dict[str, Any]) -> None:
+    """Copy the ModemManager hardware view into the modem status."""
+    # NM is authoritative for the data session; don't let a stale
+    # mmcli "disconnected" flip an NM "activated".
+    if not status.connected:
+        status.connected = mm_info.get("connected", False)
+    status.model = mm_info.get("model") or status.model
+    status.carrier = mm_info.get("carrier") or status.carrier
+    status.technology = mm_info.get("technology") or status.technology
+    status.imei = mm_info.get("imei") or status.imei
+    status.signal_strength_dbm = mm_info.get("rsrp_dbm")
+    if status.signal_strength_dbm is not None:
+        status.signal_quality = _rsrp_to_quality(status.signal_strength_dbm)
+        status.signal_percent = _rsrp_to_percent(status.signal_strength_dbm)
+    if not status.interface:
+        status.interface = mm_info.get("interface")
+
+
+_MMCLI_FIELD_PATTERNS = (
+    (r"model:\s*(.+)", "model"),
+    (r"access tech(?:nologies)?:\s*(.+)", "technology"),
+    (r"operator name:\s*(.+)", "carrier"),
+    (r"\bimei:\s*(.+)", "imei"),
+    (r"primary port:\s*(\S+)", "interface"),
+)
+
+
+def _read_mmcli_fields(stdout: str) -> dict[str, Any]:
+    """Read modem state and identity fields out of ``mmcli -m <idx>`` output."""
+    info: dict[str, Any] = {}
+    state_match = re.search(r"state:\s*'?(\w+)'?", stdout, re.IGNORECASE)
+    if state_match:
+        info["connected"] = state_match.group(1).lower() == "connected"
+
+    for pattern, destination in _MMCLI_FIELD_PATTERNS:
+        match = re.search(pattern, stdout, re.IGNORECASE)
+        if not match:
+            continue
+        value = match.group(1).strip()
+        if value and value not in ("--", "unknown"):  # mmcli pads unset values with "--"
+            info[destination] = value
+    return info
+
+
+def _add_modem_signal(info: dict[str, Any], idx: str, stdout: str) -> None:
+    """Add RSRP from ``--signal-get``, falling back to the generic percent."""
+    exit_code, signal_output = _run(["mmcli", "-m", idx, "--signal-get"])
+    rsrp = None
+    if exit_code == 0:
+        match = re.search(r"rsrp:\s*([-\d.]+)\s*dBm", signal_output)
+        if match:
+            rsrp = int(float(match.group(1)))
+    if rsrp is None:
+        match = re.search(r"signal quality:\s*(\d+)%", stdout, re.IGNORECASE)
+        if match:
+            rsrp = int(round(int(match.group(1)) / 100.0 * 96 - 140))
+    if rsrp is not None:
+        info["rsrp_dbm"] = rsrp
+
+
+def _add_modem_interface(info: dict[str, Any], idx: str) -> None:
+    """Ask the modem bearer for the kernel interface when mmcli omitted it."""
+    if "interface" in info:
+        return
+    exit_code, bearer_output = _run(["mmcli", "-m", idx, "--bearer", "0"])
+    if exit_code != 0:
+        return
+    match = re.search(r"interface:\s*(\S+)", bearer_output, re.IGNORECASE)
+    if match and match.group(1) not in ("--", "unknown"):
+        info["interface"] = match.group(1).strip()
+
+
 class NetworkMonitor:
     """Polls modem + connectivity state on a daemon thread."""
 
@@ -174,51 +258,34 @@ class NetworkMonitor:
         not RF signal; ``mmcli`` knows the hardware (model, carrier, RSRP,
         IMEI) but not always the kernel interface. Either alone is incomplete.
         """
-        status = ModemStatus()
-        got_anything = False
-
-        nm_info = None
-        for cand in self._nm_conn_candidates:
-            nm_info = self._query_nm_connection(cand)
-            if nm_info:
-                break
-        if nm_info is None:
-            nm_info = self._query_nm_connection_fuzzy()
-        if nm_info:
-            status.nm_connection_name = nm_info.get("name")
-            status.nm_connection_state = nm_info.get("state")
-            status.interface = nm_info.get("interface")
-            status.ip_address = nm_info.get("ip4")
-            status.apn = nm_info.get("apn")
-            # NM "activated" => data session is up.
-            if nm_info.get("state") == "activated":
-                status.connected = True
-            got_anything = True
-
+        nm_info = self._find_nm_connection()
         mm_info = self._query_modemmanager()
+        if not nm_info and not mm_info:
+            return None
+
+        status = ModemStatus()
+        if nm_info:
+            _apply_nm_info(status, nm_info)
         if mm_info:
-            # NM is authoritative for the data session; don't let a stale
-            # mmcli "disconnected" flip an NM "activated".
-            if not status.connected:
-                status.connected = mm_info.get("connected", False)
-            status.model = mm_info.get("model") or status.model
-            status.carrier = mm_info.get("carrier") or status.carrier
-            status.technology = mm_info.get("technology") or status.technology
-            status.imei = mm_info.get("imei") or status.imei
-            status.signal_strength_dbm = mm_info.get("rsrp_dbm")
-            if status.signal_strength_dbm is not None:
-                status.signal_quality = _rsrp_to_quality(status.signal_strength_dbm)
-                status.signal_percent = _rsrp_to_percent(status.signal_strength_dbm)
-            if not status.interface:
-                status.interface = mm_info.get("interface")
-            got_anything = True
+            _apply_mm_info(status, mm_info)
+        self._fill_missing_address(status)
+        return status
 
-        if got_anything and (not status.interface or not status.ip_address):
-            iface, ip4 = self._guess_modem_interface()
-            status.interface = status.interface or iface
-            status.ip_address = status.ip_address or ip4
+    def _find_nm_connection(self) -> dict[str, Any] | None:
+        """Return the first matching named connection, else a heuristic match."""
+        for candidate in self._nm_conn_candidates:
+            info = self._query_nm_connection(candidate)
+            if info:
+                return info
+        return self._query_nm_connection_fuzzy()
 
-        return status if got_anything else None
+    def _fill_missing_address(self, status: ModemStatus) -> None:
+        """Fill interface/IP from the kernel when neither probe reported them."""
+        if status.interface and status.ip_address:
+            return
+        iface, ip4 = self._guess_modem_interface()
+        status.interface = status.interface or iface
+        status.ip_address = status.ip_address or ip4
 
     def _query_nm_connection(self, conn_name: str) -> dict[str, Any] | None:
         """Look up a NetworkManager connection by name (state/interface/ip4/apn)."""
@@ -307,45 +374,9 @@ class NetworkMonitor:
         if exit_code != 0:
             return None
 
-        info: dict[str, Any] = {}
-        state_match = re.search(r"state:\s*'?(\w+)'?", stdout, re.IGNORECASE)
-        if state_match:
-            info["connected"] = state_match.group(1).lower() == "connected"
-
-        for key_re, dest in (
-            (r"model:\s*(.+)", "model"),
-            (r"access tech(?:nologies)?:\s*(.+)", "technology"),
-            (r"operator name:\s*(.+)", "carrier"),
-            (r"\bimei:\s*(.+)", "imei"),
-            (r"primary port:\s*(\S+)", "interface"),
-        ):
-            m = re.search(key_re, stdout, re.IGNORECASE)
-            if m:
-                val = m.group(1).strip()
-                if val and val not in ("--", "unknown"):  # mmcli pads unset values with "--"
-                    info[dest] = val
-
-        # Signal: prefer --signal-get RSRP; fall back to the generic percent.
-        exit_code, sig_out = _run(["mmcli", "-m", idx, "--signal-get"])
-        rsrp = None
-        if exit_code == 0:
-            m = re.search(r"rsrp:\s*([-\d.]+)\s*dBm", sig_out)
-            if m:
-                rsrp = int(float(m.group(1)))
-        if rsrp is None:
-            m = re.search(r"signal quality:\s*(\d+)%", stdout, re.IGNORECASE)
-            if m:
-                rsrp = int(round(int(m.group(1)) / 100.0 * 96 - 140))
-        if rsrp is not None:
-            info["rsrp_dbm"] = rsrp
-
-        if "interface" not in info:
-            exit_code, b_out = _run(["mmcli", "-m", idx, "--bearer", "0"])
-            if exit_code == 0:
-                m = re.search(r"interface:\s*(\S+)", b_out, re.IGNORECASE)
-                if m and m.group(1) not in ("--", "unknown"):
-                    info["interface"] = m.group(1).strip()
-
+        info = _read_mmcli_fields(stdout)
+        _add_modem_signal(info, idx, stdout)
+        _add_modem_interface(info, idx)
         return info or None
 
     def _guess_modem_interface(self) -> tuple[str | None, str | None]:
@@ -375,15 +406,3 @@ class NetworkMonitor:
         if times:
             return sum(float(t) for t in times) / len(times)
         return None
-
-
-def _run(cmd: list[str], timeout: float = 10.0) -> tuple[int, str]:
-    """Run a command, returning (exit_code, stdout)."""
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return result.returncode, result.stdout
-    except FileNotFoundError:
-        return 127, ""
-    except Exception as e:  # noqa: BLE001 - probe failure is a soft error
-        logger.debug("Command %s failed: %s", cmd[0], e)
-        return 1, ""

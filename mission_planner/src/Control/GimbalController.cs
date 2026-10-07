@@ -1,16 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// NOMAD Gimbal Controller (shared MAVLink sender)
+// NOMAD Gimbal Controller (shared runtime client)
 // ============================================================
-// Extracted from GimbalJoystickWindow so any input source — the floating
-// joystick window, the NomadJoystickService driven by a physical DirectInput
-// stick, or a future scripted automation — can drive the same target-angle
-// integrator and serialize direct MAVLink access via MavlinkSerialLock.
-//
-// The pure command construction + kinematics live in GimbalCommand (Mission
-// Planner-free, unit-tested by tests/gimbal); this class is the thin send
-// adapter that maps a GimbalFrame onto MAVLink.MAV_CMD and ships it.
+// The floating window and physical DirectInput stick share one target-angle
+// integrator. Target requests go through the typed NOMAD runtime client.
 // ============================================================
 
 using System;
@@ -20,7 +14,7 @@ using MissionPlanner;
 namespace NOMAD.MissionPlanner
 {
     /// <summary>
-    /// Process-wide gimbal target state and MAVLink send helpers.
+    /// Process-wide gimbal target state and runtime request helpers.
     /// All state is static so multiple input sources see the same target.
     /// </summary>
     public static class GimbalController
@@ -37,7 +31,8 @@ namespace NOMAD.MissionPlanner
         public static float TargetPitchDeg { get; private set; }
         public static float TargetRollDeg { get; private set; }
 
-        public static MountMode CurrentMode { get; private set; } = MountMode.MavlinkTargeting;
+        // Desired input preset, not an observed or confirmed vehicle mount mode.
+        public static MountMode SelectedMode { get; private set; } = MountMode.MavlinkTargeting;
 
         // Shared rate limit for ALL stick-driven inputs (floating window + physical
         // joystick service). Lives here so changing it in one UI is immediately
@@ -65,7 +60,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static event Action<float, float> TargetChanged;
 
-        /// <summary>Fires when the mount mode preset changes.</summary>
+        /// <summary>Fires when the desired mount mode preset changes; vehicle acceptance is separate.</summary>
         public static event Action<MountMode> ModeChanged;
 
         private static int _inflight; // 0/1 — Interlocked.Exchange guards.
@@ -83,11 +78,11 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static void NudgeTarget(float pitchDeltaDeg, float rollDeltaDeg)
         {
-            if (CurrentMode != MountMode.MavlinkTargeting)
+            if (SelectedMode != MountMode.MavlinkTargeting)
                 SetMode(MountMode.MavlinkTargeting);
 
             SetTargetAngles(TargetPitchDeg + pitchDeltaDeg, TargetRollDeg + rollDeltaDeg);
-            SendPitchRollAngle(TargetPitchDeg, TargetRollDeg);
+            RequestPitchRollTarget(TargetPitchDeg, TargetRollDeg);
         }
 
         /// <summary>
@@ -107,91 +102,53 @@ namespace NOMAD.MissionPlanner
             TargetPitchDeg = p;
             TargetRollDeg = r;
             TargetChanged?.Invoke(p, r);
-            if (send) SendPitchRollAngle(p, r);
+            if (send) RequestPitchRollTarget(p, r);
         }
 
         public static void SetMode(MountMode mode)
         {
-            CurrentMode = mode;
+            SelectedMode = mode;
             ModeChanged?.Invoke(mode);
-            // Discrete mount switch: route through the C++ core boundary first
-            // (MAV_CMD_DO_MOUNT_CONFIGURE, acknowledged); the direct MAVLink
-            // send below is the transitional fallback. The continuous stick
-            // angle stream (SendPitchRollAngle) stays on direct MAVLink by
-            // design — spawning the CLI per frame would not scale.
-            // debt: stick stream; revisit when the core boundary gains a
-            // streaming verb; then route DO_MOUNT_CONTROL through it.
-            var client = OutputController.CreateCoreClient();
-            if (client == null || !client.GimbalConfigure((int)mode))
-            {
-                SendMountConfigure(mode);
-            }
+            _ = ConfigureModeAsync(mode);
         }
 
         /// <summary>
-        /// Send DO_MOUNT_CONTROL with absolute pitch/roll. Drops if a previous
-        /// command is still in flight so fast stick motion never queues.
+        /// Request an absolute pitch/roll target through the runtime. Drops a
+        /// new request while the previous one is in flight so stick motion never queues.
         /// </summary>
-        public static void SendPitchRollAngle(float pitchDeg, float rollDeg)
+        public static void RequestPitchRollTarget(float pitchDeg, float rollDeg)
         {
-            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return;
             if (System.Threading.Interlocked.Exchange(ref _inflight, 1) == 1) return;
 
-            byte sysid = MainV2.comPort.MAV.sysid;
-            byte compid = MainV2.comPort.MAV.compid;
-            var frame = GimbalCommand.BuildMountControl(pitchDeg, rollDeg);
-
-            Task.Run(async () =>
-            {
-                bool acquired = false;
-                try
-                {
-                    acquired = await MavlinkSerialLock.WaitAsync(1000).ConfigureAwait(false);
-                    if (!acquired) return;
-                    await SendFrameAsync(sysid, compid, frame).ConfigureAwait(false);
-                }
-                catch { }
-                finally
-                {
-                    if (acquired) MavlinkSerialLock.Release();
-                    System.Threading.Interlocked.Exchange(ref _inflight, 0);
-                }
-            });
+            _ = SendTargetAsync(pitchDeg, rollDeg);
         }
 
-        public static void SendMountConfigure(MountMode mode)
+        private static async Task ConfigureModeAsync(MountMode mode)
         {
-            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return;
-
-            byte sysid = MainV2.comPort.MAV.sysid;
-            byte compid = MainV2.comPort.MAV.compid;
-            var frame = GimbalCommand.BuildMountConfigure(mode);
-
-            Task.Run(async () =>
+            try
             {
-                bool acquired = false;
-                try
-                {
-                    acquired = await MavlinkSerialLock.WaitAsync(2000).ConfigureAwait(false);
-                    if (!acquired) return;
-                    await SendFrameAsync(sysid, compid, frame).ConfigureAwait(false);
-                }
-                catch { }
-                finally
-                {
-                    if (acquired) MavlinkSerialLock.Release();
-                }
-            });
+                await OutputController.ConfigureGimbalAsync((int)mode).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                Log.Warn($"Gimbal configure failed: {error.Message}; mode was not confirmed.");
+            }
         }
 
-        // Ship a GimbalFrame as a COMMAND_LONG. The frame's numeric command id is
-        // the MAVLink MAV_CMD value (pinned by GimbalCommand + tests/gimbal), so
-        // the cast is exact.
-        private static Task SendFrameAsync(byte sysid, byte compid, GimbalFrame frame)
-            => MainV2.comPort.doCommandAsync(
-                sysid, compid,
-                (MAVLink.MAV_CMD)frame.Command,
-                frame.P1, frame.P2, frame.P3, frame.P4, frame.P5, frame.P6, frame.P7,
-                requireack: false, uicallback: null);
+        private static async Task SendTargetAsync(float pitchDeg, float rollDeg)
+        {
+            try
+            {
+                await OutputController.SendGimbalTargetAsync(pitchDeg, rollDeg).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                Log.Warn($"Gimbal target request failed: {error.Message}; target was not confirmed.");
+            }
+            finally
+            {
+                System.Threading.Interlocked.Exchange(ref _inflight, 0);
+            }
+        }
     }
 }

@@ -20,9 +20,12 @@ enum class RejectReason {
 };
 
 struct VelocityLimits {
-    float max_velocity_xy{2.0F};
-    float max_velocity_z{1.0F};
-    float max_yaw_rate{1.0F};
+    VelocityLimits();
+    VelocityLimits(float max_velocity_xy_value, float max_velocity_z_value, float max_yaw_rate_value);
+
+    float max_velocity_xy;
+    float max_velocity_z;
+    float max_yaw_rate;
 };
 
 struct VelocityCommand {
@@ -41,6 +44,7 @@ struct FlightConditions {
     bool vio_fresh{false};
     float vio_confidence{};
     float min_vio_confidence{0.3F};
+    std::uint32_t guided_mode{kGuidedMode};
 };
 
 struct VelocityDecision {
@@ -49,6 +53,8 @@ struct VelocityDecision {
     std::string message;
     std::optional<VelocityCommand> setpoint;
 };
+
+bool is_valid_velocity_limits(const VelocityLimits& limits);
 
 VelocityDecision evaluate_velocity(
     const VelocityLimits& limits,

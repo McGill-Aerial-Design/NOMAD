@@ -1,27 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "nomad/vehicle/vehicle.hpp"
 
-#include "nomad/safety/payload.hpp"
+#include "command_ids.hpp"
+#include "nomad/safety/output.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 namespace nomad::vehicle {
 namespace {
 
-constexpr std::uint16_t kSetServoCommand = 183;
-constexpr std::uint16_t kSetRelayCommand = 181;
-constexpr std::uint16_t kMotorTestCommand = 139;
-constexpr std::uint16_t kMountConfigureCommand = 204;
-constexpr std::uint16_t kUserCommand = 31010;
-
-mavlink::Command make_command(std::uint16_t id, std::array<float, 7> parameters = {}) {
-    return mavlink::Command{id, parameters};
-}
-
 CommandResult verified(const CommandResult &result, const char *message) {
-    return result.success ? CommandResult{true, message} : result;
+    return result.success ? CommandResult{true, message, result.acknowledged} : result;
 }
 
 } // namespace
@@ -31,21 +21,29 @@ CommandResult Vehicle::set_servo(int channel, int pwm_microseconds) {
     if (!decision.allowed) {
         return {false, decision.message};
     }
+    const auto admission = require_operation(VehicleOperation::SetServo);
+    if (!admission.success) {
+        return admission;
+    }
     const auto result =
         send_command(make_command(kSetServoCommand,
                                   {static_cast<float>(channel), static_cast<float>(pwm_microseconds), 0, 0, 0, 0, 0}),
                      "set servo");
-    return verified(result, "servo command verified");
+    return verified(result, "servo command acknowledged");
 }
 
 CommandResult Vehicle::set_relay(int relay_number, bool on) {
-    if (relay_number < 0 || relay_number > 15) {
-        return {false, "relay number must be between zero and fifteen"};
+    if (!relay_number_is_valid(relay_number)) {
+        return {false, kRelayRangeMessage};
+    }
+    const auto admission = require_operation(VehicleOperation::SetRelay);
+    if (!admission.success) {
+        return admission;
     }
     const auto result = send_command(make_command(kSetRelayCommand,
                                                   {static_cast<float>(relay_number), on ? 1.0F : 0.0F, 0, 0, 0, 0, 0}),
                                      "set relay");
-    return verified(result, "relay command verified");
+    return verified(result, "relay command acknowledged");
 }
 
 CommandResult Vehicle::motor_test(int motor_instance, int pwm_microseconds, float timeout_seconds) {
@@ -58,18 +56,26 @@ CommandResult Vehicle::motor_test(int motor_instance, int pwm_microseconds, floa
     if (!std::isfinite(timeout_seconds)) {
         return {false, "motor test timeout must be finite"};
     }
+    const auto admission = require_operation(VehicleOperation::MotorTest);
+    if (!admission.success) {
+        return admission;
+    }
     const auto clamped_timeout = std::clamp(timeout_seconds, 0.05F, 3.0F);
     const auto result = send_command(
         make_command(kMotorTestCommand,
                      {static_cast<float>(motor_instance), 1.0F, static_cast<float>(pwm_microseconds), clamped_timeout,
                       1.0F, 0, 0}),
         "motor test");
-    return verified(result, "motor test command verified");
+    return verified(result, "motor test command acknowledged");
 }
 
 CommandResult Vehicle::configure_gimbal(int mount_mode) {
     if (mount_mode < 0 || mount_mode > 4) {
         return {false, "mount mode must be between zero and four"};
+    }
+    const auto admission = require_operation(VehicleOperation::ConfigureGimbal);
+    if (!admission.success) {
+        return admission;
     }
     const auto result = send_command(make_command(kMountConfigureCommand,
                                                   {static_cast<float>(mount_mode), 1.0F, 1.0F, 1.0F, 2.0F, 2.0F,
@@ -78,14 +84,22 @@ CommandResult Vehicle::configure_gimbal(int mount_mode) {
     return verified(result, "gimbal configuration verified");
 }
 
-CommandResult Vehicle::send_user_command(const std::array<float, 7> &parameters) {
-    for (const auto parameter : parameters) {
-        if (!std::isfinite(parameter)) {
-            return {false, "user command parameters must be finite"};
-        }
+CommandResult Vehicle::set_gimbal_target(double pitch_deg, double roll_deg) {
+    if (!std::isfinite(pitch_deg) || pitch_deg < -90.0 || pitch_deg > 90.0) {
+        return {false, "gimbal pitch must be finite and between -90 and 90 degrees"};
     }
-    const auto result = send_command(make_command(kUserCommand, parameters), "user command");
-    return verified(result, "user command verified");
+    if (!std::isfinite(roll_deg) || roll_deg < -30.0 || roll_deg > 30.0) {
+        return {false, "gimbal roll must be finite and between -30 and 30 degrees"};
+    }
+    const auto admission = require_operation(VehicleOperation::SetGimbalTarget);
+    if (!admission.success) {
+        return admission;
+    }
+    const auto result = send_command(
+        make_command(kMountControlCommand, {static_cast<float>(pitch_deg), static_cast<float>(roll_deg), 0, 0, 0, 0,
+                                            2.0F}),
+        "set gimbal target");
+    return verified(result, "gimbal target command acknowledged");
 }
 
 } // namespace nomad::vehicle

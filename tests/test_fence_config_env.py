@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Contract test for the CLI's NOMAD-side fence gate (SR-FEN-02).
+"""Contract test for the qualification driver's NOMAD-side fence gate (SR-FEN-02).
 
 The projected keep-in fence must reject an out-of-fence ``goto`` target
 before any socket work, and must not change the behavior of an unset
@@ -19,8 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def find_binary() -> Path | None:
-    names = ("nomad.exe", "nomad")
-    build_dirs = (ROOT / "build" / "core", ROOT / "build-core")
+    names = ("nomad-qualification.exe", "nomad-qualification")
+    build_dirs = (ROOT / "build" / "core", ROOT / "build" / "mavsdk-qualification", ROOT / "build-core")
     configurations = tuple(
         directory for build_dir in build_dirs for directory in (build_dir, build_dir / "Debug", build_dir / "Release")
     )
@@ -36,7 +36,7 @@ BINARY = find_binary()
 
 pytestmark = pytest.mark.skipif(
     BINARY is None,
-    reason="C++ core binary not built; run `pixi run build-core` first",
+    reason="qualification driver not built; run `pixi run build-qualification-cli` first",
 )
 
 # A ~222 m box around (45.0, -73.0) with a 5 m margin.

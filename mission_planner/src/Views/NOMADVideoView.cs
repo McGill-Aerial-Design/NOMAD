@@ -1,64 +1,49 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// NOMAD Video View (ZED stream + payload controls)
+// NOMAD Video View (direct video stream + payload controls)
 // ============================================================
 
 using System;
-using System.Collections.Generic;
 using System.Drawing;
-using System.IO;
-using System.IO.Compression;
-using System.Linq;
-using System.Reflection;
-using System.Text;
-using System.Threading.Tasks;
 using System.Windows.Forms;
-using MissionPlanner;
-using MissionPlanner.Utilities;
-using Newtonsoft.Json;
 
 namespace NOMAD.MissionPlanner
 {
     public class NOMADVideoView : NOMADViewBase, IUpdatableView
     {
-        private readonly DualLinkSender _sender;
+        private readonly System.Threading.CancellationToken _shutdown;
+        private readonly Func<IVideoPipeline> _createPipeline;
         private readonly NOMADConfig _config;
-        private readonly JetsonConnectionManager _jetsonConnectionManager;
         private EmbeddedVideoPlayer _videoPlayer;
-        private PayloadControlPanel _payloadPanel;
-        private Label _lblStatus;
+        private ActuatorControlPanel _actuatorPanel;
 
-        public NOMADVideoView(DualLinkSender sender, NOMADConfig config, JetsonConnectionManager jetsonConnectionManager = null)
+        public NOMADVideoView(NOMADConfig config)
+            : this(config, System.Threading.CancellationToken.None) { }
+
+        internal NOMADVideoView(NOMADConfig config, System.Threading.CancellationToken shutdown)
+            : this(config, shutdown, () => new GStreamerVideoPipeline()) { }
+
+        internal NOMADVideoView(NOMADConfig config, System.Threading.CancellationToken shutdown,
+            Func<IVideoPipeline> createPipeline)
         {
-            _sender = sender;
-            _config = config;
-            _jetsonConnectionManager = jetsonConnectionManager;
+            _createPipeline = createPipeline;
+            _shutdown = shutdown;
+            _config = config ?? new NOMADConfig();
             InitializeUI();
         }
 
         private void InitializeUI()
         {
-            // Main horizontal split: Video (left) + Controls (right)
             var mainLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 2,
                 RowCount = 1,
             };
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));  // Video
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));  // Controls
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
 
-            // Left side: Video with controls
-            var videoSection = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 1,
-            };
-            videoSection.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-            // Video player panel - left ZED camera
             var videoPanel = new Panel
             {
                 Dock = DockStyle.Fill,
@@ -66,75 +51,68 @@ namespace NOMAD.MissionPlanner
                 Margin = new Padding(5),
             };
 
+            string rtspUrl = string.IsNullOrWhiteSpace(_config.VideoUrl)
+                ? "rtsp://127.0.0.1:8554/stream"
+                : _config.VideoUrl.Trim();
             try
             {
-                // The Jetson exposes a single RTSP stream; its content is switched
-                // via the bridge API rather than by changing the URL.
-                string rtspUrl = $"rtsp://{_config.EffectiveIP}:8554/stream";
-                _videoPlayer = new EmbeddedVideoPlayer("ZED Left Camera", rtspUrl, true, _jetsonConnectionManager);
-                _videoPlayer.Dock = DockStyle.Fill;
+                _videoPlayer = new EmbeddedVideoPlayer("Video Feed", rtspUrl, true, _shutdown, _createPipeline)
+                {
+                    Dock = DockStyle.Fill,
+                };
                 videoPanel.Controls.Add(_videoPlayer);
             }
             catch (Exception ex)
             {
-                _lblStatus = new Label
+                videoPanel.Controls.Add(new Label
                 {
-                    Text = $"Video player unavailable: {ex.Message}\n\n" +
-                           $"Stream URL: rtsp://{_config.EffectiveIP}:8554/stream\n\n" +
-                           "Use VLC or another player to view the stream.",
+                    Text = $"Video player unavailable: {ex.Message}\n\nStream URL: {rtspUrl}",
                     Font = new Font("Segoe UI", 12),
                     ForeColor = TEXT_SECONDARY,
                     Dock = DockStyle.Fill,
                     TextAlign = ContentAlignment.MiddleCenter,
-                };
-                videoPanel.Controls.Add(_lblStatus);
+                });
             }
 
-            videoSection.Controls.Add(videoPanel, 0, 0);
+            mainLayout.Controls.Add(videoPanel, 0, 0);
 
-            // Video player has built-in controls - no need for duplicate controls panel
-
-            mainLayout.Controls.Add(videoSection, 0, 0);
-
-            // Right side: payload controls (drop mechanisms, servo sliders, pump)
             var controlsSection = new Panel
             {
                 Dock = DockStyle.Fill,
                 BackColor = CARD_BG,
             };
-
             try
             {
-                _payloadPanel = new PayloadControlPanel(_config) { Dock = DockStyle.Fill };
-                controlsSection.Controls.Add(_payloadPanel);
+                _actuatorPanel = new ActuatorControlPanel(_config) { Dock = DockStyle.Fill };
+                controlsSection.Controls.Add(_actuatorPanel);
             }
             catch (Exception ex)
             {
-                var errorLabel = new Label
+                controlsSection.Controls.Add(new Label
                 {
-                    Text = $"Payload controls unavailable: {ex.Message}",
+                    Text = $"Actuator controls unavailable: {ex.Message}",
                     Font = new Font("Segoe UI", 11),
                     ForeColor = ERROR_COLOR,
                     Dock = DockStyle.Top,
                     Height = 60,
                     TextAlign = ContentAlignment.MiddleCenter,
-                };
-                controlsSection.Controls.Add(errorLabel);
+                });
             }
 
             mainLayout.Controls.Add(controlsSection, 1, 0);
-
-            this.Controls.Add(mainLayout);
+            Controls.Add(mainLayout);
         }
 
-        public void UpdateData() { }
+        public void UpdateData()
+        {
+        }
 
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
                 _videoPlayer?.Dispose();
-                _payloadPanel?.Dispose();
+                _actuatorPanel?.Dispose();
             }
             base.Dispose(disposing);
         }

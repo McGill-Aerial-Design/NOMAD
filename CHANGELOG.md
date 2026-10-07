@@ -7,23 +7,56 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- [ros] The shipped ROS node is now a read-only telemetry observer. It publishes
+  only validated, fresh GPS and battery samples, has no command topics/services,
+  accepts only a UDP input endpoint, and uses a raw receive-only observer target.
+  Runtime IPC v1 has no typed requests for
+  the removed ROS flight operations and exposes no sensor values yet, so ROS
+  does not forward those commands or use a direct fallback.
+
 ### Removed
-- [core,ros] The Python ROS-HTTP bridge (`edge_core/ros_http_bridge/`) is
-  **deleted** — the C++ `nomad_vehicle_node` adapter (`ros2/nomad_ros`)
-  replaces it end-to-end: it owns the MAVLink UDP link, the core velocity
-  path (`/nomad/cmd_vel` + VIO health/confidence), and publishes `/nomad/*`
-  telemetry. The compose `ros`/`gazebo`/`ros-gpu` profiles now run the node
-  (fed by SITL / MAVProxy / a real vehicle on :14552); `Dockerfile.jetson`
-  and `Dockerfile.sim-isaac` colcon-build `nomad_core` + `nomad_ros`; the
-  systemd unit is `nomad-ros-vehicle.service` with
-  `scripts/services/nomad_ros_vehicle.sh`; `scripts/nomad` service renamed
-  `ros_http_bridge` → `ros_vehicle`; Isaac API routes manage the node
-  (status key `vehicle_running`). The bridge's host unit tests
-  (`test_bridge_http_client`, `test_coordinate_math`, `test_mavlink_velocity`,
-  `test_mesh_packer`, `test_vio_math`) and its route pinning in
-  `test_client_contract.py` were deleted with it. (Deletion gate 1, 2026-09-05)
+- [core,mavlink] The hand-written MAVLink codec is **deleted** at the Phase E
+  cutover: `src/mavlink/{protocol,udp_connection,udp_commands,fence,params}.cpp`
+  and their headers, the build-time generated dialect headers, the CMake mavgen
+  rule and its generator (`scripts/dev/generate_mavlink.py`, `pixi run
+  generate-mavlink`), and the legacy transport test targets
+  (`codec_golden_test.cpp`, `udp_connection_test.cpp`, `zero_delivery_test.cpp`)
+  — their behavior is covered by the MAVSDK peer fixture and
+  `nomad_mavsdk_zero_delivery_tests`. The pinned `third_party/ardupilot-mavlink`
+  submodule stays only as the dialect the command-id gate resolves ids against.
+  (2026-09-12, with explicit user authorization)
+- [core,ros] Historical baseline (2026-09-05; superseded by the read-only
+  observer above): the Python ROS-HTTP bridge (`edge_core/ros_http_bridge/`)
+  was deleted and the C++ `nomad_vehicle_node` initially carried direct core
+  velocity control gated by VIO inputs. At that revision, compose profiles ran
+  the node, Isaac images built `nomad_core` + `nomad_ros`, and the service was
+  named `ros_vehicle`. The bridge's host unit tests and route pinning were
+  removed. (Deletion gate 1, 2026-09-05)
 
 ### Added
+- [core,mavsdk] Historical Phase B entry (2026-09-11; superseded by the Phase E
+  cutover): opt-in MAVSDK-backed `MavlinkConnection`
+  (`src/mavlink/mavsdk_mavlink_connection.cpp`, built only with
+  `NOMAD_ENABLE_MAVSDK=ON`): commands go out as raw COMMAND_LONG/COMMAND_INT to
+  preserve NOMAD's result-code and relative-altitude-frame contracts, telemetry
+  is mapped into `VehicleState` with the same per-field validity flags and
+  steady-clock timestamps. At that historical revision the CLI gained
+  `--transport udp|mavsdk` (default `udp`) and `--system-id`.
+- [test] Historical Phase B validation: `pixi run test-mavsdk-phase-b` built the
+  opt-in CLI and
+  `nomad_mavsdk_connection_tests`, then runs
+  `scripts/dev/mavsdk_connection_fixture.py` against a deterministic peer
+  (accepted, denied, timeout, no-peer, stale-telemetry, COMMAND_INT frame,
+  wrong-identity, and per-command mode/takeoff/goto/land/RTL/servo/relay/
+  gimbal-config/user-command cases where the peer applies the requested state
+  change so the core's verification is exercised). Live Copter SITL evidence:
+  with the historical `NOMAD_TRANSPORT=mavsdk` selector the `core-sitl-command-flow` and
+  `core-sitl-payload` scenarios pass against Copter 4.7.1 (GUIDED mode, 3D GPS
+  fix, arm, takeoff, guided goto sent as COMMAND_INT, RTL, land, disarm, all
+  state-verified). Motor-test parity was added once C23 was fixed, so the
+  command matrix is complete; Phase B remains open on vehicle-class
+  identification and QuadPlane coverage.
 - [cli] New `nomad velocity` verb: streams velocity setpoints through the C++
   core (armed + GUIDED + fresh VIO gates) for a duration, then reports the
   watchdog stop (`velocity_active`, `watchdog_reason`).
@@ -32,6 +65,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   retired Python controller — the loop-closure evidence is fully C++-owned.
 
 ### Changed
+- [core,mavsdk] At the 2026-09-12 Phase E cutover, MAVSDK became the transport,
+  not an option: `CMakeLists.txt` drops
+  `NOMAD_ENABLE_MAVSDK` and fails configuration when `third_party/MAVSDK` is
+  missing, so no build can produce a NOMAD binary with no way to reach a vehicle.
+  The ROS 2 adapter built `make_mavsdk_connection` instead of
+  `UdpMavlinkConnection` and gained a declared `system_id` parameter. The
+  historical `--transport mavsdk` selector was removed; the current CLI has no
+  transport selector and does not read `NOMAD_TRANSPORT`, so naming the selector
+  fails closed with usage. No path
+  retains a hidden fallback.
+  (2026-09-12)
+- [core] `VehicleState` carries steady-clock timestamps for position, battery, GPS,
+  and attitude samples; `Vehicle::wait_for_location` and `Vehicle::wait_for_altitude`
+  fail closed when the position sample is older than the configured
+  `position_freshness_timeout` (default 2000 ms) — closes hazard H-10 for the
+  position field. The other three timestamps are stamped but not yet gated.
 - [plugin,infra] Flight-controller-generic naming: `CubeOutputController` is
   renamed `OutputController` (it drives generic ArduPilot `DO_SET_SERVO` /
   `DO_SET_RELAY` outputs on any board); the services-status key
@@ -350,6 +399,39 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shrinks to message unpacking and HTTP forwarding.
 
 ### Fixed
+- [core] [bug] `Vehicle::motor_test` sent MAVLink command ID 139, which is not a
+  `MAV_CMD` entry at all in the pinned dialect — `MAV_CMD_DO_MOTOR_TEST` is 209
+  — so no autopilot handler matched it and the verb could never work. Live A/B
+  against Copter 4.7.1: id 139 drew `MAV_RESULT_UNSUPPORTED`, id 209 drew
+  `MAV_RESULT_ACCEPTED` with the vehicle's own "starting motor test" /
+  "finished motor test" status texts. `tests/test_command_ids.py` now resolves
+  every hand-typed command id in `src/vehicle/` against the pinned dialect
+  definition, which is the check that would have caught it, and the MAVSDK peer
+  fixture covers the verb. See C23.
+- [mavlink] [bug] The 1 Hz GCS heartbeat that opens heartbeat-gated relays was
+  emitted only once per `wait_for_heartbeat` call: the loop announced, then
+  blocked in a single receive for the whole remaining timeout. A relay that
+  stayed closed saw one announcement instead of the 1 Hz cadence, so
+  `core-sitl-gcs-heartbeat`'s negative control (which requires four announcements
+  across three measured intervals) failed. The
+  receive is now capped at a 20 ms slice — the same pattern `wait_for_state`
+  already used — and the unit test drives one long 6 s wait as the CLI does, so
+  the cadence is pinned inside a single blocking call.
+- [dev,sitl] [bug] The `sitl-fence` task could never pass. It was the only
+  scenario task without the development API key, and every step of the
+  containment scenario is an actuation command the CLI refuses without one
+  (`audit command=... result=refused auth=none reason=missing_api_key`), so
+  local runs and the `sitl.yml` step both failed at the first `mode` command.
+  The task now sets the key like the other `core-sitl-*` runners.
+- [sitl,infra] [bug] The dev SITL stack no longer starves the C++ core of
+  telemetry. ArduPilot streams position, attitude and extended status only
+  after a GCS requests the group, and the core deliberately never requests
+  streams, so with the Python edge service deleted the host-side copy the
+  `core-sitl-*` scenarios read carried little more than heartbeats — status,
+  takeoff and goto verification could not pass. `docker/sitl-streams.parm` now
+  sets `SR0_POSITION`, `SR0_EXT_STAT`, `SR0_EXTRA1` and `SR0_EXTRA2` at startup
+  via `--add-param-file`, and the host copy delivers heartbeat at 1.00 Hz with
+  position/GPS/attitude/status at ~4 Hz.
 - [core] [bug] The UDP MAVLink transport was single-consumer: with a
   concurrent telemetry pump (the ROS node's 10 Hz timer) a command
   acknowledgement could be consumed before `send_command`'s waiter saw it,

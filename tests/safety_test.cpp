@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fake_connection.hpp"
-#include "nomad/mavlink/protocol.hpp"
+#include "support/fake_connection.hpp"
 #include "nomad/safety/geofence.hpp"
-#include "nomad/safety/payload.hpp"
+#include "nomad/safety/output.hpp"
 #include "nomad/safety/velocity.hpp"
 #include "nomad/safety/watchdog.hpp"
 #include "nomad/vehicle/vehicle.hpp"
+#include "support/test_harness.hpp"
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -22,17 +22,6 @@
 
 namespace {
 
-// A failing assert on Windows opens a dialog that blocks unattended CI runs,
-// so main() runs the tests inside a try/catch and reports failures on stderr.
-void check_impl(bool ok, const char *condition, int line) {
-    if (!ok) {
-        throw std::runtime_error(std::string("check failed at line ") + std::to_string(line) + ": " + condition);
-    }
-}
-
-#define CHECK(condition) check_impl(static_cast<bool>(condition), #condition, __LINE__)
-
-
 void test_safety_velocity_accepts_clamped_frd_command() {
     const nomad::safety::FlightConditions conditions{
         true, true, true, nomad::safety::kGuidedMode, true, true, 1.0F,
@@ -45,6 +34,15 @@ void test_safety_velocity_accepts_clamped_frd_command() {
     CHECK(decision.setpoint->vy == 2.0F);
     CHECK(decision.setpoint->vz == -1.0F);
     CHECK(decision.setpoint->yaw_rate == -1.0F);
+}
+
+void test_safety_velocity_accepts_plane_guided_mode_when_selected() {
+    const nomad::safety::FlightConditions conditions{
+        true, true, true, 15, true, true, 1.0F, 0.3F, 15,
+    };
+    const auto decision = nomad::safety::evaluate_velocity({}, conditions, {1.0F, 0.0F, 0.0F, 0.0F});
+
+    CHECK(decision.allowed);
 }
 
 void test_safety_velocity_rejects_each_fault() {
@@ -65,18 +63,28 @@ void test_safety_velocity_rejects_each_fault() {
     CHECK(nonfinite.reason == nomad::safety::RejectReason::nonfinite);
 }
 
-void test_vehicle_rejects_invalid_watchdog_policy_before_transmission() {
+void test_vehicle_rejects_body_velocity_for_unsupported_aircraft() {
     FakeConnection connection;
     connection.connect();
     connection.state->armed = true;
-    nomad::safety::WatchdogPolicy policy{};
-    policy.min_vio_confidence = 2.0F;
-    nomad::vehicle::Vehicle vehicle(connection, policy);
+    nomad::vehicle::Vehicle vehicle(connection);
     CHECK(vehicle.update_vio(true, 1.0F).success);
 
-    const auto result = vehicle.set_velocity({1.0F, 0.0F, 0.0F, 0.0F});
+    connection.state->identity = nomad::telemetry::identify_vehicle(nomad::telemetry::kArduPilotAutopilot,
+                                                                     nomad::telemetry::kFixedWing);
+    CHECK(!vehicle.set_velocity({1.0F, 0.0F, 0.0F, 0.0F}).success);
+    CHECK(!vehicle.stop_velocity().success);
+    CHECK(connection.velocity_send_count == 0);
 
-    CHECK(!result.success);
+    connection.state->identity = nomad::telemetry::identify_vehicle(nomad::telemetry::kArduPilotAutopilot,
+                                                                     nomad::telemetry::kVtolQuadrotor);
+    CHECK(!vehicle.set_velocity({1.0F, 0.0F, 0.0F, 0.0F}).success);
+    CHECK(!vehicle.stop_velocity().success);
+    CHECK(connection.velocity_send_count == 0);
+
+    connection.state->identity = {};
+    CHECK(!vehicle.set_velocity({1.0F, 0.0F, 0.0F, 0.0F}).success);
+    CHECK(!vehicle.stop_velocity().success);
     CHECK(connection.velocity_send_count == 0);
 }
 
@@ -109,7 +117,9 @@ void test_vehicle_watchdog_stops_for_command_timeout() {
     nomad::safety::WatchdogPolicy policy{};
     policy.command_timeout = std::chrono::milliseconds(20);
     policy.poll_interval = std::chrono::milliseconds(5);
-    nomad::vehicle::Vehicle vehicle(connection, policy);
+    nomad::vehicle::VehicleConfig config{};
+    config.watchdog = policy;
+    nomad::vehicle::Vehicle vehicle(connection, config);
     CHECK(vehicle.update_vio(true, 1.0F).success);
 
     CHECK(vehicle.set_velocity({1.0F, 0.0F, 0.0F, 0.0F}).success);
@@ -128,7 +138,9 @@ void test_vehicle_watchdog_stops_for_stale_vio_and_mode_loss() {
     policy.command_timeout = std::chrono::milliseconds(200);
     policy.vio_timeout = std::chrono::milliseconds(20);
     policy.poll_interval = std::chrono::milliseconds(5);
-    nomad::vehicle::Vehicle vehicle(connection, policy);
+    nomad::vehicle::VehicleConfig config{};
+    config.watchdog = policy;
+    nomad::vehicle::Vehicle vehicle(connection, config);
     CHECK(vehicle.update_vio(true, 1.0F).success);
     CHECK(vehicle.set_velocity({1.0F, 0.0F, 0.0F, 0.0F}).success);
     std::this_thread::sleep_for(std::chrono::milliseconds(60));
@@ -148,7 +160,9 @@ void test_vehicle_watchdog_stops_for_link_loss() {
     nomad::safety::WatchdogPolicy policy{};
     policy.command_timeout = std::chrono::milliseconds(200);
     policy.poll_interval = std::chrono::milliseconds(5);
-    nomad::vehicle::Vehicle vehicle(connection, policy);
+    nomad::vehicle::VehicleConfig config{};
+    config.watchdog = policy;
+    nomad::vehicle::Vehicle vehicle(connection, config);
     CHECK(vehicle.update_vio(true, 1.0F).success);
     CHECK(vehicle.set_velocity({1.0F, 0.0F, 0.0F, 0.0F}).success);
 
@@ -174,49 +188,6 @@ void test_vehicle_stop_velocity_sends_zero() {
     CHECK(connection.last_velocity.vx == 0.0F);
 }
 
-void test_geofence_contains_only_safe_targets() {
-    const std::vector<nomad::safety::Point2d> square{
-        {-5.0, -5.0},
-        {5.0, -5.0},
-        {5.0, 5.0},
-        {-5.0, 5.0},
-    };
-    CHECK(nomad::safety::point_in_polygon({0.0, 0.0}, square));
-    CHECK(!nomad::safety::point_in_polygon({10.0, 0.0}, square));
-    CHECK(nomad::safety::is_contained({0.0, 0.0}, square, 2.0));
-    CHECK(!nomad::safety::is_contained({4.0, 0.0}, square, 2.0));
-    CHECK(nomad::safety::distance_to_boundary({0.0, 0.0}, square) == 5.0);
-}
-
-void test_geofence_rejects_invalid_configuration_and_targets() {
-    const auto malformed =
-        nomad::safety::evaluate_position({std::vector<nomad::safety::Point2d>{{0.0, 0.0}}, 0.0}, {0.0, 0.0});
-    CHECK(!malformed.allowed);
-    CHECK(malformed.reason == "fence");
-
-    const auto nonfinite =
-        nomad::safety::evaluate_position({std::nullopt, 0.0}, {std::numeric_limits<double>::quiet_NaN(), 0.0});
-    CHECK(!nonfinite.allowed);
-    CHECK(nonfinite.reason == "nonfinite");
-
-    const auto unconfigured = nomad::safety::evaluate_position({std::nullopt, 0.0}, {100.0, -100.0});
-    CHECK(unconfigured.allowed);
-}
-
-void test_global_geofence_projects_meters() {
-    const nomad::safety::GlobalFencePolicy policy{
-        std::vector<nomad::safety::GlobalPoint>{
-            {45.0, -73.0},
-            {45.0, -72.9999},
-            {45.0001, -72.9999},
-            {45.0001, -73.0},
-        },
-        1.0,
-    };
-    CHECK(nomad::safety::evaluate_global_position(policy, {45.00005, -72.99995}).allowed);
-    CHECK(!nomad::safety::evaluate_global_position(policy, {45.002, -72.99995}).allowed);
-}
-
 void test_vehicle_fence_rejects_target_before_transmission() {
     FakeConnection connection;
     connection.connect();
@@ -229,70 +200,61 @@ void test_vehicle_fence_rejects_target_before_transmission() {
         },
         1.0,
     };
-    nomad::vehicle::Vehicle vehicle(connection, {}, policy);
+    nomad::vehicle::VehicleConfig config{};
+    config.fence = policy;
+    nomad::vehicle::Vehicle vehicle(connection, config);
     connection.acknowledgement = nomad::mavlink::CommandAck{192, 0};
 
     const auto result = vehicle.goto_location({45.002, -72.99995, 10.0F});
 
     CHECK(!result.success);
     CHECK(connection.last_command.id == 0);
+    CHECK(!connection.last_goto.has_value());
 }
 
-void test_vehicle_payload_commands_require_interlock_and_validate_ranges() {
+void test_vehicle_goto_location_rejects_stale_position() {
     FakeConnection connection;
     connection.connect();
+    connection.acknowledgement = nomad::mavlink::CommandAck{192, 0};
+    connection.auto_stamp_fresh_fields = false;
     nomad::vehicle::Vehicle vehicle(connection);
-    connection.acknowledgement = nomad::mavlink::CommandAck{183, 0};
-    CHECK(!vehicle.set_servo(0, 1500).success);
-    CHECK(vehicle.set_servo(8, 1500).success);
+    connection.state->position_valid = true;
+    connection.state->position.latitude_deg = 45.5;
+    connection.state->position.longitude_deg = -73.6;
+    connection.state->position.relative_altitude_m = 5.0F;
+    connection.state->position_updated_at =
+        std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
-    connection.acknowledgement = nomad::mavlink::CommandAck{181, 0};
-    CHECK(!vehicle.release_payload(2, 0.1F).success);
-    CHECK(vehicle.arm_payload().success);
-    CHECK(vehicle.release_payload(2, 0.05F).success);
-    CHECK(!vehicle.release_payload(2, 0.05F).success);
+    const auto result = vehicle.goto_location({45.5, -73.6, 5.0F});
+
+    CHECK(!result.success);
+    CHECK(result.message.find("stale") != std::string::npos);
 }
 
-void test_vehicle_payload_on_failure_still_attempts_off() {
+void test_vehicle_takeoff_altitude_rejects_stale_position() {
     FakeConnection connection;
     connection.connect();
+    connection.acknowledgement = nomad::mavlink::CommandAck{22, 0};
+    connection.auto_stamp_fresh_fields = false;
     nomad::vehicle::Vehicle vehicle(connection);
-    connection.acknowledgement = nomad::mavlink::CommandAck{181, 4};
+    connection.state->position_valid = true;
+    connection.state->position.relative_altitude_m = 5.0F;
+    connection.state->position_updated_at =
+        std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
-    CHECK(vehicle.arm_payload().success);
-    CHECK(!vehicle.release_payload(2, 0.05F).success);
-    CHECK(connection.command_history.size() >= 2);
-    CHECK(connection.command_history.back().id == 181);
-    CHECK(connection.command_history.back().parameters[1] == 0.0F);
+    const auto result = vehicle.takeoff(5.0F);
+
+    CHECK(!result.success);
+    CHECK(result.message.find("stale") != std::string::npos);
 }
 
-void test_vehicle_payload_off_failure_is_reported() {
-    FakeConnection connection;
-    connection.connect();
-    nomad::vehicle::Vehicle vehicle(connection);
-    connection.acknowledgement = nomad::mavlink::CommandAck{181, 0};
-    connection.command_send_results = {true, false};
-
-    CHECK(vehicle.arm_payload().success);
-    CHECK(!vehicle.release_payload(2, 0.05F).success);
-    CHECK(connection.command_history.size() >= 2);
-    CHECK(connection.command_history.back().parameters[1] == 0.0F);
-}
-
-void test_payload_validation_and_interlock() {
+void test_generic_servo_validation() {
     CHECK(nomad::safety::validate_servo_command(1, 500).allowed);
+    CHECK(nomad::safety::validate_servo_command(16, 2500).allowed);
     CHECK(!nomad::safety::validate_servo_command(0, 1500).allowed);
+    CHECK(!nomad::safety::validate_servo_command(17, 1500).allowed);
+    CHECK(!nomad::safety::validate_servo_command(8, 499).allowed);
     CHECK(!nomad::safety::validate_servo_command(8, 2501).allowed);
-    CHECK(*nomad::safety::clamp_release_duration(60.0F) == 5.0F);
-    CHECK(!nomad::safety::clamp_release_duration(std::numeric_limits<float>::quiet_NaN()).has_value());
-
-    nomad::safety::ReleaseInterlock interlock;
-    CHECK(!interlock.evaluate_release(1.0F).allowed);
-    CHECK(interlock.arm(10.0F).allowed);
-    CHECK(interlock.evaluate_release(11.0F).allowed);
-    CHECK(!interlock.evaluate_release(11.1F).allowed);
-    CHECK(interlock.arm(20.0F).allowed);
-    CHECK(!interlock.evaluate_release(31.0F).allowed);
 }
 
 void test_vehicle_destructor_sends_zero_velocity_before_shutdown() {
@@ -445,54 +407,28 @@ void test_vehicle_upload_fence_rejects_invalid_coordinates() {
     CHECK(!lon_result.success);
 }
 
-void test_param_readback_codec_round_trip() {
-    // Fence verification reads FENCE_ENABLE back as authoritative state; the
-    // request frame and the value decode must round-trip the exact name.
-    const auto request = nomad::mavlink::encode_param_request_read(1, 255, 190, 1, 1, "FENCE_ENABLE", -1);
-    CHECK(!request.empty());
-    const auto message = nomad::mavlink::decode_message(request);
-    CHECK(message.has_value());
-    CHECK(!nomad::mavlink::decode_param_value(*message).has_value());
-
-    const auto value = nomad::mavlink::encode_message(1, 1, 1, 22, std::vector<std::uint8_t>(25, 0), true);
-    CHECK(value.has_value());
-    const auto decoded = nomad::mavlink::decode_message(*value);
-    CHECK(decoded.has_value());
-    // An all-zero payload decodes as an empty name, which never matches a request.
-    const auto param = nomad::mavlink::decode_param_value(*decoded);
-    CHECK(param.has_value() && param->param_id.empty());
-}
-
 } // namespace
 
 int main() {
-    try {
-    test_safety_velocity_accepts_clamped_frd_command();
-    test_safety_velocity_rejects_each_fault();
-    test_vehicle_rejects_invalid_watchdog_policy_before_transmission();
-    test_watchdog_stops_for_each_fault();
-    test_vehicle_watchdog_stops_for_command_timeout();
-    test_vehicle_watchdog_stops_for_stale_vio_and_mode_loss();
-    test_vehicle_watchdog_stops_for_link_loss();
-    test_vehicle_stop_velocity_sends_zero();
-    test_geofence_contains_only_safe_targets();
-    test_geofence_rejects_invalid_configuration_and_targets();
-    test_global_geofence_projects_meters();
-    test_vehicle_fence_rejects_target_before_transmission();
-    test_vehicle_payload_commands_require_interlock_and_validate_ranges();
-    test_vehicle_payload_on_failure_still_attempts_off();
-    test_vehicle_payload_off_failure_is_reported();
-    test_payload_validation_and_interlock();
-    test_vehicle_destructor_sends_zero_velocity_before_shutdown();
-    test_vehicle_destructor_orders_zero_before_disconnect();
-    test_vehicle_upload_fence_validates_boundary();
-    test_param_readback_codec_round_trip();
-    test_vehicle_verifies_fence_status_and_fails_closed();
-    test_vehicle_upload_fence_rejects_transport_failure();
-    test_vehicle_upload_fence_rejects_invalid_coordinates();
-    } catch (const std::exception &error) {
-        std::fprintf(stderr, "FAILED: %s\n", error.what());
-        return 1;
-    }
-    return 0;
+    return nomad::test::run_tests([] {
+        test_safety_velocity_accepts_clamped_frd_command();
+        test_safety_velocity_accepts_plane_guided_mode_when_selected();
+        test_safety_velocity_rejects_each_fault();
+        test_vehicle_rejects_body_velocity_for_unsupported_aircraft();
+        test_watchdog_stops_for_each_fault();
+        test_vehicle_watchdog_stops_for_command_timeout();
+        test_vehicle_watchdog_stops_for_stale_vio_and_mode_loss();
+        test_vehicle_watchdog_stops_for_link_loss();
+        test_vehicle_stop_velocity_sends_zero();
+        test_vehicle_fence_rejects_target_before_transmission();
+        test_vehicle_goto_location_rejects_stale_position();
+        test_vehicle_takeoff_altitude_rejects_stale_position();
+        test_generic_servo_validation();
+        test_vehicle_destructor_sends_zero_velocity_before_shutdown();
+        test_vehicle_destructor_orders_zero_before_disconnect();
+        test_vehicle_upload_fence_validates_boundary();
+        test_vehicle_verifies_fence_status_and_fails_closed();
+        test_vehicle_upload_fence_rejects_transport_failure();
+        test_vehicle_upload_fence_rejects_invalid_coordinates();
+    });
 }

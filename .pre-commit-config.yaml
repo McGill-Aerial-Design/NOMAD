@@ -8,7 +8,8 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: '\.(svg|patch)$'
+        # Reviewed redistribution licenses retain their upstream bytes.
+        exclude: '(^licenses/mavsdk-phase-a/|\.(svg|patch)$)'
       - id: end-of-file-fixer
         exclude: '\.(svg|patch)$'
       - id: check-yaml
@@ -51,9 +52,11 @@ repos:
         language: python
         files: \.(c|cc|cpp|cs|cxx|h|hpp|py|sh)$
       - id: complexity-check
-        name: Source size and function size
-        description: Reject new oversized source files and Python functions
-        entry: python scripts/dev/line_report.py --fail-over-file-limit --fail-over-function-limit
+        name: Source size, line width, and baseline freshness
+        description: Reject oversized sources, over-long C/C++ lines, and stale baselines
+        entry: >
+          python -m scripts.dev.line_report --fail-over-file-limit --fail-over-function-limit
+          --fail-line-length --fail-stale-baseline
         # language: python (like every other hook) so the entry runs in
         # pre-commit's own venv: the commit shell may not have `python` on
         # PATH at all (pixi-managed environments). stdlib-only script, so no

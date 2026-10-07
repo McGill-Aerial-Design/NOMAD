@@ -55,6 +55,8 @@ class Telemetry:
         kind = msg.get_type()
         with self._lock:
             if kind == "HEARTBEAT":
+                if int(msg.get_srcSystem()) != int(conn.target_system):
+                    return
                 self.mode = mavutil.mode_string_v10(msg) or "UNKNOWN"
                 self.armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
             elif kind == "VFR_HUD":
@@ -83,7 +85,7 @@ def get_sitl_port() -> str:
 
 
 def find_binary() -> Path | None:
-    names = ("nomad.exe", "nomad")
+    names = ("nomad-qualification.exe", "nomad-qualification")
     build_dirs = (ROOT / "build" / "core", ROOT / "build-core")
     configurations = tuple(
         directory for build_dir in build_dirs for directory in (build_dir, build_dir / "Debug", build_dir / "Release")
@@ -286,14 +288,16 @@ def _check_mode_gate(connection, telemetry: Telemetry, binary: Path, port: str, 
     _log("  PASS: setpoint refused outside GUIDED (H-04 gate enforced)")
 
 
-def _cleanup_scenario(connection, reader_stop: threading.Event) -> None:
-    _log("cleanup: returning the vehicle")
+def _cleanup_scenario(connection, telemetry: Telemetry, reader_stop: threading.Event) -> None:
+    _log("cleanup: returning and disarming the vehicle")
     try:
         _set_mode(connection, "RTL")
     except Exception:
         pass
-    reader_stop.set()
-    time.sleep(0.5)
+    try:
+        _wait_until(lambda state: not state[1], 120, telemetry, "vehicle to land and disarm")
+    finally:
+        reader_stop.set()
 
 
 def run_scenario(operator_ep: str, binary: Path, port: str) -> dict:
@@ -309,7 +313,7 @@ def run_scenario(operator_ep: str, binary: Path, port: str) -> dict:
         results["status"] = "PASS"
         return results
     finally:
-        _cleanup_scenario(operator, reader_stop)
+        _cleanup_scenario(operator, telemetry, reader_stop)
 
 
 def main() -> int:
@@ -319,7 +323,7 @@ def main() -> int:
         return 2
     binary = find_binary()
     if binary is None:
-        print("error: C++ core binary not found; run `pixi run build-core` first", file=sys.stderr)
+        print("error: qualification driver not found; run `pixi run build-qualification-cli` first", file=sys.stderr)
         return 2
     _log("watch this run live: Mission Planner -> CONNECT -> TCP -> 127.0.0.1:5762 (passive observer)")
     try:

@@ -1,120 +1,294 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 using System;
+using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
-using MissionPlanner;
 using NOMAD.MissionPlanner.Connectivity;
 
 namespace NOMAD.MissionPlanner
 {
-    // Sends standard ArduPilot output commands (DO_SET_SERVO / DO_SET_RELAY)
-    // through the C++ core client boundary. These are generic ArduPilot
-    // servo/relay channels that work on any ArduPilot flight controller, with
-    // no board-specific assumptions. Payloads are config-declared client
-    // profiles over these generic outputs (NOMADConfig.Payloads); the core
-    // knows channels, never a specific payload.
-    //
-    // The direct-MAVLink fallback and the edge_core REST fallbacks were
-    // removed in the C++ cutover (2026-09-05): commands that the core did not
-    // acknowledge and verify must fail closed, and the core must not depend on
-    // a GCS link being present.
     internal static class OutputController
     {
-        private static NOMADConfig _config;
+        private static NomadCoreClient _coreClient;
+        private static readonly SemaphoreSlim GimbalRequests = new SemaphoreSlim(1, 1);
+        private static readonly object GimbalFailureLock = new object();
+        private static string _lastGimbalFailure = "";
+        private static DateTime _lastGimbalFailureAt = DateTime.MinValue;
 
-        /// <summary>
-        /// Called at plugin load so output commands can build the core client
-        /// (same wiring as FlightModeController).
-        /// </summary>
         internal static void Initialize(NOMADConfig config)
         {
-            _config = config;
-        }
-
-        internal static NomadCoreClient CreateCoreClient()
-        {
-            if (_config == null)
+            lock (ProjectionGate)
             {
-                return null;
+                DisplayStates.Clear();
+                ReleaseOperations.Clear();
+                ContinuousAxisActions.Clear();
+                _catalogRevision = null;
+                _displayIncarnation = "";
+                _displaySequence = 0;
+                RetiredIncarnations.Clear();
             }
-            return new NomadCoreClient(_config.CoreExePath, _config.CoreMavlinkEndpoint, _config.CoreApiKey);
+            _coreClient = config == null ? null :
+                new NomadCoreClient(config.CoreClientCredential, config.CoreRuntimePort);
         }
 
-        /// <summary>
-        /// Drive an ArduPilot servo channel to a PWM value through the core
-        /// (MAV_CMD_DO_SET_SERVO, acknowledged and verified by the core).
-        /// Fails closed on invalid input or an unavailable/refusing core.
-        /// </summary>
-        public static Task<bool> SendServoPwmAsync(int channel, int pwmUs)
+        internal static NomadCoreClient CreateCoreClient() => _coreClient;
+
+        // Nonwaiting gates reject overlapping input instead of collecting stale commands.
+        private static NomadCoreRequestResult NotSent(string code, string message)
         {
-            return Task.FromResult(SendServoPwm(channel, pwmUs));
+            return new NomadCoreRequestResult(NomadCoreRequestOutcome.NotAttempted, code, message);
         }
 
-        public static bool SendServoPwm(int channel, int pwmUs)
+        private static readonly object ProjectionGate = new object();
+        private static readonly Dictionary<string, NomadActuatorState> DisplayStates = new Dictionary<string, NomadActuatorState>();
+        private static readonly Dictionary<string, string> ReleaseOperations = new Dictionary<string, string>();
+        private static readonly Dictionary<string, NomadActuatorAction> ContinuousAxisActions = new Dictionary<string, NomadActuatorAction>();
+        private static ulong? _catalogRevision;
+        private static readonly HashSet<string> RetiredIncarnations = new HashSet<string>();
+        private static ulong _displaySequence;
+        private static string _displayIncarnation = "";
+        internal static event Action<NomadActuatorState> ActuatorStateChanged;
+
+        internal static Task<NomadCoreRequestResult> GetActuatorsAsync() =>
+            SendSemanticAsync(client => client.GetActuatorsAsync());
+        internal static Task<NomadCoreRequestResult> ConfigureActuatorsAsync(string json) =>
+            SendSemanticAsync(client => client.ConfigureActuatorsAsync(json), configuration: true);
+        internal static Task<NomadCoreRequestResult> ActuatorActionAsync(string id, string operation,
+            string source = "ui", int? slot = null, double? value = null, Func<bool> inputStillCurrent = null) =>
+            SendSemanticAsync(client => client.ActuatorActionAsync(id, operation, source, slot, value,
+                inputStillCurrent: inputStillCurrent));
+
+        private static async Task<NomadCoreRequestResult> SendSemanticAsync(
+            Func<NomadCoreClient, Task<NomadCoreRequestResult>> send, bool configuration = false)
         {
-            if (channel <= 0 || pwmUs < 500 || pwmUs > 2500)
-            {
-                return false;
-            }
             var client = CreateCoreClient();
-            if (client == null)
+            var result = client == null ? NotSent("runtime_not_configured", "NOMAD runtime is not configured.") :
+                await send(client).ConfigureAwait(false);
+            if (client != CreateCoreClient())
             {
-                Log.Warn("Servo command: NOMAD core not configured.");
-                return false;
+                result.PresentationCurrent = false; return result;
             }
-            if (client.Servo(channel, pwmUs))
+            if (result.RuntimeIncarnation != "" && !ObserveIncarnation(result.RuntimeIncarnation, result.RequestSequence))
+            { result.PresentationCurrent = false; return result; }
+            if (!AcceptCatalog(result)) { result.PresentationCurrent = false; return result; }
+            foreach (var actuator in result.Actuators)
+            {
+                if (!PublishState(result.RuntimeIncarnation, actuator.State, result.RequestSequence))
+                {
+                    continue;
+                }
+            }
+            if (result.ActuatorState != null)
+            {
+                PublishState(result.RuntimeIncarnation, result.ActuatorState, result.RequestSequence);
+            }
+            if (!result.Succeeded)
+            {
+                Log.Warn(configuration ? DescribeConfigurationResult(result) : DescribeFailure("Actuator request", result));
+            }
+            return result;
+        }
+
+        private static bool AcceptCatalog(NomadCoreRequestResult result)
+        {
+            if (!result.HasActuatorDefinitions) { return true; }
+            lock (ProjectionGate)
+            {
+                if (!result.ActuatorConfigurationRevision.HasValue)
+                { ContinuousAxisActions.Clear(); return false; }
+                ulong revision = result.ActuatorConfigurationRevision.Value;
+                if (_catalogRevision.HasValue && revision < _catalogRevision.Value) { return false; }
+                _catalogRevision = revision;
+                ReleaseOperations.Clear();
+                ContinuousAxisActions.Clear();
+                foreach (var actuator in result.Actuators)
+                {
+                    foreach (var action in actuator.Actions)
+                    {
+                        ReleaseOperations[actuator.Id + ":" + action.Operation] = action.ReleaseOperation;
+                        if (action.Control == "position") { ContinuousAxisActions[actuator.Id] = action; }
+                    }
+                }
+                return true;
+            }
+        }
+        internal static NomadActuatorAction GetContinuousAxisMetadata(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) { return null; }
+            lock (ProjectionGate) { return ContinuousAxisActions.TryGetValue(id, out var action) ? action : null; }
+        }
+
+        internal static string GetReleaseOperation(string binding)
+        {
+            lock (ProjectionGate)
+            {
+                return ReleaseOperations.TryGetValue(binding, out var release) ? release : "";
+            }
+        }
+        internal static NomadActuatorState GetDisplayState(string id)
+        {
+            lock (ProjectionGate)
+            {
+                return DisplayStates.TryGetValue(id, out var state) ? state : null;
+            }
+        }
+        internal static bool ObserveIncarnation(string incarnation, ulong sequence)
+        {
+            lock (ProjectionGate)
+            {
+                if (_displayIncarnation != incarnation)
+                {
+                    if (sequence < _displaySequence || RetiredIncarnations.Contains(incarnation))
+                    {
+                        return false;
+                    }
+                    if (_displayIncarnation != "")
+                    {
+                        RetiredIncarnations.Add(_displayIncarnation);
+                    }
+                    DisplayStates.Clear();
+                    ReleaseOperations.Clear();
+                    ContinuousAxisActions.Clear();
+                    _catalogRevision = null;
+                    _displayIncarnation = incarnation;
+                }
+                _displaySequence = Math.Max(_displaySequence, sequence);
+                return true;
+            }
+        }
+        internal static bool PublishState(string incarnation, NomadActuatorState state, ulong sequence = 0)
+        {
+            lock (ProjectionGate)
+            {
+                if (!ObserveIncarnation(incarnation, sequence))
+                {
+                    return false;
+                }
+                if (DisplayStates.TryGetValue(state.Id, out var old) && old.Revision > state.Revision)
+                {
+                    return false;
+                }
+                DisplayStates[state.Id] = state;
+            }
+            var handlers = ActuatorStateChanged;
+            if (handlers == null)
             {
                 return true;
             }
-            Log.Warn("Servo command: core refused or could not reach the vehicle.");
-            return false;
+            foreach (Action<NomadActuatorState> handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(state);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("Actuator display update failed: " + ex.Message);
+                }
+            }
+            return true;
         }
 
-        /// <summary>
-        /// Toggle an ArduPilot relay through the core (MAV_CMD_DO_SET_RELAY,
-        /// acknowledged and verified by the core). Fails closed when the core
-        /// is not configured, refuses, or cannot reach the vehicle.
-        /// </summary>
-        public static bool TrySetRelay(int relayNumber, bool on)
+        internal static async Task<NomadCoreRequestResult> SendGimbalTargetAsync(double pitchDeg, double rollDeg)
         {
-            if (relayNumber < 0)
+            var result = await SendGimbalAsync(client => client.GimbalTargetAsync(pitchDeg, rollDeg))
+                .ConfigureAwait(false);
+            if (result.Succeeded)
             {
-                return false;
+                ClearGimbalFailure();
             }
-            var client = CreateCoreClient();
-            if (client == null)
+            else
             {
-                Log.Warn("Relay command: NOMAD core not configured.");
-                return false;
+                ReportGimbalFailure(DescribeFailure("Gimbal target", result));
             }
-            if (client.SetRelay(relayNumber, on))
-            {
-                return true;
-            }
-            Log.Warn("Relay command: core refused or could not reach the vehicle.");
-            return false;
+            return result;
         }
 
-        /// <summary>
-        /// Fire a relay pulse through the core: on for the clamped duration,
-        /// then off. SR-PAY-03: direct GCS-to-FC relay output bypasses the
-        /// on-board interlock by design; the panel's armed click or the
-        /// transmitter switch is the operator interlock documented in
-        /// docs/safety.md.
-        /// </summary>
-        public static async Task<bool> FireRelayAsync(int relayNumber, int durationMs)
+        internal static async Task<NomadCoreRequestResult> ConfigureGimbalAsync(int mountMode)
         {
-            if (relayNumber < 0)
+            var result = await SendGimbalAsync(client => client.GimbalConfigureAsync(mountMode)).ConfigureAwait(false);
+            if (!result.Succeeded)
             {
-                return false;
+                Log.Warn(DescribeFailure("Gimbal configure", result));
             }
-            durationMs = Math.Max(50, Math.Min(durationMs, 5000));
-            if (!TrySetRelay(relayNumber, true))
-            {
-                return false;
-            }
-            await Task.Delay(durationMs).ConfigureAwait(false);
-            return TrySetRelay(relayNumber, false);
+            return result;
         }
+
+        private static async Task<NomadCoreRequestResult> SendGimbalAsync(
+            Func<NomadCoreClient, Task<NomadCoreRequestResult>> send)
+        {
+            if (!await GimbalRequests.WaitAsync(0).ConfigureAwait(false))
+            {
+                return NotSent("request_in_progress", "Another gimbal request is in progress; no request was sent.");
+            }
+            try
+            {
+                var client = CreateCoreClient();
+                return client == null ? NotSent("core_not_configured", "NOMAD core is not configured.")
+                    : await send(client).ConfigureAwait(false);
+            }
+            finally
+            {
+                GimbalRequests.Release();
+            }
+        }
+
+        private static void ReportGimbalFailure(string detail)
+        {
+            lock (GimbalFailureLock)
+            {
+                var now = DateTime.UtcNow;
+                if (detail == _lastGimbalFailure && now - _lastGimbalFailureAt < TimeSpan.FromSeconds(5))
+                {
+                    return;
+                }
+                _lastGimbalFailure = detail;
+                _lastGimbalFailureAt = now;
+            }
+            Log.Warn($"Gimbal target failed: {detail}");
+        }
+
+        private static void ClearGimbalFailure()
+        {
+            lock (GimbalFailureLock)
+            {
+                _lastGimbalFailure = "";
+                _lastGimbalFailureAt = DateTime.MinValue;
+            }
+        }
+
+        internal static string DescribeConfigurationResult(NomadCoreRequestResult result)
+        {
+            if (result.ConfigurationRecoveryRequired || (result.ConfigurationChanged && !result.Succeeded))
+            {
+                return "Runtime configuration changed or may have changed. Restart and review the persisted configuration before further operation. " + result.Message;
+            }
+            if (result.Succeeded)
+            {
+                return result.Message;
+            }
+            string evidence = result.Outcome == NomadCoreRequestOutcome.UnknownOutcome || result.Outcome == NomadCoreRequestOutcome.Interrupted ?
+                "Configuration request disposition is uncertain; inspect runtime configuration before submitting again. " :
+                result.Outcome == NomadCoreRequestOutcome.NotAttempted || result.Outcome == NomadCoreRequestOutcome.FailedBeforeSend ?
+                "Configuration request was not sent. " : "Runtime configuration request failed. ";
+            return evidence + result.ErrorCode + ": " + result.Message;
+        }
+
+        internal static string DescribeFailure(string action, NomadCoreRequestResult result)
+        {
+            var evidence = result.Outcome switch
+            {
+                NomadCoreRequestOutcome.Rejected => "Command was not sent to the vehicle; runtime rejected it.",
+                NomadCoreRequestOutcome.Failed => "Operation was attempted and NOMAD obtained a definite failure.",
+                NomadCoreRequestOutcome.Interrupted => "Authority or session changed during execution; "
+                    + "final vehicle state is unknown. Do not retry blindly.",
+                NomadCoreRequestOutcome.UnknownOutcome => "Request may have been transmitted; "
+                    + "final vehicle state is unknown. Do not retry blindly.",
+                _ => "No runtime mutation request was sent.",
+            };
+            return $"{action}: {evidence} {result.ErrorCode}: {result.Message}";
+        }
+
     }
 }

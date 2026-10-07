@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 The NOMAD Authors
+
+FROM ardupilot/ardupilot-dev-base@sha256:d81c02a9d86ea88b297a66910a6a1f077e8c14cd9ad10e1620b44033e8e371bf
+
+ARG ARDUPILOT_REVISION=dbe792162d06cab66c3475fd5556bf7a120f119e
+ARG MAVPROXY_VERSION=1.8.74
+ARG PYMAVLINK_VERSION=2.4.49
+
+RUN git init /ardupilot \
+    && cd /ardupilot \
+    && git remote add origin https://github.com/ArduPilot/ardupilot.git \
+    && git fetch --depth 1 origin "${ARDUPILOT_REVISION}" \
+    && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "${ARDUPILOT_REVISION}" \
+    && git submodule update --init --recursive --depth 1
+
+WORKDIR /ardupilot
+RUN ./waf configure --board sitl && ./waf plane
+RUN pip3 install --no-cache-dir "MAVProxy==${MAVPROXY_VERSION}" "pymavlink==${PYMAVLINK_VERSION}"
+
+ENV PATH="/usr/local/bin:/root/.local/bin:${PATH}"
+EXPOSE 5760/tcp

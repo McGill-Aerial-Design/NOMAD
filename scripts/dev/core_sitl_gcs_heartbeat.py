@@ -4,10 +4,12 @@
 
 Real mavlink-router and MAVProxy setups only start streaming a UDP leg after
 the endpoint announces itself with a GCS heartbeat. The C++ core therefore
-emits a 1 Hz standard GCS heartbeat while it waits for the vehicle
-(``encode_gcs_heartbeat`` in ``src/mavlink/protocol.cpp``, pinned byte-for-byte
-by ``nomad_codec_golden_tests`` and by ``nomad_udp_tests`` in
-``tests/udp_connection_test.cpp``).
+emits a 1 Hz standard GCS heartbeat while it waits for the vehicle. MAVSDK does
+that: the transport configures its ``Mavsdk`` as ``ComponentType::GroundStation``
+(``src/mavlink/mavsdk_mavlink_connection.cpp``), and
+``test_unlatched_link_announces_a_gcs_heartbeat`` in
+``tests/test_mavsdk_connection.py`` requires the cadence on the wire before any
+autopilot is latched.
 
 The scenario places a heartbeat-gated UDP relay between the always-on SITL
 stream (host UDP 14572, see docker-compose.dev.yml) and a fresh client port,
@@ -16,7 +18,7 @@ then runs the C++ CLI ``status`` verb through it twice:
 1. Gate open: the relay starts forwarding the vehicle stream only after it
    sees a datagram from the client (mavlink-router behavior). The status read
    succeeds, the relayed datagrams are counted, and every captured client
-   announcement is verified to be a standard GCS heartbeat (sysid 255,
+   announcement is verified to be a standard GCS heartbeat (sysid 245,
    compid 190, MAV_TYPE_GCS) at ~1 Hz.
 2. Gate closed (negative control): a relay copy that drops client
    announcements never forwards anything, so the status read must fail closed
@@ -27,10 +29,10 @@ then runs the C++ CLI ``status`` verb through it twice:
 The status read is the authoritative check (telemetry through the whole relay
 path), not a command acknowledgement.
 
-The CLI announces to the relay through NOMAD_RELAY_ADDRESS (see
-docs/operations.md): the configured endpoint is a wildcard listen address, so
-the pre-latch announcement needs the relay's routable upstream port. The relay
-binds the SITL stream port as its upstream — the same convention
+The CLI uses a MAVSDK ``udpout:`` endpoint aimed at the relay's routable
+upstream port. MAVSDK chooses the local source port, and the relay learns that
+source from the pre-latch announcement before forwarding the SITL stream back.
+The relay binds the SITL stream port as its upstream — the same convention
 core-sitl-link-recovery uses.
 
 Run against the dev stack (see tests/sitl/README.md):
@@ -40,6 +42,7 @@ Run against the dev stack (see tests/sitl/README.md):
 
 from __future__ import annotations
 
+import math
 import os
 import socket
 import subprocess
@@ -53,6 +56,13 @@ sys.path.insert(0, str(ROOT / "scripts" / "dev"))
 
 from core_sitl_status import find_binary, print_watch_hint  # noqa: E402
 
+MIN_CADENCE_ANNOUNCEMENTS = 4
+MIN_ANNOUNCEMENT_INTERVAL_S = 0.9
+MAX_ANNOUNCEMENT_INTERVAL_S = 1.3
+CADENCE_COMPARISON_EPSILON_S = 1e-9
+GCS_SYSTEM_ID = 245
+GCS_COMPONENT_ID = 190
+
 
 class ScenarioError(AssertionError):
     """A scenario assertion failed (the SC behaviour was not observed)."""
@@ -63,25 +73,25 @@ def _now_s() -> float:
 
 
 class GatedRelay:
-    """Heartbeat-gated one-way UDP relay: upstream stream -> client port.
+    """Heartbeat-gated one-way UDP relay: upstream stream -> client endpoint.
 
-    Datagrams from the SITL stream are forwarded to the client port only once
-    ``gate_opens`` is true and a client datagram has been seen (mavlink-router
-    starts the leg on the first client datagram). A relay with ``gate_opens``
-    false captures client announcements but never forwards, which models a
-    relay whose leg stayed closed. A background thread pumps the socket while
-    the scenario blocks on the CLI subprocess.
+    Datagrams from the SITL stream are forwarded to the UDP source that sent a
+    valid GCS heartbeat only once ``gate_opens`` is true. MAVSDK's ``udpout``
+    connection chooses its local source port, so the relay must learn that
+    address from the announcement instead of assuming a fixed client port. A
+    relay with ``gate_opens`` false captures announcements but never forwards,
+    which models a leg that stayed closed.
     """
 
-    def __init__(self, upstream_port: int, client_port: int, gate_opens: bool) -> None:
+    def __init__(self, upstream_port: int, gate_opens: bool) -> None:
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._socket.bind(("0.0.0.0", upstream_port))
         self._socket.settimeout(0.1)
-        self._client = ("127.0.0.1", client_port)
+        self._client: tuple[str, int] | None = None
         self._gate_opens = gate_opens
         self._saw_client = False
         self._running = True
-        self.announcements: list[bytes] = []
+        self.announcements: list[tuple[float, bytes]] = []
         self.forwarded = 0
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -98,11 +108,13 @@ class GatedRelay:
                 if getattr(error, "winerror", None) == 10054:
                     continue
                 return
-            if sender == self._client:
-                self.announcements.append(data)
+            heartbeat = parse_mavlink_heartbeat(data)
+            if heartbeat and heartbeat["sysid"] == GCS_SYSTEM_ID and heartbeat["compid"] == GCS_COMPONENT_ID:
+                self.announcements.append((_now_s(), data))
+                self._client = sender
                 self._saw_client = True
                 continue
-            if self._gate_opens and self._saw_client:
+            if self._gate_opens and self._saw_client and self._client is not None:
                 self._socket.sendto(data, self._client)
                 self.forwarded += 1
 
@@ -124,56 +136,73 @@ def parse_mavlink_heartbeat(frame: bytes) -> dict[str, int] | None:
     }
 
 
-def verify_announcements(announced: list[bytes], elapsed: float) -> None:
-    """Every announcement must be a standard ~1 Hz GCS heartbeat."""
+def verify_announcements(announced: list[tuple[float, bytes]], require_cadence: bool) -> None:
+    """Require standard GCS heartbeats and, when requested, their cadence."""
     if not announced:
         raise ScenarioError("no announcements captured; cannot prove the GCS heartbeat opened the gate")
-    for frame in announced:
+    for _, frame in announced:
         heartbeat = parse_mavlink_heartbeat(frame)
         if heartbeat is None:
             raise ScenarioError(f"announced frame is not a heartbeat: {frame.hex()}")
-        if heartbeat["sysid"] != 255 or heartbeat["compid"] != 190:
+        if heartbeat["sysid"] != GCS_SYSTEM_ID or heartbeat["compid"] != GCS_COMPONENT_ID:
             raise ScenarioError(f"heartbeat is not GCS-sourced: {heartbeat}")
         if heartbeat["type"] != 6 or heartbeat["autopilot"] != 8:
             raise ScenarioError(f"heartbeat is not MAV_TYPE_GCS/MAV_AUTOPILOT_INVALID: {heartbeat}")
-    rate = len(announced) / max(elapsed, 1e-6)
-    if rate > 2.0:
-        raise ScenarioError(f"announcement rate {rate:.1f} Hz exceeds the documented 1 Hz")
+    if not require_cadence:
+        return
+    if len(announced) < MIN_CADENCE_ANNOUNCEMENTS:
+        raise ScenarioError(
+            f"fewer than {MIN_CADENCE_ANNOUNCEMENTS} announcements captured; cannot prove heartbeat cadence"
+        )
+    intervals = [current[0] - previous[0] for previous, current in zip(announced, announced[1:])]
+    if not all(math.isfinite(interval) for interval in intervals):
+        raise ScenarioError("announcement cadence contains a non-finite interval")
+    fastest = min(intervals)
+    slowest = max(intervals)
+    if fastest < MIN_ANNOUNCEMENT_INTERVAL_S - CADENCE_COMPARISON_EPSILON_S:
+        raise ScenarioError(f"announcement interval {fastest:.3f}s is faster than the 1 Hz tolerance")
+    if slowest > MAX_ANNOUNCEMENT_INTERVAL_S + CADENCE_COMPARISON_EPSILON_S:
+        raise ScenarioError(f"announcement interval {slowest:.3f}s is slower than the 1 Hz tolerance")
 
 
-def run_status(binary: Path, endpoint: str, relay_address: str) -> subprocess.CompletedProcess[str]:
-    environment = os.environ | {"NOMAD_RELAY_ADDRESS": relay_address}
+def measured_rate(announced: list[tuple[float, bytes]]) -> float | None:
+    if len(announced) < 2:
+        return None
+    elapsed = announced[-1][0] - announced[0][0]
+    return (len(announced) - 1) / max(elapsed, 1e-6)
+
+
+def run_status(binary: Path, endpoint: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(binary), "status", "--endpoint", endpoint],
         capture_output=True,
         text=True,
         check=False,
-        env=environment,
+        env=os.environ.copy(),
     )
 
 
-def relay_announcement_address(upstream_port: int) -> str:
-    """The relay's routable upstream port receives the pre-latch announcements."""
+def relay_endpoint(upstream_port: int) -> str:
+    """Use MAVSDK's outbound UDP mode so the relay can learn our source port."""
     return f"udpout:127.0.0.1:{upstream_port}"
 
 
-def run_gate_open(binary: Path, upstream_port: int, client_port: int, relay_address: str) -> None:
+def run_gate_open(binary: Path, upstream_port: int) -> None:
     """Announcements flow, the relay opens, and status reads live telemetry."""
-    relay = GatedRelay(upstream_port, client_port, gate_opens=True)
+    relay = GatedRelay(upstream_port, gate_opens=True)
     try:
         started = _now_s()
-        result = run_status(binary, f"udpin:0.0.0.0:{client_port}", relay_address)
+        result = run_status(binary, relay_endpoint(upstream_port))
         elapsed = _now_s() - started
         if result.returncode != 0:
             # Record what the run did prove before failing closed: the
             # announcement cadence and gate-open behaviour may be healthy even
             # when a lossy relay starves the telemetry itself.
             if relay.announcements:
-                verify_announcements(relay.announcements, elapsed)
+                verify_announcements(relay.announcements, require_cadence=False)
                 print(
-                    f"diagnostic: {len(relay.announcements)} announcements at ~"
-                    f"{len(relay.announcements) / max(elapsed, 1e-6):.1f} Hz and {relay.forwarded} datagrams "
-                    "relayed, but status failed (lossy relay?)",
+                    f"diagnostic: {len(relay.announcements)} valid announcements and "
+                    f"{relay.forwarded} datagrams relayed, but status failed (lossy relay?)",
                     flush=True,
                 )
             raise ScenarioError(
@@ -182,32 +211,34 @@ def run_gate_open(binary: Path, upstream_port: int, client_port: int, relay_addr
             )
         if relay.forwarded == 0:
             raise ScenarioError("status succeeded but no vehicle datagrams were relayed")
-        verify_announcements(relay.announcements, elapsed)
-        rate = len(relay.announcements) / max(elapsed, 1e-6)
+        verify_announcements(relay.announcements, require_cadence=False)
         print(
             f"gate open: status succeeded in {elapsed:.1f}s; {relay.forwarded} vehicle datagrams relayed; "
-            f"{len(relay.announcements)} GCS heartbeat announcements at ~{rate:.1f} Hz",
+            f"{len(relay.announcements)} valid GCS heartbeat announcements",
             flush=True,
         )
     finally:
         relay.close()
 
 
-def run_gate_closed(binary: Path, upstream_port: int, client_port: int, relay_address: str) -> None:
-    """Without the announcements being accepted, status must fail closed."""
-    relay = GatedRelay(upstream_port, client_port, gate_opens=False)
+def run_gate_closed(binary: Path, upstream_port: int) -> None:
+    """Even after announcements, a closed gate must fail status closed."""
+    relay = GatedRelay(upstream_port, gate_opens=False)
     try:
         started = _now_s()
-        result = run_status(binary, f"udpin:0.0.0.0:{client_port}", relay_address)
+        result = run_status(binary, relay_endpoint(upstream_port))
         elapsed = _now_s() - started
         if not relay.announcements:
             raise ScenarioError("CLI announced nothing on the closed gate; the negative control proves nothing")
+        verify_announcements(relay.announcements, require_cadence=True)
         if result.returncode == 0:
             raise ScenarioError("status succeeded through a closed gate; the gate is not actually heartbeat-gated")
         if "timed out waiting for ArduPilot heartbeat" not in result.stderr:
             raise ScenarioError(f"unexpected failure through the closed gate: {result.stderr.strip()}")
+        rate = measured_rate(relay.announcements)
+        assert rate is not None
         print(
-            f"gate closed: {len(relay.announcements)} announcements captured then dropped; "
+            f"gate closed: {len(relay.announcements)} announcements at ~{rate:.1f} Hz captured then dropped; "
             f"status failed closed after {elapsed:.1f}s",
             flush=True,
         )
@@ -233,12 +264,13 @@ def main() -> int:
         upstream_port = get_upstream_port()
         binary = find_binary()
         if binary is None:
-            print("error: C++ core binary not found; run `pixi run build-core` first", file=sys.stderr)
+            print(
+                "error: qualification driver not found; run `pixi run build-qualification-cli` first", file=sys.stderr
+            )
             return 2
         print_watch_hint()
-        relay_address = relay_announcement_address(upstream_port)
-        run_gate_open(binary, upstream_port, upstream_port + 10, relay_address)
-        run_gate_closed(binary, upstream_port, upstream_port + 10, relay_address)
+        run_gate_open(binary, upstream_port)
+        run_gate_closed(binary, upstream_port)
         return 0
     except (ValueError, ScenarioError, OSError) as error:
         print(f"C++ SITL GCS-heartbeat scenario failed: {error}", file=sys.stderr)

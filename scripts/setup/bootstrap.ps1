@@ -12,7 +12,7 @@
 #   1. Checks prerequisites (git, pixi, Visual Studio for C# build)
 #   2. Runs `pixi install` to set up the reproducible dev environment
 #   3. Installs pre-commit hooks
-#   4. Smoke-tests that Edge Core imports work
+#   4. Builds the C++ core and lists the supported product profiles
 # =============================================================================
 
 param(
@@ -83,9 +83,9 @@ if ($msbuild -and (Test-Path $msbuild)) {
 
 $mp = "${env:ProgramFiles(x86)}\Mission Planner"
 if (Test-Path $mp) {
-    Log-Ok "Mission Planner found at $mp"
+    Log-Ok "Mission Planner reference assemblies found at $mp"
 } else {
-    Log-Warn "Mission Planner not found - plugin deploy step will skip"
+    Log-Warn "Mission Planner not found - plugin build needs staged reference assemblies"
 }
 
 # ---- Step 2: pixi install ----
@@ -100,7 +100,7 @@ Log-Ok "Pixi environment installed"
 # ---- Step 3: pre-commit hooks ----
 if (-not $SkipHooks) {
     Log-Info "Step 3/5 - Installing pre-commit hooks"
-    & $pixiExe run precommit
+    & $pixiExe run pre-commit install
     if ($LASTEXITCODE -ne 0) {
         Log-Warn "pre-commit had issues (may need 'git init' first)"
     }
@@ -109,18 +109,22 @@ if (-not $SkipHooks) {
     Log-Info "Step 3/5 - Skipped pre-commit hooks"
 }
 
-# ---- Step 4: Python import smoke-test ----
-Log-Info "Step 4/5 - Smoke-testing Edge Core imports"
-try {
-    $result = & $pixiExe run python -c "from edge_core.api import create_app; print('create_app OK')" 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Log-Ok "Edge Core imports OK"
-    } else {
-        Log-Warn "Edge Core import test: $result"
-    }
-} catch {
-    Log-Warn "Smoke-test skipped: $_"
+# ---- Step 4: C++ core and product profile checks ----
+Log-Info "Step 4/5 - Building the C++ core"
+& $pixiExe run build-core
+if ($LASTEXITCODE -ne 0) {
+    Log-Error "C++ core build failed"
+    exit 1
 }
+Log-Ok "C++ core build OK"
+
+Log-Info "Checking supported product profiles"
+& $pixiExe run profile-list
+if ($LASTEXITCODE -ne 0) {
+    Log-Error "Product profile manager check failed"
+    exit 1
+}
+Log-Ok "Product profile manager OK"
 
 # ---- Step 5: summary ----
 Log-Info "Step 5/5 - Done"
@@ -130,9 +134,10 @@ Write-Host " NOMAD dev environment ready!" -ForegroundColor $cOk
 Write-Host "======================================" -ForegroundColor $cInfo
 Write-Host ""
 Write-Host "Quick commands:" -ForegroundColor $cWarn
-Write-Host "  pixi run dev            Start Edge Core sim on :8000"
+Write-Host "  pixi run build-core     Build the production C++ executables"
+Write-Host "  pixi run dev-up         Start the hardware-free SITL stack"
 Write-Host "  pixi run test           Run pytest"
 Write-Host "  pixi run lint           Run ruff check"
 Write-Host "  pixi run fmt            Auto-format all Python"
 Write-Host "  pixi run docs           Serve the canonical docs site"
-Write-Host "  pixi run build-plugin   Build Mission Planner plugin (Windows)"
+Write-Host "  pixi run build-plugin-only  Compile plugin without deployment (Windows)"

@@ -1,0 +1,25 @@
+# NOMAD reference QuadPlane profile for ArduPlane Plane-4.7.1.
+# Geometry values mirror ArduPilot's pinned quadplane-tilttri SITL defaults.
+# ArduPlane 4.7.1: value 2 starts AUTO in VTOL AUTO state.
+Q_ENABLE 2
+Q_FRAME_CLASS 7
+Q_TILT_ENABLE 1
+Q_TILT_MASK 3
+Q_TILT_TYPE 0
+# Keep tilt-tri assistance below the pinned airspeed target so the forward
+# transition can leave AIRSPEED_WAIT once the reference waypoint is reached.
+Q_ASSIST_SPEED 6
+Q_TRANSITION_MS 5000
+# NOMAD owns the bounded verification deadline for this qualification.
+Q_TRANS_FAIL 0
+Q_TRANS_FAIL_ACT 0
+SERVO3_FUNCTION 0
+SERVO12_FUNCTION 41
+SERVO12_MIN 1000
+SERVO12_MAX 2000
+
+# Make the passive NOMAD link independently observable without stream requests.
+SR0_POSITION 5
+SR0_EXT_STAT 2
+SR0_EXTRA1 5
+SR0_EXTRA2 2

@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// Dual-link router stress & behaviour tests
+// Standalone ground-router stress and management-client tests
 // ============================================================
-// Compiled together with src/Connectivity/GroundLinkRouter*.cs,
-// src/Connectivity/MAVLinkConnectionManager.cs and src/UI/Log.cs
+// Compiled with infra/transport/ground_router, the management client, and src/UI/Log.cs
 // by scripts/build/test_plugin_duallink.ps1 (plain csc, no test
 // framework — exits non-zero on failure).
 // Run via `pixi run test-plugin-duallink`.
@@ -50,6 +49,27 @@ internal static partial class DualLinkStressTests
 
     private static async Task RunAll()
     {
+        await RunAsync("timing: management polling across UTC jumps", ManagementPollingClockJumps);
+        await RunAsync("timing: learned consumer endpoint across UTC jumps", ConsumerEndpointClockJumps);
+        Run("timing: management freshness across UTC jumps", ManagementClockJumps);
+        Run("timing: physical freshness, health and jitter across UTC jumps", PhysicalFreshnessClockJumps);
+        Run("timing: periodic stats and rate windows across UTC jumps", StatsClockJumps);
+        Run("timing: reconnect boundary across UTC jumps", ReconnectClockJumps);
+        Run("timing: TCP and DNS opening deadlines across UTC jumps", OpeningClockJumps);
+        Run("timing: failover cooldown and recovery dwell across UTC jumps", FailoverClockJumps);
+        Run("timing: echo prevention across UTC jumps", EchoClockJumps);
+        Run("timing: duplicate sweep and parameter expiry across UTC jumps", ExpiryClockJumps);
+        await RunAsync("multi-link: one, two and four enabled links", LinkCollectionSizes);
+        Run("review: local address and topology guard", LocalAddressGuardChecks);
+        Run("review: generic link status and membership", LinkStatusDisplayChecks);
+        await RunAsync("review: resolved local destination rejected", ResolvedLocalDestination);
+        Run("multi-link: configuration rejection", MultiConfigValidation);
+        Run("multi-link: explicit Links and Consumers are required", RouterRequiresExplicitTopology);
+        Run("multi-link: unsafe Mission Planner outbound config rejected", MissionPlannerOutboundConfigRejection);
+        await RunAsync("multi-link: three links, consumers, pinning and cleanup", MultiLinkRouting);
+        await RunAsync("multi-link: receive-only consumer outbound admission", ReadOnlyConsumerOutboundAdmission);
+        await RunAsync("multi-link: initial announcement", InitialAnnouncement);
+        await RunAsync("multi-link: TCP isolation and reconnect", TcpIsolation);
         Run("parser: single v2 frame", ParserSingleV2);
         Run("parser: single v1 frame", ParserSingleV1);
         Run("parser: byte-by-byte split delivery", ParserByteSplit);
@@ -71,7 +91,9 @@ internal static partial class DualLinkStressTests
         await RunAsync("router: stop/restart rebinds cleanly", StopRestart);
         await RunAsync("router: stress — mirrored high-rate, strict no dup/loss", StressMirrored);
         await RunAsync("router: stress — bidirectional concurrent traffic", StressBidirectional);
-        await RunAsync("manager: facade lifecycle and projections", ManagerFacade);
+        Run("management: one-link status snapshot", RouterManagementSingleLinkStatus);
+        await RunAsync("management: versioned status/control protocol", RouterManagementProtocolChecks);
+        await RunAsync("management: standalone client reconnect and stale state", StandaloneClientReconnects);
     }
 
     // ============================================================
@@ -155,7 +177,8 @@ internal static partial class DualLinkStressTests
             .ToArray();
         var msgids = new List<uint>();
         p.Push(buf, buf.Length, m => msgids.Add(m.Msgid));
-        Check(msgids.SequenceEqual(new uint[] { 1, 2, 3 }), $"three frames parsed in order (got [{string.Join(",", msgids)}])");
+        Check(msgids.SequenceEqual(new uint[] { 1, 2, 3 }),
+              $"three frames parsed in order (got [{string.Join(",", msgids)}])");
     }
 
     private static void ParserGarbageSkipped()
@@ -223,7 +246,8 @@ internal static partial class DualLinkStressTests
                 LatencyMs = 0,
             };
             set(s);
-            mi.Invoke(null, new object[] { s, now });
+            mi.Invoke(null, new object[] { s, (now - s.LastPacketTime).TotalSeconds,
+                (now - s.LastHeartbeatTime).TotalSeconds });
             return s.Health;
         }
 
@@ -233,7 +257,8 @@ internal static partial class DualLinkStressTests
         Check(Grade(s => s.LastHeartbeatTime = now.AddSeconds(-2)) == LinkHealth.Good, "heartbeat 2s stale → Good");
         Check(Grade(s => s.LastHeartbeatTime = now.AddSeconds(-3)) == LinkHealth.Fair, "heartbeat 3s stale → Fair");
         Check(Grade(s => s.LastHeartbeatTime = now.AddSeconds(-5)) == LinkHealth.Poor, "heartbeat 5s stale → Poor");
-        Check(Grade(s => s.LastHeartbeatTime = now.AddSeconds(-9)) == LinkHealth.Critical, "heartbeat 9s stale → Critical");
+        Check(Grade(s => s.LastHeartbeatTime = now.AddSeconds(-9)) == LinkHealth.Critical,
+              "heartbeat 9s stale → Critical");
         Check(Grade(s => s.LastPacketTime = now.AddSeconds(-6)) == LinkHealth.Critical, "packets 6s stale → Critical");
         Check(Grade(s => s.PacketLossPercent = 10) == LinkHealth.Good, "10% loss → Good");
         Check(Grade(s => s.PacketLossPercent = 30) == LinkHealth.Fair, "30% loss → Fair");

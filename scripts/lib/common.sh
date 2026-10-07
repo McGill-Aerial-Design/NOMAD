@@ -108,7 +108,7 @@ ros_setup_prelude() {
     local workspace="${NOMAD_ISAAC_WORKSPACE:-/workspaces/isaac_ros-dev}"
     cat <<EOS
 GXF_LIB_DIRS=\$(find ${ros_root}/share -path '*/gxf/lib' -type d 2>/dev/null | tr '\n' ':')
-export LD_LIBRARY_PATH=${ros_root}/lib:${ros_root}/lib/aarch64-linux-gnu:/usr/local/zed/lib:\${GXF_LIB_DIRS}\${LD_LIBRARY_PATH:-}
+export LD_LIBRARY_PATH=${ros_root}/lib:${ros_root}/lib/aarch64-linux-gnu:\${GXF_LIB_DIRS}\${LD_LIBRARY_PATH:-}
 source ${ros_root}/install/setup.bash 2>/dev/null || source ${ros_root}/setup.bash 2>/dev/null
 source ${workspace}/install/setup.bash 2>/dev/null || true
 # NOMAD C++ core + nomad_ros adapter workspace (built into the jetson /

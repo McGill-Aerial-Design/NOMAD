@@ -11,7 +11,7 @@
 #   1. Checks prerequisites (git, pixi)
 #   2. Runs `pixi install` to set up the reproducible dev environment
 #   3. Installs pre-commit hooks
-#   4. Smoke-tests that Edge Core imports work
+#   4. Builds the C++ core and lists the supported product profiles
 # =============================================================================
 set -euo pipefail
 
@@ -54,16 +54,17 @@ ok "Pixi environment installed"
 
 # ---- Step 3: pre-commit hooks ----
 info "Step 3/5 — Installing pre-commit hooks"
-pixi run precommit || warn "pre-commit install had issues (may need 'git init' first)"
+pixi run pre-commit install || warn "pre-commit install had issues (may need 'git init' first)"
 ok "Pre-commit hooks installed"
 
-# ---- Step 4: Python import smoke-test ----
-info "Step 4/5 — Smoke-testing Edge Core imports"
-if pixi run python -c "from edge_core.api import create_app; print('create_app OK')" 2>&1; then
-    ok "Edge Core imports OK"
-else
-    warn "Edge Core import test failed (may need dependencies)"
-fi
+# ---- Step 4: C++ core and product profile checks ----
+info "Step 4/5 — Building the C++ core"
+pixi run build-core
+ok "C++ core build OK"
+
+info "Checking supported product profiles"
+pixi run profile-list
+ok "Product profile manager OK"
 
 # ---- Step 5: summary ----
 info "Step 5/5 — Done"
@@ -73,7 +74,8 @@ echo -e "${GREEN} NOMAD dev environment ready!${NC}"
 echo -e "${CYAN}======================================${NC}"
 echo ""
 echo -e "${YELLOW}Quick commands:${NC}"
-echo "  pixi run dev         Start Edge Core sim on :8000"
+echo "  pixi run build-core  Build the production C++ executables"
+echo "  pixi run dev-up      Start the hardware-free SITL stack"
 echo "  pixi run test        Run pytest"
 echo "  pixi run lint        Run ruff check"
 echo "  pixi run fmt         Auto-format all Python"

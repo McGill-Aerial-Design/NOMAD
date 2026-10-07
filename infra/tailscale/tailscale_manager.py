@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import json
 import logging
-import subprocess
 import threading
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+
+from .shell import run_command as _run
 
 logger = logging.getLogger(__name__)
 
@@ -126,15 +127,3 @@ class TailscaleManager:
         exit_code, _ = _run(["tailscale", "up"], timeout=30.0)
         if exit_code != 0:
             logger.warning("tailscale up failed (exit %d)", exit_code)
-
-
-def _run(cmd: list[str], timeout: float = 10.0) -> tuple[int, str]:
-    """Run a command, returning (exit_code, stdout); 127 when not installed."""
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return result.returncode, result.stdout
-    except FileNotFoundError:
-        return 127, ""
-    except Exception as e:  # noqa: BLE001 - probe failure is a soft error
-        logger.debug("Command %s failed: %s", cmd[0], e)
-        return 1, ""

@@ -16,9 +16,6 @@ namespace NOMAD.MissionPlanner
             AddSectionLabel(tab, "Log Sources", ref y);
             AddLabel(tab, "Local log directory:", 20, y);
             _txtDefaultLogDirectory = AddTextBox(tab, 170, y, 410);
-            y += 30;
-            AddLabel(tab, "Jetson log directory:", 20, y);
-            _txtJetsonLogDirectory = AddTextBox(tab, 170, y, 410);
             y += 40;
 
             AddSectionLabel(tab, "Health Thresholds", ref y);

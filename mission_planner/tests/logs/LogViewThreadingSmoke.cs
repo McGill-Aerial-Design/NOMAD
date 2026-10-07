@@ -37,7 +37,6 @@ internal static class LogViewThreadingSmoke
         ConstructorInfo constructor = viewType.GetConstructor(new[]
         {
             configType,
-            plugin.GetType("NOMAD.MissionPlanner.DualLinkSender", true),
         });
 
         using (var host = new Form
@@ -46,7 +45,7 @@ internal static class LogViewThreadingSmoke
             ShowInTaskbar = false,
             Size = new Size(1200, 800),
         })
-        using (var view = (Control)constructor.Invoke(new[] { config, null }))
+        using (var view = (Control)constructor.Invoke(new[] { config }))
         {
             view.Dock = DockStyle.Fill;
             host.Controls.Add(view);

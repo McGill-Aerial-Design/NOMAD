@@ -1,46 +1,46 @@
-# Security Policy
+# Security policy
 
-## Supported versions
+## Current trust boundary
 
-| Version | Supported |
-|---------|-----------|
-| main (latest) | ✅ |
-| Older releases | ❌ |
+Production clients use loopback typed IPC to `nomad-runtime`, which owns the single
+NOMAD vehicle-writing path. Per-client shared secrets authenticate HMAC request
+proofs and runtime hello proofs; request identity and source must match the
+authenticated configured identity. `NOMAD_API_KEY` remains only an explicit
+deployment actuation-enable gate. Authentication alone does not admit authority.
+Authority generation, vehicle session, expiry and sequence fence final-send admission.
+The runtime durably journals intent before command execution and observed outcomes
+afterward. Audit failure inhibits further mutations; software evidence does not
+prove physical action. Core library and qualification calls are outside this
+installed-client boundary.
 
-## Reporting a vulnerability
+This protects against ordinary local processes without the client's credential,
+including identity claims and a rogue listener trying to harvest raw credentials.
+It does not protect against administrator/root, kernel, credential-reading malware
+or physical host compromise. Credential files and local client settings require
+OS access protection. Remote authentication and exposed ROS/media endpoint protection
+remain outside this slice.
+A VPN is an optional network control; it does not authorize commands by itself.
+The retained video tool's HTTP controls currently lack authentication.
 
-NOMAD is an open-source drone framework designed to operate in a private
-Tailscale VPN. The security model assumes:
+See [operations](docs/operations.md), [architecture](docs/architecture.md) and
+[the safety case](docs/safety.md) for canonical controls and open evidence.
+Do not deploy template development credentials or infer security from a config
+flag. Independent manual control must be qualified for the selected aircraft;
+this plan prescribes no airborne motor-kill action.
 
-1. The companion computer and ground station are connected via a secure VPN
-   (Tailscale).
-2. API access is authenticated via a shared API key.
-3. The radio control link (ELRS) is independent of the companion computer
-   and provides a physical failsafe.
+## Reporting
 
-### What to report
+Report command injection, authentication bypass, credential leakage, unsafe
+replay or remote execution privately to repository maintainers using their
+configured private security reporting channel. Avoid public disclosure of
+exploitable details, credentials, aircraft locations or private datasets.
+Do not invent an issue type or publish a vulnerability if a private channel
+is unavailable.
 
-- Authentication bypass or API key leakage
-- Remote code execution via the API or terminal
-- MAVLink command injection
-- Hardcoded secrets or credentials in the repository
+## Operator responsibilities
 
-### How to report
-
-Please report security vulnerabilities by opening a private issue on GitHub
-or contacting the maintainers directly. Do not disclose vulnerabilities in
-public issues.
-
-We will acknowledge receipt within 48 hours and provide an estimated timeline
-for a fix.
-
-## Security best practices for operators
-
-1. **Always use a strong API key.** Generate one with `python -c "import secrets; print(secrets.token_hex(32))"` and set `NOMAD_API_KEY` in `config/nomad.env`.
-2. **Keep `NOMAD_ALLOW_INSECURE_REMOTE=false`** in production.
-3. **Disable terminal execution** in production (`NOMAD_ENABLE_TERMINAL_EXEC=false`).
-4. **Use Tailscale ACLs** to restrict access to the companion computer's ports.
-5. **Keep the RC kill switch** armed at all times — the ELRS link is the
-   ultimate physical failsafe and is independent of the companion computer.
-6. **Never commit secrets** to the repository. The `.gitignore` excludes
-   `config/nomad.env`, but be mindful of API keys and tokens in code.
+Restrict command, MAVLink, DDS, media and maintenance endpoints to intended
+principals. Protect/rotate actual secrets outside source control, validate
+server identity and keep dependency/firmware pairs pinned and qualified.
+Preserve sanitized evidence of security failures without recording secrets.
+Current development support does not imply a flight-qualified release.

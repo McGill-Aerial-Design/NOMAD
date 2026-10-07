@@ -3,11 +3,11 @@
   "tasks": [
     // ==================== Configuration Profiles ====================
     // These tasks appear in the VS Code status bar via "Run Task".
-    // Switch between real drone and minimal dev with one click.
+    // Switch between real drone and supported ground-station profiles.
     {
-      "label": "Profile: Load real drone (Jetson + ZED2i)",
+      "label": "Profile: Load onboard companion",
       "type": "shell",
-      "command": "pixi run profile-load drone",
+      "command": "pixi run profile-load onboard_companion",
       "group": "none",
       "presentation": {
         "panel": "shared",
@@ -15,20 +15,7 @@
         "showReuseMessage": false
       },
       "problemMatcher": [],
-      "detail": "Production Jetson Orin Nano + ZED2i + CubePilot. All hardware services enabled."
-    },
-    {
-      "label": "Profile: Load minimal dev (Edge Core only)",
-      "type": "shell",
-      "command": "pixi run profile-load dev",
-      "group": "none",
-      "presentation": {
-        "panel": "shared",
-        "clear": true,
-        "showReuseMessage": false
-      },
-      "problemMatcher": [],
-      "detail": "Minimal: Edge Core in sim mode, no vision, no containers. Good for API dev."
+      "detail": "Onboard companion placement; optional compute services remain disabled until qualified."
     },
     {
       "label": "Profile: Show active",
@@ -82,22 +69,9 @@
       "problemMatcher": [],
       "detail": "Snapshot the current config/nomad.env into config/profiles/<name>.env"
     },
-    // ==================== Edge Core (Python) ====================
+    // ==================== Python tools ====================
     {
-      "label": "Edge Core: Dev server (sim)",
-      "type": "shell",
-      "command": "pixi run dev",
-      "group": { "kind": "build", "isDefault": false },
-      "presentation": {
-        "panel": "dedicated",
-        "showReuseMessage": false,
-        "clear": true
-      },
-      "problemMatcher": [],
-      "detail": "Run Edge Core in hardware-free sim mode on http://localhost:8000"
-    },
-    {
-      "label": "Edge Core: Run tests",
+      "label": "Python: Run tests",
       "type": "shell",
       "command": "pixi run test",
       "group": { "kind": "test", "isDefault": true },
@@ -106,7 +80,7 @@
       "detail": "Run pytest"
     },
     {
-      "label": "Edge Core: Lint (ruff check)",
+      "label": "Python: Lint (ruff check)",
       "type": "shell",
       "command": "pixi run lint",
       "group": { "kind": "build", "isDefault": true },
@@ -115,7 +89,7 @@
       "detail": "Run ruff check on the entire codebase"
     },
     {
-      "label": "Edge Core: Format (ruff format)",
+      "label": "Python: Format (ruff format)",
       "type": "shell",
       "command": "pixi run fmt",
       "group": "build",
@@ -124,7 +98,7 @@
       "detail": "Auto-format all Python files with ruff"
     },
     {
-      "label": "Edge Core: Type check (mypy)",
+      "label": "Python: Type check (mypy)",
       "type": "shell",
       "command": "pixi run typecheck",
       "group": "build",
@@ -149,7 +123,7 @@
       "group": "build",
       "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
       "problemMatcher": [],
-      "detail": "Start Edge Core, ROS bridge, and synthetic ZED publisher"
+      "detail": "Start the C++ ROS adapter and SITL stack"
     },
     {
       "label": "Sim ROS: Stop stack",
@@ -178,78 +152,15 @@
       "problemMatcher": [],
       "detail": "Run ROS bridge integration tests inside the sim-ros image"
     },
-    {
-      "label": "Sim Gazebo: Build image",
-      "type": "shell",
-      "command": "pixi run sim-gazebo-build",
-      "group": "build",
-      "presentation": { "panel": "dedicated", "clear": true },
-      "problemMatcher": [],
-      "detail": "Build the ArduPilot SITL + Gazebo Harmonic image"
-    },
-    {
-      "label": "Sim Gazebo: Start visible stack",
-      "type": "shell",
-      "command": "pixi run sim-gazebo-up",
-      "group": "build",
-      "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
-      "problemMatcher": [],
-      "detail": "Start Edge Core, ROS bridge, and Gazebo GUI at http://localhost:6080/vnc.html"
-    },
-    {
-      "label": "Sim Gazebo: Open GUI",
-      "type": "shell",
-      "command": "pixi run sim-gazebo-open",
-      "group": "none",
-      "presentation": { "panel": "shared", "clear": false },
-      "problemMatcher": [],
-      "detail": "Open the Gazebo noVNC GUI in your browser"
-    },
-    {
-      "label": "Sim Gazebo: Start headless stack",
-      "type": "shell",
-      "command": "pixi run sim-gazebo-up-headless",
-      "group": "build",
-      "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
-      "problemMatcher": [],
-      "detail": "Start the Gazebo stack with gz --headless-rendering"
-    },
-    {
-      "label": "Sim Gazebo: Start fast headless stack",
-      "type": "shell",
-      "command": "pixi run sim-gazebo-up-fast",
-      "group": "build",
-      "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
-      "problemMatcher": [],
-      "detail": "Start the lower-load Gazebo stack for real-time-factor checks"
-    },
-    {
-      "label": "Sim Gazebo: Stop stack",
-      "type": "shell",
-      "command": "pixi run sim-gazebo-down",
-      "group": "none",
-      "presentation": { "panel": "dedicated", "clear": true },
-      "problemMatcher": [],
-      "detail": "Stop and remove the Gazebo simulation stack"
-    },
-    {
-      "label": "Sim Gazebo: Logs",
-      "type": "shell",
-      "command": "pixi run sim-gazebo-logs",
-      "group": "none",
-      "presentation": { "panel": "dedicated", "showReuseMessage": false },
-      "problemMatcher": [],
-      "detail": "Follow logs from the Gazebo simulation stack"
-    },
     // ==================== C# ====================
     {
       "label": "C#: Build Mission Planner Plugin",
       "type": "shell",
-      "command": "pixi run build-plugin",
+      "command": "pixi run build-plugin-only",
       "group": "build",
       "presentation": { "panel": "dedicated", "clear": true },
       "problemMatcher": [],
-      "detail": "Build and deploy NOMADPlugin.dll (requires Visual Studio + Mission Planner)"
+      "detail": "Build NOMADPlugin.dll without installing it (requires Visual Studio + Mission Planner)"
     },
     {
       "label": "C#: Lint plugin for dead code",
@@ -264,13 +175,13 @@
     // These call the pixi `dev-*` tasks (see pixi.toml) so the compose flags are
     // defined in one place.
     {
-      "label": "Docker: Build dev image",
+      "label": "Core: Build",
       "type": "shell",
-      "command": "pixi run dev-build",
+      "command": "pixi run build-core",
       "group": "build",
       "presentation": { "panel": "dedicated", "clear": true },
       "problemMatcher": [],
-      "detail": "Build the x86 dev Docker image (docker/Dockerfile.dev)"
+      "detail": "Build the production C++ executables without installing them"
     },
     {
       "label": "Docker: Build + start dev stack (SITL)",
@@ -279,7 +190,7 @@
       "group": "build",
       "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
       "problemMatcher": [],
-      "detail": "Build and start Edge Core + ArduPilot SITL (detached)"
+      "detail": "Build and start the ArduPilot SITL stack (detached)"
     },
     {
       "label": "Docker: Stop dev stack",

@@ -3,14 +3,12 @@
 // ============================================================
 // NOMAD Gimbal Joystick — Floating Dockable Window
 // ============================================================
-// Rate-controlled 2D joystick that streams MAV_CMD_DO_MOUNT_CONTROL angle
-// commands (pitch/roll) to a brushless gimbal mount on the autopilot. Mode
-// buttons send MAV_CMD_DO_MOUNT_CONFIGURE. Works with any DO_MOUNT_CONTROL
-// mount configured as an MNTx_* mount on ArduPilot.
+// Rate-controlled 2D joystick requests pitch/roll targets through the NOMAD
+// runtime. Mode buttons also use runtime IPC.
 //
-// This is independent from the ZED tilt servo (PayloadControlPanel), which is
-// just a SERVOx output. The command construction lives in GimbalCommand and the
-// shared send/integrator in GimbalController, so this window is pure UI.
+// This is independent from the camera tilt servo (ActuatorControlPanel), which is
+// just a SERVOx output. Angle integration lives in GimbalCommand and the shared
+// target/request state lives in GimbalController, so this window is pure UI.
 //
 // Layout is fully dynamic: a docked TableLayoutPanel with a fill joystick pad
 // (which scales itself in OnPaint) and AutoSize rows that reflow, so the window
@@ -19,7 +17,6 @@
 
 using System;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 using Timer = System.Windows.Forms.Timer;
 
@@ -224,7 +221,7 @@ namespace NOMAD.MissionPlanner
 
             // Joystick pad — fills the flexible row and stays circular via OnPaint.
             // It caps its own drawn radius so it never grows uncomfortably large.
-            _pad = new JoystickPad
+            _pad = new JoystickPad(STICK_DEADZONE)
             {
                 Dock = DockStyle.Fill,
                 Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
@@ -245,7 +242,7 @@ namespace NOMAD.MissionPlanner
             };
             _lblPitch = MakeReadout("Pitch: +0.0°");
             _lblRoll = MakeReadout("Roll: +0.0°");
-            _lblMode = MakeReadout("Mode: MAVLINK");
+            _lblMode = MakeReadout("Selected mode: MAVLINK");
             readouts.Controls.Add(_lblPitch);
             readouts.Controls.Add(_lblRoll);
             readouts.Controls.Add(_lblMode);
@@ -513,9 +510,7 @@ namespace NOMAD.MissionPlanner
 
             bool active = sx != 0f || sy != 0f;
 
-            // Delegate the rate→target-angle integration and the actual
-            // DO_MOUNT_CONTROL send to GimbalController so this window and the
-            // physical NomadJoystickService share one authoritative target.
+            // Share rate-to-target integration with the physical joystick.
             if (active)
             {
                 GimbalController.ApplyStick(sx, sy, dt,
@@ -534,10 +529,10 @@ namespace NOMAD.MissionPlanner
         // Helpers for the in-window snap / key-nudge buttons — both go through
         // GimbalController so the physical NomadJoystickService sees the same
         // target angles immediately.
-        private void SendPitchRollAngle(float pitchDeg, float rollDeg)
+        private void RequestPitchRollTarget(float pitchDeg, float rollDeg)
         {
             GimbalController.SetTargetAngles(pitchDeg, rollDeg);
-            GimbalController.SendPitchRollAngle(GimbalController.TargetPitchDeg, GimbalController.TargetRollDeg);
+            GimbalController.RequestPitchRollTarget(GimbalController.TargetPitchDeg, GimbalController.TargetRollDeg);
         }
 
         // ============================================================
@@ -571,7 +566,7 @@ namespace NOMAD.MissionPlanner
         private void UpdateModeLabel()
         {
             if (_lblMode == null) return;
-            _lblMode.Text = $"Mode: {_modeLabel}";
+            _lblMode.Text = $"Selected mode: {_modeLabel}";
         }
 
         private void SnapAngles(float pitch, float roll)
@@ -586,136 +581,8 @@ namespace NOMAD.MissionPlanner
             }
             _targetPitch = pitch;
             _targetRoll = roll;
-            SendPitchRollAngle(pitch, roll);
+            RequestPitchRollTarget(pitch, roll);
         }
 
-        // ============================================================
-        // Joystick pad — custom control, mouse drag, springs to centre
-        // ============================================================
-        private class JoystickPad : Control
-        {
-            public event Action<float, float> StickChanged;
-            private bool _dragging;
-            private PointF _stickNorm; // [-1,1] each axis
-
-            // Gutters reserved between the ring and the control edge so the axis
-            // labels sit OUTSIDE the circle yet stay within the pad; the X gutter is
-            // wider because "ROLL+/ROLL-" are wider than they are tall. The radius is
-            // also capped so the joystick stays a sensible size on a large pad. Both
-            // OnPaint and the hit-test use Radius() so visual + interaction agree.
-            private const int LABEL_MARGIN_X = 38;
-            private const int LABEL_MARGIN_Y = 18;
-            private const int MAX_RADIUS = 120;
-            private const int PUCK = 16;
-
-            public JoystickPad()
-            {
-                DoubleBuffered = true;
-                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint
-                         | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            }
-
-            private int Radius()
-            {
-                int r = Math.Min(Width / 2 - LABEL_MARGIN_X, Height / 2 - LABEL_MARGIN_Y);
-                return Math.Min(r, MAX_RADIUS);
-            }
-
-            protected override void OnMouseDown(MouseEventArgs e)
-            {
-                if (e.Button != MouseButtons.Left) return;
-                _dragging = true;
-                UpdateFromMouse(e.Location);
-                base.OnMouseDown(e);
-            }
-
-            protected override void OnMouseMove(MouseEventArgs e)
-            {
-                if (_dragging) UpdateFromMouse(e.Location);
-                base.OnMouseMove(e);
-            }
-
-            protected override void OnMouseUp(MouseEventArgs e)
-            {
-                _dragging = false;
-                _stickNorm = PointF.Empty;
-                StickChanged?.Invoke(0, 0);
-                Invalidate();
-                base.OnMouseUp(e);
-            }
-
-            protected override void OnMouseLeave(EventArgs e)
-            {
-                if (_dragging)
-                {
-                    _dragging = false;
-                    _stickNorm = PointF.Empty;
-                    StickChanged?.Invoke(0, 0);
-                    Invalidate();
-                }
-                base.OnMouseLeave(e);
-            }
-
-            private void UpdateFromMouse(Point p)
-            {
-                int cx = Width / 2, cy = Height / 2;
-                int r = Radius();
-                if (r <= 0) return;
-                float dx = (p.X - cx) / (float)r;
-                float dy = (p.Y - cy) / (float)r;
-                float mag = (float)Math.Sqrt(dx * dx + dy * dy);
-                if (mag > 1f) { dx /= mag; dy /= mag; }
-                _stickNorm = new PointF(dx, dy);
-                // Up-in-pixels means -Y, but operator expects "stick forward = look down" or
-                // "stick up = look up". Convention: stick UP (negative pixel-y) → pitch UP (+).
-                StickChanged?.Invoke(dx, -dy);
-                Invalidate();
-            }
-
-            protected override void OnPaint(PaintEventArgs e)
-            {
-                var g = e.Graphics;
-                g.SmoothingMode = SmoothingMode.AntiAlias;
-                g.Clear(BackColor);
-
-                int cx = Width / 2, cy = Height / 2;
-                int r = Radius();
-                if (r <= 0) return;
-
-                // Outer ring
-                using (var ringPen = new Pen(NOMADTheme.TEXT_SECONDARY, 2))
-                    g.DrawEllipse(ringPen, cx - r, cy - r, r * 2, r * 2);
-
-                // Inner cross + deadzone
-                using (var p2 = new Pen(Color.FromArgb(60, 60, 70), 1))
-                {
-                    g.DrawLine(p2, cx - r, cy, cx + r, cy);
-                    g.DrawLine(p2, cx, cy - r, cx, cy + r);
-                    int dz = (int)(r * STICK_DEADZONE);
-                    g.DrawEllipse(p2, cx - dz, cy - dz, dz * 2, dz * 2);
-                }
-
-                // Stick puck
-                int px = cx + (int)(_stickNorm.X * r);
-                int py = cy + (int)(_stickNorm.Y * r);
-                using (var brush = new SolidBrush(NOMADTheme.ACCENT))
-                    g.FillEllipse(brush, px - PUCK, py - PUCK, PUCK * 2, PUCK * 2);
-                using (var pen = new Pen(Color.White, 2))
-                    g.DrawEllipse(pen, px - PUCK, py - PUCK, PUCK * 2, PUCK * 2);
-
-                // Axis labels — drawn just OUTSIDE the ring, in the reserved gutter,
-                // so they sit clear of the circle without spilling past the pad edge.
-                using (var brush = new SolidBrush(NOMADTheme.TEXT_SECONDARY))
-                using (var f = new Font(NOMADTheme.FONT_FAMILY, NOMADTheme.SIZE_SMALL))
-                {
-                    var p = g.MeasureString("PITCH+", f);
-                    var roll = g.MeasureString("ROLL+", f);
-                    g.DrawString("PITCH+", f, brush, cx - p.Width / 2, cy - r - p.Height + 1);
-                    g.DrawString("PITCH-", f, brush, cx - p.Width / 2, cy + r + 1);
-                    g.DrawString("ROLL+", f, brush, cx - r - roll.Width - 1, cy - roll.Height / 2);
-                    g.DrawString("ROLL-", f, brush, cx + r + 1, cy - roll.Height / 2);
-                }
-            }
-        }
     }
 }

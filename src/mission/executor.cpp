@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "nomad/mission/executor.hpp"
 
-#include "nomad/safety/velocity.hpp"
-
 #include <chrono>
 #include <cmath>
 #include <thread>
@@ -44,7 +42,7 @@ vehicle::CommandResult MissionExecutor::execute_step(const Wait& step) {
 
 vehicle::CommandResult MissionExecutor::execute_step(const Action& step) {
     if (step.name == "guided" || step.name == "set_guided") {
-        return vehicle_.set_mode(safety::kGuidedMode);
+        return vehicle_.set_guided_mode();
     }
     if (step.name == "arm") {
         return vehicle_.arm();

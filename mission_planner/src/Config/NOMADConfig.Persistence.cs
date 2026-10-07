@@ -3,12 +3,19 @@
 
 using System;
 using System.IO;
+using System.Globalization;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace NOMAD.MissionPlanner
 {
     public partial class NOMADConfig
     {
+        private sealed class UnsupportedConfigurationMigrationException : JsonSerializationException
+        {
+            public UnsupportedConfigurationMigrationException(string message) : base(message) { }
+        }
+
         private static string ConfigPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Mission Planner",
@@ -22,10 +29,16 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static NOMADConfig Load()
         {
-            var primary = ConfigPath;
-            var backup = primary + ".bak";
+            return LoadFromPaths(ConfigPath, ConfigPath + ".bak");
+        }
 
-            foreach (var path in new[] { primary, backup })
+        internal static NOMADConfig LoadFromPaths(string primary, string backup)
+        {
+            foreach (var path in new[]
+            {
+                primary, backup
+            }
+            )
             {
                 try
                 {
@@ -36,6 +49,11 @@ namespace NOMAD.MissionPlanner
                     if (path == backup)
                         Log.Warn("Loaded config from .bak (primary corrupt or missing).");
                     return config;
+                }
+                catch (UnsupportedConfigurationMigrationException ex)
+                {
+                    Log.Error($"Configuration requires migration before Mission Planner can start - {ex.Message}");
+                    throw new InvalidDataException(ex.Message, ex);
                 }
                 catch (Exception ex)
                 {
@@ -67,6 +85,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                ValidateInputBindings();
                 var path = ConfigPath;
                 var dir = Path.GetDirectoryName(path);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -92,7 +111,15 @@ namespace NOMAD.MissionPlanner
             catch (Exception ex)
             {
                 Log.Error($"Failed to save config - {ex.Message}");
-                try { File.Delete(ConfigPath + ".tmp"); } catch { }
+                try
+                {
+                    File.Delete(ConfigPath + ".tmp");
+                }
+                catch
+                {
+
+                }
+                throw new IOException("Configuration was not saved.", ex);
             }
         }
 
@@ -106,17 +133,207 @@ namespace NOMAD.MissionPlanner
             if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
                 Directory.CreateDirectory(directory);
 
-            File.WriteAllText(path, JsonConvert.SerializeObject(this, Formatting.Indented));
+            var profile = JObject.FromObject(this);
+            profile.Remove(nameof(CoreClientCredential));
+            File.WriteAllText(path, profile.ToString(Formatting.Indented));
         }
 
         private static NOMADConfig Deserialize(string json)
         {
-            var config = JsonConvert.DeserializeObject<NOMADConfig>(json);
-            if (config == null)
-                throw new JsonSerializationException("The configuration file did not contain a NOMAD configuration.");
+            var document = JObject.Parse(json);
+            try
+            {
+                var migratedJson = MigrateLegacyConfigKeys(json);
+                var config = JsonConvert.DeserializeObject<NOMADConfig>(migratedJson);
+                if (config == null)
+                { throw new JsonSerializationException("The configuration file did not contain a NOMAD configuration."); }
+                config.MigrateDefaults();
+                return config;
+            }
+            catch (UnsupportedConfigurationMigrationException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (document.Property("Payloads") != null || document.Property("Actuators") != null)
+            {
+                throw new UnsupportedConfigurationMigrationException("Invalid actuator configuration: " + ex.Message);
+            }
+        }
 
-            config.MigrateDefaults();
-            return config;
+        private static string MigrateLegacyConfigKeys(string json)
+        {
+            var document = JObject.Parse(json);
+            RejectRetiredActuatorOwnership(document);
+            ValidateInputDocument(document);
+            bool legacyAxisEnabled = document["JoystickCameraTiltEnabled"]?.Value<bool>() == true ||
+                document["JoystickZedEnabled"]?.Value<bool>() == true;
+            if (legacyAxisEnabled && document["JoystickPositionEnabled"] == null)
+            { throw new UnsupportedConfigurationMigrationException(
+                "Enabled legacy relative-rate position input requires explicit review before absolute position input is enabled. Preserve the original file."); }
+            foreach (var suffix in new[]
+            {
+                "Enabled", "Device", "Axis", "Invert", "Deadzone"
+            }
+            )
+            {
+                string old = "JoystickCameraTilt" + suffix;
+                string current = "JoystickPosition" + suffix;
+                if (document[current] == null && document[old] != null)
+                {
+                    document[current] = document[old];
+                }
+                document.Remove(old);
+            }
+            foreach (var suffix in new[]
+            {
+                "Enabled", "Device", "TiltAxis", "TiltInvert", "Deadzone"
+            }
+            )
+            {
+                string old = "JoystickZed" + suffix;
+                string current = "JoystickPosition" + suffix.Replace("Tilt", "");
+                if (document[current] == null && document[old] != null)
+                {
+                    document[current] = document[old];
+                }
+                document.Remove(old);
+            }
+            foreach (var retired in new[]
+            {
+                "JoystickAutoSelectDevice", "JoystickCameraTiltMaxRateUsPerSec", "JoystickZedMaxRateUsPerSec"
+            }
+            )
+            { document.Remove(retired); }
+
+            var legacyMode = document["RouterMode"]?.Value<string>();
+            if (!string.IsNullOrWhiteSpace(legacyMode) &&
+                !string.Equals(legacyMode, "Standalone", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new UnsupportedConfigurationMigrationException(
+                    $"RouterMode '{legacyMode}' is unsupported; run only the standalone ground router.");
+            }
+
+            ValidateLegacyLoopbackSetting(document, "RouterBindAddress");
+            ValidateLegacyLoopbackSetting(document, "ManagementBindAddress");
+
+            // DualLinkEnabled was the source of truth in the old model. If it
+            // is present it wins; otherwise migrate the older RouterEnabled key.
+            if (document["DualLinkEnabled"] == null && document["RouterEnabled"] != null)
+            {
+                document["DualLinkEnabled"] = document["RouterEnabled"];
+            }
+
+            var removed = new[]
+            {
+                "IntegratedFlightMode",
+                "SprayTargetCameraRangeM",
+                "SprayRangeToleranceM",
+                "SprayTriggerMaxDistanceM",
+                "SprayAimPixelX",
+                "SprayAimPixelY",
+                "SprayAimTolerancePx",
+                "SprayServoFireAngleDeg",
+                "SprayForwardGain",
+                "SprayLateralGain",
+                "SprayAltitudeGain",
+                "SprayYawGain",
+                "SprayUseYawAlignment",
+                "SprayMaxForwardSpeedMps",
+                "SprayMaxLateralSpeedMps",
+                "SprayMaxAltitudeSpeedMps",
+                "SprayMaxYawRateRadps",
+                "SprayLockHoldMs",
+                "SprayAlignTimeoutS",
+                "RouterLinks", "RouterConsumers", "RouterEnabled", "RouterMode",
+                "RadioMasterConnectionType", "RadioMasterPort", "RadioMasterComPort",
+                "RadioMasterTcpHost", "RadioMasterBaudRate", "LteMavlinkPort",
+                "LteRemoteHost", "LteRemotePort", "AutoFailoverEnabled",
+                "PreferredMavlinkLink", "AutoReconnectToPreferred",
+                "PreferredLinkReconnectDelay", "MavlinkHeartbeatTimeout",
+                "RouterBindAddress", "RouterDedupEnabled", "ManagementBindAddress",
+                "CoreMavlinkEndpoint", "CoreClientMode", "CoreExePath",
+                "JetsonApiKey", "JetsonIP", "JetsonPort", "CoreApiKey",
+            };
+            var found = new System.Collections.Generic.List<string>();
+            foreach (var key in removed)
+            {
+                if (document.Property(key) != null)
+                {
+                    found.Add(key);
+                    document.Remove(key);
+                }
+            }
+            if (found.Count > 0)
+            {
+                Log.Warn("Removed retired aircraft/router settings from Mission Planner config: " +
+                    string.Join(", ", found) + ". Configure aircraft transport in nomad-runtime and ground links " +
+                    "in the standalone router JSON.");
+            }
+            return document.ToString(Formatting.None);
+        }
+
+        private static void RejectRetiredActuatorOwnership(JObject document)
+        {
+            foreach (var key in new[]
+            {
+                "Payloads", "Actuators"
+            }
+            )
+            {
+                if (document[key] == null)
+                {
+                    continue;
+                }
+                if (!(document[key] is JArray list) || list.Count > 0)
+                { throw new UnsupportedConfigurationMigrationException("Persisted " + key +
+                    " must be migrated to the runtime actuator configuration before loading. Preserve the original file."); }
+                document.Remove(key);
+            }
+            if (document["SerialJoystickEnabled"]?.Value<bool>() == true ||
+                !string.IsNullOrWhiteSpace(document["SerialJoystickScriptPath"]?.Value<string>()))
+            { throw new UnsupportedConfigurationMigrationException(
+                "Serial/virtual joystick bridging is retired. Select and review direct USB HID mappings; preserve the original file."); }
+            foreach (var key in new[] { "SerialJoystickEnabled", "SerialJoystickPort", "SerialJoystickBaud",
+                "SerialJoystickPython", "SerialJoystickScriptPath" }) { document.Remove(key); }
+        }
+
+        private static void ValidateInputDocument(JObject document)
+        {
+            var termination = document["JoystickTerminationButtonIndex"];
+            var monitor = document["JoystickKillSwitchEnabled"];
+            if ((termination != null && termination.Type != JTokenType.Integer) ||
+                (monitor != null && monitor.Type != JTokenType.Boolean))
+            {
+                throw new UnsupportedConfigurationMigrationException(
+                    "HID termination index must be an integer and its enabled flag must be boolean.");
+            }
+            if (termination != null) { ValidatePhysicalIndex(termination, "HID termination index"); }
+            if (document["JoystickButtonIndices"] == null) { return; }
+            if (!(document["JoystickButtonIndices"] is JArray indices))
+            { throw new UnsupportedConfigurationMigrationException("HID button indices must be an integer array."); }
+            foreach (var index in indices)
+            {
+                if (index.Type != JTokenType.Integer)
+                { throw new UnsupportedConfigurationMigrationException("HID button indices must be integers."); }
+                ValidatePhysicalIndex(index, "HID button indices");
+            }
+        }
+
+        private static void ValidatePhysicalIndex(JToken token, string name)
+        {
+            if (!int.TryParse(token.ToString(Formatting.None), NumberStyles.Integer, CultureInfo.InvariantCulture,
+                out int value) || value < 0 || value > 127)
+            { throw new UnsupportedConfigurationMigrationException(name + " must be an integer between 0 and 127."); }
+        }
+
+        private static void ValidateLegacyLoopbackSetting(JObject document, string key)
+        {
+            var address = document[key]?.Value<string>();
+            if (!string.IsNullOrWhiteSpace(address) && address != "127.0.0.1")
+            {
+                throw new UnsupportedConfigurationMigrationException(
+                    $"{key} must be 127.0.0.1; the standalone router is loopback-only.");
+            }
         }
 
         /// <summary>
@@ -124,39 +341,23 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         private void MigrateDefaults()
         {
-            // Migrate from old UDP format to RTSP (multiple viewers)
-            if (VideoUrl == "udp://@:5600" || string.IsNullOrEmpty(VideoUrl))
+            ValidateInputBindings();
+            if (CoreRuntimePort < 1 || CoreRuntimePort > 65535)
             {
-                // New default is RTSP stream (allows multiple viewers)
-                var ip = EffectiveIP;
-                if (string.IsNullOrWhiteSpace(ip))
-                    ip = JetsonIP;
-                VideoUrl = $"rtsp://{ip}:8554/stream";
+                CoreRuntimePort = Connectivity.NomadCoreClient.DefaultRuntimePort;
             }
 
-            // Migrate old Jetson IP to Tailscale if using Tailscale
-            if (JetsonIP == "192.168.1.100" && UseTailscale)
+            // Older profiles used an API-derived video URL. Keep them usable by
+            // falling back to the standalone RTSP bridge's documented local URL.
+            if (VideoUrl == "udp://@:5600" || string.IsNullOrWhiteSpace(VideoUrl))
             {
-                JetsonIP = TailscaleIP;
+                VideoUrl = "rtsp://127.0.0.1:8554/stream";
             }
 
-            // Migrate SSH username from 'nomad' to 'mad'
-            if (SshUsername == "nomad")
+            if (ManagementPort < 1 || ManagementPort > 65535)
             {
-                SshUsername = "mad";
+                ManagementPort = 14610;
             }
-
-            // Bump LTE MAVLink port off the RadioMaster default (14550) so the
-            // two links don't fight for the same UDP port on the GCS. Users
-            // who explicitly set a non-default value keep it.
-            if (LteMavlinkPort == 14550)
-            {
-                LteMavlinkPort = 14560;
-            }
-
-            // Keep the old high-level dual-link toggle and the newer local
-            // router toggle in lockstep unless a future UI exposes them separately.
-            RouterEnabled = DualLinkEnabled;
 
             // Keep FOV within a practical range for 3D view usability.
             if (SlamCameraFovDeg < 30.0f || SlamCameraFovDeg > 140.0f)
@@ -187,36 +388,13 @@ namespace NOMAD.MissionPlanner
                 ClampLog(LogEkfVarianceCritical, 0, 20, 1));
             if (LogMinimumSatellites < 0 || LogMinimumSatellites > 40) LogMinimumSatellites = 8;
             if (LogLiveBufferPoints < 60 || LogLiveBufferPoints > 10000) LogLiveBufferPoints = 600;
-            if (string.IsNullOrWhiteSpace(JetsonLogDirectory)) JetsonLogDirectory = "~/NOMAD/logs";
-            MotorMusicMotorCount = ClampInt(MotorMusicMotorCount, 1, 12, 4);
-            MotorMusicMinOutputPwm = ClampInt(MotorMusicMinOutputPwm, 1000, 2000, 1100);
-            MotorMusicMaxOutputPwm = ClampInt(MotorMusicMaxOutputPwm, MotorMusicMinOutputPwm, 2000, 1800);
-            MotorMusicTranspose = ClampInt(MotorMusicTranspose, -48, 12, -24);
-            if (MotorMusicTempoScale < 0.25 || MotorMusicTempoScale > 2.0)
-                MotorMusicTempoScale = 1.0;
 
-            if (Payloads == null)
-            {
-                Payloads = DefaultPayloads();
-            }
+        }
 
-            SprayTargetCameraRangeM = Clamp(SprayTargetCameraRangeM, 0.5f, 8.0f, 3.8f);
-            SprayRangeToleranceM = Clamp(SprayRangeToleranceM, 0.05f, 1.0f, 0.25f);
-            SprayTriggerMaxDistanceM = Clamp(SprayTriggerMaxDistanceM, 1.0f, 8.0f, 5.5f);
-            if (SprayAimPixelX < 0 || SprayAimPixelX > 4000) SprayAimPixelX = 640;
-            if (SprayAimPixelY < 0 || SprayAimPixelY > 3000) SprayAimPixelY = 390;
-            if (SprayAimTolerancePx < 2 || SprayAimTolerancePx > 250) SprayAimTolerancePx = 25;
-            SprayServoFireAngleDeg = Clamp(SprayServoFireAngleDeg, 0.0f, 180.0f, 82.0f);
-            SprayForwardGain = Clamp(SprayForwardGain, 0.0f, 2.0f, 0.45f);
-            SprayLateralGain = Clamp(SprayLateralGain, -0.02f, 0.02f, 0.0010f);
-            SprayAltitudeGain = Clamp(SprayAltitudeGain, -0.02f, 0.02f, 0.0010f);
-            SprayYawGain = Clamp(SprayYawGain, -0.02f, 0.02f, 0.0025f);
-            SprayMaxForwardSpeedMps = Clamp(SprayMaxForwardSpeedMps, 0.05f, 2.0f, 0.45f);
-            SprayMaxLateralSpeedMps = Clamp(SprayMaxLateralSpeedMps, 0.05f, 1.0f, 0.25f);
-            SprayMaxAltitudeSpeedMps = Clamp(SprayMaxAltitudeSpeedMps, 0.05f, 1.0f, 0.20f);
-            SprayMaxYawRateRadps = Clamp(SprayMaxYawRateRadps, 0.05f, 2.0f, 0.35f);
-            if (SprayLockHoldMs < 100 || SprayLockHoldMs > 5000) SprayLockHoldMs = 700;
-            SprayAlignTimeoutS = Clamp(SprayAlignTimeoutS, 2.0f, 60.0f, 20.0f);
+        internal void ValidateInputBindings()
+        {
+            string error = GetInputMappingError();
+            if (error != null) { throw new UnsupportedConfigurationMigrationException(error); }
         }
 
         private static float Clamp(float value, float min, float max, float fallback)
@@ -254,25 +432,16 @@ namespace NOMAD.MissionPlanner
         {
             var defaults = new NOMADConfig();
 
-            JetsonIP = defaults.JetsonIP;
-            JetsonPort = defaults.JetsonPort;
-            JetsonApiKey = defaults.JetsonApiKey;
-            JetsonSshUser = defaults.JetsonSshUser;
-            TailscaleIP = defaults.TailscaleIP;
-            UseTailscale = defaults.UseTailscale;
+            ActiveProfile = defaults.ActiveProfile;
+            CoreRuntimePort = defaults.CoreRuntimePort;
+            RouterLocalPort = defaults.RouterLocalPort;
+            ManagementPort = defaults.ManagementPort;
+            CoreClientCredential = defaults.CoreClientCredential;
             VideoUrl = defaults.VideoUrl;
             VideoNetworkCaching = defaults.VideoNetworkCaching;
             PreferredVideoPlayer = defaults.PreferredVideoPlayer;
             VideoAutoStart = defaults.VideoAutoStart;
-            HttpTimeoutSeconds = defaults.HttpTimeoutSeconds;
-            AutoReconnect = defaults.AutoReconnect;
-            HealthPollInterval = defaults.HealthPollInterval;
-            VioConfidenceWarning = defaults.VioConfidenceWarning;
-            VioConfidenceCritical = defaults.VioConfidenceCritical;
-            VioAlertsEnabled = defaults.VioAlertsEnabled;
-            SshUsername = defaults.SshUsername;
-            TerminalTimeout = defaults.TerminalTimeout;
-            SaveTerminalHistory = defaults.SaveTerminalHistory;
+            AutoStartHudVideo = defaults.AutoStartHudVideo;
             DebugMode = defaults.DebugMode;
             ShowNotifications = defaults.ShowNotifications;
             DefaultTab = defaults.DefaultTab;
@@ -281,13 +450,7 @@ namespace NOMAD.MissionPlanner
             TempCriticalC = defaults.TempCriticalC;
             AudioAlerts = defaults.AudioAlerts;
             AltitudeCallouts = defaults.AltitudeCallouts;
-            MotorMusicMotorCount = defaults.MotorMusicMotorCount;
-            MotorMusicMinOutputPwm = defaults.MotorMusicMinOutputPwm;
-            MotorMusicMaxOutputPwm = defaults.MotorMusicMaxOutputPwm;
-            MotorMusicTranspose = defaults.MotorMusicTranspose;
-            MotorMusicTempoScale = defaults.MotorMusicTempoScale;
             DefaultLogDirectory = defaults.DefaultLogDirectory;
-            JetsonLogDirectory = defaults.JetsonLogDirectory;
             LogVibrationWarning = defaults.LogVibrationWarning;
             LogVibrationCritical = defaults.LogVibrationCritical;
             LogHdopWarning = defaults.LogHdopWarning;
@@ -307,25 +470,7 @@ namespace NOMAD.MissionPlanner
             SlamHeadingOffsetDeg = defaults.SlamHeadingOffsetDeg;
             SlamCameraFovDeg = defaults.SlamCameraFovDeg;
             SlamMapRadiusM = defaults.SlamMapRadiusM;
-            Payloads = defaults.Payloads;
-            SprayTargetCameraRangeM = defaults.SprayTargetCameraRangeM;
-            SprayRangeToleranceM = defaults.SprayRangeToleranceM;
-            SprayTriggerMaxDistanceM = defaults.SprayTriggerMaxDistanceM;
-            SprayAimPixelX = defaults.SprayAimPixelX;
-            SprayAimPixelY = defaults.SprayAimPixelY;
-            SprayAimTolerancePx = defaults.SprayAimTolerancePx;
-            SprayServoFireAngleDeg = defaults.SprayServoFireAngleDeg;
-            SprayForwardGain = defaults.SprayForwardGain;
-            SprayLateralGain = defaults.SprayLateralGain;
-            SprayAltitudeGain = defaults.SprayAltitudeGain;
-            SprayYawGain = defaults.SprayYawGain;
-            SprayUseYawAlignment = defaults.SprayUseYawAlignment;
-            SprayMaxForwardSpeedMps = defaults.SprayMaxForwardSpeedMps;
-            SprayMaxLateralSpeedMps = defaults.SprayMaxLateralSpeedMps;
-            SprayMaxAltitudeSpeedMps = defaults.SprayMaxAltitudeSpeedMps;
-            SprayMaxYawRateRadps = defaults.SprayMaxYawRateRadps;
-            SprayLockHoldMs = defaults.SprayLockHoldMs;
-            SprayAlignTimeoutS = defaults.SprayAlignTimeoutS;
+            JoystickPositionActuatorId = defaults.JoystickPositionActuatorId;
         }
     }
 }

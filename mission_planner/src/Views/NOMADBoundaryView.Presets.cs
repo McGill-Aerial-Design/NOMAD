@@ -249,9 +249,9 @@ namespace NOMAD.MissionPlanner
                 return;
             }
 
-            if (e.BoundaryType == "hard" && _monitor?.KillCountdown != null)
+            if (e.BoundaryType == "hard")
             {
-                _lblCountdown.Text = $"FORCED DESCENT IN {_monitor.KillCountdown} SECONDS!";
+                _lblCountdown.Text = "TERMINATION REQUIRED — PLUGIN ACTIVATION UNAVAILABLE";
             }
         }
 

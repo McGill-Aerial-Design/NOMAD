@@ -18,7 +18,7 @@
     "python.terminal.activateEnvInCurrentTerminal": true,
     // Python analysis
     "python.analysis.extraPaths": [
-        "${workspaceFolder}/edge_core",
+        "${workspaceFolder}/python",
         "${workspaceFolder}/infra/tailscale"
     ],
     "python.analysis.typeCheckingMode": "basic",
@@ -44,9 +44,9 @@
     // ==================== Docker ====================
     "docker.commands.build": "-f ${workspaceFolder}/docker/${tag} -t ${image} ${workspaceFolder}",
     "docker.dockerfileSearchList": [
-        "docker/Dockerfile.dev",
         "docker/Dockerfile.jetson",
-        "Dockerfile"
+        "docker/Dockerfile.sim-ros",
+        "docker/Dockerfile.sim-isaac"
     ],
     // ==================== File Associations ====================
     "files.associations": {

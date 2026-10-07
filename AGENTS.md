@@ -1,9 +1,9 @@
 # NOMAD contributor guide
 
-NOMAD is a standalone system for monitoring and controlling ArduPilot vehicles.
-The target product is a small C++20 core with independent clients and adapters.
-The current Python edge service is transitional and must not grow new architecture.
-Verify the source before trusting this document.
+NOMAD is a C++20 system for monitoring and controlling ArduPilot vehicles.
+The production command owner is the long-running `nomad-runtime`; installed
+clients use its local IPC and it sends through one MAVSDK transport. Verify
+source and current guidance before trusting historical migration notes.
 
 ## Agent operating rules
 
@@ -22,25 +22,32 @@ Verify the source before trusting this document.
 ## Product boundary
 
 ```text
-CLI / Mission Planner / ROS 2 / Python tools
+Mission Planner / installed CLI / optional ROS observations
                     |
-                    v
-              NOMAD C++ core
+             local interfaces
                     |
-              MAVLink transport
+              nomad-runtime
+     authority, requests, vehicle/safety policy
                     |
-                 ArduPilot
+       one MAVSDK command transport
+                    |
+          standalone ground router
+                    |
+                ArduPilot
 ```
 
-The C++ core owns vehicle behavior, telemetry models, missions, command
-validation, and MAVLink interaction. ArduPilot owns stabilization, motor control,
-EKF, low-level navigation, and failsafes.
+Mission Planner is the operator UI, management and status client. Its supported
+requests and the installed CLI use runtime IPC. ROS 2 is observation-only. The
+standalone ground router routes traffic and does not grant flight authority.
+ArduPilot owns stabilization, motor control, EKF, low-level navigation and
+failsafes. Native GCS, RC/pilot and other external sources remain outside
+NOMAD's software authority guarantee.
 
 Python is for computer vision, machine learning, experiments, simulation,
-analysis, tests, and ground-side utilities. ROS 2 and Mission Planner are
-adapters or clients. They do not own vehicle decisions.
+analysis, tests and ground-side utilities. `nomad-qualification` is a
+non-installed direct test driver for SITL/transport qualification.
 
-## Target layout
+## Repository layout
 
 ```text
 NOMAD/
@@ -58,10 +65,10 @@ NOMAD/
 └── infra/               # Deployment and network support
 ```
 
-Until the migration completes, `edge_core/`, `scripts/`, and the existing plugin
-remain transitional. Do not add new modules, service registries, REST layers, or
-parallel vehicle logic there. Put new core behavior in the C++ migration plan and
-keep legacy changes limited to safety, correctness, and necessary migration work.
+Put new vehicle behavior in the C++ core/runtime and preserve the single
+production command path. Do not recreate `edge_core/`, service registries,
+vehicle REST layers or parallel vehicle logic. Current workflows are in
+`docs/development.md`; dated migration evidence is in `docs/migration.md`.
 
 ## Code rules
 
@@ -148,7 +155,9 @@ handing off a change.
 
 ## Development commands
 
-The exact task names are kept in `pixi.toml`; the target workflow is:
+The exact task names are kept in `pixi.toml`; follow the current
+[`docs/development.md`](docs/development.md) workflow. Core and Python checks
+start with:
 
 ```bash
 pixi run build-core
@@ -157,11 +166,21 @@ pixi run test-python
 pixi run lint
 pixi run format
 pixi run docs-build
+pixi run build-core-release
+pixi run package-core
+pixi run verify-core-staged-install
 ```
 
-During the transition, the existing Python/SITL tasks remain available. Use
-placeholders for deployment values and keep real configuration in the ignored
-`config/nomad.env`.
+Use placeholders for deployment values and keep real configuration in the
+ignored `config/nomad.env`.
+
+`build-core` and `build-core-release` build production executables into the build
+tree. They do not install them. `package-core` creates release archives, and
+`verify-core-staged-install` installs only into `build/package/stage` for
+verification. `install-core` is the explicit prefix-install task and requires a
+destination argument. Mission Planner deployment uses its explicit packaging
+installer; ordinary build and test tasks must not call installation or host
+deployment scripts.
 
 ## Documentation
 
@@ -170,11 +189,12 @@ The canonical documents are:
 | Topic | Document |
 |---|---|
 | Product requirements | `docs/prd.md` |
-| Target architecture | `docs/architecture.md` |
+| Current architecture | `docs/architecture.md` |
 | Development workflow | `docs/development.md` |
 | Operations and deployment | `docs/operations.md` |
-| Migration plan | `docs/migration.md` |
+| Current qualification status | `docs/qualification.md` |
 | Safety case | `docs/safety.md` |
+| Historical migration evidence | `docs/migration.md` |
 
 Component READMEs should point to these documents and describe only local details.
 Do not create competing architecture or setup guides.

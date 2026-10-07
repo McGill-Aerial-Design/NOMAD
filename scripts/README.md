@@ -1,17 +1,12 @@
 # Scripts
 
-Scripts are deployment, setup, simulation, and development utilities. They are
-not the NOMAD vehicle core.
+These are build, test, simulation, setup and deployment utilities, not the
+vehicle core. scripts/dev contains C++ SITL runners and quality checks;
+scripts/build contains plugin/image helpers; scripts/services manages retained
+adapters. scripts/nomad is a deployment dispatcher, distinct from the C++ CLI.
 
-- `scripts/dev/` contains local diagnostics and the size/complexity report.
-- `scripts/setup/` provisions deployment environments.
-- `scripts/build/` contains plugin and image helpers.
-- `scripts/services/` and `scripts/nomad` manage the transitional service stack.
-- `scripts/hardware/` contains explicit hardware utilities.
-
-The target CLI is the C++ `nomad` executable. The current service dispatcher is
-kept only until the migration deletes the Python multi-service runtime.
-
-Use the canonical [development](../docs/development.md),
-[operations](../docs/operations.md), and [migration](../docs/migration.md)
-documents instead of adding another service guide.
+Setup/provisioning targets the C++ core and retained service inventory; live host
+qualification remains in G1 in [migration](../docs/migration.md). Retained Python
+may configure or observe tests, but production vehicle decisions belong in C++.
+Use [development](../docs/development.md) and [operations](../docs/operations.md)
+for the canonical workflow.

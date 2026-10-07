@@ -65,9 +65,6 @@ namespace NOMAD.MissionPlanner
             autopilotButton.Click += async (s, e) => await DownloadLatestFromAutopilotAsync();
             var browseAutopilotButton = SmallButton("Browse FC Logs", NOMADTheme.BUTTON_BG);
             browseAutopilotButton.Click += async (s, e) => await BrowseAutopilotLogsAsync();
-            var jetsonButton = SmallButton("Jetson Latest", NOMADTheme.BUTTON_BG);
-            jetsonButton.Enabled = _sender != null;
-            jetsonButton.Click += async (s, e) => await DownloadLatestFromJetsonAsync();
             _openInMpButton = SmallButton("Open in MP", NOMADTheme.BUTTON_BG);
             _openInMpButton.Enabled = false;
             _openInMpButton.Click += (s, e) => OpenInMissionPlanner();
@@ -98,7 +95,6 @@ namespace NOMAD.MissionPlanner
             _importToolbar.Controls.Add(sampleButton);
             _importToolbar.Controls.Add(autopilotButton);
             _importToolbar.Controls.Add(browseAutopilotButton);
-            _importToolbar.Controls.Add(jetsonButton);
             _importToolbar.Controls.Add(_openInMpButton);
             _importToolbar.Controls.Add(_exportMarkdownButton);
             _importToolbar.Controls.Add(_exportPngButton);
@@ -323,45 +319,6 @@ namespace NOMAD.MissionPlanner
                 SetLoading(false, "Autopilot downloader closed. Open the downloaded file when ready.");
         }
 
-        private async Task DownloadLatestFromJetsonAsync()
-        {
-            if (_sender == null) return;
-            string remoteDirectory = string.IsNullOrWhiteSpace(_config.JetsonLogDirectory)
-                ? "~/NOMAD/logs"
-                : _config.JetsonLogDirectory.Trim();
-            if (remoteDirectory.IndexOfAny(new[] { '\r', '\n', '\0' }) >= 0)
-            {
-                MessageBox.Show(FindForm(), "The configured Jetson log directory is invalid.",
-                    "Jetson Logs", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            await RunOnUiThreadAsync(() => SetLoading(true, "Finding latest Jetson flight log..."));
-            string remoteDirectoryExpression = RemoteDirectoryExpression(remoteDirectory);
-            string command = $"find {remoteDirectoryExpression} -maxdepth 3 -type f " +
-                "\\( -iname '*.bin' -o -iname '*.log' \\) " +
-                "-printf '%T@ %p\\n' | sort -nr | head -1 | cut -d' ' -f2-";
-            var result = await _sender.ExecuteSSHCommandAsync(command, 20);
-            string remotePath = result.Success ? (result.Data ?? "").Trim() : "";
-            if (string.IsNullOrWhiteSpace(remotePath))
-            {
-                await RunOnUiThreadAsync(() =>
-                    SetLoading(false, result.Success ? "No Jetson flight logs were found." : result.Message));
-                return;
-            }
-
-            string directory = GetLogDirectory();
-            Directory.CreateDirectory(directory);
-            string localPath = UniquePath(directory, Path.GetFileName(remotePath));
-            var download = await _sender.DownloadFileViaScpAsync(remotePath, localPath, 120);
-            if (!download.Success)
-            {
-                await RunOnUiThreadAsync(() => SetLoading(false, download.Message));
-                return;
-            }
-            await LoadFileAsync(localPath);
-        }
-
         private void OpenInMissionPlanner()
         {
             if (_logData == null || string.IsNullOrWhiteSpace(_logData.SourcePath)) return;
@@ -507,13 +464,5 @@ namespace NOMAD.MissionPlanner
             return $"{bytes / (1024d * 1024d):F1} MB";
         }
 
-        private static string ShellQuote(string value) => "'" + value.Replace("'", "'\"'\"'") + "'";
-
-        private static string RemoteDirectoryExpression(string path)
-        {
-            if (path.StartsWith("~/", StringComparison.Ordinal))
-                return "$HOME/" + ShellQuote(path.Substring(2));
-            return ShellQuote(path);
-        }
     }
 }

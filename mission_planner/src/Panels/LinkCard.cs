@@ -23,7 +23,7 @@ namespace NOMAD.MissionPlanner
 
     internal class LinkCard : UserControl
     {
-        private readonly LinkType _type;
+        private readonly string _type;
         private readonly string _title;
 
         private Label _lblTitle;
@@ -41,7 +41,7 @@ namespace NOMAD.MissionPlanner
 
         public event EventHandler SetActiveRequested;
 
-        public LinkCard(string title, LinkType type)
+        public LinkCard(string title, string type)
         {
             _title = title;
             _type = type;
@@ -213,11 +213,13 @@ namespace NOMAD.MissionPlanner
         {
             _lblEndpoint.Text = string.IsNullOrEmpty(s.Endpoint) ? "—" : s.Endpoint;
 
-            _lblHealth.Text = s.IsConnected ? s.Health.ToString().ToUpperInvariant() : "DISCONNECTED";
-            _lblHealth.ForeColor = HealthColor(s.Health, s.IsConnected);
+            _lblHealth.Text = s.IsStale ? "STALE" : (s.IsConnected ? s.Health.ToString().ToUpperInvariant() : "DISCONNECTED");
+            _lblHealth.ForeColor = s.IsStale
+                ? NOMADTheme.TEXT_MUTED
+                : HealthColor(s.Health, s.IsConnected);
 
-            _lblLatency.Text = s.IsConnected ? $"HB jitter: {s.LatencyMs,5:F0} ms" : "HB jitter:    — ms";
-            _lblLoss.Text = s.IsConnected ? $"Loss:    {s.PacketLossPercent,5:F1} %" : "Loss:       — %";
+            _lblLatency.Text = !s.IsStale && s.IsConnected ? $"HB jitter: {s.LatencyMs,5:F0} ms" : "HB jitter:    — ms";
+            _lblLoss.Text = !s.IsStale && s.IsConnected ? $"Loss:    {s.PacketLossPercent,5:F1} %" : "Loss:       — %";
 
             string rate = FormatRate(s.DataRateBps);
             _lblRate.Text = $"Rate:  {rate}";
@@ -225,7 +227,7 @@ namespace NOMAD.MissionPlanner
             _lblFrames.Text = $"Frames: {s.PacketsReceived:N0}";
             if (s.PacketsDuplicate > 0) _lblFrames.Text += $"  (+{s.PacketsDuplicate:N0} dup)";
 
-            _lblHb.Text = s.HeartbeatCount > 0
+            _lblHb.Text = !s.IsStale && s.HeartbeatCount > 0
                 ? $"HB:    {s.HeartbeatCount:N0}   age {Math.Max(0, (DateTime.UtcNow - s.LastHeartbeat).TotalSeconds):F1}s"
                 : "HB:    —";
 
@@ -233,13 +235,14 @@ namespace NOMAD.MissionPlanner
                 ? $"RSSI:  {s.Rssi.Value,3}  rem {s.RemRssi.GetValueOrDefault(0),3}"
                 : "RSSI:    —";
 
-            _spark.Push(s.DataRateBps, s.IsConnected ? HealthColor(s.Health, true) : NOMADTheme.TEXT_MUTED);
+            _spark.Push(s.DataRateBps, !s.IsStale && s.IsConnected
+                ? HealthColor(s.Health, true) : NOMADTheme.TEXT_MUTED);
 
             _lblActiveBadge.Visible = isActive;
             _lblActiveBadge.BackColor = isOverride ? NOMADTheme.WARNING : NOMADTheme.SUCCESS;
             _lblActiveBadge.Text = isOverride ? "ACTIVE (manual)" : "ACTIVE";
 
-            _btnSetActive.Enabled = !isActive;
+            _btnSetActive.Enabled = !isActive && !s.IsStale && s.IsEnabled;
             _btnSetActive.BackColor = isActive ? NOMADTheme.BUTTON_BG : NOMADTheme.BTN_PRIMARY;
         }
 

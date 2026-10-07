@@ -8,9 +8,8 @@
 // Features:
 // - Full-page NOMAD control interface with tabs
 // - Embedded video streaming
-// - Jetson terminal access
-// - System health monitoring
-// - Dual-link MAVLink routing
+// - Authenticated runtime command boundary
+// - Standalone ground-router management
 // - Configurable payload controls
 // ============================================================
 
@@ -32,7 +31,7 @@ namespace NOMAD.MissionPlanner
     {
         // Plugin metadata
         public override string Name => "NOMAD Control";
-        public override string Version => "0.2.0";
+        public override string Version => NomadRelease.Version;
         public override string Author => "McGill Aerial Design";
 
         // Plugin state
@@ -40,19 +39,15 @@ namespace NOMAD.MissionPlanner
         private NotificationService _notificationService;
         private GeofenceConfig _geofenceConfig;               // Plugin-owned: survives NOMAD screen disposal
         private BoundaryMonitor _boundaryMonitor;             // Plugin-owned: alerts fire on every MP page
-        private DualLinkSender _sender;
-        private MAVLinkConnectionManager _connectionManager;  // Dual link manager
-        private JetsonConnectionManager _jetsonConnectionManager;  // Jetson HTTP connectivity
-        private NomadJoystickService _joystickService;        // Physical joysticks → gimbal + ZED tilt
+        private MAVLinkConnectionManager _connectionManager;  // Standalone router management/status client
+        private NomadJoystickService _joystickService;        // Physical joysticks → gimbal + camera tilt
         private GimbalArrowKeyFilter _gimbalArrowKeyFilter;    // Mission Planner-wide arrow key nudges
-        private SerialJoystickBridge _serialBridge;           // Python subprocess: serial → virtual Xbox 360
         private Form _popOutForm;                             // Pop-out window for NOMAD screen
-        private bool _hudVideoStarted = false;
+        private HudVideoPlayer _hudVideo;
+        private bool _hudVideoStarted => _hudVideo?.IsActive == true;
+        private System.Threading.CancellationTokenSource _videoShutdown;
         private bool _screenRegistered = false;               // Track if NOMAD screen is registered with MainSwitcher
         private DateTime _nextBoundaryMapBindUtc = DateTime.MinValue;
-
-        // Static assembly resolver for HelixToolkit dependencies
-        private static bool _assemblyResolverRegistered = false;
 
         // ============================================================
         // Plugin Lifecycle
@@ -65,28 +60,22 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                RegisterAssemblyResolver();
+                ShutdownVideo();
+                _videoShutdown = new System.Threading.CancellationTokenSource();
+                NOMADMainScreen.SetVideoShutdown(_videoShutdown.Token);
                 WarnIfUntestedMissionPlannerVersion();
 
                 // Load configuration
                 _config = NOMADConfig.Load();
 
-                // Initialize centralized API service (must be before any component that uses HttpClient)
-                JetsonApiService.Initialize(_config);
-
-                // FlightModeController builds core clients from the same config
-                // (CoreExePath / CoreMavlinkEndpoint / CoreApiKey) so GuidedGoto
-                // and EmergencyLand route through the C++ core boundary.
-                FlightModeController.Initialize(_config);
+                // OutputController builds the loopback runtime client from the
+                // saved port and local actuation gate. GuidedGoto remains unavailable.
                 OutputController.Initialize(_config);
-
-                // Initialize dual-link sender
-                _sender = new DualLinkSender(_config);
 
                 // Notification service runs plugin-wide so battery / GPS
                 // alerts (including audio + TTS) fire regardless of which NOMAD tab
                 // is open — and even when the user is on a non-NOMAD MP screen.
-                _notificationService = new NotificationService(null, _sender);
+                _notificationService = new NotificationService();
                 NotificationService.Shared = _notificationService;
                 _notificationService.StartMonitoring();
 
@@ -113,24 +102,10 @@ namespace NOMAD.MissionPlanner
                 // Startup chime + spoken welcome (fires once per process).
                 AudioAlerts.PlayWelcomeOnce();
 
-                // Initialize Jetson connection manager for non-blocking UI
-                _jetsonConnectionManager = new JetsonConnectionManager(_config);
-                _jetsonConnectionManager.StartPolling();
-
-                // Initialize MAVLink dual link connection manager
-                if (_config.DualLinkEnabled && _config.RouterEnabled)
+                // Initialize the standalone ground router management client
+                if (_config.DualLinkEnabled)
                 {
                     InitializeConnectionManager();
-                }
-
-                // Serial → virtual Xbox 360 bridge — must start BEFORE the joystick
-                // service so the virtual device is registered with Windows by the
-                // time NomadJoystickService enumerates DirectInput devices.
-                _serialBridge = new SerialJoystickBridge(_config);
-                if (_config.SerialJoystickEnabled)
-                {
-                    try { _serialBridge.Start(); }
-                    catch (Exception ex) { Log.Error($"Serial bridge start failed — {ex.Message}"); }
                 }
 
                 // Seed centralized gimbal rate from persisted config so the floating
@@ -148,7 +123,10 @@ namespace NOMAD.MissionPlanner
                 _joystickService = new NomadJoystickService(_config);
                 if (_joystickService.NeedsToRun())
                 {
-                    try { _joystickService.Start(); }
+                    try
+                    {
+                        _joystickService.Start();
+                    }
                     catch (Exception ex) { Log.Error($"Joystick service start failed — {ex.Message}"); }
                 }
 
@@ -166,7 +144,7 @@ namespace NOMAD.MissionPlanner
                             $"NOMAD Plugin v{Version} loaded (debug mode).\n\n" +
                             $"Click NOMAD in the menu bar to open the interface;\n" +
                             $"hover it for tools and settings.\n\n" +
-                            $"Jetson IP: {_config.EffectiveIP}",
+                            $"C++ runtime IPC port: 127.0.0.1:{_config.CoreRuntimePort}",
                             "NOMAD"
                         );
                     });
@@ -176,6 +154,7 @@ namespace NOMAD.MissionPlanner
             }
             catch (Exception ex)
             {
+                ShutdownVideo();
                 CustomMessageBox.Show($"NOMAD Plugin failed to load: {ex.Message}", "Error");
                 return false;
             }
@@ -188,10 +167,21 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                if (_videoShutdown == null || _videoShutdown.IsCancellationRequested)
+                {
+                    return false;
+                }
+                var videoToken = _videoShutdown.Token;
                 // Ensure UI setup runs on the UI thread
                 if (Host?.MainForm != null && Host.MainForm.InvokeRequired)
                 {
-                    Host.MainForm.BeginInvoke((MethodInvoker)delegate { Loaded(); });
+                    Host.MainForm.BeginInvoke((MethodInvoker)delegate
+                    {
+                        if (!videoToken.IsCancellationRequested)
+                        {
+                            Loaded();
+                        }
+                    });
                     return true;
                 }
 
@@ -205,15 +195,7 @@ namespace NOMAD.MissionPlanner
                 // Auto-start HUD video if configured
                 if (_config.AutoStartHudVideo && !_hudVideoStarted)
                 {
-                    // Delay slightly to ensure FlightData is fully loaded
-                    System.Threading.Tasks.Task.Run(async () =>
-                    {
-                        await System.Threading.Tasks.Task.Delay(2000); // 2 second delay
-                        Host?.MainForm?.BeginInvoke((MethodInvoker)delegate
-                        {
-                            StartHudVideo();
-                        });
-                    });
+                    StartHudVideo();
                 }
 
                 return true;
@@ -253,6 +235,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public override bool Exit()
         {
+            ShutdownVideo();
             try
             {
                 // Unhook the toast overlay before the service goes away
@@ -269,11 +252,6 @@ namespace NOMAD.MissionPlanner
                 _notificationService?.Dispose();
                 _notificationService = null;
 
-                // Stop Jetson connection manager
-                _jetsonConnectionManager?.StopPolling();
-                _jetsonConnectionManager?.Dispose();
-                _jetsonConnectionManager = null;
-
                 // Stop connection manager monitoring
                 _connectionManager?.StopMonitoring();
                 _connectionManager?.Dispose();
@@ -287,8 +265,6 @@ namespace NOMAD.MissionPlanner
                 _gimbalArrowKeyFilter = null;
 
                 // Kill serial bridge subprocess
-                _serialBridge?.Dispose();
-                _serialBridge = null;
 
                 if (_popOutForm != null && !_popOutForm.IsDisposed)
                 {
@@ -304,8 +280,6 @@ namespace NOMAD.MissionPlanner
                 // ignore disposal errors
             }
 
-            _sender?.Dispose();
-            JetsonApiService.Shutdown();
             return true;
         }
 
@@ -315,7 +289,7 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Shared module context so the NOMADMainScreen pop-out and any registered
-        /// modules can re-use plugin-level config (theme, API key, etc.) without
+        /// modules can re-use plugin-level config (theme, runtime client credential, etc.) without
         /// requiring a full NOMADConfig instance. Built and cached on first read,
         /// with <see cref="EnvFlag"/> resolving module enable flags.
         /// </summary>
@@ -382,17 +356,25 @@ namespace NOMAD.MissionPlanner
             using (var form = new NOMADSettingsForm(_config))
             {
                 // Live serial bridge status indicator on the Joystick tab.
-                form.SetSerialBridgeStatusProvider(() => _serialBridge?.GetStatus() ?? "(no bridge instance)");
 
                 if (form.ShowDialog() == DialogResult.OK)
                 {
                     _config = form.Config;
                     _config.Save();
-                    _sender.UpdateConfig(_config);
-                    ApplyDualLinkSettings();
-                    try { _serialBridge?.UpdateConfig(_config); }
-                    catch (Exception ex) { Log.Error($"Serial bridge update failed — {ex.Message}"); }
-                    try { _joystickService?.UpdateConfig(_config); }
+                    try
+                    {
+                        _joystickService?.Stop();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"Joystick stop before output reconfiguration failed — {ex.Message}");
+                    }
+                    OutputController.Initialize(_config);
+                    ApplyRouterClientSettings();
+                    try
+                    {
+                        _joystickService?.UpdateConfig(_config);
+                    }
                     catch (Exception ex) { Log.Error($"Joystick restart failed — {ex.Message}"); }
                 }
             }

@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// NOMAD Mission Planner Plugin — Video & Dual Link
+// NOMAD Mission Planner Plugin — Video & Standalone Router
 // ============================================================
 // Target: Mission Planner 1.3.x
 //
-// Video streaming (HUD overlay) and MAVLink dual-link
-// management for NOMAD.
+// Video streaming (HUD overlay) and standalone ground router
+// management and observation for NOMAD.
 // ============================================================
 
 using System;
 using System.Drawing;
-using System.Net.Http;
 using System.Windows.Forms;
 using MissionPlanner;
 using MissionPlanner.Utilities;
@@ -20,31 +19,29 @@ using NOMAD.MissionPlanner.Core;
 namespace NOMAD.MissionPlanner
 {
     /// <summary>
-    /// Video streaming and MAVLink dual-link management for NOMAD.
+    /// Video streaming and standalone ground router management for NOMAD.
     /// </summary>
     public partial class NOMADPlugin
     {
         // ============================================================
-        // Dual Link Settings
+        // Router Client Settings
         // ============================================================
 
         /// <summary>
-        /// Bring the live router in sync with the (now-saved) config. Handles
-        /// all three transitions: enabled→disabled, disabled→enabled, and
-        /// changes while still enabled (rebind sockets to new ports/bindings).
+        /// Bring the local status client in sync with the saved connection settings.
         /// </summary>
-        private void ApplyDualLinkSettings()
+        private void ApplyRouterClientSettings()
         {
             try
             {
-                if (!_config.DualLinkEnabled || !_config.RouterEnabled)
+                if (!_config.DualLinkEnabled)
                 {
                     if (_connectionManager != null)
                     {
                         _connectionManager.StopMonitoring();
                         _connectionManager.Dispose();
                         _connectionManager = null;
-                        Log.Info("Dual link/router disabled — MAVLink sockets released for direct Mission Planner connection");
+                        Log.Info("Standalone router status client disabled; router host remains running");
                     }
                     return;
                 }
@@ -52,17 +49,17 @@ namespace NOMAD.MissionPlanner
                 if (_connectionManager == null)
                 {
                     InitializeConnectionManager();
-                    Log.Info("Dual link enabled — router started");
+                    Log.Info("Standalone router status client started");
                     return;
                 }
 
                 _connectionManager.UpdateConfig(BuildLinkConfig());
-                _connectionManager.RestartRouter();
-                Log.Info("Router restarted with new config");
+                _connectionManager.RestartManagementClient();
+                Log.Info("Standalone router management client reconnected");
             }
             catch (Exception ex)
             {
-                Log.Error($"Failed to apply dual link settings — {ex.Message}");
+                Log.Error($"Failed to apply router client settings — {ex.Message}");
             }
             finally
             {
@@ -70,7 +67,7 @@ namespace NOMAD.MissionPlanner
                 // refresh the statics so the next MainSwitcher-created NOMAD
                 // screen (and its Links view) sees the live instance instead of
                 // the stale one captured at plugin load.
-                NOMADMainScreen.SetStaticConfig(_sender, _config, _connectionManager, _jetsonConnectionManager, _geofenceConfig, _boundaryMonitor);
+                NOMADMainScreen.SetStaticConfig(_config, _connectionManager, _geofenceConfig, _boundaryMonitor);
                 NOMADMainScreen.SetStaticModuleHost(BuildModuleHost());
             }
         }
@@ -80,31 +77,27 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         /// <summary>
-        /// Starts the ZED camera video stream on Mission Planner's HUD overlay.
+        /// Starts the configured camera/video stream on Mission Planner's HUD overlay.
         /// Uses the same GStreamer pipeline format as built-in HereLink support.
         /// </summary>
         public void StartHudVideo()
         {
+            if (Host?.MainForm != null && Host.MainForm.InvokeRequired)
+            {
+                Host.MainForm.Invoke((Action)StartHudVideo);
+                return;
+            }
             try
             {
-                // Build the GStreamer pipeline using Mission Planner's expected format
+                if (_videoShutdown == null || _videoShutdown.IsCancellationRequested || _hudVideoStarted)
+                {
+                    return;
+                }
+                // Preserve the configured HUD pipeline and crop.
                 var streamUrl = _config.VideoUrl;
                 if (string.IsNullOrWhiteSpace(streamUrl))
                 {
                     Log.Info("HUD video: no video URL configured");
-                    return;
-                }
-
-                // Ensure GStreamer is available
-                GStreamer.GstLaunch = GStreamer.LookForGstreamer();
-                if (!GStreamer.GstLaunchExists)
-                {
-                    Log.Warn("GStreamer not found, cannot start HUD video");
-                    CustomMessageBox.Show(
-                        "GStreamer is not installed. The HUD video requires GStreamer.\n\n" +
-                        "You can install it via Tools > GStreamer in Mission Planner.",
-                        "GStreamer Required"
-                    );
                     return;
                 }
 
@@ -117,24 +110,35 @@ namespace NOMAD.MissionPlanner
                 {
                     // UDP RTP stream
                     var port = ExtractUdpPort(streamUrl);
-                    pipeline = $"udpsrc port={port} buffer-size=90000 ! application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264 ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
+                    pipeline = $"udpsrc port={port} buffer-size=90000 ! " +
+                               "application/x-rtp,media=(string)video,clock-rate=(int)90000," +
+                               "encoding-name=(string)H264 ! decodebin3 ! queue " +
+                               "max-size-buffers=1 leaky=2 ! videoconvert ! " +
+                               "video/x-raw,format=BGRA ! appsink name=outsink sync=false";
                 }
                 else
                 {
                     // RTSP stream - crop to left camera only (left half of 2560x720)
                     // Add videocrop after decoding to extract left 1280 pixels
-                    pipeline = $"rtspsrc location={streamUrl} latency={latency} udp-reconnect=1 timeout=0 do-retransmission=false ! application/x-rtp ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videocrop right=1280 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
+                    pipeline = $"rtspsrc location={streamUrl} latency={latency} " +
+                               "udp-reconnect=1 timeout=0 do-retransmission=false ! " +
+                               "application/x-rtp ! decodebin3 ! queue " +
+                               "max-size-buffers=1 leaky=2 ! videocrop right=1280 ! " +
+                               "videoconvert ! video/x-raw,format=BGRA ! " +
+                               "appsink name=outsink sync=false";
                 }
 
-                Log.Debug($"Starting HUD video with pipeline: {pipeline}");
-
-                global::MissionPlanner.GCSViews.FlightData.hudGStreamer.Start(pipeline);
-                _hudVideoStarted = true;
+                _hudVideo?.Dispose();
+                var hud = global::MissionPlanner.GCSViews.FlightData.myhud;
+                _hudVideo = new HudVideoPlayer((Control)(object)hud, frame => hud.bgimage = frame,
+                    () => hud.bgimage, () => new GStreamerVideoPipeline());
+                _hudVideo.Start(pipeline);
             }
             catch (Exception ex)
             {
                 Log.Error($"HUD video failed to start — {ex.Message}");
-                _hudVideoStarted = false;
+                _hudVideo?.Dispose();
+                _hudVideo = null;
             }
         }
 
@@ -143,10 +147,15 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public void StopHudVideo()
         {
+            if (Host?.MainForm != null && Host.MainForm.InvokeRequired)
+            {
+                Host.MainForm.Invoke((Action)StopHudVideo);
+                return;
+            }
             try
             {
-                global::MissionPlanner.GCSViews.FlightData.hudGStreamer.Stop();
-                _hudVideoStarted = false;
+                _hudVideo?.Dispose();
+                _hudVideo = null;
             }
             catch (Exception ex)
             {
@@ -182,45 +191,26 @@ namespace NOMAD.MissionPlanner
                     return port;
                 }
             }
-            catch { }
+            catch
+            {
+
+            }
             return 5600; // Default port
         }
 
         // ============================================================
-        // MAVLink Dual Link Management
+        // Standalone Ground Router Management
         // ============================================================
 
         /// <summary>
-        /// Build the ConnectionConfig the router needs from the current NOMADConfig.
-        /// Pulled out so both first-init and settings-save paths produce identical configs.
+        /// Build the local endpoint settings for Mission Planner's router client.
         /// </summary>
         private MAVLinkConnectionManager.ConnectionConfig BuildLinkConfig()
         {
             return new MAVLinkConnectionManager.ConnectionConfig
             {
-                JetsonTailscaleIP = _config.TailscaleIP,
-                LtePort = _config.LteMavlinkPort,
-                LteRemoteHost = _config.LteRemoteHost,
-                LteRemotePort = _config.LteRemotePort,
-                RadioMasterPort = _config.RadioMasterPort,
-                AutoFailoverEnabled = _config.AutoFailoverEnabled,
-                PreferredLink = _config.PreferredMavlinkLink switch
-                {
-                    "LTE" => LinkType.LTE,
-                    "RadioMaster" => LinkType.RadioMaster,
-                    _ => LinkType.None
-                },
-                AutoReconnectPreferred = _config.AutoReconnectToPreferred,
-                PreferredLinkReconnectDelaySec = _config.PreferredLinkReconnectDelay,
-                MonitorIntervalMs = _config.LinkMonitorInterval,
-                RadioMasterConnectionType = _config.RadioMasterConnectionType,
-                RadioMasterComPort = _config.RadioMasterComPort,
-                RadioMasterBaudRate = _config.RadioMasterBaudRate,
-                RadioMasterTcpHost = _config.RadioMasterTcpHost,
-                RouterBindAddress = _config.RouterBindAddress,
                 RouterLocalPort = _config.RouterLocalPort,
-                RouterDedupEnabled = _config.RouterDedupEnabled,
-                HeartbeatTimeoutSec = _config.MavlinkHeartbeatTimeout,
+                ManagementPort = _config.ManagementPort,
             };
         }
 
@@ -241,7 +231,10 @@ namespace NOMAD.MissionPlanner
                         MainV2.comPort?.MAV?.cs?.messages?.Add((DateTime.Now,
                             $"NOMAD: Failover to {e.ToLink} - {e.Reason}"));
                     }
-                    catch { }
+                    catch
+                    {
+
+                    }
                 };
 
                 _connectionManager.ActiveLinkChanged += (s, newLink) =>
@@ -273,8 +266,8 @@ namespace NOMAD.MissionPlanner
                 if (_connectionManager == null)
                 {
                     CustomMessageBox.Show(
-                        "Dual link management is not enabled.\n\n" +
-                        "Enable it in NOMAD Settings → Connection → Enable Dual Link.",
+                        "Standalone router status is not enabled.\n\n" +
+                        "Enable it in NOMAD Settings → Connection → Connect to router status and controls.",
                         "Link Manager Not Available"
                     );
                     return;

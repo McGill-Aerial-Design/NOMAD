@@ -8,9 +8,6 @@ namespace NOMAD.MissionPlanner
         /// <summary>Default local directory for flight log open/export dialogs.</summary>
         public string DefaultLogDirectory { get; set; } = "";
 
-        /// <summary>Remote directory searched by the Jetson Latest action.</summary>
-        public string JetsonLogDirectory { get; set; } = "~/NOMAD/logs";
-
         public double LogVibrationWarning { get; set; } = 30;
         public double LogVibrationCritical { get; set; } = 60;
         public double LogHdopWarning { get; set; } = 2;

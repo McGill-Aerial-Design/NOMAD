@@ -2,9 +2,10 @@
 # Copyright 2026 The NOMAD Authors
 """Tests for infra.tailscale.tailscale_manager.
 
-``tailscale status``/``up`` go through the module-level ``_run`` wrapper, which
-is patched to a command-dispatching stub. The status JSON parser is pure and is
-pinned directly; the monitor loop is driven one iteration at a time.
+``tailscale status``/``up`` go through the shared ``_run`` wrapper
+(``infra.tailscale.shell``), patched to a command-dispatching stub. The status
+JSON parser is pure and is pinned directly; the monitor loop is driven one
+iteration at a time.
 """
 
 from __future__ import annotations
@@ -63,26 +64,6 @@ def test_parse_status_defaults_when_self_missing():
     assert info.ip_address is None
     assert info.hostname == "unknown"
     assert info.peer_count == 0
-
-
-# --------------------------------------------------------------------------- #
-# _run
-# --------------------------------------------------------------------------- #
-
-
-def test_run_ok(monkeypatch):
-    monkeypatch.setattr(tsm.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="out"))
-    assert tsm._run(["tailscale", "status"]) == (0, "out")
-
-
-def test_run_not_installed(monkeypatch):
-    monkeypatch.setattr(tsm.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
-    assert tsm._run(["tailscale"]) == (127, "")
-
-
-def test_run_generic_error(monkeypatch):
-    monkeypatch.setattr(tsm.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
-    assert tsm._run(["tailscale"]) == (1, "")
 
 
 # --------------------------------------------------------------------------- #

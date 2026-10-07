@@ -12,10 +12,8 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.IO.Ports;
-using System.Net.Http;
 using System.Text;
 using System.Windows.Forms;
-using Newtonsoft.Json.Linq;
 
 namespace NOMAD.MissionPlanner
 {
@@ -28,15 +26,8 @@ namespace NOMAD.MissionPlanner
         private TabControl _tabControl;
 
         // Connection Tab
-        private TextBox _txtJetsonIP;
-        private NumericUpDown _numPort;
-        private TextBox _txtJetsonApiKey;
-        private TextBox _txtTailscaleIP;
-        private CheckBox _chkUseTailscale;
-        private TextBox _txtSshUsername;
-        private NumericUpDown _numHttpTimeout;
-        private CheckBox _chkAutoReconnect;
-        private NumericUpDown _numHealthPollInterval;
+        private NumericUpDown _numCoreRuntimePort;
+        private TextBox _txtCoreClientCredential;
 
         // Video Tab
         private TextBox _txtVideoUrl;
@@ -46,33 +37,9 @@ namespace NOMAD.MissionPlanner
         private CheckBox _chkAutoStartHudVideo;
 
         // Dual Link Tab
-        private CheckBox _chkDualLinkEnabled;
-        private ComboBox _cmbRadioMasterConnType;
-        private Label _lblRadioMasterPort;
-        private NumericUpDown _numRadioMasterPort;
-        private Label _lblRadioTcpHost;
-        private TextBox _txtRadioTcpHost;
-        private ComboBox _cmbRadioMasterComPort;
-        private ComboBox _cmbRadioMasterBaudRate;
-        private NumericUpDown _numLteMavlinkPort;
-        private CheckBox _chkAutoFailover;
-        private ComboBox _cmbPreferredLink;
-        private CheckBox _chkAutoReconnectPreferred;
-        private NumericUpDown _numPreferredReconnectDelay;
-        private NumericUpDown _numHeartbeatTimeout;
-        private NumericUpDown _numLinkMonitorInterval;
-        private TextBox _txtRouterBindAddress;
+        private CheckBox _chkRouterClientEnabled;
         private NumericUpDown _numRouterLocalPort;
-        private CheckBox _chkRouterDedup;
-
-        // VIO Tab
-        private NumericUpDown _numVioConfidenceWarning;
-        private NumericUpDown _numVioConfidenceCritical;
-        private CheckBox _chkVioAlertsEnabled;
-
-        // Terminal Tab
-        private NumericUpDown _numTerminalTimeout;
-        private CheckBox _chkSaveTerminalHistory;
+        private NumericUpDown _numManagementPort;
 
         // UI Tab
         private CheckBox _chkDebugMode;
@@ -90,7 +57,6 @@ namespace NOMAD.MissionPlanner
 
         // Log Analysis Tab
         private TextBox _txtDefaultLogDirectory;
-        private TextBox _txtJetsonLogDirectory;
         private NumericUpDown _numLogVibrationWarning;
         private NumericUpDown _numLogVibrationCritical;
         private NumericUpDown _numLogHdopWarning;
@@ -103,42 +69,24 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numLogLiveBufferPoints;
         private CheckBox _chkLogInjectHud;
 
-        // Spray Tab (reels, camera tilt + all other payloads live in the Payloads tab)
-        private NumericUpDown _numSprayRange, _numSprayRangeTol, _numSprayTriggerMax, _numSprayAimX, _numSprayAimY, _numSprayAimTol;
-        private NumericUpDown _numSprayServoAngle, _numSprayForwardGain, _numSprayLateralGain, _numSprayAltitudeGain, _numSprayYawGain;
-        private NumericUpDown _numSprayMaxForward, _numSprayMaxLateral, _numSprayMaxAltitude, _numSprayMaxYaw, _numSprayLockMs, _numSprayTimeout;
-        private CheckBox _chkSprayUseYaw;
 
         // Joystick Tab
-        private CheckBox _chkJoyGimbalEnabled, _chkJoyZedEnabled;
-        private CheckBox _chkJoyGimbalPitchInvert, _chkJoyGimbalRollInvert, _chkJoyZedTiltInvert;
-        private ComboBox _cmbJoyGimbalDevice, _cmbJoyZedDevice;
-        private ComboBox _cmbJoyGimbalPitchAxis, _cmbJoyGimbalRollAxis, _cmbJoyZedTiltAxis;
-        private NumericUpDown _numJoyGimbalDeadzone, _numJoyZedDeadzone;
-        private NumericUpDown _numJoyGimbalMaxRate, _numJoyZedMaxRate;
+        private CheckBox _chkJoyGimbalEnabled, _chkJoyPositionEnabled;
+        private CheckBox _chkJoyGimbalPitchInvert, _chkJoyGimbalRollInvert, _chkJoyPositionInvert;
+        private ComboBox _cmbJoyGimbalDevice, _cmbJoyPositionDevice;
+        private ComboBox _cmbJoyGimbalPitchAxis, _cmbJoyGimbalRollAxis, _cmbJoyPositionAxis;
+        private NumericUpDown _numJoyGimbalDeadzone, _numJoyPositionDeadzone;
+        private NumericUpDown _numJoyGimbalMaxRate;
+        private TextBox _txtJoyPositionActuatorId;
+        private readonly NumericUpDown[] _switchButtons = new NumericUpDown[6];
         private Button _btnJoyRefreshDevices;
         private Label _lblJoyStatus;
+        private Label _lblJoyPositionEligibility;
+        private NumericUpDown _numTerminationButton;
         // 3-position switch action mapping (6 slots: sw1/2/3 x up/down)
         private ComboBox _cmbSw1Up, _cmbSw1Down, _cmbSw2Up, _cmbSw2Down, _cmbSw3Up, _cmbSw3Down;
         private ComboBox _cmbSwitchDevice;
         private CheckBox _chkKillSwitchEnabled;
-        private NumericUpDown _numKillLandSpeed;
-        private CheckBox _chkJoyAutoSelect;
-        // Serial bridge sub-section
-        private CheckBox _chkSerialBridgeEnabled;
-        private ComboBox _cmbSerialBridgePort;
-        private TextBox _txtSerialBridgePython, _txtSerialBridgeScript;
-        private NumericUpDown _numSerialBridgeBaud;
-        private Label _lblSerialBridgeStatus;
-        private System.Windows.Forms.Timer _serialBridgeStatusTimer;
-
-        // Externally-provided status source for the live bridge indicator.
-        private Func<string> _serialBridgeStatusProvider;
-        public void SetSerialBridgeStatusProvider(Func<string> provider)
-        {
-            _serialBridgeStatusProvider = provider;
-            RefreshSerialBridgeStatus();
-        }
 
         // Buttons
         private Button _btnOK;
@@ -189,12 +137,10 @@ namespace NOMAD.MissionPlanner
             _tabControl.TabPages.Add(CreateConnectionTab());
             _tabControl.TabPages.Add(CreateVideoTab());
             _tabControl.TabPages.Add(CreateDualLinkTab());
-            _tabControl.TabPages.Add(CreateVioTab());
             _tabControl.TabPages.Add(CreateUiTab());
             _tabControl.TabPages.Add(CreateAlertsTab());
             _tabControl.TabPages.Add(CreateLogsTab());
-            _tabControl.TabPages.Add(CreatePayloadsTab());
-            _tabControl.TabPages.Add(CreateSprayCalibrationTab());
+            _tabControl.TabPages.Add(CreateActuatorsTab());
             _tabControl.TabPages.Add(CreateJoystickTab());
 
             int clientWidth = CalculateSettingsClientWidth();
@@ -260,9 +206,20 @@ namespace NOMAD.MissionPlanner
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(0, 150, 100),
                 ForeColor = Color.White,
-                DialogResult = DialogResult.OK
+                DialogResult = DialogResult.None
             };
-            _btnOK.Click += (s, e) => SaveSettings();
+            _btnOK.Click += (s, e) =>
+            {
+                try
+                {
+                    SaveSettings(); DialogResult = DialogResult.OK;
+                }
+                catch (Exception ex)
+                {
+                    DialogResult = DialogResult.None;
+                    MessageBox.Show(this, ex.Message, "Configuration requires review", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            };
             this.Controls.Add(_btnOK);
 
             _btnCancel = new Button
@@ -353,7 +310,8 @@ namespace NOMAD.MissionPlanner
             return textBox;
         }
 
-        private NumericUpDown AddNumericUpDown(TabPage tab, int x, int y, int width, decimal min, decimal max, decimal value, int decimals = 0)
+        private NumericUpDown AddNumericUpDown(
+            TabPage tab, int x, int y, int width, decimal min, decimal max, decimal value, int decimals = 0)
         {
             var num = new NumericUpDown
             {
@@ -418,69 +376,22 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private async void BtnTest_Click(object sender, EventArgs e)
+        private void BtnTest_Click(object sender, EventArgs e)
         {
-            _btnTest.Enabled = false;
-            _btnTest.Text = "Testing...";
-
-            try
-            {
-                SaveSettings();
-
-                JetsonApiService.Reconfigure(Config);
-
-                var response = await JetsonApiService.GetAsync("/health");
-
-                if (response.IsSuccessStatusCode)
-                {
-                    MessageBox.Show(
-                        $"Connection successful!\n\nJetson at {Config.EffectiveIP}:{Config.JetsonPort} is reachable.",
-                        "Success",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information
-                    );
-                }
-                else
-                {
-                    MessageBox.Show(
-                        $"Connection failed: HTTP {(int)response.StatusCode}",
-                        "Error",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning
-                    );
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(
-                    $"Connection failed:\n{ex.Message}",
-                    "Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
-            }
-            finally
-            {
-                _btnTest.Enabled = true;
-                _btnTest.Text = "Test Connection";
-            }
+            SaveSettings();
+            bool configured = !string.IsNullOrWhiteSpace(Config.CoreClientCredential)
+                && Config.CoreRuntimePort >= 1 && Config.CoreRuntimePort <= 65535;
+            MessageBox.Show(
+                configured
+                    ? $"Runtime IPC is configured for 127.0.0.1:{Config.CoreRuntimePort}. " +
+                      "The supervised runtime must be running to issue commands."
+                    : "Configure the runtime IPC port and local actuation gate before issuing vehicle commands.",
+                "NOMAD Runtime Configuration",
+                MessageBoxButtons.OK,
+                configured ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
 
-        private void RefreshSerialBridgeStatus()
-        {
-            if (_lblSerialBridgeStatus == null) return;
-            string status;
-            try { status = _serialBridgeStatusProvider?.Invoke() ?? "(no bridge instance)"; }
-            catch (Exception ex) { status = "Error: " + ex.Message; }
 
-            _lblSerialBridgeStatus.Text = status;
-            if (status.StartsWith("Running", StringComparison.OrdinalIgnoreCase))
-                _lblSerialBridgeStatus.ForeColor = Color.LimeGreen;
-            else if (status.StartsWith("Disabled", StringComparison.OrdinalIgnoreCase))
-                _lblSerialBridgeStatus.ForeColor = Color.Goldenrod;
-            else
-                _lblSerialBridgeStatus.ForeColor = Color.IndianRed;
-        }
 
     }
 }

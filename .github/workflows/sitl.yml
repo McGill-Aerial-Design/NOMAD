@@ -4,12 +4,35 @@ name: sitl
 # safety-critical velocity and geofence core (the §4.5 verification the safety
 # case calls for — see tests/sitl/README.md and docs/safety.md).
 #
-# This is deliberately NOT on every push/PR: it builds ArduPilot from source
-# and drives a live autopilot, so it runs nightly and on demand. The fast unit
-# + SC-coverage gates in test.yml protect every PR; this proves the same
-# mitigations close the loop on an actual flight controller.
+# The full suite is deliberately NOT on every push/PR: it builds ArduPilot from
+# source and drives a live autopilot, so it runs nightly and on demand. Main
+# pushes that change MAVSDK connectivity/SITL qualification inputs run only the
+# reduced live MAVSDK connect/status smoke below. The fast unit + SC-coverage
+# gates in test.yml protect every PR.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/sitl.yml"
+      - ".gitmodules"
+      - "CMakeLists.txt"
+      - "pixi.toml"
+      - "third_party/MAVSDK"
+      - "third_party/MAVSDK/**"
+      - "third_party/ardupilot-mavlink"
+      - "third_party/ardupilot-mavlink/**"
+      - "include/nomad/mavlink/mavsdk_*.hpp"
+      - "src/mavlink/mavsdk_*.cpp"
+      - "examples/mavsdk_connectivity_smoke.cpp"
+      - "scripts/dev/mavsdk_build_metrics.py"
+      - "scripts/dev/mavsdk_connectivity_*.py"
+      - "scripts/dev/check_mavsdk_provenance.py"
+      - "tests/mavsdk_validation_test.cpp"
+      - "tests/test_mavsdk_build_metrics.py"
+      - "tests/test_mavsdk_connectivity_*.py"
+      - "tests/test_mavsdk_provenance.py"
+      - "licenses/mavsdk-phase-a/**"
   workflow_dispatch:
   schedule:
     - cron: "0 7 * * *" # 07:00 UTC nightly
@@ -22,19 +45,75 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  mavsdk-connectivity-sitl:
+    name: MAVSDK connectivity SITL smoke
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NOMAD_CORE_SITL_PORT: "14570"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build ArduPilot SITL image
+        uses: docker/build-push-action@v7
+        with:
+          context: https://github.com/radarku/ardupilot-sitl-docker.git
+          build-args: COPTER_TAG=Copter-4.7.1
+          push: false
+          load: true
+          tags: nomad-sitl:copter-4.7.1
+          cache-from: type=gha,scope=sitl
+          cache-to: type=gha,mode=max,scope=sitl
+
+      - uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          cache: true
+
+      - name: Bring up the dev + SITL stack
+        run: pixi run dev-up
+
+      - name: Let SITL warm up
+        run: sleep 25
+
+      - name: MAVSDK connect/status smoke
+        run: pixi run run-mavsdk-sitl-smoke | tee "$RUNNER_TEMP/mavsdk-connectivity-runtime.txt"
+
+      - name: Retain connectivity runtime metrics
+        uses: actions/upload-artifact@v6
+        with:
+          name: mavsdk-connectivity-runtime
+          path: ${{ runner.temp }}/mavsdk-connectivity-runtime.txt
+          if-no-files-found: error
+
+      - name: Record connectivity build metrics
+        run: python scripts/dev/mavsdk_build_metrics.py
+
+      - name: SITL logs on failure
+        if: failure()
+        run: docker logs nomad-dev-sitl-1 2>&1 | tail -120 || true
+
+      - name: Tear down
+        if: always()
+        run: pixi run dev-down
+
   sitl:
     name: SITL loop closure (velocity + geofence)
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    # The link-recovery scenario relays the SITL stream, so it must reach a
-    # host port the relay can bind (docker-compose publishes 14570; 14572 is
-    # free). MAVProxy forwards to this port and every core-sitl-* task reads
-    # the same variable, so one value serves the whole job.
+    # Most scenarios read the regular host copy on 14570. The link-recovery
+    # and zero-delivery tasks override this to the private 14572 relay copy.
     env:
-      NOMAD_CORE_SITL_PORT: "14572"
+      NOMAD_CORE_SITL_PORT: "14570"
     steps:
-      # The C++ codec compiles against headers generated from the pinned
-      # third_party/ardupilot-mavlink submodule (see scripts/dev/generate_mavlink.py).
+      # The transport is the pinned third_party/MAVSDK submodule, so the checkout
+      # must be recursive for the core to configure at all.
       - uses: actions/checkout@v5
         with:
           submodules: recursive
@@ -70,19 +149,58 @@ jobs:
       - name: Let SITL warm up
         run: sleep 25
 
-      - name: C++ core telemetry smoke test (Phase 2)
+      - name: Build production runtime for authority qualification
+        run: pixi run build-core
+
+      - name: Qualify runtime authority and independent source on isolated Copter
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          set -euo pipefail
+          authority_container=""
+          stop_authority() {
+            if [[ -n "$authority_container" ]]; then
+              docker stop "$authority_container" >/dev/null 2>&1 || true
+            fi
+          }
+          trap stop_authority EXIT
+          authority_container=$(docker compose -p nomad-authority -f docker/docker-compose.dev.yml run \
+            --rm --name nomad-authority-sitl -d --no-deps \
+            -e SITL_UDP_OUTPUT_ADDRESS="udp:host.docker.internal:14690 --out udp:host.docker.internal:14691" \
+            sitl)
+          sleep 25
+          pixi run --frozen python scripts/dev/core_sitl_authority.py \
+            2>&1 | tee "$RUNNER_TEMP/runtime-authority-sitl.json"
+
+      - name: Retain runtime authority SITL evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: runtime-authority-sitl
+          path: ${{ runner.temp }}/runtime-authority-sitl.json
+          if-no-files-found: warn
+
+      - name: C++ runtime telemetry observation scenario
         run: pixi run core-sitl-status
 
-      - name: C++ core command flow (Phase 3/4)
+      - name: MAVSDK connect/status smoke
+        run: pixi run run-mavsdk-sitl-smoke | tee "$RUNNER_TEMP/mavsdk-connectivity-runtime.txt"
+
+      - name: Retain connectivity runtime metrics
+        uses: actions/upload-artifact@v6
+        with:
+          name: mavsdk-connectivity-runtime
+          path: ${{ runner.temp }}/mavsdk-connectivity-runtime.txt
+          if-no-files-found: error
+
+      - name: Record connectivity build metrics
+        run: python scripts/dev/mavsdk_build_metrics.py
+
+      - name: C++ command authorization and flow scenario
         run: pixi run core-sitl-command-flow
 
-      - name: C++ mission executor scenario (Phase 5)
+      - name: C++ mission execution scenario
         run: pixi run core-sitl-mission
-
-      # Runs while the vehicle is still disarmed (the mission executor waits for
-      # disarm) because the geofence scenario requires a disarmed start.
-      - name: C++ geofence upload/readback scenario (H-05, SR-FEN-01)
-        run: pixi run core-sitl-geofence
 
       - name: C++ velocity watchdog scenario (H-01..H-04)
         run: pixi run core-sitl-velocity-watchdog
@@ -92,6 +210,13 @@ jobs:
 
       - name: C++ link-loss injection scenario (H-03, SR-LNK-01/03)
         run: pixi run core-sitl-link-loss
+
+      # SR-LNK-03 transport-level zero-delivery proof: a pymavlink observer
+      # watches the CLI's actual wire setpoints through a tee relay and the
+      # vehicle must stop after the zero. Runs on the stack's 14572 copy like
+      # the link-recovery scenario (the relay binds it as upstream).
+      - name: C++ zero-delivery proof (SR-LNK-03, H-03)
+        run: pixi run core-sitl-zero-delivery
 
       - name: C++ link-recovery scenario (degraded-link semantics)
         run: pixi run core-sitl-link-recovery
@@ -108,28 +233,11 @@ jobs:
       - name: Geofence containment scenario (H-05, SR-FEN-02; C++ CLI drives the vehicle)
         run: pixi run sitl-fence
 
-      # The gimbal scenario needs a vehicle that has NOT flown: state left by the
-      # velocity/fence scenarios (persisted across the mount reboot) suppresses
-      # mount actuation. Recreate the SITL container for a clean vehicle —
-      # sim_vehicle launches with -w, so a fresh container = wiped EEPROM.
-      - name: Recreate SITL for a clean gimbal vehicle
-        run: |
-          docker compose -f docker/docker-compose.dev.yml --profile sitl up -d --force-recreate sitl
-          sleep 25
-
-      # Configures a servo mount + reboots to apply MNT1_TYPE, then verifies the
-      # mount points where commanded. Exit 2 (mount never actuates) is a defensive
-      # skip net; on the clean vehicle above the scenario actually verifies.
-      - name: Gimbal mount-control scenario (DO_MOUNT_CONTROL/CONFIGURE)
-        run: |
-          set +e
-          pixi run sitl-gimbal
-          code=$?
-          if [ "$code" -eq 2 ]; then
-            echo "::warning::Gimbal SITL scenario skipped — mount did not actuate"
-            exit 0
-          fi
-          exit "$code"
+      # Upload/readback leaves an ArduPilot polygon active. Keep it after the
+      # guided-flight containment check so that persisted autopilot state cannot
+      # reject the containment scenario's in-fence target.
+      - name: C++ geofence upload/readback scenario (H-05, SR-FEN-01)
+        run: pixi run core-sitl-geofence
 
       - name: SITL logs on failure
         if: failure()
@@ -138,3 +246,134 @@ jobs:
       - name: Tear down
         if: always()
         run: pixi run dev-down
+
+  quadplane-observation:
+    name: QuadPlane identity, takeoff, transitions, route, recovery and landing qualification
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build pinned ArduPlane SITL image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile.sitl-plane
+          build-args: ARDUPILOT_REVISION=dbe792162d06cab66c3475fd5556bf7a120f119e
+          push: false
+          load: true
+          tags: nomad-sitl:plane-4.7.1-quadplane-tilttri
+          cache-from: type=gha,scope=sitl-plane-4.7.1
+          cache-to: type=gha,mode=max,scope=sitl-plane-4.7.1
+
+      - uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          cache: true
+
+      - name: Prove disarmed simulated RC fault delivery on two clean instances
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_container=""
+          stop_probe() {
+            if [[ -n "$probe_container" ]]; then
+              docker stop "$probe_container" >/dev/null 2>&1 || true
+            fi
+          }
+          trap stop_probe EXIT
+          for attempt in 1 2; do
+            probe_container=$(docker compose -p nomad-quadplane-probe -f docker/docker-compose.quadplane.yml run \
+              --rm --name nomad-quadplane-rc-probe -d --no-deps \
+              -e SITL_UDP_OUTPUT_ADDRESS=udp:host.docker.internal:14680 \
+              -e SITL_UDP_OBSERVER_ADDRESS=udp:host.docker.internal:14681 \
+              quadplane_sitl)
+            sleep 25
+            pixi run --frozen --quiet core-sitl-quadplane-rc-loss-probe 2>&1 \
+              | tee "$RUNNER_TEMP/quadplane-rc-probe-$attempt.json"
+            docker stop "$probe_container" >/dev/null
+            probe_container=""
+          done
+
+      - name: Retain disarmed RC fault-delivery evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: quadplane-disarmed-rc-fault-probe
+          path: ${{ runner.temp }}/quadplane-rc-probe-*.json
+          if-no-files-found: warn
+
+      - name: Bring up pinned QuadPlane SITL
+        run: pixi run quadplane-sitl-up
+
+      - name: Verify firmware revision inside the simulator
+        run: |
+          test "$(docker compose -f docker/docker-compose.quadplane.yml exec -T quadplane_sitl git -C /ardupilot rev-parse HEAD)" = "dbe792162d06cab66c3475fd5556bf7a120f119e"
+
+      - name: Let QuadPlane telemetry become ready
+        run: sleep 25
+
+      - name: Observe identity, telemetry and baseline modes
+        run: pixi run core-sitl-quadplane-observe
+
+      - name: Qualify NOMAD arm and QuadPlane VTOL takeoff
+        run: pixi run core-sitl-quadplane-vtol-takeoff
+
+      - name: Reset QuadPlane SITL before transition qualification
+        run: |
+          pixi run quadplane-sitl-down
+          pixi run quadplane-sitl-up
+          sleep 25
+
+      - name: Qualify pinned QuadPlane VTOL-to-fixed-wing transition
+        run: pixi run core-sitl-quadplane-transition
+
+      - name: Reset QuadPlane SITL before route qualification
+        run: |
+          pixi run quadplane-sitl-down
+          pixi run quadplane-sitl-up
+          sleep 25
+
+      - name: Qualify pinned QuadPlane fixed-wing route navigation
+        run: pixi run core-sitl-quadplane-route
+
+      - name: Reset QuadPlane SITL before recovery qualification
+        run: |
+          pixi run quadplane-sitl-down
+          pixi run quadplane-sitl-up
+          sleep 25
+
+      - name: Qualify pinned QuadPlane fixed-wing recovery after route
+        run: pixi run core-sitl-quadplane-recovery
+
+      - name: Reset QuadPlane SITL before transition-back qualification
+        run: |
+          pixi run quadplane-sitl-down
+          pixi run quadplane-sitl-up
+          sleep 25
+
+      - name: Qualify recovered QuadPlane fixed-wing-to-VTOL transition
+        run: pixi run core-sitl-quadplane-transition-back
+
+      - name: Reset QuadPlane SITL before VTOL landing qualification
+        run: |
+          pixi run quadplane-sitl-down
+          pixi run quadplane-sitl-up
+          sleep 25
+
+      - name: Qualify full pinned QuadPlane chain through VTOL landing
+        run: pixi run core-sitl-quadplane-vtol-landing
+
+      - name: QuadPlane SITL logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.quadplane.yml logs --tail 160 || true
+
+      - name: Tear down
+        if: always()
+        run: pixi run quadplane-sitl-down

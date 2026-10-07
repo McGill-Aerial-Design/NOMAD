@@ -10,6 +10,7 @@
 docs/
 *.md
 !README.md
+!third_party/MAVSDK/LICENSE.md
 
 # IDE and editor files
 .vscode/
@@ -43,6 +44,11 @@ build/
 dist/
 *.egg-info/
 *.egg
+
+# Vendored MAVSDK build caches are not source inputs for the ROS image.
+third_party/MAVSDK/build*/
+third_party/MAVSDK/cpp/build-win/
+third_party/MAVSDK/cpp/build*/
 
 # Local development
 *.local

@@ -14,7 +14,6 @@ namespace NOMAD.MissionPlanner
     public partial class NOMADLogView : NOMADViewBase, IUpdatableView
     {
         private readonly NOMADConfig _config;
-        private readonly DualLinkSender _sender;
         private readonly int _uiThreadId;
         private readonly TelemetryInjector _telemetryInjector = new TelemetryInjector();
         private readonly Dictionary<string, TimeSeriesData> _liveBuffers =
@@ -31,11 +30,10 @@ namespace NOMAD.MissionPlanner
         private DateTime _liveStartedUtc;
         private StreamWriter _recordWriter;
 
-        public NOMADLogView(NOMADConfig config, DualLinkSender sender)
+        public NOMADLogView(NOMADConfig config)
         {
             _uiThreadId = Thread.CurrentThread.ManagedThreadId;
             _config = config ?? new NOMADConfig();
-            _sender = sender;
             AutoScaleMode = AutoScaleMode.Dpi;
             BackColor = NOMADTheme.BG_DARK;
             Padding = new Padding(0);

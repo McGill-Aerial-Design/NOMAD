@@ -1,13 +1,9 @@
-# Tailscale integration
+# Optional network support
 
-Tailscale is an optional deployment network. It may carry MAVLink, a future
-client connection, SSH, or video between a companion computer and ground
-station. It is not a NOMAD core dependency.
+Tailscale may carry MAVLink, authenticated client traffic, SSH or video.
+It is a deployment option, not a core dependency or sufficient command
+authorization by itself. Python monitors here are retained infrastructure tools;
+they do not require a Python vehicle service.
 
-The Python monitors and shell setup helpers are transitional infrastructure used
-by the current Edge Core deployment. Keep real auth keys, hosts, and ACLs outside
-the repository. Detailed setup is intentionally kept out of the canonical product
-docs until a supported deployment requires it.
-
-See [operations](../../docs/operations.md) for the supported boundary and
-[development](../../docs/development.md) for the migration policy.
+Keep real keys, hosts and ACLs outside source control. See
+[operations](../../docs/operations.md) for trust boundaries and profile qualification.

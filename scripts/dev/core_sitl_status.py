@@ -20,7 +20,8 @@ def get_sitl_port() -> str:
 
 
 def find_binary() -> Path | None:
-    names = ("nomad.exe", "nomad")
+    """Find the non-installed direct vehicle driver used only for qualification."""
+    names = ("nomad-qualification.exe", "nomad-qualification")
     build_dirs = (ROOT / "build" / "core", ROOT / "build-core")
     configurations = tuple(
         directory for build_dir in build_dirs for directory in (build_dir, build_dir / "Debug", build_dir / "Release")
@@ -64,7 +65,7 @@ def main() -> int:
 
     binary = find_binary()
     if binary is None:
-        print("error: C++ core binary not found; run `pixi run build-core` first", file=sys.stderr)
+        print("error: qualification driver not found; run `pixi run build-qualification-cli` first", file=sys.stderr)
         return 2
     print_watch_hint()
     return run_status(binary, port)

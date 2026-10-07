@@ -1,8 +1,7 @@
 [Unit]
-Description=NOMAD Video Bridge (RTSP relay)
-After=nomad-edge-core.service nomad-mediamtx.service nomad-isaac-ros-container.service
-Wants=nomad-zed-wrapper.service
-Requires=nomad-edge-core.service nomad-isaac-ros-container.service
+Description=NOMAD Video Bridge (ROS image to RTSP relay)
+After=nomad-mediamtx.service nomad-isaac-ros-container.service
+Requires=nomad-mediamtx.service nomad-isaac-ros-container.service
 PartOf=nomad.target
 
 [Service]

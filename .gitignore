@@ -88,6 +88,9 @@ dmypy.json
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/
+!scripts/release/
+!scripts/release/*.py
+release-assets/
 [Rr]eleases/
 x64/
 x86/

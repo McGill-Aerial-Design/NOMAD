@@ -5,7 +5,7 @@
 // ============================================================
 // Handles plugin configuration persistence.
 // Stored in Mission Planner's config directory.
-// Supports all NOMAD features including video, terminal, and VIO.
+// Configures runtime IPC, video, router status, observation, and operator input.
 // ============================================================
 
 using System;
@@ -24,99 +24,28 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         /// <summary>
-        /// Jetson IP address (local network or Tailscale).
-        /// </summary>
-        /// <summary>
         /// Active NOMAD config profile name. Written by the profile loader
         /// (scripts/profile.py) so the plugin can show which profile is live.
         /// </summary>
         public string ActiveProfile { get; set; } = "dev";
 
-        public string JetsonIP { get; set; } = "";
+        /// <summary>Loopback TCP port used by the persistent C++ runtime.</summary>
+        public int CoreRuntimePort { get; set; } = Connectivity.NomadCoreClient.DefaultRuntimePort;
 
         /// <summary>
-        /// Jetson API port.
+        /// Shared secret used for HMAC proofs over loopback IPC, bound to the configured
+        /// mission-planner identity. Deploy it independently of NOMAD_API_KEY.
         /// </summary>
-        public int JetsonPort { get; set; } = 8000;
-
-        /// <summary>
-        /// Jetson API key (must match NOMAD_API_KEY on the Jetson).
-        /// Defaults to the committed DEV key so the plugin works against the dev
-        /// stack out of the box. Override locally (untracked) for a real drone.
-        /// </summary>
-        public string JetsonApiKey { get; set; } = "nomad-dev-key";
-
-        /// <summary>
-        /// SSH login user on the Jetson (used by terminal/service control over SSH).
-        /// </summary>
-        public string JetsonSshUser { get; set; } = "nomad";
-
-        /// <summary>
-        /// Full Jetson Base URL (computed property).
-        /// </summary>
-        [JsonIgnore]
-        public string JetsonBaseUrl => $"http://{JetsonIP}:{JetsonPort}";
-
-        /// <summary>
-        /// Path to the C++ core CLI binary invoked by <c>NomadCoreClient</c>.
-        /// Empty means "nomad" on PATH. In the ground-station configuration
-        /// the core runs on this machine; in the Jetson configuration the
-        /// plugin keeps using the Jetson API until that path migrates.
-        /// </summary>
-        public string CoreExePath { get; set; } = "";
-
-        /// <summary>
-        /// Endpoint the core binds (listen mode) for the MAVLink stream.
-        /// Must match the core's NOMAD_MAVLINK_ENDPOINT on the same host.
-        /// </summary>
-        public string CoreMavlinkEndpoint { get; set; } = "udpin:0.0.0.0:14550";
-
-        /// <summary>
-        /// API key passed to the core as NOMAD_API_KEY. Must match the key the
-        /// core was started with; the documented development key is
-        /// "nomad-dev-sitl-key" (config/nomad.env.example).
-        /// </summary>
-        public string CoreApiKey { get; set; } = "nomad-dev-sitl-key";
-
-        /// <summary>
-        /// Tailscale IP address (if using VPN).
-        /// </summary>
-        public string TailscaleIP { get; set; } = "";
-
-        /// <summary>
-        /// Use Tailscale IP instead of local IP.
-        /// </summary>
-        public bool UseTailscale { get; set; } = true;
-
-        /// <summary>
-        /// Gets the effective IP based on UseTailscale setting.
-        /// </summary>
-        [JsonIgnore]
-        public string EffectiveIP => UseTailscale && !string.IsNullOrWhiteSpace(TailscaleIP) ? TailscaleIP : JetsonIP;
-
-        /// <summary>
-        /// Gets the effective base URL.
-        /// </summary>
-        [JsonIgnore]
-        public string EffectiveBaseUrl
-        {
-            get
-            {
-                var ip = EffectiveIP;
-                if (string.IsNullOrWhiteSpace(ip))
-                    ip = "127.0.0.1";
-                return $"http://{ip}:{JetsonPort}";
-            }
-        }
+        public string CoreClientCredential { get; set; } = "";
 
         // ============================================================
         // Video Streaming Configuration
         // ============================================================
 
         /// <summary>
-        /// Video stream URL for ZED camera.
+        /// Video stream URL for the configured camera or video source.
         /// Default: RTSP stream supporting multiple simultaneous viewers.
-        /// Format: rtsp://&lt;jetson-ip&gt;:8554/stream
+        /// Format: rtsp://&lt;video-host&gt;:8554/stream
         /// </summary>
         public string VideoUrl { get; set; } = "";
 
@@ -138,99 +67,19 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Auto-start video on Mission Planner's HUD when plugin loads.
-        /// This displays the ZED camera feed as a background overlay on the HUD.
+        /// This displays the configured video feed as a background overlay on the HUD.
         /// </summary>
         public bool AutoStartHudVideo { get; set; } = true;
 
         // ============================================================
-        // Communication Configuration
+        // Standalone Ground Router Client Configuration
         // ============================================================
 
         /// <summary>
-        /// HTTP connection timeout in seconds.
+        /// Enable Mission Planner's standalone router status client.
         /// </summary>
-        public int HttpTimeoutSeconds { get; set; } = 5;
-
-        /// <summary>
-        /// Enable auto-reconnect on connection loss.
-        /// </summary>
-        public bool AutoReconnect { get; set; } = true;
-
-        /// <summary>
-        /// Health polling interval (ms).
-        /// </summary>
-        public int HealthPollInterval { get; set; } = 5000;
-
-        // ============================================================
-        // MAVLink Dual Link Configuration
-        // ============================================================
-
-        /// <summary>
-        /// Enable MAVLink dual link management (LTE + RadioMaster failover).
-        /// </summary>
+        // Serialized compatibility name; enables the standalone router status client only.
         public bool DualLinkEnabled { get; set; } = true;
-
-        /// <summary>
-        /// RadioMaster connection type: "UDP", "COM", or "TCP"
-        /// UDP uses network port, COM uses serial port (e.g., COM3), TCP uses TCP network port (e.g., SITL)
-        /// </summary>
-        public string RadioMasterConnectionType { get; set; } = "UDP";
-
-        /// <summary>
-        /// RadioMaster UDP port (typically 14550 for RC telemetry).
-        /// Used when RadioMasterConnectionType is "UDP"
-        /// </summary>
-        public int RadioMasterPort { get; set; } = 14550;
-
-        /// <summary>
-        /// RadioMaster COM port (e.g., "COM3", "COM4").
-        /// Used when RadioMasterConnectionType is "COM"
-        /// </summary>
-        public string RadioMasterComPort { get; set; } = "COM3";
-
-        /// <summary>
-        /// RadioMaster TCP host to connect to (e.g. "127.0.0.1" for ArduPilot SITL).
-        /// Used when RadioMasterConnectionType is "TCP" (port = RadioMasterPort).
-        /// </summary>
-        public string RadioMasterTcpHost { get; set; } = "127.0.0.1";
-
-        /// <summary>
-        /// RadioMaster COM port baud rate.
-        /// ELRS typically uses 420000 or 115200
-        /// </summary>
-        public int RadioMasterBaudRate { get; set; } = 420000;
-
-        /// <summary>
-        /// LTE/Tailscale MAVLink UDP port the ground station listens on.
-        /// Default 14560 to avoid colliding with the RadioMaster default (14550).
-        /// </summary>
-        public int LteMavlinkPort { get; set; } = 14560;
-
-        /// <summary>
-        /// Enable automatic failover between links.
-        /// </summary>
-        public bool AutoFailoverEnabled { get; set; } = true;
-
-        /// <summary>
-        /// Preferred MAVLink link when both are available.
-        /// Options: "LTE", "RadioMaster", "None"
-        /// </summary>
-        public string PreferredMavlinkLink { get; set; } = "LTE";
-
-        /// <summary>
-        /// Auto-reconnect to preferred link when it becomes available.
-        /// </summary>
-        public bool AutoReconnectToPreferred { get; set; } = true;
-
-        /// <summary>
-        /// Delay in seconds before switching back to preferred link.
-        /// </summary>
-        public int PreferredLinkReconnectDelay { get; set; } = 10;
-
-        /// <summary>
-        /// MAVLink heartbeat timeout in seconds before considering link dead.
-        /// </summary>
-        public double MavlinkHeartbeatTimeout { get; set; } = 3.0;
 
         /// <summary>
         /// Link monitoring interval in milliseconds.
@@ -238,80 +87,17 @@ namespace NOMAD.MissionPlanner
         public int LinkMonitorInterval { get; set; } = 500;
 
         // ============================================================
-        // Ground-side MAVLink Router (MAVProxy-style multiplexer)
+        // Standalone ground-router connection settings
         // ============================================================
-        // The router opens both source links itself (LTE UDP + RC UDP/COM),
-        // tracks per-link health from real packet flow, dedupes duplicates,
-        // and exposes a single merged UDP endpoint Mission Planner connects
-        // to (UDPCl to 127.0.0.1:<RouterLocalPort>). Failover is zero-gap
-        // because both source links are read in parallel at all times.
+        // The separately supervised host owns physical links, failover,
+        // duplicate suppression, and consumer permissions. Mission Planner
+        // only consumes telemetry and uses the loopback management client.
 
-        /// <summary>
-        /// Enable the local MAVLink router. When on, the plugin owns both
-        /// source links and Mission Planner should connect to the local
-        /// loopback endpoint instead of LTE/RC directly.
-        /// </summary>
-        public bool RouterEnabled { get; set; } = true;
-
-        /// <summary>Local UDP port the router serves the merged stream on.</summary>
+        /// <summary>Mission Planner's local UDP client endpoint for router telemetry.</summary>
         public int RouterLocalPort { get; set; } = 14600;
 
-        /// <summary>Address the router binds for the local merged stream.</summary>
-        public string RouterBindAddress { get; set; } = "127.0.0.1";
-
-        /// <summary>
-        /// Deduplicate identical packets that arrive on both links (recommended).
-        /// Disable only for diagnostics — costs ~1.5x bandwidth to MP.
-        /// </summary>
-        public bool RouterDedupEnabled { get; set; } = true;
-
-        /// <summary>
-        /// Optional outbound endpoint for LTE link. When non-empty, router
-        /// sends GCS-originated traffic to this host:port over UDP. Leave
-        /// empty to use the same endpoint packets were received from.
-        /// </summary>
-        public string LteRemoteHost { get; set; } = "";
-
-        /// <summary>Outbound UDP port for LTE link (0 = use last-rx port).</summary>
-        public int LteRemotePort { get; set; } = 0;
-
-        // ============================================================
-        // VIO Configuration
-        // ============================================================
-
-        /// <summary>
-        /// VIO confidence warning threshold (0-100).
-        /// </summary>
-        public float VioConfidenceWarning { get; set; } = 50.0f;
-
-        /// <summary>
-        /// VIO confidence critical threshold (0-100).
-        /// </summary>
-        public float VioConfidenceCritical { get; set; } = 30.0f;
-
-        /// <summary>
-        /// Enable VIO status alerts.
-        /// </summary>
-        public bool VioAlertsEnabled { get; set; } = true;
-
-        // ============================================================
-        // Terminal Configuration
-        // ============================================================
-
-        /// <summary>
-        /// SSH username for direct SSH connection.
-        /// </summary>
-        public string SshUsername { get; set; } = "mad";
-
-        /// <summary>
-        /// Terminal command timeout (seconds).
-        /// </summary>
-        public int TerminalTimeout { get; set; } = 30;
-
-        /// <summary>
-        /// Save terminal history between sessions.
-        /// </summary>
-        public bool SaveTerminalHistory { get; set; } = true;
+        /// <summary>Loopback TCP destination port for the standalone router management client.</summary>
+        public int ManagementPort { get; set; } = 14610;
 
         // ============================================================
         // UI Configuration
@@ -362,26 +148,7 @@ namespace NOMAD.MissionPlanner
         public bool AltitudeCallouts { get; set; } = true;
 
         // ============================================================
-        // Motor Music Configuration
-        // ============================================================
-
-        /// <summary>Number of motor outputs the music bridge should use.</summary>
-        public int MotorMusicMotorCount { get; set; } = 4;
-
-        /// <summary>Lowest active ArduPilot motor output, in PWM-equivalent microseconds.</summary>
-        public int MotorMusicMinOutputPwm { get; set; } = 1100;
-
-        /// <summary>Highest active ArduPilot motor output, in PWM-equivalent microseconds.</summary>
-        public int MotorMusicMaxOutputPwm { get; set; } = 1800;
-
-        /// <summary>Semitone offset applied before notes are sent to the motors.</summary>
-        public int MotorMusicTranspose { get; set; } = -24;
-
-        /// <summary>Playback speed multiplier for MIDI scheduling.</summary>
-        public double MotorMusicTempoScale { get; set; } = 1.0;
-
-        // ============================================================
-        // Drone Geometry & SLAM 3D Configuration
+        // Drone Geometry Configuration
         // ============================================================
 
         /// <summary>Drone body length in cm (nose to tail).</summary>
@@ -405,56 +172,21 @@ namespace NOMAD.MissionPlanner
         /// <summary>Heading offset in degrees to compensate for magnetometer calibration.</summary>
         public float SlamHeadingOffsetDeg { get; set; } = 0.0f;
 
-        /// <summary>SLAM 3D camera field of view in degrees.</summary>
+        /// <summary>Camera field of view in degrees for future visualization.</summary>
         public float SlamCameraFovDeg { get; set; } = 60.0f;
 
-        /// <summary>SLAM 3D local map radius in meters.</summary>
+        /// <summary>Local map radius in meters for future visualization.</summary>
         public float SlamMapRadiusM { get; set; } = 3.0f;
 
         // ============================================================
-        // Servo Configuration (ArduPilot AUX outputs via MAVLink)
-        // All payloads, reels, water pump and camera tilt are driven through
-        // standard ArduPilot servo/relay outputs on any ArduPilot flight
-        // controller via MAVLink DO_SET_SERVO / DO_SET_RELAY.
-        // Commands are sent through the NOMAD C++ core, which owns the
-        // MAVLink transport.
-        // Channel numbers are ArduPilot servo output numbers (SERVOn_FUNCTION)
-        // and are mapped per-board in the autopilot parameters, not hardcoded
-        // to a specific flight controller.
-        // ============================================================
-
-        // --- Modular payloads (drop servos, slider servos, relay/GPIO outputs) ---
-        /// <summary>Maximum number of configurable payloads (panel + Settings cap).</summary>
-        public const int MaxPayloads = 8;
-
-        /// <summary>
-        /// Configurable payload outputs rendered on the payload panel and edited in
-        /// Settings → Payloads. Each is a drop servo, a slider servo, or a relay/GPIO
-        /// output. See <see cref="PayloadControl"/>.
-        /// </summary>
-        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
-        public List<PayloadControl> Payloads { get; set; } = DefaultPayloads();
-
-        /// <summary>Payload controls start empty and are configured per aircraft.</summary>
-        public static List<PayloadControl> DefaultPayloads() => new List<PayloadControl>();
-
-        // Strap reels and the camera tilt servo are regular payload entries now
-        // (PayloadKind.Reel / PayloadKind.CamTilt) — add them in Settings →
-        // Payloads. PayloadControl.NewReel / NewCamTilt carry the standard
-        // NOMAD defaults (reel out <1000 us / in >2000 us / stop 1500 us;
-        // tilt 700 down / 1250 level / 1450 up — the camera arm is mechanically
-        // offset, so level is NOT the standard 1500 us).
-
+        // Configured actuator commands use authenticated typed runtime IPC.
+        public string JoystickPositionActuatorId { get; set; } = "";
         // ============================================================
         // Joystick Configuration (Mission Planner DirectInput-based)
         // ============================================================
-        // Two independent joystick assignments routed by NomadJoystickService:
-        //   * Gimbal: stick deflection → pitch/roll rate, integrated locally
-        //     into MAV_CMD_DO_MOUNT_CONTROL angle commands.
-        //   * ZED tilt: stick deflection → PWM rate, integrated locally into
-        //     the camera tilt servo PWM target (DO_SET_SERVO).
-        // Axes are referenced by DirectInput state property name: X, Y, Z,
-        // Rx, Ry, Rz, Slider1, Slider2.
+        // Gimbal input produces angle targets; position input produces normalized
+        // values for an explicitly configured runtime actuator ID.
+        // DirectInput axes: X, Y, Z, Rx, Ry, Rz, Slider1, Slider2.
 
         /// <summary>Enable the gimbal joystick channel.</summary>
         public bool JoystickGimbalEnabled { get; set; } = false;
@@ -485,77 +217,31 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public bool GimbalArrowKeysEnabled { get; set; } = false;
 
-        /// <summary>Enable the ZED tilt joystick channel.</summary>
-        public bool JoystickZedEnabled { get; set; } = false;
+        /// <summary>Enable the configured position input.</summary>
+        public bool JoystickPositionEnabled { get; set; } = false;
         /// <summary>DirectInput device name. May be the same device as gimbal (different axes).</summary>
-        public string JoystickZedDevice { get; set; } = "";
-        /// <summary>Axis driving ZED tilt rate.</summary>
-        public string JoystickZedTiltAxis { get; set; } = "Y";
-        public bool JoystickZedTiltInvert { get; set; } = true;
-        public float JoystickZedDeadzone { get; set; } = 0.08f;
-        /// <summary>Max integrated PWM rate (microseconds per second) at full stick deflection.</summary>
-        public float JoystickZedMaxRateUsPerSec { get; set; } = 400f;
+        public string JoystickPositionDevice { get; set; } = "";
+        /// <summary>Axis producing a normalized position input.</summary>
+        public string JoystickPositionAxis { get; set; } = "Y";
+        public bool JoystickPositionInvert { get; set; } = true;
+        public float JoystickPositionDeadzone { get; set; } = 0.08f;
 
-        // --- Three-position switch action mapping ---
-        // joystick.py encodes each 3-position RadioMaster switch (sw1, sw2, sw3)
-        // as a pair of virtual Xbox 360 buttons — UP and DOWN positions press a
-        // dedicated button, middle releases both. NomadJoystickService dispatches
-        // a configurable action per slot. Valid action IDs:
-        //   None, DropToggleP1, DropToggleP2, DropToggleP3,
-        //   ReelInP1, ReelOutP1, ReelInP2, ReelOutP2, FireWaterPump
-        // Drop toggles and FireWaterPump are edge-triggered (fire on switch flip
-        // toward the position); Reel actions run while the switch is held off-
-        // centre and stop when it returns to middle.
-        /// <summary>
-        /// DirectInput device that publishes the switch buttons (from joystick.py
-        /// or any other source). Independent of the gimbal/ZED axis devices so
-        /// payload switches keep working even when both axis channels are off.
-        /// Leave blank to fall back to the gimbal device, then the ZED device.
-        /// </summary>
+        // Each physical switch uses configurable UP/DOWN DirectInput button indices.
+        // Bindings carry backend actuator IDs and operation strings.
+        public int[] JoystickButtonIndices { get; set; } = new[] { 0, 1, 2, 3, 4, 5 };
         public string JoystickSwitchDevice  { get; set; } = "";
 
-        public string JoystickSw1UpAction   { get; set; } = "DropToggleP1";
-        public string JoystickSw1DownAction { get; set; } = "DropToggleP2";
-        public string JoystickSw2UpAction   { get; set; } = "DropToggleP3";
-        public string JoystickSw2DownAction { get; set; } = "ReelInP1";
-        public string JoystickSw3UpAction   { get; set; } = "ReelInP2";
-        public string JoystickSw3DownAction { get; set; } = "FireWaterPump";
+        public string JoystickSw1UpAction   { get; set; } = "None";
+        public string JoystickSw1DownAction { get; set; } = "None";
+        public string JoystickSw2UpAction   { get; set; } = "None";
+        public string JoystickSw2DownAction { get; set; } = "None";
+        public string JoystickSw3UpAction   { get; set; } = "None";
+        public string JoystickSw3DownAction { get; set; } = "None";
 
-        /// <summary>
-        /// Enable the dedicated kill-switch pushbutton (button index 6 on the
-        /// virtual gamepad — joystick.py maps the radio kill switch to XInput
-        /// BACK). When pressed, the plugin commands LAND mode and forces
-        /// LAND_SPEED / WPNAV_SPEED_DN to <see cref="JoystickKillLandSpeedCmS"/>
-        /// so the descent meets the CONOPS §4.5 ≥2 m/s requirement.
-        /// </summary>
+        /// <summary>Direct USB HID button index used only for the unavailable-termination monitor.</summary>
+        public int JoystickTerminationButtonIndex { get; set; } = 6;
+        /// <summary>Monitor the configured button and visibly report aircraft termination as unavailable.</summary>
         public bool JoystickKillSwitchEnabled { get; set; } = true;
-
-        /// <summary>
-        /// Descent speed (cm/s) the kill switch forces before engaging LAND.
-        /// Default 250 = 2.5 m/s, comfortably above the 2 m/s CONOPS floor.
-        /// </summary>
-        public int JoystickKillLandSpeedCmS { get; set; } = 250;
-
-        /// <summary>
-        /// When true, the joystick service auto-picks the first available
-        /// DirectInput device for any role whose configured device name is
-        /// blank or not currently enumerated, and re-checks periodically so
-        /// hot-plugged controllers (e.g. the vgamepad created by joystick.py)
-        /// get picked up without a settings round-trip. Default true.
-        /// </summary>
-        public bool JoystickAutoSelectDevice { get; set; } = true;
-
-        // --- Serial → virtual gamepad bridge (jotystick.py) ---
-        /// <summary>Auto-launch jotystick.py on plugin start so a serial-attached MCU appears as an Xbox 360 controller.</summary>
-        public bool SerialJoystickEnabled { get; set; } = false;
-        /// <summary>Serial port the MCU is on (e.g. COM10).</summary>
-        public string SerialJoystickPort { get; set; } = "COM10";
-        /// <summary>Baud rate.</summary>
-        public int SerialJoystickBaud { get; set; } = 115200;
-        /// <summary>Python executable to use. Leave blank to use "python" from PATH.</summary>
-        public string SerialJoystickPython { get; set; } = "python";
-        /// <summary>Absolute path to jotystick.py. Leave blank to auto-resolve relative to the plugin DLL.</summary>
-        public string SerialJoystickScriptPath { get; set; } = "";
 
     }
 }

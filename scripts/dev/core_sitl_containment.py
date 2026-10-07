@@ -22,11 +22,19 @@ Run against the dev stack: ``pixi run sitl-fence``.
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 from pathlib import Path
 
-from core_sitl_command_flow import ScenarioError, parse_status, run_cli, wait_for_altitude, wait_for_status
+from core_sitl_command_flow import (
+    ScenarioError,
+    parse_status,
+    run_cli,
+    run_cli_rejection,
+    wait_for_altitude,
+    wait_for_status,
+)
 from core_sitl_status import find_binary, get_sitl_port, print_watch_hint
 
 # Keep-in box half-extent around home (m) and margin (m). The out-of-fence
@@ -35,20 +43,22 @@ FENCE_HALF_EXTENT_M = 100.0
 FENCE_MARGIN_M = 5.0
 INSIDE_TARGET_NORTH_M = 30.0
 OUTSIDE_TARGET_NORTH_M = 300.0
-# ~111.2 km per degree of latitude at these scales (matches the C++ core's
-# projected geofence approximation).
+# Projected geofence scales matching src/safety/geofence.cpp.
 METERS_PER_DEGREE_LAT = 110_540.0
+METERS_PER_DEGREE_LON = 111_320.0
 
 
 def fence_env_around(home: tuple[float, float]) -> str:
-    """A square keep-in boundary around home, as NOMAD_FENCE_POLYGON syntax."""
-    half_extent_deg = FENCE_HALF_EXTENT_M / METERS_PER_DEGREE_LAT
+    """Return a square metric keep-in boundary around home."""
     lat, lon = home
+    half_extent_lat_deg = FENCE_HALF_EXTENT_M / METERS_PER_DEGREE_LAT
+    longitude_scale = METERS_PER_DEGREE_LON * math.cos(math.radians(lat))
+    half_extent_lon_deg = FENCE_HALF_EXTENT_M / longitude_scale
     corners = [
-        (lat + half_extent_deg, lon - half_extent_deg),
-        (lat + half_extent_deg, lon + half_extent_deg),
-        (lat - half_extent_deg, lon + half_extent_deg),
-        (lat - half_extent_deg, lon - half_extent_deg),
+        (lat + half_extent_lat_deg, lon - half_extent_lon_deg),
+        (lat + half_extent_lat_deg, lon + half_extent_lon_deg),
+        (lat - half_extent_lat_deg, lon + half_extent_lon_deg),
+        (lat - half_extent_lat_deg, lon - half_extent_lon_deg),
     ]
     return ";".join(f"{clat:.7f},{clon:.7f}" for clat, clon in corners)
 
@@ -80,17 +90,11 @@ def wait_for_displacement(
     raise ScenarioError(f"timed out waiting for {minimum_north_m:.0f} m north displacement; last position={last}")
 
 
-def run_containment(binary: Path, port: str) -> None:
-    initial = wait_for_status(binary, port, {"connected": "true"}, 15.0)
-    if initial.get("armed") == "true":
-        raise ScenarioError("SITL must start disarmed for the containment scenario")
-
-    home = read_position(binary, port)
-    fence = fence_env_around(home)
-    os.environ["NOMAD_FENCE_POLYGON"] = fence
+def prepare_containment_flight(binary: Path, port: str, home: tuple[float, float]) -> None:
+    """Configure the projected fence and reach the test altitude through C++."""
+    os.environ["NOMAD_FENCE_POLYGON"] = fence_env_around(home)
     os.environ["NOMAD_FENCE_MARGIN_M"] = str(FENCE_MARGIN_M)
     print(f"fence configured: +/-{FENCE_HALF_EXTENT_M:.0f} m box around ({home[0]:.6f}, {home[1]:.6f})", flush=True)
-
     run_cli(binary, port, "mode", "4")
     wait_for_status(binary, port, {"mode": "4"}, 15.0)
     run_cli(binary, port, "arm")
@@ -99,35 +103,95 @@ def run_containment(binary: Path, port: str) -> None:
     wait_for_altitude(binary, port, 8.0, 45.0)
     print(f"reached altitude, flying fence tests (home {home[0]:.6f},{home[1]:.6f})", flush=True)
 
+
+def run_containment_checks(binary: Path, port: str, home: tuple[float, float]) -> None:
+    """Prove accepted motion and rejected motion through the C++ CLI."""
     inside = (home[0] + INSIDE_TARGET_NORTH_M / METERS_PER_DEGREE_LAT, home[1])
     run_cli(binary, port, "goto", f"{inside[0]:.7f}", f"{inside[1]:.7f}", "10")
     wait_for_displacement(binary, port, home, INSIDE_TARGET_NORTH_M * 0.5, 45.0)
     print("PASS: in-fence target accepted and flown (loop closed)", flush=True)
-
     outside = (home[0] + OUTSIDE_TARGET_NORTH_M / METERS_PER_DEGREE_LAT, home[1])
-    result = run_cli(binary, port, "goto", f"{outside[0]:.7f}", f"{outside[1]:.7f}", "10")
+    result = run_cli_rejection(
+        binary, port, "outside the geofence", "goto", f"{outside[0]:.7f}", f"{outside[1]:.7f}", "10"
+    )
     print(f"out-of-fence goto output: {result.strip()!r}", flush=True)
-    max_north = max_displacement_after_reject(binary, port, home, seconds=10.0)
-    if max_north > FENCE_HALF_EXTENT_M:
-        raise ScenarioError(f"vehicle left the fence after a rejected target (north={max_north:.1f} m)")
-    print(f"PASS: out-of-fence target rejected; vehicle contained (max north {max_north:.1f} m)", flush=True)
+    max_north, max_east = max_displacement_after_reject(binary, port, home, seconds=10.0)
+    if max_north > FENCE_HALF_EXTENT_M or max_east > FENCE_HALF_EXTENT_M:
+        raise ScenarioError(
+            f"vehicle left the fence after a rejected target (north={max_north:.1f} m, east={max_east:.1f} m)"
+        )
+    print(
+        f"PASS: out-of-fence target rejected; vehicle contained (max north {max_north:.1f} m, east {max_east:.1f} m)",
+        flush=True,
+    )
 
-    run_cli(binary, port, "rtl")
-    run_cli(binary, port, "land")
-    wait_for_status(binary, port, {"armed": "false"}, 120.0)
-    run_cli(binary, port, "disarm")
+
+def cleanup_containment(binary: Path, port: str) -> list[str]:
+    """Attempt bounded safe cleanup and return every failed cleanup step."""
+    print("cleanup: returning and landing the vehicle", flush=True)
+    errors: list[str] = []
+    for action in ("rtl", "land"):
+        try:
+            run_cli(binary, port, action, attempts=2)
+        except (OSError, ScenarioError) as error:
+            errors.append(f"{action}: {error}")
+    try:
+        wait_for_status(binary, port, {"armed": "false"}, 120.0)
+    except (OSError, ScenarioError) as error:
+        errors.append(f"disarm verification: {error}")
+    try:
+        run_cli(binary, port, "disarm", attempts=2)
+    except (OSError, ScenarioError) as error:
+        errors.append(f"disarm command: {error}")
+    return errors
 
 
-def max_displacement_after_reject(binary: Path, port: str, home: tuple[float, float], seconds: float) -> float:
+def run_containment(binary: Path, port: str) -> None:
+    """Run containment checks and preserve cleanup failures in the result."""
+    initial = wait_for_status(binary, port, {"connected": "true"}, 15.0)
+    if initial.get("armed") == "true":
+        cleanup_errors = cleanup_containment(binary, port)
+        message = "SITL must start disarmed for the containment scenario"
+        if cleanup_errors:
+            message += f"; safe cleanup failed: {'; '.join(cleanup_errors)}"
+        raise ScenarioError(message)
+    home = read_position(binary, port)
+    try:
+        prepare_containment_flight(binary, port, home)
+        run_containment_checks(binary, port, home)
+    except (OSError, ScenarioError) as error:
+        cleanup_errors = cleanup_containment(binary, port)
+        if cleanup_errors:
+            raise ScenarioError(f"{error}; safe cleanup failed: {'; '.join(cleanup_errors)}") from error
+        raise
+    cleanup_errors = cleanup_containment(binary, port)
+    if cleanup_errors:
+        raise ScenarioError(f"safe cleanup failed: {'; '.join(cleanup_errors)}")
+
+
+def get_local_displacement(home: tuple[float, float], position: tuple[float, float]) -> tuple[float, float]:
+    """Convert latitude/longitude differences to north/east metres."""
+    north_m = (position[0] - home[0]) * METERS_PER_DEGREE_LAT
+    longitude_scale = METERS_PER_DEGREE_LON * math.cos(math.radians(home[0]))
+    east_m = (position[1] - home[1]) * longitude_scale
+    return north_m, east_m
+
+
+def max_displacement_after_reject(
+    binary: Path, port: str, home: tuple[float, float], seconds: float
+) -> tuple[float, float]:
+    """Track the largest absolute north/east displacement after rejection."""
     import time
 
     end = time.monotonic() + seconds
     max_north = 0.0
+    max_east = 0.0
     while time.monotonic() < end:
-        lat, _ = read_position(binary, port)
-        max_north = max(max_north, (lat - home[0]) * METERS_PER_DEGREE_LAT)
+        north_m, east_m = get_local_displacement(home, read_position(binary, port))
+        max_north = max(max_north, abs(north_m))
+        max_east = max(max_east, abs(east_m))
         time.sleep(0.5)
-    return max_north
+    return max_north, max_east
 
 
 def main() -> int:
@@ -135,11 +199,13 @@ def main() -> int:
         port = get_sitl_port()
         binary = find_binary()
         if binary is None:
-            print("error: C++ core binary not found; run `pixi run build-core` first", file=sys.stderr)
+            print(
+                "error: qualification driver not found; run `pixi run build-qualification-cli` first", file=sys.stderr
+            )
             return 2
         print_watch_hint()
         run_containment(binary, port)
-    except (ValueError, ScenarioError) as error:
+    except (OSError, ValueError, ScenarioError) as error:
         print(f"C++ SITL containment failed: {error}", file=sys.stderr)
         return 1
     print("C++ SITL containment passed", flush=True)

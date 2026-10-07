@@ -1,14 +1,10 @@
 # Infrastructure
 
-`infra/` contains deployment support that is outside the NOMAD core:
+Deployment support lives outside the core: systemd templates, MAVLink routing,
+optional network monitors and MediaMTX/video support. Retained routing/video
+support is useful in onboard and ground GPU profiles; it is not removed merely
+because Edge Core is deleted.
 
-- `systemd/` service templates used by the transitional runtime;
-- `transport/mavlink_router/` routing configuration;
-- `tailscale/` optional network monitoring and setup scripts;
-- `mediamtx.yml` and log rotation configuration.
-
-The target deployment is one C++ core process plus only the adapters a vehicle
-needs. Keep network, container, VPN, and service-manager choices out of the core.
-
-See [operations](../docs/operations.md) for the canonical deployment model and
-[migration](../docs/migration.md) for deletion/consolidation gates.
+The target has one active C++ command owner per aircraft and only selected
+adapters. Runtime wiring still needs G1/G3 qualification. See
+[operations](../docs/operations.md) and [migration](../docs/migration.md).

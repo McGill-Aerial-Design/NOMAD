@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "release_version": "@NOMAD_RELEASE_VERSION@",
+  "source_sha": "@NOMAD_SOURCE_SHA@",
+  "mavsdk_sha": "@NOMAD_MAVSDK_SHA@",
+  "official": @NOMAD_OFFICIAL@,
+  "source_dirty": @NOMAD_SOURCE_DIRTY@,
+  "name": "core",
+  "version": "@NOMAD_COMPONENT_VERSION@",
+  "platform": "@NOMAD_PACKAGE_PLATFORM@",
+  "architecture": "x86_64",
+  "protocol_versions": {"runtime_ipc": 1},
+  "required_files": ["package-identity.json", @NOMAD_PACKAGE_REQUIRED@, "include/nomad/vehicle/vehicle.hpp", "share/nomad/LICENSE", "share/nomad/NOTICE",
+    "share/nomad/config/README.md", "share/nomad/config/nomad.env.example", "share/nomad/config/actuators.example.json",
+    "share/nomad/lifecycle/migrate_actuators.py", "share/nomad/operations.md",
+    "share/nomad/lifecycle/nomad-runtime.service.in", "share/nomad/lifecycle/install_systemd.py",
+    "share/nomad/lifecycle/Manage-NomadRuntime.ps1", "share/nomad/lifecycle/runtime.example.json"]
+}

@@ -5,9 +5,8 @@
 // ============================================================
 // Registers modules, filters them by allow-list + enable flags, resolves a
 // dependency order (topological sort with cycle/missing detection), and drives
-// the configure/start/stop lifecycle. Mirrors edge_core.core.ModuleRegistry on
-// the Jetson side. Aggregated view descriptors are consumed by NOMADMainScreen
-// to build the sidebar.
+// the configure/start/stop lifecycle. Aggregated view descriptors are consumed
+// by NOMADMainScreen to build the sidebar.
 // ============================================================
 
 using System;

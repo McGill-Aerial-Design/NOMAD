@@ -1,0 +1,13 @@
+{
+  "PreferredLink": "lte",
+  "ManagementPort": 14610,
+  "Links": [
+    { "Id": "lte", "Name": "LTE / Tailscale", "Transport": "UDP", "Port": 14560, "Priority": 100 },
+    { "Id": "radiomaster", "Name": "RadioMaster", "Transport": "UDP", "Port": 14550, "Priority": 80 },
+    { "Id": "wifi", "Name": "Wi-Fi", "Transport": "UDP", "Port": 14570, "Priority": 60 }
+  ],
+  "Consumers": [
+    { "Id": "mission_planner", "RouterPort": 14600, "AllowOutbound": false },
+    { "Id": "nomad_core", "RouterPort": 14602, "ClientPort": 14601 }
+  ]
+}

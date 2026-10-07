@@ -3,8 +3,8 @@
 
 site_name: NOMAD
 site_description: Standalone C++ vehicle-control core for ArduPilot systems
-site_url: https://github.com/McGill-Aerial-Design/NOMAD
-repo_url: https://github.com/McGill-Aerial-Design/NOMAD
+site_url: https://github.com/YoussGm3o8/NOMAD
+repo_url: https://github.com/YoussGm3o8/NOMAD
 edit_uri: blob/main/docs/
 
 theme:
@@ -37,7 +37,7 @@ theme:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/McGill-Aerial-Design/NOMAD
+      link: https://github.com/YoussGm3o8/NOMAD
 
 markdown_extensions:
   - admonition
@@ -63,13 +63,20 @@ plugins:
 nav:
   - Home: index.md
   - Product Requirements: prd.md
+  - CONOPS requirement inventory: conops-requirements.md
+  - AEAC 2027 integration: aeac-2027.md
   - Architecture: architecture.md
+  - Runtime IPC: runtime-ipc.md
   - Development: development.md
   - Agent and engineering guidance: agent-guidance.md
   - Operations: operations.md
-  - Migration: migration.md
-  - Safety: safety.md
-  - Transitional API Reference: api_reference.md
+  - Qualification status: qualification.md
+  - Sources and takeover qualification: source-arbitration.md
+  - Safety case: safety.md
+  - Historical migration evidence: migration.md
+  - MAVSDK adoption: mavsdk-adoption.md
+  - MAVSDK dependencies: mavsdk-dependencies.md
+
 
 validation:
   links:

@@ -27,16 +27,31 @@ jobs:
           cache: true
       - name: File and line size report
         run: pixi run line-report
+      - name: C++ complexity report (report-only)
+        continue-on-error: true
+        env:
+          CPP_COMPLEXITY_REPORT: ${{ runner.temp }}/cpp-complexity-${{ github.sha }}.json
+        run: pixi run python -m scripts.dev.cpp_complexity_report --output "$CPP_COMPLEXITY_REPORT"
+      - name: Upload C++ complexity report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cpp-complexity-${{ github.sha }}
+          path: ${{ runner.temp }}/cpp-complexity-${{ github.sha }}.json
+          if-no-files-found: warn
       - name: Enforce changed-file complexity
         env:
           NOMAD_COMPLEXITY_BASE: origin/${{ github.base_ref || 'main' }}
         run: pixi run complexity-check
-      - name: Build and test C++ core
-        run: pixi run test-core
       - name: Ruff lint
         run: pixi run lint
+      - name: Strict documentation build
+        run: pixi run docs-build
       - name: Ruff format check
-        run: pixi run format-check
+        run: |
+          if ! pixi run format-check; then
+            ./.pixi/envs/default/bin/ruff format --diff .
+          fi
       - name: Mypy — full tree (advisory)
         run: pixi run typecheck
         continue-on-error: true

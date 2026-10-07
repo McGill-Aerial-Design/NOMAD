@@ -123,9 +123,13 @@ internal static partial class DualLinkStressTests
 
                 ltePump.Dispose(); // LTE goes silent mid-flight
                 Check(await WaitUntil(() => bed.Router.ActiveLink == LinkType.RadioMaster, 5000), "fails over to RadioMaster");
-                lock (bed.Failovers)
-                    Check(bed.Failovers.Any(e => e.FromLink == LinkType.LTE && e.ToLink == LinkType.RadioMaster),
-                        "failover event recorded LTE→Radio");
+                Check(await WaitUntil(() =>
+                {
+                    lock (bed.Failovers)
+                    {
+                        return bed.Failovers.Any(e => e.FromLink == LinkType.LTE && e.ToLink == LinkType.RadioMaster);
+                    }
+                }, 1000), "failover event recorded LTE to Radio");
 
                 // Telemetry must keep flowing on the surviving link. Markers use
                 // their own compid so their seq counter does not interleave with
@@ -139,10 +143,17 @@ internal static partial class DualLinkStressTests
 
                 // Preferred link recovers → router returns to it after the hold-down.
                 ltePump = new Pump(f => bed.SendLte(f), 10, 1, 1);
+                Check(await WaitUntil(() => bed.Router.Lte.IsConnected, 1000), "preferred link receives again");
+                await Task.Delay(250);
+                Check(bed.Router.ActiveLink == LinkType.RadioMaster, "brief recovery does not immediately flap");
                 Check(await WaitUntil(() => bed.Router.ActiveLink == LinkType.LTE, 8000), "returns to preferred LTE after recovery");
-                lock (bed.Failovers)
-                    Check(bed.Failovers.Any(e => e.ToLink == LinkType.LTE && e.Reason.Contains("preferred")),
-                        "preferred-recovery event recorded");
+                Check(await WaitUntil(() =>
+                {
+                    lock (bed.Failovers)
+                    {
+                        return bed.Failovers.Any(e => e.ToLink == LinkType.LTE && e.Reason.Contains("preferred"));
+                    }
+                }, 1000), "preferred-recovery event recorded");
                 Check(bed.Router.FailoverLog.Count >= 2, "failover log retains events");
             }
             finally { ltePump.Dispose(); radioPump?.Dispose(); }
@@ -408,50 +419,4 @@ internal static partial class DualLinkStressTests
     }
 
 
-    // ============================================================
-    // Manager façade
-    // ============================================================
-
-    private static async Task ManagerFacade()
-    {
-        int b = Bed.NextBase();
-        var cfg = new MAVLinkConnectionManager.ConnectionConfig
-        {
-            RouterBindAddress = "127.0.0.1",
-            RouterLocalPort = b,
-            LtePort = b + 1,
-            RadioMasterPort = b + 2,
-            MonitorIntervalMs = 100,
-            HeartbeatTimeoutSec = 0.6,
-            PreferredLinkReconnectDelaySec = 1,
-        };
-        using (var mgr = new MAVLinkConnectionManager(cfg))
-        using (var lteSrc = new UdpSink())
-        using (var mp = UdpSink.ConnectedTo(b))
-        {
-            mgr.StartMonitoring();
-            Check(mgr.IsMonitoring, "manager starts monitoring");
-            Check(mgr.LocalMergedEndpoint.Contains(b.ToString()), "merged endpoint advertises the router port");
-
-            mp.Send(Frames.Heartbeat(255, 190, 0));
-            using (var pump = new Pump(f => lteSrc.SendTo(b + 1, f), 10))
-            {
-                Check(await WaitUntil(() => mgr.LteStatistics.IsConnected && mgr.LteStatistics.HeartbeatCount > 0, 4000),
-                    "stats projected from the router");
-                Check(mgr.IsLteHealthy, "LTE reported healthy");
-                Check(mgr.ActiveLink == LinkType.LTE, "active link is LTE");
-                Check(mgr.GetLinkStatus().ActiveLink == "LTE", "snapshot reports active link");
-
-                Check(mgr.SwitchToLink(LinkType.RadioMaster), "manual switch accepted");
-                Check(mgr.ManualOverride == LinkType.RadioMaster, "manual override projected");
-                mgr.SwitchToLink(LinkType.None);
-                Check(mgr.ManualOverride == LinkType.None, "override released");
-
-                Check(!string.IsNullOrEmpty(mgr.GetStatusSummary()), "status summary available");
-                mgr.ResetCounters();
-            }
-            mgr.StopMonitoring();
-            Check(!mgr.IsMonitoring, "manager stops monitoring");
-        }
-    }
 }

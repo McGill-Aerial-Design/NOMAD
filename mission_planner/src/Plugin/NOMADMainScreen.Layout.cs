@@ -108,34 +108,11 @@ namespace NOMAD.MissionPlanner
             _btnVideo.Click += (s, e) => ShowView("Video");
             navPanel.Controls.Add(_btnVideo);
 
-            // 3D SLAM map button (live nvblox mesh + drone pose visualization)
-            _btnSlam3d = CreateSidebarButton("3D SLAM");
-            _btnSlam3d.Click += (s, e) => ShowView("Slam3D");
-            navPanel.Controls.Add(_btnSlam3d);
-
-            _btnMotorMusic = CreateSidebarButton("Motor Music");
-            _btnMotorMusic.Click += (s, e) => ShowView("MotorMusic");
-            navPanel.Controls.Add(_btnMotorMusic);
-
-            // Terminal button
-            _btnTerminal = CreateSidebarButton("Terminal");
-            _btnTerminal.Click += (s, e) => ShowView("Terminal");
-            navPanel.Controls.Add(_btnTerminal);
-
-            // Health button
-            _btnHealth = CreateSidebarButton("System Health");
-            _btnHealth.Click += (s, e) => ShowView("Health");
-            navPanel.Controls.Add(_btnHealth);
 
             // Links button
             _btnLinks = CreateSidebarButton("Link Status");
             _btnLinks.Click += (s, e) => ShowView("Links");
             navPanel.Controls.Add(_btnLinks);
-
-            // ZED Calibration button
-            _btnCalibration = CreateSidebarButton("ZED Calibration");
-            _btnCalibration.Click += (s, e) => ShowView("Calibration");
-            navPanel.Controls.Add(_btnCalibration);
 
             var btnGimbal = CreateSidebarButton("Gimbal");
             btnGimbal.Click += (s, e) => GimbalJoystickWindow.ShowSingleton(_config, this.FindForm());

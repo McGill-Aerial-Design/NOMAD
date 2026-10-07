@@ -13,16 +13,16 @@
 # ============================================================
 
 # Configuration
-HOSTNAME="nomad-jetson"
+HOSTNAME="${TS_HOSTNAME:-nomad-jetson}"
 CHECK_INTERVAL=30          # Seconds between checks
 MAX_RETRIES=3              # Max reconnect attempts before giving up
 RETRY_DELAY=10             # Seconds between retry attempts
 LOG_TAG="tailscale-watchdog"
-# Operator user — must match `tailscale set --operator=<user>` on the Jetson
-# (defaults to "mad"). When the daemon has any non-default prefs set, a bare
+# Operator user must match setup's explicit --operator (default: no delegation).
+# When the daemon has any non-default prefs set, a bare
 # `tailscale up` refuses with "requires mentioning all non-default flags",
 # so we mention them here.
-OPERATOR="${TS_OPERATOR:-mad}"
+OPERATOR="${TS_OPERATOR:-}"
 
 # ============================================================
 # Helper Functions
@@ -91,7 +91,8 @@ get_connection_status() {
 
     # Parse BackendState from JSON
     local backend_state
-    backend_state=$(echo "$status_output" | grep -o '"BackendState":"[^"]*"' | cut -d'"' -f4)
+    backend_state=$(printf '%s\n' "$status_output" |
+        sed -n 's/.*"BackendState"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
 
     case "$backend_state" in
         "Running")
@@ -295,4 +296,6 @@ main() {
     monitor_loop
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

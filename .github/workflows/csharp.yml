@@ -10,18 +10,45 @@ name: csharp
 # HintPaths resolve unchanged, then run MSBuild. No .NET SDK is required (the
 # project is a plain MSBuild/.NET Framework project, not SDK-style).
 #
-# Pin MP_VERSION to the version the plugin is developed against; bump it
-# deliberately when the local Mission Planner is upgraded.
+# The reviewed target is owned by scripts/release/mission-planner-target.json.
 
 on:
   push:
     branches: [main]
     paths:
+      - "pixi.toml"
+      - "pixi.lock"
       - "mission_planner/**"
+      - "infra/transport/ground_router/**"
+      - "scripts/build/**"
+      - "scripts/dev/ground_router_smoke.py"
+      - "scripts/dev/ground_router_fixture_support.py"
+      - "scripts/dev/runtime_*support.py"
+      - "scripts/dev/runtime_lifecycle_fixture.py"
+      - "scripts/dev/release_process*"
+      - "scripts/dev/release_router_launcher.py"
+      - "scripts/dev/release_supervisor_fixture.py"
+      - "scripts/dev/mavsdk_peer*.py"
+      - "scripts/dev/verify_core_package.py"
+      - "scripts/release/**"
       - ".github/workflows/csharp.yml"
   pull_request:
     paths:
+      - "pixi.toml"
+      - "pixi.lock"
       - "mission_planner/**"
+      - "infra/transport/ground_router/**"
+      - "scripts/build/**"
+      - "scripts/dev/ground_router_smoke.py"
+      - "scripts/dev/ground_router_fixture_support.py"
+      - "scripts/dev/runtime_*support.py"
+      - "scripts/dev/runtime_lifecycle_fixture.py"
+      - "scripts/dev/release_process*"
+      - "scripts/dev/release_router_launcher.py"
+      - "scripts/dev/release_supervisor_fixture.py"
+      - "scripts/dev/mavsdk_peer*.py"
+      - "scripts/dev/verify_core_package.py"
+      - "scripts/release/**"
       - ".github/workflows/csharp.yml"
   workflow_dispatch:
 
@@ -33,7 +60,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MP_VERSION: "1.3.83"
   MP_DIR: 'C:\Program Files (x86)\Mission Planner'
 
 defaults:
@@ -42,10 +68,13 @@ defaults:
 
 jobs:
   plugin-tests:
-    name: test plugin SC logic (Windows)
+    name: Plugin logic tests (Windows)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          cache: true
 
       # The plugin's pure SC logic is tested with standalone Roslyn (csc)
       # assertion harnesses — no .NET SDK, NuGet, or staged Mission Planner
@@ -53,9 +82,6 @@ jobs:
       # to it. This matches the repo's existing test-plugin-* idiom.
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v3
-
-      - name: Payload-release interlock tests (SR-PAY-03)
-        run: pwsh -File scripts/build/test_plugin_interlock.ps1
 
       - name: Geofence geometry tests
         run: pwsh -File scripts/build/test_plugin_geometry.ps1
@@ -69,17 +95,64 @@ jobs:
       - name: Altitude callout tests
         run: pwsh -File scripts/build/test_plugin_audio.ps1
 
-      - name: Core client boundary tests
+      - name: Local Mission Planner notification tests
+        run: pwsh -File scripts/build/test_plugin_local_messages.ps1
+
+      - name: Semantic client, actuator UI and USB HID mapping tests
         run: pwsh -File scripts/build/test_plugin_core_client.ps1
 
+      - name: Mission Planner reviewed-target warning tests
+        run: pwsh -File scripts/build/test_plugin_version.ps1
+
+  router-tests:
+    name: Router tests and release qualification (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          cache: true
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Build standalone ground router
+        run: pwsh -File scripts/build/build_ground_router.ps1
+
+      - name: Standalone router and management-client tests
+        run: pwsh -File scripts/build/test_plugin_duallink.ps1
+
+      - name: Standalone router smoke
+        run: python scripts/dev/ground_router_smoke.py
+      - name: Build distinguishable release A and B router fixtures
+        run: pwsh -File scripts/build/build_release_router_fixtures.ps1
+      - name: Qualify router activation health failure and exact binary rollback
+        run: >-
+          pixi run python scripts/dev/release_process_qualification.py
+          --router-a build/release-fixtures/router-A --router-b build/release-fixtures/router-B
+
+      - name: Upload standalone ground router artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: NOMADLinkRouter
+          path: build/ground-router/*
+          if-no-files-found: error
+
   plugin-build:
-    name: build MP plugin (Windows)
+    name: Plugin build and integration (Windows)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
 
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v3
+
+      - name: Build-only dispatch tests (isolated installation)
+        run: pwsh -File scripts/build/test_build_plugin_windows.ps1
+
+      - name: Read reviewed Mission Planner target
+        run: |
+          $version = (Get-Content scripts/release/mission-planner-target.json -Raw | ConvertFrom-Json).version
+          "MP_VERSION=$version" >> $env:GITHUB_ENV
 
       # Cache the 116 MB portable zip keyed on the pinned version so it is
       # downloaded once and restored on subsequent runs.
@@ -109,11 +182,22 @@ jobs:
 
       - name: Build plugin (Release)
         run: |
-          msbuild mission_planner/src/NOMADPlugin.csproj `
-            /nologo /p:Configuration=Release /p:Platform=AnyCPU /v:minimal /clp:Summary
+          pwsh -File scripts/build/build_plugin_windows.ps1
           if (-not (Test-Path "mission_planner/src/bin/Release/NOMADPlugin.dll")) {
             throw "build did not produce NOMADPlugin.dll"
           }
+
+      - name: Mission Planner dead-code lint
+        run: pwsh -File scripts/build/lint_plugin_deadcode.ps1
+
+      - name: Persisted configuration migration and settings UI tests
+        run: pwsh -File scripts/build/test_plugin_config_migration.ps1
+
+      - name: Gimbal joystick UI smoke
+        run: pwsh -File scripts/build/test_plugin_gimbal_ui.ps1
+
+      - name: Video lifetime and cleanup tests
+        run: pwsh -File scripts/build/test_plugin_video.ps1
 
       - name: Flight log adapter smoke test
         run: pwsh -File scripts/build/test_plugin_log_adapters.ps1

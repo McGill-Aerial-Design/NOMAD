@@ -1,0 +1,16 @@
+# MAVLink stream rates the NOMAD core consumes, applied to SITL at startup.
+#
+# ArduPilot streams position, attitude and extended status only after a GCS
+# requests the group: on a fresh passive link these rates are zero and the
+# vehicle emits little more than heartbeats. The C++ core deliberately does not
+# request streams, so the stack sets them here instead, on SERIAL0 - the link
+# MAVProxy forwards from to every host-side copy the core and its scenarios read.
+#
+# SR0_POSITION  GLOBAL_POSITION_INT (position and altitude), GPS_RAW_INT (fix)
+# SR0_EXT_STAT  SYS_STATUS (battery voltage and remaining)
+# SR0_EXTRA1    ATTITUDE
+# SR0_EXTRA2    VFR_HUD (groundspeed, heading)
+SR0_POSITION 5
+SR0_EXT_STAT 2
+SR0_EXTRA1 5
+SR0_EXTRA2 2

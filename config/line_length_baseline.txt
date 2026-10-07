@@ -1,0 +1,7 @@
+# C/C++ files whose existing over-length lines the migration deletes instead of
+# reformatting. An entry must still justify itself: the file must exist and must
+# still contain a line over the limit, so deleting the file (or fixing its lines)
+# makes the entry stale and fails complexity-check.
+#
+# Currently empty: the hand-written codec was deleted at the MAVSDK Phase E
+# cutover, which is what the previous five entries were waiting for.

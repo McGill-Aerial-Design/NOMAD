@@ -9,8 +9,8 @@
 // ArduPilot's own FC fence remains the enforcement in that case.
 #include "nomad/safety/fence_config.hpp"
 
-#include <cmath>
-#include <cstdlib>
+#include "nomad/util/parse.hpp"
+
 #include <string>
 #include <vector>
 
@@ -19,27 +19,17 @@ namespace {
 
 constexpr double kMinimumMarginMeters = 0.0;
 
-bool parse_finite_double(const std::string &text, double &value) {
-    char *end = nullptr;
-    const double parsed = std::strtod(text.c_str(), &end);
-    if (end == text.c_str() || *end != '\0' || !std::isfinite(parsed)) {
-        return false;
-    }
-    value = parsed;
-    return true;
-}
-
 bool parse_vertex(const std::string &pair, GlobalPoint &vertex) {
     const auto comma = pair.find(',');
     if (comma == std::string::npos) {
         return false;
     }
-    GlobalPoint parsed{};
-    if (!parse_finite_double(pair.substr(0, comma), parsed.latitude_deg) ||
-        !parse_finite_double(pair.substr(comma + 1), parsed.longitude_deg)) {
+    const auto latitude = util::parse_double(pair.substr(0, comma));
+    const auto longitude = util::parse_double(pair.substr(comma + 1));
+    if (!latitude.has_value() || !longitude.has_value()) {
         return false;
     }
-    vertex = parsed;
+    vertex = GlobalPoint{*latitude, *longitude};
     return true;
 }
 
@@ -49,11 +39,12 @@ GlobalFencePolicy load_fence_policy(const char *polygon_env, const char *margin_
     const char *polygon_text = polygon_env == nullptr ? "" : polygon_env;
     const char *margin_text = margin_env == nullptr ? "2.0" : margin_env;
 
-    GlobalFencePolicy policy{std::nullopt, 2.0};
-    if (!parse_finite_double(margin_text, policy.margin_m) || policy.margin_m < kMinimumMarginMeters) {
+    const auto margin = util::parse_double(margin_text);
+    if (!margin.has_value() || *margin < kMinimumMarginMeters) {
         // A broken margin must reject every target, not fly unfenced.
         return {std::vector<GlobalPoint>{}, 0.0};
     }
+    GlobalFencePolicy policy{std::nullopt, *margin};
 
     const std::string raw(polygon_text);
     if (raw.empty()) {

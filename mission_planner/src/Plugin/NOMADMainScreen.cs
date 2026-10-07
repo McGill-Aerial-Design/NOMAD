@@ -53,9 +53,7 @@ namespace NOMAD.MissionPlanner
         // Fields
         // ============================================================
 
-        private DualLinkSender _sender;
         private MAVLinkConnectionManager _connectionManager;
-        private JetsonConnectionManager _jetsonConnectionManager;
         private NOMADConfig _config;
         private GeofenceConfig _geofenceConfig;
         private BoundaryMonitor _boundaryMonitor;
@@ -71,26 +69,16 @@ namespace NOMAD.MissionPlanner
         private Button _btnDashboard;
         private Button _btnBoundaries;
         private Button _btnVideo;
-        private Button _btnTerminal;
-        private Button _btnHealth;
         private Button _btnLinks;
-        private Button _btnCalibration;
-        private Button _btnSlam3d;
         private Button _btnLogs;
-        private Button _btnMotorMusic;
 
         // Content views
         private UserControl _currentView;
         private NOMADDashboardView _dashboardView;
         private NOMADBoundaryView _boundaryView;
         private NOMADVideoView _videoView;
-        private NOMADTerminalView _terminalView;
-        private NOMADHealthView _healthView;
         private NOMADLinksView _linksView;
-        private ZedCalibrationView _calibrationView;
-        private SLAM3DView _slam3dView;
         private NOMADLogView _logView;
-        private NOMADMotorMusicView _motorMusicView;
 
 
         // Update timer
@@ -105,10 +93,10 @@ namespace NOMAD.MissionPlanner
         private readonly Dictionary<string, Control> _descriptorViewCache = new Dictionary<string, Control>();
 
         // Static configuration (set by the plugin before this screen is shown)
-        private static DualLinkSender _staticSender;
+        private static System.Threading.CancellationToken _videoShutdown;
+        internal static void SetVideoShutdown(System.Threading.CancellationToken token) => _videoShutdown = token;
         private static NOMADConfig _staticConfig;
         private static MAVLinkConnectionManager _staticConnectionManager;
-        private static JetsonConnectionManager _staticJetsonConnectionManager;
         private static GeofenceConfig _staticGeofenceConfig;
         private static BoundaryMonitor _staticBoundaryMonitor;
         private static ModuleHost _staticModuleHost;
@@ -119,12 +107,10 @@ namespace NOMAD.MissionPlanner
         /// The geofence config + boundary monitor are plugin-owned so monitoring
         /// keeps running when MainSwitcher disposes/recreates this screen.
         /// </summary>
-        public static void SetStaticConfig(DualLinkSender sender, NOMADConfig config, MAVLinkConnectionManager connectionManager = null, JetsonConnectionManager jetsonConnectionManager = null, GeofenceConfig geofenceConfig = null, BoundaryMonitor boundaryMonitor = null)
+        public static void SetStaticConfig(NOMADConfig config, MAVLinkConnectionManager connectionManager = null, GeofenceConfig geofenceConfig = null, BoundaryMonitor boundaryMonitor = null)
         {
-            _staticSender = sender;
             _staticConfig = config;
             _staticConnectionManager = connectionManager;
-            _staticJetsonConnectionManager = jetsonConnectionManager;
             _staticGeofenceConfig = geofenceConfig;
             _staticBoundaryMonitor = boundaryMonitor;
         }
@@ -143,25 +129,17 @@ namespace NOMAD.MissionPlanner
         /// Parameterless constructor required for MainSwitcher.
         /// Uses static configuration set via SetStaticConfig().
         /// </summary>
-        public NOMADMainScreen() : this(_staticSender, _staticConfig, _staticConnectionManager, _staticJetsonConnectionManager)
+        public NOMADMainScreen() : this(_staticConfig, _staticConnectionManager)
         {
         }
 
         /// <summary>
         /// Full constructor with explicit dependencies.
         /// </summary>
-        public NOMADMainScreen(DualLinkSender sender, NOMADConfig config, MAVLinkConnectionManager connectionManager = null, JetsonConnectionManager jetsonConnectionManager = null)
+        public NOMADMainScreen(NOMADConfig config, MAVLinkConnectionManager connectionManager = null)
         {
-            _sender = sender;
             _config = config ?? NOMADConfig.Load(); // Fallback to loading config if null
             _connectionManager = connectionManager;
-            _jetsonConnectionManager = jetsonConnectionManager;
-
-            // Create dummy sender if none provided
-            if (_sender == null && _config != null)
-            {
-                _sender = new DualLinkSender(_config);
-            }
 
             // Geofence config + boundary monitor shared by the boundary view and
             // the dashboard's notification service. Prefer the plugin-owned
@@ -322,7 +300,7 @@ namespace NOMAD.MissionPlanner
                 case "Dashboard":
                     if (_dashboardView == null)
                     {
-                        _dashboardView = new NOMADDashboardView(_sender, _config, _connectionManager, _jetsonConnectionManager);
+                        _dashboardView = new NOMADDashboardView(_config, _connectionManager, _videoShutdown);
                         if (_boundaryMonitor != null)
                         {
                             _dashboardView.SetBoundaryMonitor(_boundaryMonitor);
@@ -335,36 +313,16 @@ namespace NOMAD.MissionPlanner
                     newView = _boundaryView;
                     break;
                 case "Video":
-                    if (_videoView == null) _videoView = new NOMADVideoView(_sender, _config, _jetsonConnectionManager);
+                    if (_videoView == null) _videoView = new NOMADVideoView(_config, _videoShutdown);
                     newView = _videoView;
-                    break;
-                case "Terminal":
-                    if (_terminalView == null) _terminalView = new NOMADTerminalView(_config);
-                    newView = _terminalView;
-                    break;
-                case "Health":
-                    if (_healthView == null) _healthView = new NOMADHealthView(_config, _sender);
-                    newView = _healthView;
                     break;
                 case "Links":
                     if (_linksView == null) _linksView = new NOMADLinksView(_connectionManager, _config);
                     newView = _linksView;
                     break;
-                case "Calibration":
-                    if (_calibrationView == null) _calibrationView = new ZedCalibrationView(_config);
-                    newView = _calibrationView;
-                    break;
-                case "Slam3D":
-                    if (_slam3dView == null) _slam3dView = new SLAM3DView(_config, _sender);
-                    newView = _slam3dView;
-                    break;
                 case "Logs":
-                    if (_logView == null) _logView = new NOMADLogView(_config, _sender);
+                    if (_logView == null) _logView = new NOMADLogView(_config);
                     newView = _logView;
-                    break;
-                case "MotorMusic":
-                    if (_motorMusicView == null) _motorMusicView = new NOMADMotorMusicView(_config);
-                    newView = _motorMusicView;
                     break;
             }
 
@@ -385,13 +343,8 @@ namespace NOMAD.MissionPlanner
                 _btnDashboard,
                 _btnBoundaries,
                 _btnVideo,
-                _btnTerminal,
-                _btnHealth,
                 _btnLinks,
-                _btnCalibration,
-                _btnSlam3d,
                 _btnLogs,
-                _btnMotorMusic,
             };
             foreach (var btn in buttons)
             {
@@ -409,13 +362,8 @@ namespace NOMAD.MissionPlanner
                 case "Dashboard": activeBtn = _btnDashboard; break;
                 case "Boundaries": activeBtn = _btnBoundaries; break;
                 case "Video": activeBtn = _btnVideo; break;
-                case "Terminal": activeBtn = _btnTerminal; break;
-                case "Health": activeBtn = _btnHealth; break;
                 case "Links": activeBtn = _btnLinks; break;
-                case "Calibration": activeBtn = _btnCalibration; break;
-                case "Slam3D": activeBtn = _btnSlam3d; break;
                 case "Logs": activeBtn = _btnLogs; break;
-                case "MotorMusic": activeBtn = _btnMotorMusic; break;
             }
 
             if (activeBtn != null)
@@ -435,7 +383,7 @@ namespace NOMAD.MissionPlanner
             if (_updateTimer == null)
             {
                 _updateTimer = new System.Windows.Forms.Timer();
-                _updateTimer.Interval = _config.HealthPollInterval; // Honor config polling interval
+                _updateTimer.Interval = Math.Max(100, _config.LinkMonitorInterval);
                 _updateTimer.Tick += UpdateTimer_Tick;
             }
             _updateTimer.Start();
@@ -470,13 +418,8 @@ namespace NOMAD.MissionPlanner
                 _dashboardView?.Dispose();
                 _boundaryView?.Dispose();
                 _videoView?.Dispose();
-                _terminalView?.Dispose();
-                _healthView?.Dispose();
                 _linksView?.Dispose();
-                _calibrationView?.Dispose();
-                _slam3dView?.Dispose();
                 _logView?.Dispose();
-                _motorMusicView?.Dispose();
                 // Dispose any module-contributed views built in module mode.
                 foreach (var cached in _descriptorViewCache.Values)
                     cached?.Dispose();

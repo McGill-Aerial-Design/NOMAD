@@ -1,0 +1,6 @@
+function(nomad_add_core_test target source)
+    add_executable(${target} ${source})
+    target_link_libraries(${target} PRIVATE nomad_core)
+    target_compile_definitions(${target} PRIVATE NOMAD_TESTS)
+    add_test(NAME ${target} COMMAND ${target})
+endfunction()

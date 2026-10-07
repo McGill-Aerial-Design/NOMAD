@@ -35,6 +35,18 @@ bool is_finite(const GlobalPoint& point) {
            point.longitude_deg >= -180.0 && point.longitude_deg <= 180.0;
 }
 
+bool is_valid_polygon(const std::vector<Point2d>& polygon) {
+    if (polygon.size() < 3) {
+        return false;
+    }
+    for (const auto& vertex : polygon) {
+        if (!is_finite(vertex)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 Point2d to_local_point(const GlobalPoint& reference, const GlobalPoint& point) {
     const double longitude_scale = kMetersPerDegreeLongitude *
                                    std::cos(reference.latitude_deg * 0.017453292519943295);
@@ -47,7 +59,7 @@ Point2d to_local_point(const GlobalPoint& reference, const GlobalPoint& point) {
 }  // namespace
 
 bool point_in_polygon(const Point2d& point, const std::vector<Point2d>& polygon) {
-    if (polygon.size() < 3) {
+    if (!is_valid_polygon(polygon)) {
         return false;
     }
     bool inside = false;
@@ -68,7 +80,7 @@ bool point_in_polygon(const Point2d& point, const std::vector<Point2d>& polygon)
 }
 
 double distance_to_boundary(const Point2d& point, const std::vector<Point2d>& polygon) {
-    if (polygon.size() < 2) {
+    if (!is_valid_polygon(polygon)) {
         return std::numeric_limits<double>::infinity();
     }
     double closest = std::numeric_limits<double>::infinity();
@@ -81,7 +93,7 @@ double distance_to_boundary(const Point2d& point, const std::vector<Point2d>& po
 }
 
 bool is_contained(const Point2d& point, const std::vector<Point2d>& polygon, double margin_m) {
-    if (!point_in_polygon(point, polygon)) {
+    if (!is_valid_polygon(polygon) || !point_in_polygon(point, polygon)) {
         return false;
     }
     if (margin_m <= 0.0) {
@@ -99,6 +111,9 @@ FenceDecision evaluate_position(const FencePolicy& policy, const Point2d& point)
     }
     if (!std::isfinite(policy.margin_m) || policy.margin_m < 0.0) {
         return {false, "fence", "geofence margin is invalid"};
+    }
+    if (!is_valid_polygon(*policy.boundary)) {
+        return {false, "fence", "geofence boundary is invalid"};
     }
     if (!is_contained(point, *policy.boundary, policy.margin_m)) {
         return {false, "fence", "position target is outside the geofence"};

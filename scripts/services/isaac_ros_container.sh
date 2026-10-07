@@ -5,9 +5,8 @@
 # nomad-isaac-ros-container service
 #
 # Owns: the long-running `nomad_isaac_ros` Docker container (sleep infinity).
-# Does NOT own ZED, nvblox, the ROS adapter node (nomad_ros_vehicle), or the
-# video bridge — each of
-# those has its own service that runs `docker exec` against this container.
+# Does NOT own the ROS adapter node (nomad_ros_vehicle) or the video bridge;
+# each has its own service that runs `docker exec` against this container.
 #
 # Stopping this service stops the container, which cascades to every in-
 # container service (and they will be restarted by their own units after the
@@ -56,14 +55,12 @@ create_container() {
         -v /tmp/argus_socket:/tmp/argus_socket \
         -v /etc/localtime:/etc/localtime:ro \
         -v "$NOMAD_REPO_ROOT/config:/workspaces/isaac_ros-dev/config:ro" \
-        -v "$NOMAD_REPO_ROOT/edge_core:/workspaces/isaac_ros-dev/edge_core:ro" \
         -e DISPLAY="${DISPLAY:-}" \
         -e NVIDIA_VISIBLE_DEVICES=all \
         -e NVIDIA_DRIVER_CAPABILITIES=all \
         -e EGL_PLATFORM=device \
         -e ROS_DOMAIN_ID="$ISAAC_ROS_DOMAIN_ID" \
-        -e LD_LIBRARY_PATH=/usr/local/zed/lib:/opt/ros/humble/lib:/opt/ros/humble/lib/aarch64-linux-gnu \
-        -e CMAKE_PREFIX_PATH=/usr/local/zed \
+        -e LD_LIBRARY_PATH=/opt/ros/humble/lib:/opt/ros/humble/lib/aarch64-linux-gnu \
         -w /workspaces/isaac_ros-dev \
         "$image" \
         sleep infinity > /dev/null

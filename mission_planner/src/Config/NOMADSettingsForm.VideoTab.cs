@@ -64,7 +64,7 @@ namespace NOMAD.MissionPlanner
             _chkDebugMode = AddCheckBox(tab, "Enable Debug Logging", 20, y);
             y += 40;
 
-            AddSectionLabel(tab, "SLAM 3D View", ref y);
+            AddSectionLabel(tab, "Future 3D View", ref y);
 
             AddLabel(tab, "Camera FOV (deg):", 20, y);
             _numSlamFov = AddNumericUpDown(tab, 150, y, 70, 30, 140, 60);
@@ -75,7 +75,7 @@ namespace NOMAD.MissionPlanner
             AddLabel(tab, "Local Map Radius (m):", 20, y);
             _numSlamMapRadius = AddNumericUpDown(tab, 150, y, 70, 1, 20, 3);
             y += 24;
-            AddLabel(tab, "Controls how much SLAM data stays in the Mission Planner view", 20, y, Color.Gray);
+            AddLabel(tab, "Reserved for a future estimator visualization", 20, y, Color.Gray);
 
             return tab;
         }

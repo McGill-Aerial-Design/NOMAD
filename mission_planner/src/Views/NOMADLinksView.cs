@@ -53,7 +53,7 @@ namespace NOMAD.MissionPlanner
 
             layout.Controls.Add(new Label
             {
-                Text = "MAVLink Dual Link Router",
+                Text = "MAVLink Multi-Link Router",
                 Font = new Font("Segoe UI", 14, FontStyle.Bold),
                 ForeColor = NOMADTheme.ACCENT,
                 AutoSize = true,
@@ -63,12 +63,11 @@ namespace NOMAD.MissionPlanner
             layout.Controls.Add(new Label
             {
                 Text =
-                    "Dual link is disabled in settings.\n\n" +
-                    "When enabled, NOMAD opens both the LTE/Tailscale and RadioMaster sockets directly,\n" +
-                    "merges the two streams to a single local UDP endpoint and switches the outbound\n" +
-                    "side to whichever link is healthiest. Mission Planner connects to that local endpoint\n" +
-                    "as a UDP client — failover happens with no reconnect and no dropped packets.\n\n" +
-                    "Enable it in NOMAD → Settings → Connection.",
+                    "Multi-Link is disabled in settings.\n\n" +
+                    "When enabled, Mission Planner connects to the separately supervised ground router.\n" +
+                    "The router selects one physical link, supplies telemetry, and reports link health.\n" +
+                    "Mission Planner does not start, stop, or configure the router host.\n\n" +
+                    "Enable the router status client in NOMAD → Settings → Multi-Link.",
                 Font = new Font("Segoe UI", 10),
                 ForeColor = NOMADTheme.TEXT_SECONDARY,
                 AutoSize = true,
