@@ -345,7 +345,15 @@ for unrelated changes. `sitl.yml` runs the full Copter and QuadPlane
 qualification for safety-sensitive pull requests and main pushes. Its scope
 gate skips both simulator builds for unrelated changes, and a required gate
 fails if either full suite does not pass when those paths change. Scheduled and
-manual runs always perform both suites. The separate
+manual runs always perform both suites. Each full job builds the runtime and
+non-installed qualification driver once, then uses `pixi run --skip-deps` to
+run its scenarios serially with their task-specific environments. Ordinary
+standalone scenario commands retain their `build-sitl-tools` dependency.
+This avoids repeated MAVSDK reconfiguration consuming the qualification timeout.
+The Copter harness invokes each mutation once and reports any failed or uncertain
+outcome. Only read-only status observations may retry; cleanup actions remain
+distinct commands followed by authoritative state checks.
+The separate
 [`mavsdk-sitl-smoke.yml`](../.github/workflows/mavsdk-sitl-smoke.yml) checks
 connectivity only and is not reported as full SITL qualification. `docker.yml`
 is manual and targets self-hosted Jetson/GPU runners. The

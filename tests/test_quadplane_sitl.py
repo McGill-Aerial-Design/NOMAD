@@ -53,7 +53,7 @@ def test_rc_probe_ci_is_isolated_bounded_and_preserves_the_flight_chain() -> Non
     artifact = steps[probe_index + 1]
     assert artifact["if"] == "always()"
     assert artifact["with"]["path"].endswith("quadplane-rc-probe-*.json")
-    assert any(step.get("run") == "pixi run core-sitl-quadplane-vtol-landing" for step in steps)
+    assert any(step.get("run") == "pixi run --skip-deps core-sitl-quadplane-vtol-landing" for step in steps)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="CI cleanup shell requires native Bash")

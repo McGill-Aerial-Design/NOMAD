@@ -88,8 +88,8 @@ jobs:
       - name: Let SITL warm up
         run: sleep 25
 
-      - name: Build production runtime for authority qualification
-        run: pixi run build-core
+      - name: Build runtime and qualification tools once
+        run: pixi run build-sitl-tools
 
       - name: Qualify runtime authority and independent source on isolated Copter
         timeout-minutes: 6
@@ -120,7 +120,7 @@ jobs:
           if-no-files-found: warn
 
       - name: C++ runtime telemetry observation scenario
-        run: pixi run core-sitl-status
+        run: pixi run --skip-deps core-sitl-status
 
       - name: MAVSDK connect/status smoke
         run: pixi run run-mavsdk-sitl-smoke | tee "$RUNNER_TEMP/mavsdk-connectivity-runtime.txt"
@@ -136,47 +136,47 @@ jobs:
         run: python scripts/dev/mavsdk_build_metrics.py
 
       - name: C++ command authorization and flow scenario
-        run: pixi run core-sitl-command-flow
+        run: pixi run --skip-deps core-sitl-command-flow
 
       - name: C++ mission execution scenario
-        run: pixi run core-sitl-mission
+        run: pixi run --skip-deps core-sitl-mission
 
       - name: C++ velocity watchdog scenario (H-01..H-04)
-        run: pixi run core-sitl-velocity-watchdog
+        run: pixi run --skip-deps core-sitl-velocity-watchdog
 
       - name: C++ relay pulse acknowledgements (H-06, SR-PAY-01..03)
-        run: pixi run core-sitl-payload
+        run: pixi run --skip-deps core-sitl-payload
 
       - name: C++ link-loss injection scenario (H-03, SR-LNK-01/03)
-        run: pixi run core-sitl-link-loss
+        run: pixi run --skip-deps core-sitl-link-loss
 
       # SR-LNK-03 transport-level zero-delivery proof: a pymavlink observer
       # watches the CLI's actual wire setpoints through a tee relay and the
       # vehicle must stop after the zero. Runs on the stack's 14572 copy like
       # the link-recovery scenario (the relay binds it as upstream).
       - name: C++ zero-delivery proof (SR-LNK-03, H-03)
-        run: pixi run core-sitl-zero-delivery
+        run: pixi run --skip-deps core-sitl-zero-delivery
 
       - name: C++ link-recovery scenario (degraded-link semantics)
-        run: pixi run core-sitl-link-recovery
+        run: pixi run --skip-deps core-sitl-link-recovery
 
       # Proves the 1 Hz GCS heartbeat opens a heartbeat-gated relay leg (the
       # mechanism real mavlink-router and MAVProxy setups require). Must run
       # on the stack's default 14570 copy; it binds its own client port.
       - name: C++ GCS-heartbeat relay-gate scenario (SR-LNK-04)
-        run: pixi run core-sitl-gcs-heartbeat
+        run: pixi run --skip-deps core-sitl-gcs-heartbeat
 
       - name: Velocity loop-closure scenario (H-01..H-04, SR-VEL/LNK/VIO)
-        run: pixi run sitl-scenario
+        run: pixi run --skip-deps sitl-scenario
 
       - name: Geofence containment scenario (H-05, SR-FEN-02; C++ CLI drives the vehicle)
-        run: pixi run sitl-fence
+        run: pixi run --skip-deps sitl-fence
 
       # Upload/readback leaves an ArduPilot polygon active. Keep it after the
       # guided-flight containment check so that persisted autopilot state cannot
       # reject the containment scenario's in-fence target.
       - name: C++ geofence upload/readback scenario (H-05, SR-FEN-01)
-        run: pixi run core-sitl-geofence
+        run: pixi run --skip-deps core-sitl-geofence
 
       - name: SITL logs on failure
         if: failure()
@@ -249,6 +249,9 @@ jobs:
           path: ${{ runner.temp }}/quadplane-rc-probe-*.json
           if-no-files-found: warn
 
+      - name: Build runtime and qualification tools once
+        run: pixi run build-sitl-tools
+
       - name: Bring up pinned QuadPlane SITL
         run: pixi run quadplane-sitl-up
 
@@ -260,10 +263,10 @@ jobs:
         run: sleep 25
 
       - name: Observe identity, telemetry and baseline modes
-        run: pixi run core-sitl-quadplane-observe
+        run: pixi run --skip-deps core-sitl-quadplane-observe
 
       - name: Qualify NOMAD arm and QuadPlane VTOL takeoff
-        run: pixi run core-sitl-quadplane-vtol-takeoff
+        run: pixi run --skip-deps core-sitl-quadplane-vtol-takeoff
 
       - name: Reset QuadPlane SITL before transition qualification
         run: |
@@ -272,7 +275,7 @@ jobs:
           sleep 25
 
       - name: Qualify pinned QuadPlane VTOL-to-fixed-wing transition
-        run: pixi run core-sitl-quadplane-transition
+        run: pixi run --skip-deps core-sitl-quadplane-transition
 
       - name: Reset QuadPlane SITL before route qualification
         run: |
@@ -281,7 +284,7 @@ jobs:
           sleep 25
 
       - name: Qualify pinned QuadPlane fixed-wing route navigation
-        run: pixi run core-sitl-quadplane-route
+        run: pixi run --skip-deps core-sitl-quadplane-route
 
       - name: Reset QuadPlane SITL before recovery qualification
         run: |
@@ -290,7 +293,7 @@ jobs:
           sleep 25
 
       - name: Qualify pinned QuadPlane fixed-wing recovery after route
-        run: pixi run core-sitl-quadplane-recovery
+        run: pixi run --skip-deps core-sitl-quadplane-recovery
 
       - name: Reset QuadPlane SITL before transition-back qualification
         run: |
@@ -299,7 +302,7 @@ jobs:
           sleep 25
 
       - name: Qualify recovered QuadPlane fixed-wing-to-VTOL transition
-        run: pixi run core-sitl-quadplane-transition-back
+        run: pixi run --skip-deps core-sitl-quadplane-transition-back
 
       - name: Reset QuadPlane SITL before VTOL landing qualification
         run: |
@@ -308,7 +311,7 @@ jobs:
           sleep 25
 
       - name: Qualify full pinned QuadPlane chain through VTOL landing
-        run: pixi run core-sitl-quadplane-vtol-landing
+        run: pixi run --skip-deps core-sitl-quadplane-vtol-landing
 
       - name: QuadPlane SITL logs on failure
         if: failure()

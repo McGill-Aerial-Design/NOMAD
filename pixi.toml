@@ -50,7 +50,7 @@ verify-core-resource-budgets = "python scripts/dev/verify_core_resource_budgets.
 # two installed executables, even when test targets are configured.
 build-core = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DBUILD_TESTING=OFF && cmake --build build/core --config Debug --target nomad nomad-runtime"
 build-qualification-cli = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DBUILD_TESTING=OFF && cmake --build build/core --config Debug --target nomad-qualification"
-build-sitl-tools = "pixi run build-core && pixi run build-qualification-cli"
+build-sitl-tools = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DBUILD_TESTING=OFF && cmake --build build/core --config Debug --target nomad nomad-runtime nomad-qualification"
 test-core = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DBUILD_TESTING=ON && cmake --build build/core --config Debug && ctest --test-dir build/core -C Debug --output-on-failure"
 test-runtime-ipc = "pixi run build-core && python scripts/dev/runtime_ipc_smoke.py"
 test-runtime-lifecycle = "pixi run build-core && python scripts/dev/runtime_lifecycle_qualification.py"
@@ -246,11 +246,13 @@ profile-edit = "python scripts/profile.py edit"
 # (SR-SEC-02/03); the key below is the documented development-simulation key
 # from config/nomad.env.example, never a production credential.
 [tasks.core-sitl-status]
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_status.py"
+cmd = "python scripts/dev/core_sitl_status.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-quadplane-observe]
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_observe.py"
+cmd = "python scripts/dev/core_sitl_quadplane_observe.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
 # Dedicated, guarded native Copter simulator; see tests/sitl/README.md.
@@ -262,74 +264,90 @@ cmd = "pixi run build-core && python scripts/dev/core_sitl_authority.py"
 cmd = "python scripts/dev/core_sitl_quadplane_rc_loss_probe.py"
 
 [tasks.core-sitl-quadplane-vtol-takeoff]
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_vtol_takeoff.py"
+cmd = "python scripts/dev/core_sitl_quadplane_vtol_takeoff.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
 [tasks.core-sitl-quadplane-transition]
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_transition.py"
+cmd = "python scripts/dev/core_sitl_quadplane_transition.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
 [tasks.core-sitl-quadplane-route]
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_route.py"
+cmd = "python scripts/dev/core_sitl_quadplane_route.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
 [tasks.core-sitl-quadplane-recovery]
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_recovery.py"
+cmd = "python scripts/dev/core_sitl_quadplane_recovery.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
 [tasks.core-sitl-quadplane-transition-back]
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_transition_back.py"
+cmd = "python scripts/dev/core_sitl_quadplane_transition_back.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
 [tasks.core-sitl-quadplane-vtol-landing]
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_landing.py"
+cmd = "python scripts/dev/core_sitl_quadplane_landing.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
 [tasks.core-sitl-command-flow]
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_command_flow.py"
+cmd = "python scripts/dev/core_sitl_command_flow.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-mission]
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_mission.py"
+cmd = "python scripts/dev/core_sitl_mission.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-velocity-watchdog]
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_velocity_watchdog.py"
+cmd = "python scripts/dev/core_sitl_velocity_watchdog.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-geofence]
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_geofence.py"
+cmd = "python scripts/dev/core_sitl_geofence.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-payload]
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_payload.py"
+cmd = "python scripts/dev/core_sitl_payload.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-link-loss]
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_link_loss.py"
+cmd = "python scripts/dev/core_sitl_link_loss.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-zero-delivery]
 # Observes the CLI's wire setpoints through a tee relay (the relay binds the
 # always-on 14572 copy as its upstream, like the link-recovery scenario).
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_zero_delivery.py"
+cmd = "python scripts/dev/core_sitl_zero_delivery.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_CORE_SITL_PORT = "14572" }
 
 [tasks.core-sitl-gcs-heartbeat]
 # The relay binds the always-on 14572 copy as its upstream (see
 # docker-compose.dev.yml), like the link-recovery scenario.
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_gcs_heartbeat.py"
+cmd = "python scripts/dev/core_sitl_gcs_heartbeat.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.sitl-scenario]
-cmd = "pixi run build-sitl-tools && python tests/sitl/velocity_loop_closure.py"
+cmd = "python tests/sitl/velocity_loop_closure.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_SITL_OPERATOR = "tcp:127.0.0.1:5762", NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-link-recovery]
 # The relay binds 14572 as its upstream; the dev stack always forwards a
 # MAVLink copy there (see SITL_UDP_OUTPUT_ADDRESS in docker-compose.dev.yml),
 # so this task works without restarting the stack with special env.
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_link_recovery.py"
+cmd = "python scripts/dev/core_sitl_link_recovery.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_CORE_SITL_PORT = "14572" }
 
 [tasks.sitl-fence]
@@ -337,5 +355,6 @@ env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_CORE_SITL_PORT = "14572" }
 # (mode/arm/takeoff/goto under the projected fence) against the same host-side
 # SITL UDP copy the other core-sitl-* scenarios use. Every step is an actuation
 # command, so it needs the same development API key the other runners set.
-cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_containment.py"
+cmd = "python scripts/dev/core_sitl_containment.py"
+depends-on = ["build-sitl-tools"]
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }

@@ -242,7 +242,7 @@ def cleanup_zero_delivery(binary: Path, port: str) -> None:
     errors: list[str] = []
     for action in ("rtl", "land"):
         try:
-            run_cli(binary, port, action, attempts=2)
+            run_cli(binary, port, action)
         except (OSError, ScenarioError) as error:
             errors.append(f"{action}: {error}")
     try:
@@ -250,7 +250,7 @@ def cleanup_zero_delivery(binary: Path, port: str) -> None:
     except (OSError, ScenarioError) as error:
         errors.append(f"disarm verification: {error}")
     try:
-        run_cli(binary, port, "disarm", attempts=2)
+        run_cli(binary, port, "disarm")
     except (OSError, ScenarioError) as error:
         errors.append(f"disarm command: {error}")
     if errors:
