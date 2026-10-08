@@ -9,7 +9,7 @@
 # packages required.
 #
 # The harness exercises typed runtime requests, fail-closed validation,
-# explicit GuidedGoto unavailability, authority controls, protocol negotiation,
+# authority controls, protocol negotiation,
 # and unknown-outcome no-replay behavior without Mission Planner assemblies.
 #
 # Usage: pixi run test-plugin-core-client
@@ -45,7 +45,7 @@ $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Network.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Requests.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Control\FlightModeController.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Control\TerminationControl.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Control\GimbalCommand.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Control\GimbalController.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\TerminationRequestTests.cs'),

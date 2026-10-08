@@ -1,86 +1,8 @@
-# Persistent C++ runtime and local IPC
+# Runtime IPC contract
 
-This document records the source ownership at the PR #23 main baseline
-(`3cd11aee48b9e844e75829a9ef2d65bc1ecfa1f3`) and the runtime IPC foundation
-added from that baseline, followed by the current software-authority foundation.
-It does not qualify aircraft-wide manual takeover.
-
-## Ownership before the runtime
-
-At the baseline, `src/main.cpp` created a MAVSDK-backed `MavlinkConnection`
-through `make_mavsdk_connection` for each `nomad` invocation. `run_command`
-constructed a stack `Vehicle` for a command. The separate `status` path in
-`src/cli_commands.cpp` also constructed a stack `Vehicle`; `connect` did not.
-The process then exited, destroying the transport and telemetry subscriptions.
-The `Vehicle` held a reference to the connection; it did not own it.
-
-`MavsdkMavlinkConnection` owned the MAVSDK instance, connection handle, selected
-system, plugins, telemetry subscriptions and mutex-protected latest
-`VehicleState`. The `Vehicle` owned its current safety policy objects and
-watchdog state. The `MissionExecutor` was a small synchronous helper used by a
-CLI demo, not a persistent mission session.
-
-Mission Planner's `NomadCoreClient` created a new OS process for each `goto`,
-servo, relay, motor-test or gimbal-config request. Its API key was copied to that
-child as `NOMAD_API_KEY`; the C++ CLI only checked that the value was non-empty
-before an actuation verb and wrote an audit line. It did not compare a client
-credential with a runtime secret or authenticate a user.
-
-At the starting baseline, `nomad_ros` created its own command-capable
-`MavlinkConnection` and `Vehicle`. The ROS architecture slice removes that
-path. The shipped node now uses a separate raw UDP `MavlinkObservation` because
-protocol v1 status does not include sensor values. Its API and socket expose no
-MAVLink send path.
-It exposes no flight command topics or services. Python vehicle-facing code
-found in this source review is limited to test/SITL peers, passive observers and
-maintenance utilities; there is no Python `Vehicle` runtime.
-Mission Planner's native MAVLink functions, pilot/RC and ArduPilot remain
-independent command sources.
-
-The standalone ground router's current topology reserves router consumer UDP
-`127.0.0.1:14602` and MAVSDK client UDP `127.0.0.1:14601`. Mission Planner uses
-router UDP `127.0.0.1:14600`. Router management is TCP `127.0.0.1:14610`.
-Runtime IPC uses a separate TCP port, `127.0.0.1:14611` by default.
-
-## Runtime ownership now
-
-`nomad-runtime` is the long-lived composition root. It creates one
-`MavlinkConnection`, constructs one `Vehicle` that references it, and keeps both
-alive while the process runs. A connection worker retries the same connection
-object when startup discovery fails or MAVSDK reports that its system is no
-longer connected. Client connect/disconnect does not create or destroy the
-vehicle connection. The runtime starts its IPC listener even while aircraft
-identity is unresolved, so `STATUS` can report partial startup state.
-
-Runtime IPC v1 does not expose position targets, velocity setpoints, missions,
-or fence transfer. The runtime does not apply `NOMAD_FENCE_*` or
-`NOMAD_VELOCITY_*` settings to its accepted requests. Those core policies remain
-available to direct C++ `Vehicle` callers and the non-installed
-`nomad-qualification` driver; they are not a runtime boundary monitor or an
-operator-facing safety decision API. Typed runtime handlers call only the
-supported actuator and gimbal operations. The IPC layer does not pack MAVLink
-or copy Vehicle capability checks.
-
-The C++ library, installed `nomad` executable, `nomad-runtime` executable and
-Mission Planner client now have these roles:
-
-| Client | Mode | Behavior |
-|---|---|---|
-| Mission Planner | runtime IPC only | Connects to the configured loopback port; never launches the CLI or falls back to native MAVLink/direct vehicle writes |
-| Installed C++ CLI | bare verb | Sends typed requests to runtime IPC; has no MAVSDK connection or direct fallback |
-| `nomad-qualification` | build-tree test target | Direct MAVSDK/`Vehicle` driver for SITL; excluded from install/default build |
-| ROS 2 | telemetry observer | Uses the receive-only `nomad_mavlink_observation` target; publishes validated GPS and battery samples only |
-
-Mission Planner and the installed C++ CLI support the typed requests listed
-below. Recognized CLI verbs without a typed v1 request return
-`unsupported_request` and do not contact a vehicle. In particular, there is no
-generic command ID, raw MAVLink or shell command. Mission Planner has no
-one-shot compatibility mode. GuidedGoto remains unavailable because protocol v1
-does not expose a typed navigation request; the plugin reports this and sends no
-vehicle command.
-
-The direct test driver accepts aircraft endpoint and system-ID options solely
-for qualification. It is not installed or used by production clients.
+The persistent `nomad-runtime` owns all production vehicle writes.
+[Architecture](architecture.md) defines ownership; this document defines protocol v1,
+outcomes, actuator requests, authentication and durable evidence.
 
 ## Protocol v1
 
@@ -127,8 +49,8 @@ fields are ignored. Clients negotiate with `hello` before sending a command.
 
 Vehicle navigation requests are intentionally absent from protocol v1. The
 two-point QuadPlane fixed-wing route is qualified in the core, but it is not
-exposed through runtime IPC v1. The installed `nomad goto` command therefore
-reports unavailable; the non-installed qualification driver retains direct
+exposed through runtime IPC v1. The installed CLI rejects `goto` during argument parsing; the non-installed
+qualification driver retains direct
 navigation for its SITL evidence.
 
 `STATUS` reports runtime IPC readiness, MAVSDK connection open, vehicle
@@ -171,11 +93,11 @@ runtime outcomes do not trigger a direct MAVLink fallback or replay.
 
 `NOMAD_API_KEY` remains a nonempty runtime deployment/actuation enable gate.
 It does not authenticate identity. Mission Planner's old `CoreApiKey` setting
-is retired and ignored; it is never migrated into an authentication credential.
+is unsupported and rejected by current settings validation.
 
 ## Vehicle mutation outcomes
 
-The five vehicle mutations use the existing additive protocol v1 `outcome`
+Vehicle mutations use the existing additive protocol v1 `outcome`
 field on both `command_response` and error envelopes. `ok` describes the
 response envelope, not vehicle success. `error.code` explains why normal
 completion was unavailable; it does not classify transmission. Authority
@@ -183,8 +105,7 @@ admission, revocation and handback are runtime state transitions and retain
 their separate `authority_response` contract.
 
 Protocol v1 already carried `outcome` on vehicle command responses; extending
-it to error envelopes and preserving it in updated clients is additive. No
-version bump or legacy inference fallback is needed. Missing classification
+it to error envelopes and preserving it in updated clients is additive. Classification remains explicit in protocol v1. Missing classification
 from an older runtime remains unknown to an updated mutation client.
 
 | `outcome` | What NOMAD knows | Transmission guarantee |
@@ -326,7 +247,7 @@ software waits are 50–1500 ms, admitted only with a 3000 ms ON ACK budget plus
 250 ms margin. Both edges retain the original final-send token; expiry/revocation is
 never bypassed for OFF. Explicit safe requests can interrupt the wait and retain their
 own normal expiry/authority checks. Configuration changes report disk uncertainty
-separately, without inventing vehicle admission/ACK. See [operations](operations.md#generic-actuator-configuration-and-frontend-migration)
+separately, without inventing vehicle admission/ACK. See [operations](operations.md#current-configuration)
 and [backend fault tests](../tests/actuator_test.cpp).
 
 debt: at most eight actuators and the existing 32 IPC workers bound explicit safe
@@ -380,9 +301,9 @@ is immutable during runtime; rotation requires restart and fresh admission.
 The installed CLI reads `NOMAD_CLIENT_CREDENTIAL` and optional `NOMAD_CLIENT_ID`
 (default `nomad-cli`). Mission Planner uses stable identity `mission-planner`
 and separately provisioned `CoreClientCredential` (empty by default), entered
-in its masked settings field. Profile synchronization removes `CoreApiKey` and
-preserves the separately provisioned credential; it no longer copies
-`NOMAD_API_KEY` into plugin credentials. Profiles must never save credentials.
+in its masked settings field. Current settings reject `CoreApiKey`; portable
+exports omit the separately provisioned client credential. The actuation-enable
+gate must never be used as a client credential.
 Future approved clients may receive their own configured identity/token.
 
 Any configured authenticated client may explicitly revoke software authority,
@@ -468,82 +389,41 @@ separate evidence, including interrupted outcomes. None proves physical action. 
 Vehicle result is only the software observation. Failed/interrupted/unknown
 outcomes must not be reported as proof of a physical outcome.
 
-## Software authority foundation
 
-The runtime starts with generation zero and no admitted owner. `hello` and
-`status` expose its random incarnation, current vehicle session and authority
-generation. A trusted local client explicitly calls `admit_authority` with the
-current context and its `client_id` as `command_source`. Only one source can win.
-`revoke_authority` advances the generation and removes the owner. After a prior
-admission, `handback_authority` explicitly admits a source into another new
-generation; reconnect alone never does. Loss of the observed aircraft session
-also revokes the owner. A session mismatch is checked and revoked during
-`hello`, `status`, mutation and transport admission, without waiting for the monitor loop.
-The MAVSDK connection also invalidates the shared gate when it changes vehicle
-session, before a later queued command can use the new session.
-No old mission is restored.
 
-Each typed mutation echoes the incarnation, vehicle session, generation and
-source, supplies a positive monotonically increasing `sequence`, and an absolute
-`expires_at_ms` no more than five seconds ahead. The runtime reserves each
-sequence before dispatch and keeps the high-water mark after response eviction.
-`hello` includes the next sequence for each short-lived `nomad` invocation.
-Mission Planner allocates at least the authenticated
-`hello.authority.next_sequence`, sharing a counter by runtime loopback port and
-client identity across client instances in its process. A short lock allocates
-the greater of this lower bound and the previous allocation plus one, without
-holding a lock across network awaits. A restarted Mission Planner therefore
-uses the runtime's current lower bound immediately. Runtime restart does not
-reset the local counter; each request still binds fresh incarnation, session and
-generation from its own authenticated handshake. A nonwaiting async mutation gate
-shared by endpoint and identity covers hello, allocation, write and response
-classification for vehicle mutations only (servo, relay, motor-test and gimbal
-configuration/target). Overlapping vehicle mutations return `NotAttempted` /
-`request_in_progress` before connecting, so same-process vehicle mutations cannot
-overtake one another on independent connections. Admit, revoke and handback bypass
-this gate, using the same sequence allocator and their own fresh hello/context.
-An operator revoke can therefore advance runtime authority generation while a
-vehicle mutation is executing; that mutation then reports `authority_interrupted`.
-The gate is released on every result, failure and cancellation. Separate
-simultaneous processes sharing an identity remain
-unsupported and do not coordinate their local allocations.
-Duplicate requests can retrieve a cached response only while the same authority
-is still current. An evicted replay is rejected. In-flight operations return
-`authority_interrupted` if authority changes before completion. The runtime
-captures the request context for each SDK command operation. `nomad admit`,
-`revoke` and `handback` are explicit local operator controls for the CLI source;
-Mission Planner exposes the same deliberate controls on its Core settings tab.
-Neither client admits itself on reconnect.
+## Authority request context
 
-The HMAC credential authenticates a configured client identity; it does not identify
-a human operator or protect a compromised host. A process without the client's
-secret cannot use its authority by claiming its ID. The pinned MAVSDK fork checks the captured context
-before the first send and each retry of `COMMAND_LONG` and `COMMAND_INT`. Its
-posted UDP delivery also runs under the same authority gate used by revoke and
-handback. Denied passthrough work returns a distinct admission-cancelled result
-to the transport; an interrupted runtime request reports `authority_interrupted` and
-never treats an uncertain aircraft outcome as success. Fence transfer and
-one-shot Offboard setpoints are outside runtime IPC v1 and need their own
-per-frame admission before integrated authority can expose them.
+The runtime starts at generation zero with no owner. Each typed mutation includes
+`runtime_incarnation`, `vehicle_session`, `authority_generation`, `command_source`,
+a positive monotonically increasing `sequence` and absolute `expires_at_ms` no more
+than five seconds ahead. The authenticated `hello.authority.next_sequence` is the
+minimum next sequence. Reservation precedes dispatch; response eviction does not
+clear the high-water mark. Duplicates retrieve cached responses only under the same
+current authority; evicted replay is rejected.
+
+Initial startup requires explicit `admit_authority`. After prior admission/session
+loss or revoke, explicit `handback_authority` admits a new generation. Reconnect never
+admits itself. Session mismatch revokes during hello/status/mutation/admission, without
+waiting for the monitor loop. Runtime replacement creates a new incarnation and ownerless
+state; no prior operation is restored.
+
+Mission Planner coordinates sequence allocation and a nonwaiting mutation gate by
+endpoint/client identity across instances in one process. Authority controls bypass
+the vehicle-mutation gate so revoke can interrupt an executing operation. Separate
+processes sharing an identity are unsupported. Authentication does not identify a human.
+
+The pinned MAVSDK hook checks captured authority before initial COMMAND_LONG/COMMAND_INT
+send, every retry and posted UDP delivery. Revocation shares this send fence. Fence
+transfer and Offboard setpoints are outside production IPC and require their own
+per-frame admission before future exposure.
 
 ## Remaining ownership limits
 
-This establishes one admitted software source for typed clients connected to this runtime.
-It does not establish one writer for the aircraft. Native Mission Planner
-MAVLink controls, RC/pilot input, ArduPilot behavior and maintenance/test tools
-remain independent authorities. The ROS observer has no flight command path;
-its temporary MAVLink connection receives telemetry only. Integrated profiles
-set `NOMAD_INTEGRATED_FLIGHT` to inhibit direct actuation by the non-installed
-qualification tool. Profile sync removes the obsolete Mission Planner
-`IntegratedFlightMode` field and does not copy the qualification gate there. The
-separately supervised ground router enforces its `mission_planner` consumer as
-receive-only and keeps `nomad_core` command-capable. An explicit Mission Planner
-entry with `AllowOutbound` omitted (default true) or set true is rejected at
-startup. Direct Mission Planner links and RC/ELRS are not inhibited.
-Aircraft input selection still needs independent proof. The runtime does not
-own a persistent mission executor. Mission Planner's supported typed requests
-and the installed CLI use this IPC; ROS is observation-only, and Python vehicle
-access is limited to test, SITL and maintenance tools. The QuadPlane fixed-wing
-route is qualified in the core and remains outside runtime IPC v1. Mission,
-navigation, geofence and payload requests are not exposed through the installed
-client protocol.
+One admitted software source does not establish one writer for the aircraft. Native
+GCS, RC/pilot and maintenance tools remain independent. The ground router rejects outbound
+traffic from its receive-only Mission Planner consumer; consumer IDs do not authenticate
+external sources. Direct qualification is non-installed and inhibited by an occupied
+runtime port or `NOMAD_INTEGRATED_FLIGHT`. Runtime IPC exposes no mission/navigation,
+QuadPlane, authoritative geofence or VIO request. Configured actuator operations and
+primitive outputs remain as specified above. Physical pilot arbitration and total C2-loss
+behavior require the separate [safety procedure](safety.md#controller-bench-and-aircraft-procedure).

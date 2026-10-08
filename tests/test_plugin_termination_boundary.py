@@ -19,7 +19,7 @@ def test_plugin_has_no_land_as_termination_recipe():
 
 def test_joystick_termination_request_reports_unavailable():
     text = (ROOT / "Input/NomadJoystickService.Switches.cs").read_text(encoding="utf-8")
-    assert "if (!FlightModeController.RequestTermination())" in text
+    assert "if (!TerminationControl.RequestTermination())" in text
     assert "Termination unavailable. Take manual control." in text
     assert "Forced descent engaged" not in text
 
@@ -27,7 +27,7 @@ def test_joystick_termination_request_reports_unavailable():
 def test_boundary_preview_has_no_vehicle_action_path():
     text = (ROOT / "Geofence/BoundaryManager.cs").read_text(encoding="utf-8")
     assert "class AdvisoryBoundaryMonitor" in text
-    assert "FlightModeController" not in text
+    assert "TerminationControl" not in text
     assert "GuidedGoto" not in text
     assert "RequestTermination" not in text
     view = (ROOT / "Views/NOMADBoundaryView.cs").read_text(encoding="utf-8")

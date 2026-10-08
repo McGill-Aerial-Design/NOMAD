@@ -24,7 +24,7 @@ namespace NOMAD.MissionPlanner
             GStreamer.GstLaunch = GStreamer.LookForGstreamer();
             if (!GStreamer.GstLaunchExists)
             {
-                throw new InvalidOperationException("GStreamer not available - use VLC");
+                throw new InvalidOperationException("GStreamer is not available in Mission Planner");
             }
             cancellation.ThrowIfCancellationRequested();
             bool initialized = Native.gst_init_check(IntPtr.Zero, IntPtr.Zero, out var error);

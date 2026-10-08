@@ -1,88 +1,28 @@
-# NOMAD documentation site
-# Serve locally with `pixi run docs`; build with `pixi run docs-build`.
-
 site_name: NOMAD
-site_description: Standalone C++ vehicle-control core for ArduPilot systems
-site_url: https://github.com/YoussGm3o8/NOMAD
+site_description: Persistent ArduPilot runtime and local clients
 repo_url: https://github.com/YoussGm3o8/NOMAD
-edit_uri: blob/main/docs/
-
 theme:
   name: material
-  palette:
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/brightness-4
-        name: Switch to light mode
-  features:
-    - navigation.tabs
-    - navigation.sections
-    - navigation.path
-    - navigation.top
-    - navigation.indexes
-    - content.code.copy
-    - content.code.annotate
-    - content.tabs.link
-
-extra:
-  social:
-    - icon: fontawesome/brands/github
-      link: https://github.com/YoussGm3o8/NOMAD
-
 markdown_extensions:
-  - admonition
-  - pymdownx.details
-  - pymdownx.superfences
-  - pymdownx.tabbed:
-      alternate_style: true
-  - pymdownx.highlight:
-      anchor_linenums: true
-  - pymdownx.inlinehilite
-  - pymdownx.snippets
-  - toc:
-      permalink: true
-  - attr_list
-  - md_in_html
   - tables
-
+  - admonition
+  - pymdownx.superfences
 plugins:
   - search
-  - redirects:
-      redirect_maps: {}
-
 nav:
   - Home: index.md
-  - Product Requirements: prd.md
-  - CONOPS requirement inventory: conops-requirements.md
-  - AEAC 2027 integration: aeac-2027.md
   - Architecture: architecture.md
-  - Runtime IPC: runtime-ipc.md
   - Development: development.md
-  - Agent and engineering guidance: agent-guidance.md
   - Operations: operations.md
-  - Qualification status: qualification.md
-  - Sources and takeover qualification: source-arbitration.md
-  - Safety case: safety.md
-  - Historical migration evidence: migration.md
-  - MAVSDK adoption: mavsdk-adoption.md
-  - MAVSDK dependencies: mavsdk-dependencies.md
-
-
+  - Safety: safety.md
+  - Qualification: qualification.md
+  - Runtime IPC: runtime-ipc.md
+  - Product requirements: prd.md
+  - CONOPS traceability: conops-requirements.md
+  - AEAC integration: aeac-2027.md
+  - Dependencies: mavsdk-dependencies.md
 validation:
   links:
     not_found: info
     absolute_links: info
     unrecognized_links: info
-
-extra_css: []
-extra_javascript: []

@@ -1,10 +1,10 @@
-# MAVSDK Phase A redistribution licenses
+# MAVSDK redistribution licenses
 
 This directory accompanies NOMAD distributions that contain statically linked
 MAVSDK. The files are verbatim copies from the exact fetched sources recorded in
 [the dependency inventory](../../docs/mavsdk-dependencies.md). The provenance
 checker validates every license text by its Git blob ID so a missing or changed
-text fails the Phase A gate.
+text fails the provenance gate.
 
 | File | Component and licence |
 |---|---|

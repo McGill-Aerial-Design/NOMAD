@@ -373,19 +373,6 @@ int receive_result(NativeSocket socket, const std::string &request_id, bool muta
 
 } // namespace
 
-bool runtime_endpoint_is_open() {
-    const auto port = runtime_port();
-    if (port == 0) {
-        return true;
-    }
-    const auto socket = connect_loopback(port);
-    if (socket == kInvalidSocket) {
-        return false;
-    }
-    close_socket(socket);
-    return true;
-}
-
 int run_runtime_command(const Arguments &arguments) {
     Json request;
     if (!add_typed_arguments(arguments, request)) {

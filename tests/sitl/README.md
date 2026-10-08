@@ -7,12 +7,11 @@ typed IPC boundary, with an independent simulator GCS and observer. The
 installed `nomad` CLI uses runtime IPC only; commands without a typed v1 request
 report unavailable.
 Normal pytest skips live scenarios without an explicitly configured simulation.
-Pull request CI runs deterministic software tests; path-triggered pushes run a
-reduced Copter connect/status smoke, while scheduled and manually dispatched
-SITL workflows run the full Copter scenarios, RC-fault delivery probe and
-pinned QuadPlane chain. See [current SITL/ROS evidence](../../docs/qualification.md#sitl-and-ros-readiness)
-for the exact run SHAs and limits. A workflow definition alone is not passed-run
-evidence, and a reduced smoke is not the full matrix.
+Safety-sensitive PR/main changes require full Copter and pinned QuadPlane jobs;
+scheduled and manual runs always require both. The separate main connectivity smoke
+is not full qualification. [Qualification status](../../docs/qualification.md#sitl-qualification)
+defines evidence limits; retain exact source/firmware/configuration and actual run
+results for a release. A workflow definition alone is not passed-run evidence.
 
 ## Local test responsibilities
 
@@ -55,7 +54,7 @@ evidence, and a reduced smoke is not the full matrix.
   complete hosted route run was a dated result at implementation head
   `7f6206cbad51aade79ae86b20983d4e1fb818901` in [workflow run 35818612311](https://github.com/YoussGm3o8/NOMAD/actions/runs/35818612311);
   current full-chain evidence and limits are in
-  [qualification status](../../docs/qualification.md#sitl-and-ros-readiness).
+  [qualification status](../../docs/qualification.md#sitl-qualification).
 
 The obsolete sitl-gimbal task was removed with runtime wiring repair. No successful gimbal evidence is claimed.
 
@@ -89,7 +88,7 @@ Flight scenarios remain Copter-oriented except for the separately pinned
 QuadPlane chain through return/recovery, VTOL-back and QLAND landing, plus the
 disarmed receiver-fault delivery probe. Those slices do not qualify link loss,
 authority, manual takeover, handback, termination or complete Task 1 flight. Required gate artifacts and historical/current distinctions live in
-[migration archive](../../docs/migration.md); do not duplicate pass counts here.
+[qualification status](../../docs/qualification.md); do not duplicate pass counts here.
 
 ## Runtime authority and independent source
 
@@ -98,7 +97,7 @@ request while a dedicated pinned Copter stays disarmed. This scenario is
 separate from the flight chain and does not use the direct qualification driver
 to execute a NOMAD mutation. The independent source-250 test GCS requests modes;
 that is simulated external-source behavior, not physical pilot takeover.
-The [source model and hardware procedure](../../docs/source-arbitration.md)
+The [source model and hardware procedure](../../docs/safety.md#controller-bench-and-aircraft-procedure)
 define the exact evidence boundaries and required production RC decisions.
 
 Run against its dedicated container, serially with other simulator scenarios:

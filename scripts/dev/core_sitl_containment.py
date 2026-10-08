@@ -15,7 +15,7 @@ The vehicle command path is entirely the C++ core (mode, arm, takeoff, goto,
 rtl, land); this script only configures the fence environment for the CLI,
 spawns it, and polls the CLI's own ``status`` output for authoritative
 telemetry. Replaces the deleted Python ``MavlinkService`` scenario — see the
-Phase 7 deletion ledger in docs/migration.md.
+Current limits are in docs/qualification.md.
 
 Run against the dev stack: ``pixi run sitl-fence``.
 """

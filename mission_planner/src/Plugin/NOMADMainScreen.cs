@@ -21,7 +21,6 @@ using System.Windows.Forms;
 using MissionPlanner;
 using MissionPlanner.Controls;
 using MissionPlanner.Plugin;
-using NOMAD.MissionPlanner.Core;
 
 namespace NOMAD.MissionPlanner
 {
@@ -58,7 +57,6 @@ namespace NOMAD.MissionPlanner
         private GeofenceConfig _geofenceConfig;
         private AdvisoryBoundaryMonitor _advisoryBoundaryMonitor;
         private bool _ownsAdvisoryBoundaryMonitor;
-        private Label _profileLabel;
 
         // Layout panels
         private Panel _sidebarPanel;
@@ -70,7 +68,6 @@ namespace NOMAD.MissionPlanner
         private Button _btnBoundaries;
         private Button _btnVideo;
         private Button _btnLinks;
-        private Button _btnLogs;
 
         // Content views
         private UserControl _currentView;
@@ -78,19 +75,11 @@ namespace NOMAD.MissionPlanner
         private NOMADBoundaryView _boundaryView;
         private NOMADVideoView _videoView;
         private NOMADLinksView _linksView;
-        private NOMADLogView _logView;
 
 
         // Update timer
         private System.Windows.Forms.Timer _updateTimer;
         private bool _themeReapplyPending;
-
-        // Optional module-contributed sidebar entries (NOMAD module SDK — see
-        // src/Core). A plugin-supplied ModuleHost appends its views/actions to the
-        // built-in sidebar; with no host, only the built-in entries appear.
-        private ModuleHost _moduleHost;
-        private readonly Dictionary<string, Button> _descriptorButtons = new Dictionary<string, Button>();
-        private readonly Dictionary<string, Control> _descriptorViewCache = new Dictionary<string, Control>();
 
         // Static configuration (set by the plugin before this screen is shown)
         private static System.Threading.CancellationToken _videoShutdown;
@@ -99,7 +88,6 @@ namespace NOMAD.MissionPlanner
         private static MAVLinkConnectionManager _staticConnectionManager;
         private static GeofenceConfig _staticGeofenceConfig;
         private static AdvisoryBoundaryMonitor _staticAdvisoryBoundaryMonitor;
-        private static ModuleHost _staticModuleHost;
 
         /// <summary>
         /// Sets the static configuration used by the MainSwitcher-created instance.
@@ -118,12 +106,6 @@ namespace NOMAD.MissionPlanner
             _staticGeofenceConfig = geofenceConfig;
             _staticAdvisoryBoundaryMonitor = advisoryBoundaryMonitor;
         }
-
-        /// <summary>
-        /// Wire an optional module host before showing the NOMAD screen. The plugin
-        /// builds this from discovered NOMAD modules; null means no extra views.
-        /// </summary>
-        public static void SetStaticModuleHost(ModuleHost host) => _staticModuleHost = host;
 
         // ============================================================
         // Constructor
@@ -157,11 +139,7 @@ namespace NOMAD.MissionPlanner
                 _ownsAdvisoryBoundaryMonitor = true;
             }
 
-            // Optional module host (set by the plugin). Inert unless it has modules.
-            _moduleHost = _staticModuleHost;
-
             InitializeUI();
-            InitializeViews();
 
             // Don't start timer yet - wait for Activate()
         }
@@ -225,7 +203,6 @@ namespace NOMAD.MissionPlanner
                     child.BackColor = Color.FromArgb(8, 8, 10);
                     foreach (Control c in child.Controls)
                     {
-                        if (c == _profileLabel) continue; // keeps its status color
                         c.BackColor = Color.FromArgb(8, 8, 10);
                         c.ForeColor = ACCENT_COLOR;
                     }
@@ -268,17 +245,12 @@ namespace NOMAD.MissionPlanner
         }
 
         // UI construction lives in NOMADMainScreen.Layout.cs;
-        // the module-driven sidebar path lives in NOMADMainScreen.Modules.cs.
+
 
 
         // ============================================================
         // View Management
         // ============================================================
-
-        private void InitializeViews()
-        {
-            // Create all views lazily - they'll be created when first accessed
-        }
 
         private void ShowView(string viewName)
         {
@@ -287,12 +259,10 @@ namespace NOMAD.MissionPlanner
 
             // Update sidebar button states (and clear any active module button).
             UpdateSidebarButtonState(viewName);
-            UpdateDescriptorButtonState(null);
 
             // Remove current view
             if (_currentView != null)
             {
-                if (_currentView is INomadView leaving) leaving.OnDeactivated();
                 _viewContainer.Controls.Remove(_currentView);
                 // Don't dispose - keep cached for quick switching
             }
@@ -327,10 +297,6 @@ namespace NOMAD.MissionPlanner
                     if (_linksView == null) _linksView = new NOMADLinksView(_connectionManager, _config);
                     newView = _linksView;
                     break;
-                case "Logs":
-                    if (_logView == null) _logView = new NOMADLogView(_config);
-                    newView = _logView;
-                    break;
             }
 
             if (newView != null)
@@ -338,7 +304,6 @@ namespace NOMAD.MissionPlanner
                 newView.Dock = DockStyle.Fill;
                 _viewContainer.Controls.Add(newView);
                 _currentView = newView;
-                if (newView is INomadView activated) activated.OnActivated();
             }
         }
 
@@ -351,7 +316,6 @@ namespace NOMAD.MissionPlanner
                 _btnBoundaries,
                 _btnVideo,
                 _btnLinks,
-                _btnLogs,
             };
             foreach (var btn in buttons)
             {
@@ -370,7 +334,6 @@ namespace NOMAD.MissionPlanner
                 case "Boundaries": activeBtn = _btnBoundaries; break;
                 case "Video": activeBtn = _btnVideo; break;
                 case "Links": activeBtn = _btnLinks; break;
-                case "Logs": activeBtn = _btnLogs; break;
             }
 
             if (activeBtn != null)
@@ -426,11 +389,6 @@ namespace NOMAD.MissionPlanner
                 _boundaryView?.Dispose();
                 _videoView?.Dispose();
                 _linksView?.Dispose();
-                _logView?.Dispose();
-                // Dispose any module-contributed views built in module mode.
-                foreach (var cached in _descriptorViewCache.Values)
-                    cached?.Dispose();
-                _descriptorViewCache.Clear();
             }
             base.Dispose(disposing);
         }

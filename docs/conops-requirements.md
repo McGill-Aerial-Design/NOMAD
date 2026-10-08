@@ -16,8 +16,22 @@ Safety H = directly safety relevant, M = supporting safety/evidence, L = mainly
 administrative/scoring. Owner names are component or accountable team roles,
 not a claim that software already exists. Every evidence cell is **required**
 future acceptance evidence. Current implementation scope is in
-[qualification status](qualification.md); dated run records are in the
-[migration archive](migration.md).
+[qualification status](qualification.md).
+
+## Evidence gate legend
+
+| Gate | Required acceptance boundary |
+|---|---|
+| G0 | Source requirements and unresolved decisions reconciled |
+| G1 | Reproducible build, tests and repository baseline |
+| G-M | Pinned MAVSDK semantics, provenance and firmware qualification |
+| G2 | Runtime authority, fresh state, truthful outcomes and fault response |
+| G3 | Actual deployment/compute placement and declared capability qualification |
+| G4 | Official server telemetry, traffic and demonstrated separation |
+| G5 | Task 1 survey evidence, coordination, return and landing |
+| G6 | Task 2 tracking, authorized tagging and sample mechanisms |
+| G7 | Selected aircraft hardware, links, failsafes, mass/endurance and physical safety |
+| G8 | Security, observability, full rehearsal, reproducible release and operator acceptance |
 
 ## Administration and assessment
 

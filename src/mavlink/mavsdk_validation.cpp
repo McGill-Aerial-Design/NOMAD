@@ -7,7 +7,7 @@
 #include <cmath>
 #include <cctype>
 
-namespace nomad::mavsdk_phase_a {
+namespace nomad::mavlink::validation {
 namespace {
 
 constexpr std::int64_t kMinimumObservationMs = 1000;
@@ -154,4 +154,4 @@ bool has_fresh_telemetry(std::int64_t age_ms, std::int64_t maximum_age_ms) {
     return maximum_age_ms >= 0 && age_ms >= 0 && age_ms <= maximum_age_ms;
 }
 
-} // namespace nomad::mavsdk_phase_a
+} // namespace nomad::mavlink::validation

@@ -19,10 +19,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# MAVSDK is the transport, not an option: the hand-written codec was removed at
-# the Phase E cutover, so a build without MAVSDK would have no way to reach a
-# vehicle and the removed path could survive as a hidden fallback. There is
-# therefore no enable/disable flag; a missing checkout is a configuration error.
+# MAVSDK is the only command transport; a missing checkout is a configuration error.
 set(NOMAD_MAVSDK_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/MAVSDK" CACHE PATH
     "MAVSDK checkout that provides the transport")
 
@@ -42,11 +39,6 @@ function(add_nomad_mavsdk)
     set(ENABLED_PLUGINS telemetry geofence param action offboard)
     set(MAVLINK_DIALECT ardupilotmega)
     add_subdirectory("${NOMAD_MAVSDK_SOURCE_DIR}/cpp" "${CMAKE_BINARY_DIR}/mavsdk")
-    # Record the effective child options for resource evidence without exporting cache defaults.
-    string(JOIN "\",\"" resource_plugins ${ENABLED_PLUGINS} mavlink_passthrough)
-    file(WRITE "${CMAKE_BINARY_DIR}/resource-build-config.json"
-        "{\"shared\":false,\"server\":false,\"curl\":false,\"superbuild\":true,\"mavsdk_build_testing\":false,"
-        "\"dialect\":\"${MAVLINK_DIALECT}\",\"plugins\":[\"${resource_plugins}\"]}\n")
 endfunction()
 
 if(NOT EXISTS "${NOMAD_MAVSDK_SOURCE_DIR}/cpp/CMakeLists.txt")
@@ -68,13 +60,11 @@ else()
 endif()
 
 add_library(nomad_core
-    src/mission/executor.cpp
     src/safety/fence_config.cpp
     src/safety/geofence.cpp
     src/safety/output.cpp
     src/safety/velocity.cpp
     src/safety/velocity_config.cpp
-    src/safety/vio_source.cpp
     src/safety/watchdog.cpp
     src/telemetry/identity.cpp
     src/util/parse.cpp
@@ -114,9 +104,14 @@ add_executable(nomad
     src/main.cpp
     src/runtime/cli_client.cpp
     src/cli_arguments.cpp
-    src/cli_command_table.cpp)
+    src/cli_command_table.cpp
+    src/util/parse.cpp)
 # The CLI owns only local IPC and JSON dependencies.
-target_link_libraries(nomad PRIVATE nomad_core nlohmann_json::nlohmann_json)
+target_include_directories(nomad PRIVATE include)
+target_link_libraries(nomad PRIVATE nlohmann_json::nlohmann_json)
+if(WIN32)
+    target_link_libraries(nomad PRIVATE ws2_32)
+endif()
 
 add_library(nomad_local_crypto src/runtime/auth_proof.cpp)
 target_compile_features(nomad_local_crypto PUBLIC cxx_std_20)
@@ -171,12 +166,14 @@ if(PROJECT_IS_TOP_LEVEL)
         src/qualification/commands.cpp
         src/qualification/demos.cpp
         src/qualification/velocity.cpp
-        src/runtime/cli_client.cpp
+        src/qualification/owner_probe.cpp
+        src/qualification/command_arguments.cpp
+        src/qualification/command_table.cpp
         src/cli_arguments.cpp
         src/cli_command_table.cpp)
     target_include_directories(nomad-qualification PRIVATE src)
     target_link_libraries(nomad-qualification PRIVATE
-        nomad_core nomad_mavsdk_connection nomad_local_crypto nlohmann_json::nlohmann_json)
+        nomad_core nomad_mavsdk_connection)
 endif()
 
 if(PROJECT_IS_TOP_LEVEL)
@@ -191,12 +188,11 @@ if(PROJECT_IS_TOP_LEVEL)
     # configuration templates and the reviewed dependency notices travel with the
     # executable for clean install and rollback review.
     install(TARGETS nomad nomad-runtime RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT nomad_runtime)
-    install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT nomad_runtime)
     install(FILES LICENSE NOTICE DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad COMPONENT nomad_runtime)
-    install(FILES config/README.md config/nomad.env.example config/actuators.example.json
+    install(FILES config/nomad.env.example config/actuators.example.json
             DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad/config COMPONENT nomad_runtime)
     install(FILES infra/runtime/nomad-runtime.service.in infra/runtime/runtime.example.json
-            infra/runtime/install_systemd.py infra/runtime/Manage-NomadRuntime.ps1 scripts/migrate_actuators.py
+            infra/runtime/install_systemd.py infra/runtime/Manage-NomadRuntime.ps1
             DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad/lifecycle COMPONENT nomad_runtime)
     install(FILES docs/operations.md DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad COMPONENT nomad_runtime)
     install(DIRECTORY licenses/mavsdk-phase-a/
@@ -243,22 +239,7 @@ set_target_properties(nomad_mavsdk_fmt PROPERTIES
     IMPORTED_LOCATION_DEBUG "${NOMAD_MAVSDK_FMT_DEBUG_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${NOMAD_MAVSDK_INSTALL_DIR}/include")
 
-# Shared MAVSDK discovery helpers used by the command-capable transport.
-add_library(nomad_mavsdk_system src/mavlink/mavsdk_system.cpp)
-target_include_directories(nomad_mavsdk_system PUBLIC include PRIVATE
-    "${NOMAD_MAVSDK_SOURCE_DIR}/cpp/src/mavsdk/core/include"
-)
-target_compile_features(nomad_mavsdk_system PUBLIC cxx_std_20)
-add_dependencies(nomad_mavsdk_system mavsdk)
-target_link_libraries(nomad_mavsdk_system PRIVATE mavsdk nomad_mavsdk_fmt)
-if(MSVC)
-    target_compile_options(nomad_mavsdk_system PRIVATE /W4 /permissive- /EHsc)
-else()
-    target_compile_options(nomad_mavsdk_system PRIVATE -Wall -Wextra -Wpedantic)
-endif()
-
-# Receive-only UDP telemetry observation used by ROS and the connectivity smoke.
-# MAVLink parsing uses the generated dialect header but owns no MAVSDK connection.
+# Receive-only telemetry parser for the explicit connectivity qualification.
 add_library(nomad_mavlink_observation src/mavlink/mavlink_observation.cpp)
 target_include_directories(nomad_mavlink_observation PUBLIC include)
 target_include_directories(nomad_mavlink_observation SYSTEM PRIVATE
@@ -300,7 +281,7 @@ target_compile_features(nomad_mavsdk_connection PUBLIC cxx_std_20)
 add_dependencies(nomad_mavsdk_connection mavsdk)
 target_link_libraries(
     nomad_mavsdk_connection PUBLIC nomad_mavsdk_validation
-    PRIVATE nomad_mavsdk_system mavsdk nomad_mavsdk_fmt)
+    PRIVATE mavsdk nomad_mavsdk_fmt)
 if(MSVC)
     target_compile_options(nomad_mavsdk_connection PRIVATE /W4 /permissive- /EHsc)
 else()
@@ -357,7 +338,6 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     nomad_add_core_test(nomad_quadplane_recovery_tests tests/vehicle/quadplane/quadplane_recovery_test.cpp)
     nomad_add_core_test(nomad_safety_tests tests/safety_test.cpp)
     nomad_add_core_test(nomad_output_tests tests/output_command_test.cpp)
-    nomad_add_core_test(nomad_vio_tests tests/vio_source_test.cpp)
     nomad_add_core_test(nomad_aircraft_identity_tests tests/aircraft_identity_test.cpp)
     nomad_add_core_test(nomad_operation_capability_tests tests/operation_capability_test.cpp)
     nomad_add_core_test(nomad_velocity_config_tests tests/velocity_config_test.cpp)

@@ -33,7 +33,7 @@ def test_valid_install_tree_has_no_content_errors(tmp_path: Path) -> None:
     assert verify_core_package.validate_install_root(tmp_path) == []
 
 
-@pytest.mark.parametrize("name", ["config/actuators.example.json", "lifecycle/migrate_actuators.py"])
+@pytest.mark.parametrize("name", ["config/actuators.example.json", "lifecycle/runtime.example.json"])
 def test_package_requires_actuator_provisioning_assets(tmp_path: Path, name: str) -> None:
     make_install_tree(tmp_path)
     relative = Path("share/nomad") / name

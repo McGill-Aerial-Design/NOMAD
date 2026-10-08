@@ -75,9 +75,9 @@ internal static partial class NomadCoreClientTests
         Expect(runtime.Commands[0]["type"].ToString() == "configure_gimbal",
             "the unresolved standalone mode request is not replaced by a combined retry");
         runtime.ReleaseResponses();
-        var result = WaitResult(request);
+        var result1 = WaitResult(request);
         runtime.Wait();
-        Expect(result.Outcome == NomadCoreRequestOutcome.UnknownOutcome,
+        Expect(result1.Outcome == NomadCoreRequestOutcome.UnknownOutcome,
             "oversized response leaves the paired command outcome unknown");
 
         var declined = WaitResult(GimbalController.RequestPitchRollTargetAsync(-10.0f, 4.0f));
@@ -97,9 +97,9 @@ internal static partial class NomadCoreClientTests
         Expect(runtime.Commands[0]["type"].ToString() == "configure_gimbal_target",
             "a fresh target action uses one combined request");
         runtime.ReleaseResponses();
-        var result = WaitResult(request);
+        var result1 = WaitResult(request);
         runtime.Wait();
-        Expect(result.Outcome == NomadCoreRequestOutcome.UnknownOutcome,
+        Expect(result1.Outcome == NomadCoreRequestOutcome.UnknownOutcome,
             "a lost composite response leaves both command outcomes uncertain");
 
         var declined = WaitResult(GimbalController.RequestPitchRollTargetAsync(-10.0f, 4.0f));

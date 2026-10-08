@@ -17,13 +17,10 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 REQUIRED_FILES = (
-    Path("include/nomad/vehicle/vehicle.hpp"),
     Path("share/nomad/LICENSE"),
     Path("share/nomad/NOTICE"),
-    Path("share/nomad/config/README.md"),
     Path("share/nomad/config/nomad.env.example"),
     Path("share/nomad/config/actuators.example.json"),
-    Path("share/nomad/lifecycle/migrate_actuators.py"),
     Path("share/nomad/operations.md"),
     Path("share/nomad/lifecycle/nomad-runtime.service.in"),
     Path("share/nomad/lifecycle/install_systemd.py"),
@@ -133,8 +130,8 @@ def verify_unsupported_navigation(binary: Path, root: Path, environment: dict[st
     unsupported_environment = environment.copy()
     unsupported_environment["NOMAD_RUNTIME_IPC_PORT"] = "invalid"
     unsupported = run_cli(binary, root, ["goto", "45", "-73", "10"], unsupported_environment)
-    if "error[unsupported_request]" not in unsupported.stderr:
-        return ["unsupported navigation verb did not report unavailable"]
+    if unsupported.returncode == 0 or "Usage: nomad" not in unsupported.stdout or unsupported.stderr:
+        return ["unsupported navigation verb did not fail before IPC"]
     return []
 
 

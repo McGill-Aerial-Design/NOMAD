@@ -331,7 +331,4 @@ def test_source_archive_has_honest_nonrelease_identity(tmp_path):
     result = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "identity.txt").read_text() == "0.0.0-development"
-    for name in ("sim-ros", "jetson", "sim-isaac"):
-        dockerfile = (identity.ROOT / "docker" / ("Dockerfile." + name)).read_text(encoding="utf-8")
-        assert "COPY cmake/ /ws/src/nomad/cmake/" in dockerfile
     assert "NOMAD_FIXTURE_VERSION OR NOMAD_SOURCE_ARCHIVE" in (identity.ROOT / "CMakeLists.txt").read_text()

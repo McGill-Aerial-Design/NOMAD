@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "support/fake_connection.hpp"
-#include "nomad/mission/executor.hpp"
 #include "nomad/vehicle/vehicle.hpp"
 #include "support/test_harness.hpp"
 
@@ -410,36 +409,6 @@ void test_command_requires_connection() {
     CHECK(!result.success);
 }
 
-void test_mission_executor_runs_steps_and_reports_progress() {
-    FakeConnection connection;
-    connection.connect();
-    nomad::vehicle::Vehicle vehicle(connection);
-    nomad::mission::MissionExecutor executor(vehicle);
-
-    const nomad::mission::Mission mission{
-        nomad::mission::Action{"guided"},
-        nomad::mission::Action{"arm"},
-        nomad::mission::Land{},
-        nomad::mission::Action{"wait_disarmed"},
-    };
-    const auto result = executor.execute(mission);
-
-    CHECK(result.success);
-    CHECK(result.completed_steps == 4);
-}
-
-void test_mission_executor_rejects_unknown_action() {
-    FakeConnection connection;
-    connection.connect();
-    nomad::vehicle::Vehicle vehicle(connection);
-    nomad::mission::MissionExecutor executor(vehicle);
-
-    const auto result = executor.execute({nomad::mission::Action{"unknown"}});
-
-    CHECK(!result.success);
-    CHECK(result.completed_steps == 0);
-}
-
 } // namespace
 
 int main() {
@@ -469,7 +438,5 @@ int main() {
         test_goto_location_requires_connection();
         test_command_rejects_failed_acknowledgement();
         test_command_requires_connection();
-        test_mission_executor_runs_steps_and_reports_progress();
-        test_mission_executor_rejects_unknown_action();
     });
 }

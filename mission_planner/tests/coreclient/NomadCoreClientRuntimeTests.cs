@@ -20,8 +20,11 @@ internal static partial class NomadCoreClientTests
         using var runtime = new MockRuntime(2);
         var client = new NomadCoreClient("test-key", runtime.Port);
 
-        Expect(client.Servo(8, 1500), "runtime sends a typed servo request");
-        Expect(client.SetRelay(3, true), "runtime sends a typed relay request");
+        var result1 = client.ServoAsync(8, 1500).GetAwaiter().GetResult();
+
+        Expect(result1.Succeeded, "runtime sends a typed servo request");
+        var result2 = client.SetRelayAsync(3, true).GetAwaiter().GetResult();
+        Expect(result2.Succeeded, "runtime sends a typed relay request");
         runtime.Wait();
         Expect(runtime.CommandCount == 2, "each action was sent once to the runtime");
         Expect(runtime.LastCommandType == "set_relay", "relay maps to its semantic protocol type");
@@ -38,7 +41,7 @@ internal static partial class NomadCoreClientTests
             "client proof binds exact request bytes");
         Expect(Convert.ToString(runtime.LastCommand["client_id"], CultureInfo.InvariantCulture) == "mission-planner",
             "credential uses a stable configured identity");
-        Expect(client.LastOutcome == NomadCoreRequestOutcome.Succeeded, "structured success is reported");
+        Expect(result2.Outcome == NomadCoreRequestOutcome.Succeeded, "structured success is reported");
     }
 
     private static void Runtime_GimbalTarget_UsesTypedRequestAndRequiresAuthority()
@@ -46,10 +49,14 @@ internal static partial class NomadCoreClientTests
         using var runtime = new MockRuntime(3, enforceAuthority: true);
         var client = new NomadCoreClient("test-key", runtime.Port);
 
-        Expect(!client.GimbalTarget(-20.5, 12.25), "gimbal target fails closed before authority admission");
-        Expect(client.LastErrorCode == "not_authoritative", "gimbal target reports missing authority");
-        Expect(client.AdmitAuthority(), "operator explicitly admits gimbal client");
-        Expect(client.GimbalTarget(-20.5, 12.25), "admitted gimbal target succeeds through runtime");
+        var result1 = client.GimbalTargetAsync(-20.5, 12.25).GetAwaiter().GetResult();
+
+        Expect(!result1.Succeeded, "gimbal target fails closed before authority admission");
+        Expect(result1.ErrorCode == "not_authoritative", "gimbal target reports missing authority");
+        var result2 = client.AdmitAuthorityAsync().GetAwaiter().GetResult();
+        Expect(result2.Succeeded, "operator explicitly admits gimbal client");
+        var result3 = client.GimbalTargetAsync(-20.5, 12.25).GetAwaiter().GetResult();
+        Expect(result3.Succeeded, "admitted gimbal target succeeds through runtime");
         runtime.Wait();
 
         Expect(runtime.CommandCount == 3, "denied target, admission and accepted target are each sent once");
@@ -67,12 +74,14 @@ internal static partial class NomadCoreClientTests
         using var runtime = new MockRuntime(1, dropCommandResponse: true);
         var client = new NomadCoreClient("test-key", runtime.Port);
 
-        Expect(!client.GimbalTarget(0.0, 0.0), "missing gimbal response is not reported as success");
+        var result1 = client.GimbalTargetAsync(0.0, 0.0).GetAwaiter().GetResult();
+
+        Expect(!result1.Succeeded, "missing gimbal response is not reported as success");
         runtime.Wait();
-        Expect(client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome,
+        Expect(result1.Outcome == NomadCoreRequestOutcome.UnknownOutcome,
             "gimbal request reports an unknown vehicle outcome");
         Expect(runtime.CommandCount == 1, "unknown gimbal outcome is not replayed");
-        Expect(runtime.LastCommandType == "set_gimbal_target", "unknown result belongs to the typed gimbal request");
+        Expect(runtime.LastCommandType == "set_gimbal_target", "unknown result1 belongs to the typed gimbal request");
     }
 
     private static void Runtime_ReportsUnknownOutcomeWithoutReplay()
@@ -80,9 +89,11 @@ internal static partial class NomadCoreClientTests
         using var runtime = new MockRuntime(1, dropCommandResponse: true);
         var client = new NomadCoreClient("test-key", runtime.Port);
 
-        Expect(!client.Servo(8, 1500), "missing command response reports failure to the Boolean caller");
+        var result1 = client.ServoAsync(8, 1500).GetAwaiter().GetResult();
+
+        Expect(!result1.Succeeded, "missing command response reports failure to the Boolean caller");
         runtime.Wait();
-        Expect(client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome,
+        Expect(result1.Outcome == NomadCoreRequestOutcome.UnknownOutcome,
             "disconnect after send is reported as an unknown vehicle outcome");
         Expect(runtime.CommandCount == 1, "the client did not replay the mutating request");
     }
@@ -92,11 +103,13 @@ internal static partial class NomadCoreClientTests
         using var runtime = new MockRuntime(1, helloVersion: 2);
         var client = new NomadCoreClient("test-key", runtime.Port);
 
-        Expect(!client.Servo(8, 1500), "incompatible runtime is rejected");
+        var result1 = client.ServoAsync(8, 1500).GetAwaiter().GetResult();
+
+        Expect(!result1.Succeeded, "incompatible runtime is rejected");
         runtime.Wait();
-        Expect(client.LastOutcome == NomadCoreRequestOutcome.FailedBeforeSend,
+        Expect(result1.Outcome == NomadCoreRequestOutcome.FailedBeforeSend,
             "incompatible protocol fails before command send");
-        Expect(client.LastErrorCode == "incompatible_version", "version mismatch is explicit");
+        Expect(result1.ErrorCode == "incompatible_version", "version mismatch is explicit");
         Expect(runtime.CommandCount == 0, "no command is sent before successful negotiation");
     }
 
@@ -105,9 +118,11 @@ internal static partial class NomadCoreClientTests
         using var runtime = new MockRuntime(1, commandResponseVersion: 2);
         var client = new NomadCoreClient("test-key", runtime.Port);
 
-        Expect(!client.Servo(8, 1500), "incompatible command response is not reported as success");
+        var result1 = client.ServoAsync(8, 1500).GetAwaiter().GetResult();
+
+        Expect(!result1.Succeeded, "incompatible command response is not reported as success");
         runtime.Wait();
-        Expect(client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome,
+        Expect(result1.Outcome == NomadCoreRequestOutcome.UnknownOutcome,
             "incompatible command response leaves the vehicle outcome unknown");
         Expect(runtime.CommandCount == 1, "the client did not replay after an incompatible response");
     }
@@ -118,12 +133,14 @@ internal static partial class NomadCoreClientTests
         var client = new NomadCoreClient("test-key", port);
         using (var firstRuntime = new MockRuntime(1, port: port))
         {
-            Expect(client.Servo(8, 1500), "first runtime request succeeds");
+            var result1 = client.ServoAsync(8, 1500).GetAwaiter().GetResult();
+            Expect(result1.Succeeded, "first runtime request succeeds");
             firstRuntime.Wait();
         }
         using (var restartedRuntime = new MockRuntime(1, port: port))
         {
-            Expect(client.SetRelay(3, true), "same client reconnects after runtime restart");
+            var result2 = client.SetRelayAsync(3, true).GetAwaiter().GetResult();
+            Expect(result2.Succeeded, "same client reconnects after runtime restart");
             restartedRuntime.Wait();
             Expect(restartedRuntime.LastCommandType == "set_relay", "reconnected client sends typed relay request");
         }
@@ -135,15 +152,24 @@ internal static partial class NomadCoreClientTests
         var first = new NomadCoreClient("test-key", runtime.Port);
         var second = new NomadCoreClient("test-key", runtime.Port);
 
-        Expect(!first.Servo(8, 1500), "Mission Planner starts without command authority");
-        Expect(first.LastErrorCode == "not_authoritative", "startup rejection names the missing owner");
-        Expect(first.AdmitAuthority(), "operator explicitly admits Mission Planner");
-        Expect(first.Servo(8, 1500), "admitted client can issue a typed command");
-        Expect(second.SetRelay(3, true), "another client instance retains the same logical source");
-        Expect(first.RevokeAuthority(), "operator explicitly revokes the source");
-        Expect(!second.Servo(8, 1500), "reconnect after revoke does not reclaim authority");
-        Expect(second.HandbackAuthority(), "operator explicitly creates a handback generation");
-        Expect(first.Servo(8, 1500), "the shared source can command after handback");
+        var result1 = first.ServoAsync(8, 1500).GetAwaiter().GetResult();
+
+        Expect(!result1.Succeeded, "Mission Planner starts without command authority");
+        Expect(result1.ErrorCode == "not_authoritative", "startup rejection names the missing owner");
+        var result2 = first.AdmitAuthorityAsync().GetAwaiter().GetResult();
+        Expect(result2.Succeeded, "operator explicitly admits Mission Planner");
+        var result3 = first.ServoAsync(8, 1500).GetAwaiter().GetResult();
+        Expect(result3.Succeeded, "admitted client can issue a typed command");
+        var result4 = second.SetRelayAsync(3, true).GetAwaiter().GetResult();
+        Expect(result4.Succeeded, "another client instance retains the same logical source");
+        var result5 = first.RevokeAuthorityAsync().GetAwaiter().GetResult();
+        Expect(result5.Succeeded, "operator explicitly revokes the source");
+        var result6 = second.ServoAsync(8, 1500).GetAwaiter().GetResult();
+        Expect(!result6.Succeeded, "reconnect after revoke does not reclaim authority");
+        var result7 = second.HandbackAuthorityAsync().GetAwaiter().GetResult();
+        Expect(result7.Succeeded, "operator explicitly creates a handback generation");
+        var result8 = first.ServoAsync(8, 1500).GetAwaiter().GetResult();
+        Expect(result8.Succeeded, "the shared source can command after handback");
         runtime.Wait();
 
         Expect(runtime.CommandCount == 8, "every authority and mutation request was observed once");
@@ -160,9 +186,10 @@ internal static partial class NomadCoreClientTests
     {
         using var runtime = new MockRuntime(1, enforceAuthority: true, wrongAuthorityResponseType: true);
         var client = new NomadCoreClient("test-key", runtime.Port);
-        Expect(!client.AdmitAuthority(), "command acknowledgement cannot impersonate authority admission");
+        var result1 = client.AdmitAuthorityAsync().GetAwaiter().GetResult();
+        Expect(!result1.Succeeded, "command acknowledgement cannot impersonate authority admission");
         runtime.Wait();
-        Expect(client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome,
+        Expect(result1.Outcome == NomadCoreRequestOutcome.UnknownOutcome,
             "malformed authority response is not reported as admitted");
     }
 
@@ -170,9 +197,10 @@ internal static partial class NomadCoreClientTests
     {
         using var runtime = new MockRuntime(1, rogueRuntime: true);
         var client = new NomadCoreClient("test-key", runtime.Port);
-        Expect(!client.AdmitAuthority(), "rogue runtime fails authentication");
+        var result1 = client.AdmitAuthorityAsync().GetAwaiter().GetResult();
+        Expect(!result1.Succeeded, "rogue runtime fails authentication");
         runtime.Wait();
-        Expect(client.LastOutcome == NomadCoreRequestOutcome.FailedBeforeSend, "rogue proof fails before send");
+        Expect(result1.Outcome == NomadCoreRequestOutcome.FailedBeforeSend, "rogue proof fails before send");
         Expect(runtime.CommandCount == 0, "no command or reusable credential is disclosed to rogue runtime");
     }
 
@@ -180,9 +208,10 @@ internal static partial class NomadCoreClientTests
     {
         using var runtime = new MockRuntime(1, auditFailure: true);
         var client = new NomadCoreClient("test-key", runtime.Port);
-        Expect(!client.Servo(8, 1500), "audit failure is not success");
+        var result1 = client.ServoAsync(8, 1500).GetAwaiter().GetResult();
+        Expect(!result1.Succeeded, "audit failure is not success");
         runtime.Wait();
-        Expect(client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome, "possible send audit failure is unknown");
+        Expect(result1.Outcome == NomadCoreRequestOutcome.UnknownOutcome, "possible send audit failure is unknown");
         Expect(runtime.CommandCount == 1, "audit failure is never retried");
     }
 

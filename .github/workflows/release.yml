@@ -115,7 +115,7 @@ jobs:
         run: |
           pwsh -File scripts/build/test_plugin_core_client.ps1
           if ($LASTEXITCODE -ne 0) { throw 'plugin core client tests failed' }
-          pwsh -File scripts/build/test_plugin_config_migration.ps1
+          pwsh -File scripts/build/test_plugin_config_validation.ps1
           if ($LASTEXITCODE -ne 0) { throw 'plugin configuration tests failed' }
           pwsh -File scripts/build/test_plugin_duallink.ps1
           if ($LASTEXITCODE -ne 0) { throw 'router tests failed' }

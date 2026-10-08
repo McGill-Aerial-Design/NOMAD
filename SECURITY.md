@@ -17,10 +17,8 @@ This protects against ordinary local processes without the client's credential,
 including identity claims and a rogue listener trying to harvest raw credentials.
 It does not protect against administrator/root, kernel, credential-reading malware
 or physical host compromise. Credential files and local client settings require
-OS access protection. Remote authentication and exposed ROS/media endpoint protection
-remain outside this slice.
+OS access protection. Remote client authentication is not implemented.
 A VPN is an optional network control; it does not authorize commands by itself.
-The retained video tool's HTTP controls currently lack authentication.
 
 See [operations](docs/operations.md), [architecture](docs/architecture.md) and
 [the safety case](docs/safety.md) for canonical controls and open evidence.

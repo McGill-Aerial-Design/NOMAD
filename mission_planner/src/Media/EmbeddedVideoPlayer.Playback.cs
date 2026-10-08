@@ -50,7 +50,6 @@ namespace NOMAD.MissionPlanner
             _session.Stop();
             try
             {
-                _external.Stop();
             }
             finally
             {

@@ -12,6 +12,37 @@ using NOMAD.MissionPlanner;
 
 internal static partial class VideoLifetimeTests
 {
+    private static void PlaybackControlsAttached()
+    {
+        using (var player = new EmbeddedVideoPlayer("fake", "fake", true,
+            CancellationToken.None, () => new FakeVideoPipeline()))
+        {
+            foreach (var label in new[] { "Play", "Stop", "Full", "Snap" })
+            {
+                var button = FindVideoButton(player, label);
+                Check(button != null && button.Parent != null && button.Visible,
+                    $"Playback control {label} is not visible in the player");
+            }
+        }
+    }
+
+    private static Button FindVideoButton(Control parent, string label)
+    {
+        foreach (Control child in parent.Controls)
+        {
+            if (child is Button button && button.Text == label)
+            {
+                return button;
+            }
+            var match = FindVideoButton(child, label);
+            if (match != null)
+            {
+                return match;
+            }
+        }
+        return null;
+    }
+
     private static T GetField<T>(object owner, string name)
     {
         return (T)owner.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(owner);

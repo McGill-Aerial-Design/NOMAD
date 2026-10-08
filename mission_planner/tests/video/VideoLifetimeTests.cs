@@ -14,11 +14,6 @@ internal static partial class VideoLifetimeTests
     [STAThread]
     private static int Main(string[] args)
     {
-        if (args.Length == 1 && args[0] == "--child")
-        {
-            new ManualResetEvent(false).WaitOne();
-            return 0;
-        }
         try
         {
             string references = args[0];
@@ -28,6 +23,7 @@ internal static partial class VideoLifetimeTests
                 string path = Path.Combine(references, name == "MissionPlanner" ? name + ".exe" : name + ".dll");
                 return File.Exists(path) ? Assembly.LoadFrom(path) : null;
             };
+            Run("playback controls attached", PlaybackControlsAttached);
             Run("start-stop and repeated stop", StartStop);
             Run("duplicate start", DuplicateStart);
             Run("partial startup failure", PartialStartupFailure);
@@ -42,8 +38,6 @@ internal static partial class VideoLifetimeTests
             Run("view reopen and shutdown", ViewReopenAndShutdown);
             Run("handle recreation", HandleRecreation);
             Run("HUD disposal and plugin exit", HudAndPluginShutdown);
-            Run("external process cleanup", ExternalProcessCleanup);
-            Run("external startup failure", ExternalStartupFailure);
             Run("disposed view and HUD subscriptions", DisposedSubscriptions);
             Run("background plugin cancellation", BackgroundShutdown);
             Run("already cancelled plugin token", AlreadyCancelledShutdown);

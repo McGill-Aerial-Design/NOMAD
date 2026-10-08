@@ -40,8 +40,8 @@ internal static partial class NomadCoreClientTests
 
     private static int RunAsyncRestartChild(int port)
     {
-        var result = new NomadCoreClient("test-key", port).ServoAsync(8, 1500).GetAwaiter().GetResult();
-        return result.Succeeded ? 0 : 1;
+        var result1 = new NomadCoreClient("test-key", port).ServoAsync(8, 1500).GetAwaiter().GetResult();
+        return result1.Succeeded ? 0 : 1;
     }
 
     private static void Runtime_DelayedResponseReturnsControl()
@@ -106,16 +106,16 @@ internal static partial class NomadCoreClientTests
             (index % 2 == 0 ? first : second).ServoAsync(8, 1500))).ToArray();
         foreach (var request in overlaps)
         {
-            var result = WaitResult(request);
-            Expect(result.Outcome == NomadCoreRequestOutcome.NotAttempted &&
-                result.ErrorCode == "request_in_progress", "identity overlap is declined locally without queueing");
+            var result1 = WaitResult(request);
+            Expect(result1.Outcome == NomadCoreRequestOutcome.NotAttempted &&
+                result1.ErrorCode == "request_in_progress", "identity overlap is declined locally without queueing");
         }
         Expect(runtime.AcceptedConnections == 1 && runtime.Commands.Count == 1,
             "overlaps cannot connect, allocate or overtake the delayed active request");
         runtime.ReleaseResponses();
         Expect(WaitResult(active).Succeeded, "active request succeeds against real high-water enforcement");
         Expect(WaitResult(second.ServoAsync(8, 1500)).Succeeded,
-            "gate is released after result so another client can issue the next request");
+            "gate is released after result1 so another client can issue the next request");
         runtime.Wait();
         var sequences = runtime.Commands.Select(command => Convert.ToUInt64(command["sequence"])).ToArray();
         Expect(sequences[0] >= 900000 && sequences[1] > sequences[0],
@@ -170,9 +170,9 @@ internal static partial class NomadCoreClientTests
         Expect(gimbalOverlap.Outcome == NomadCoreRequestOutcome.NotAttempted &&
             gimbalOverlap.ErrorCode == "request_in_progress", "gimbal respects shared payload identity gate");
         runtime.ReleaseResponses();
-        var result = WaitResult(payloadSuccess);
-        Expect(result.Succeeded && result.Message == "request-1",
-            "active payload caller retains its exact result despite overlapping local failures");
+        var result1 = WaitResult(payloadSuccess);
+        Expect(result1.Succeeded && result1.Message == "request-1",
+            "active payload caller retains its exact result1 despite overlapping local failures");
         runtime.Wait();
         Expect(runtime.Commands.Count == 1 && runtime.AcceptedConnections == 1 && runtime.StaleRequests == 0,
             "overlapping production callers generate no stale IPC mutation or retry");
@@ -220,9 +220,9 @@ internal static partial class NomadCoreClientTests
         {
             using var runtime = new AsyncRuntime(1) { ResponseSize = size };
             runtime.ReleaseResponses();
-            var result = WaitResult(new NomadCoreClient("test-key", runtime.Port).ServoAsync(8, 1500));
+            var result1 = WaitResult(new NomadCoreClient("test-key", runtime.Port).ServoAsync(8, 1500));
             runtime.Wait();
-            Expect(size <= 65536 ? result.Succeeded : result.Outcome == NomadCoreRequestOutcome.UnknownOutcome,
+            Expect(size <= 65536 ? result1.Succeeded : result1.Outcome == NomadCoreRequestOutcome.UnknownOutcome,
                 "buffered response of " + size + " bytes preserves framing and 65536-byte limit");
             Expect(runtime.Commands.Count == 1, "response size failure cannot replay a mutation");
         }
@@ -263,8 +263,8 @@ internal static partial class NomadCoreClientTests
             {
                 SequenceFloorOverride = floor, OmitSequenceFloor = floor == null
             };
-            var result = WaitResult(new NomadCoreClient("test-key", runtime.Port).ServoAsync(8, 1500));
-            Expect(result.Outcome == NomadCoreRequestOutcome.FailedBeforeSend && result.ErrorCode == "invalid_response",
+            var result1 = WaitResult(new NomadCoreClient("test-key", runtime.Port).ServoAsync(8, 1500));
+            Expect(result1.Outcome == NomadCoreRequestOutcome.FailedBeforeSend && result1.ErrorCode == "invalid_response",
                 "missing, zero, negative, fractional, malformed or overflowing next_sequence fails before mutation");
             runtime.Wait();
             Expect(runtime.Commands.Count == 0, "invalid sequence floor sends no mutation and does not retry");
@@ -274,9 +274,9 @@ internal static partial class NomadCoreClientTests
     private static void Runtime_StaleMutationIsNotRetried()
     {
         using var runtime = new MockRuntime(1, outcome: "rejected", errorCode: "stale_request");
-        var result = WaitResult(new NomadCoreClient("test-key", runtime.Port).ServoAsync(8, 1500));
+        var result1 = WaitResult(new NomadCoreClient("test-key", runtime.Port).ServoAsync(8, 1500));
         runtime.Wait();
-        Expect(result.Outcome == NomadCoreRequestOutcome.Rejected && result.ErrorCode == "stale_request",
+        Expect(result1.Outcome == NomadCoreRequestOutcome.Rejected && result1.ErrorCode == "stale_request",
             "stale mutation preserves its exact runtime rejection");
         Expect(runtime.CommandCount == 1, "stale mutation is never automatically reallocated and retried");
     }
@@ -314,8 +314,8 @@ internal static partial class NomadCoreClientTests
     {
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
-        var result = WaitResult(new NomadCoreClient("test-key", ReservePort()).ServoAsync(8, 1500, cancelled.Token));
-        Expect(result.Outcome == NomadCoreRequestOutcome.FailedBeforeSend && result.Acknowledged == null,
+        var result1 = WaitResult(new NomadCoreClient("test-key", ReservePort()).ServoAsync(8, 1500, cancelled.Token));
+        Expect(result1.Outcome == NomadCoreRequestOutcome.FailedBeforeSend && result1.Acknowledged == null,
             "pre-cancelled request fails before connection and mutation write");
         using var runtime = new AsyncRuntime(1, delayHello: true);
         using var duringHello = new CancellationTokenSource();

@@ -14,7 +14,6 @@ namespace NOMAD.MissionPlanner
 {
     public partial class NOMADBoundaryView
     {
-        private Label _lblMigrationNotice;
         private CheckBox _chkEnableMonitoring;
         private NumericUpDown _nudMaxAlt;
         private CheckBox _chkAdvisoryAudio;
@@ -26,7 +25,6 @@ namespace NOMAD.MissionPlanner
             AddAdvisoryPreviewToggle(body);
             AddAdvisoryAltitudeThreshold(body);
             AddAdvisoryAudioToggle(body);
-            AddMigrationNotice(body);
             return card;
         }
 
@@ -109,29 +107,6 @@ namespace NOMAD.MissionPlanner
                 _missionConfig.Save();
             };
             AddRow(body, _chkAdvisoryAudio);
-        }
-
-        private void AddMigrationNotice(TableLayoutPanel body)
-        {
-            var migrationNotice = string.Join(" ", new[]
-            {
-                _missionConfig.MigrationNotice,
-                _presetMigrationNotice,
-            }.Where(value => !string.IsNullOrWhiteSpace(value)));
-            if (string.IsNullOrWhiteSpace(migrationNotice))
-            {
-                return;
-            }
-
-            _lblMigrationNotice = new Label
-            {
-                Text = migrationNotice,
-                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Bold),
-                ForeColor = Color.Gold,
-                AutoSize = true,
-                MaximumSize = new Size(320, 0),
-            };
-            AddRow(body, _lblMigrationNotice);
         }
 
         private string FormatAltitudeUnavailable() =>

@@ -125,9 +125,9 @@ internal static partial class NomadCoreClientTests
                     var response = CreateCommandResponse(command, channel);
                     if (ResponseSize > 0)
                     {
-                        var result = (Dictionary<string, object>)response["command_result"];
-                        result["message"] = "";
-                        result["message"] = new string('x', ResponseSize - serializer.Serialize(response).Length);
+                        var result1 = (Dictionary<string, object>)response["command_result"];
+                        result1["message"] = "";
+                        result1["message"] = new string('x', ResponseSize - serializer.Serialize(response).Length);
                     }
                     if (!accepted)
                     {

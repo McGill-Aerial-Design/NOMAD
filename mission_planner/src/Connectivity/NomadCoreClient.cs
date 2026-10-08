@@ -18,19 +18,13 @@ namespace NOMAD.MissionPlanner.Connectivity
         public const int DefaultRuntimePort = 14611;
 
         public int RuntimePort { get; }
-        // Legacy synchronous API snapshot; async callers must use their returned result.
-        public NomadCoreRequestOutcome LastOutcome { get; private set; }
-        public string LastErrorCode { get; private set; } = "";
-        public string LastMessage { get; private set; } = "";
-        public bool? LastAcknowledged { get; private set; }
 
         private readonly NomadRuntimeClient _runtimeClient;
 
-        // apiKey retains named-call compatibility; it is the runtime client credential, not NOMAD_API_KEY.
-        public NomadCoreClient(string apiKey, int runtimePort = DefaultRuntimePort)
+        public NomadCoreClient(string credential, int runtimePort = DefaultRuntimePort)
         {
             RuntimePort = runtimePort >= 1 && runtimePort <= 65535 ? runtimePort : DefaultRuntimePort;
-            _runtimeClient = new NomadRuntimeClient(RuntimePort, apiKey ?? "", ProcessSource);
+            _runtimeClient = new NomadRuntimeClient(RuntimePort, credential ?? "", ProcessSource);
         }
 
         public Task<NomadCoreRequestResult> AdmitAuthorityAsync(CancellationToken cancellationToken = default) =>
@@ -170,26 +164,5 @@ namespace NOMAD.MissionPlanner.Connectivity
             return _runtimeClient.RunAsync(verb, values, cancellationToken, inputStillCurrent);
         }
 
-        // Compatibility only. Production callers await the immutable request result.
-        private bool CompleteLegacy(Task<NomadCoreRequestResult> request)
-        {
-            var result = request.GetAwaiter().GetResult();
-            LastOutcome = result.Outcome;
-            LastErrorCode = result.ErrorCode;
-            LastMessage = result.Message;
-            LastAcknowledged = result.Acknowledged;
-            return result.Succeeded;
-        }
-
-        public bool AdmitAuthority() => CompleteLegacy(AdmitAuthorityAsync());
-        public bool RevokeAuthority() => CompleteLegacy(RevokeAuthorityAsync());
-        public bool HandbackAuthority() => CompleteLegacy(HandbackAuthorityAsync());
-        public bool Servo(int channel, int pwmUs) => CompleteLegacy(ServoAsync(channel, pwmUs));
-        public bool SetRelay(int relayNumber, bool on) => CompleteLegacy(SetRelayAsync(relayNumber, on));
-        public bool MotorTest(int motorInstance, int pwmUs, double timeoutSeconds) =>
-            CompleteLegacy(MotorTestAsync(motorInstance, pwmUs, timeoutSeconds));
-        public bool GimbalConfigure(int mountMode) => CompleteLegacy(GimbalConfigureAsync(mountMode));
-        public bool GimbalTarget(double pitchDeg, double rollDeg) =>
-            CompleteLegacy(GimbalTargetAsync(pitchDeg, rollDeg));
     }
 }

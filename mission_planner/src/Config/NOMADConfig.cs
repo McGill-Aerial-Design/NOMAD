@@ -23,11 +23,6 @@ namespace NOMAD.MissionPlanner
         // Connection Configuration
         // ============================================================
 
-        /// <summary>
-        /// Active NOMAD config profile name. Written by the profile loader
-        /// (scripts/profile.py) so the plugin can show which profile is live.
-        /// </summary>
-        public string ActiveProfile { get; set; } = "dev";
 
         /// <summary>Loopback TCP port used by the persistent C++ runtime.</summary>
         public int CoreRuntimePort { get; set; } = Connectivity.NomadCoreClient.DefaultRuntimePort;
@@ -49,21 +44,8 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public string VideoUrl { get; set; } = "";
 
-        /// <summary>
-        /// Network caching for video streams (ms).
-        /// Lower = less latency, higher = more stable.
-        /// </summary>
-        public int VideoNetworkCaching { get; set; } = 100;
 
-        /// <summary>
-        /// Preferred video player: "Embedded", "VLC", "FFplay".
-        /// </summary>
-        public string PreferredVideoPlayer { get; set; } = "Embedded";
 
-        /// <summary>
-        /// Enable video stream auto-start when opening video tab.
-        /// </summary>
-        public bool VideoAutoStart { get; set; } = false;
 
         /// <summary>
         /// Auto-start video on Mission Planner's HUD when plugin loads.
@@ -78,8 +60,8 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Enable Mission Planner's standalone router status client.
         /// </summary>
-        // Serialized compatibility name; enables the standalone router status client only.
-        public bool DualLinkEnabled { get; set; } = true;
+        // Enables the standalone router status client only.
+        public bool RouterClientEnabled { get; set; } = true;
 
         /// <summary>
         /// Link monitoring interval in milliseconds.
@@ -108,34 +90,14 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public bool DebugMode { get; set; } = false;
 
-        /// <summary>
-        /// Show notifications for status changes.
-        /// </summary>
-        public bool ShowNotifications { get; set; } = true;
 
-        /// <summary>
-        /// Default tab to show on startup.
-        /// </summary>
-        public string DefaultTab { get; set; } = "Dashboard";
 
-        /// <summary>
-        /// Enable dark mode for NOMAD UI.
-        /// </summary>
-        public bool DarkMode { get; set; } = true;
 
         // ============================================================
         // Alert Configuration
         // ============================================================
 
-        /// <summary>
-        /// Temperature warning threshold (Celsius).
-        /// </summary>
-        public float TempWarningC { get; set; } = 75.0f;
 
-        /// <summary>
-        /// Temperature critical threshold (Celsius).
-        /// </summary>
-        public float TempCriticalC { get; set; } = 85.0f;
 
         /// <summary>
         /// Enable audio alerts for critical warnings.
@@ -151,32 +113,14 @@ namespace NOMAD.MissionPlanner
         // Drone Geometry Configuration
         // ============================================================
 
-        /// <summary>Drone body length in cm (nose to tail).</summary>
-        public float DroneLengthCm { get; set; } = 45.0f;
 
-        /// <summary>Drone body width in cm (arm tip to arm tip).</summary>
-        public float DroneWidthCm { get; set; } = 45.0f;
 
-        /// <summary>Drone body height in cm (top to bottom).</summary>
-        public float DroneHeightCm { get; set; } = 15.0f;
 
-        /// <summary>Camera forward offset from drone center in cm.</summary>
-        public float CameraForwardOffsetCm { get; set; } = 10.0f;
 
-        /// <summary>Camera downward offset from drone center in cm.</summary>
-        public float CameraDownOffsetCm { get; set; } = 5.0f;
 
-        /// <summary>Drone frame type for 3D visualization: "Tricopter" or "Quadcopter".</summary>
-        public string DroneFrameType { get; set; } = "Quadcopter";
 
-        /// <summary>Heading offset in degrees to compensate for magnetometer calibration.</summary>
-        public float SlamHeadingOffsetDeg { get; set; } = 0.0f;
 
-        /// <summary>Camera field of view in degrees for future visualization.</summary>
-        public float SlamCameraFovDeg { get; set; } = 60.0f;
 
-        /// <summary>Local map radius in meters for future visualization.</summary>
-        public float SlamMapRadiusM { get; set; } = 3.0f;
 
         // ============================================================
         // Configured actuator commands use authenticated typed runtime IPC.

@@ -8,8 +8,8 @@
 
 #include "mavsdk_mavlink_connection.hpp"
 
-#include "mavsdk_system.hpp"
 #include "nomad/mavlink/mavsdk_transport.hpp"
+#include "nomad/mavlink/mavsdk_validation.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -26,6 +26,31 @@
 namespace nomad::mavlink {
 namespace {
 
+std::vector<std::shared_ptr<mavsdk::System>> connected_autopilots(const mavsdk::Mavsdk &sdk) {
+    std::vector<std::shared_ptr<mavsdk::System>> systems;
+    for (const auto &system : sdk.systems()) {
+        if (system->is_connected() && system->has_autopilot()) {
+            systems.push_back(system);
+        }
+    }
+    return systems;
+}
+
+std::shared_ptr<mavsdk::System> select_expected_autopilot(const mavsdk::Mavsdk &sdk, std::uint8_t expected_system_id,
+                                                          validation::SystemSelection &selection) {
+    const auto systems = connected_autopilots(sdk);
+    std::vector<std::uint32_t> ids;
+    ids.reserve(systems.size());
+    for (const auto &candidate : systems) {
+        ids.push_back(candidate->get_system_id());
+    }
+    selection = validation::classify_system_ids(ids, expected_system_id);
+    if (selection != validation::SystemSelection::Selected) {
+        return nullptr;
+    }
+    return systems.front();
+}
+
 constexpr auto kTelemetryWaitIncrement = std::chrono::milliseconds(20);
 constexpr auto kQuadplaneParameterTimeout = std::chrono::milliseconds(2000);
 
@@ -36,7 +61,7 @@ bool has_telemetry(const telemetry::VehicleState &state) {
 
 bool has_configuration(const std::string &endpoint, std::uint8_t expected_system_id,
                        std::chrono::milliseconds discovery_timeout) {
-    return mavsdk_phase_a::canonicalize_udp_endpoint(endpoint).has_value() && expected_system_id != 0 &&
+    return validation::canonicalize_udp_endpoint(endpoint).has_value() && expected_system_id != 0 &&
            discovery_timeout > std::chrono::milliseconds::zero();
 }
 
@@ -72,7 +97,7 @@ bool MavsdkMavlinkConnection::connect() {
     if (!has_configuration(endpoint_, expected_system_id_, discovery_timeout_)) {
         return false;
     }
-    const auto endpoint = mavsdk_phase_a::canonicalize_udp_endpoint(endpoint_);
+    const auto endpoint = validation::canonicalize_udp_endpoint(endpoint_);
     auto [result, handle] = sdk_.add_any_connection_with_handle(*endpoint);
     if (result != mavsdk::ConnectionResult::Success) {
         return false;
@@ -109,8 +134,8 @@ void MavsdkMavlinkConnection::disconnect() {
 }
 
 bool MavsdkMavlinkConnection::select_system() {
-    mavsdk_phase_a::SystemSelection selection{};
-    const auto candidate = mavsdk_system::select_expected_autopilot(sdk_, expected_system_id_, selection);
+    validation::SystemSelection selection{};
+    const auto candidate = select_expected_autopilot(sdk_, expected_system_id_, selection);
     if (candidate == nullptr) {
         return false;
     }
