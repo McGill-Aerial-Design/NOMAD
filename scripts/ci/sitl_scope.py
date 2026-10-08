@@ -34,7 +34,6 @@ SAFETY_PATH_PATTERNS = (
     "scripts/dev/runtime_*.py",
     "docker/**",
     "config/nomad.env.example",
-    "config/profiles/**",
     "config/actuators*.json",
     "third_party/MAVSDK",
     "third_party/MAVSDK/**",
@@ -50,7 +49,7 @@ SAFETY_PATH_PATTERNS = (
     "mission_planner/src/Views/NOMADBoundaryView*.cs",
     "mission_planner/tests/geometry/**",
     "mission_planner/tests/gimbal/**",
-    "scripts/build/test_plugin_config_migration.ps1",
+    "scripts/build/test_plugin_config_validation.ps1",
     "scripts/build/test_plugin_geometry.ps1",
     "scripts/build/test_plugin_gimbal.ps1",
 )

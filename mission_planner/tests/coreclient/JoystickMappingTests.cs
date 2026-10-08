@@ -274,9 +274,9 @@ internal static partial class NomadCoreClientTests
         runtime.WaitForHello();
         physicalSnapshotCurrent = false;
         runtime.ReleaseHello();
-        var result = request.GetAwaiter().GetResult();
+        var result1 = request.GetAwaiter().GetResult();
         runtime.Wait();
-        Expect(result.Outcome == NomadCoreRequestOutcome.NotAttempted && result.ErrorCode == "stale_input" && runtime.Commands.Count == 0,
+        Expect(result1.Outcome == NomadCoreRequestOutcome.NotAttempted && result1.ErrorCode == "stale_input" && runtime.Commands.Count == 0,
             "stale " + operation + " is discarded after hello before mutation transmission");
     }
 
@@ -331,9 +331,9 @@ internal static partial class NomadCoreClientTests
         runtime.WaitForCommands(1);
         current = false;
         runtime.ReleaseResponses();
-        var result = request.GetAwaiter().GetResult();
+        var result1 = request.GetAwaiter().GetResult();
         runtime.Wait();
-        Expect(result.Succeeded && runtime.Commands.Count == 1, "later physical change does not close or retry an already-transmitted mutation");
+        Expect(result1.Succeeded && runtime.Commands.Count == 1, "later physical change does not close or retry an already-transmitted mutation");
     }
 
 }

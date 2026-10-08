@@ -108,7 +108,7 @@ def verify_navigation_rejected(binary: Path, peer: VehiclePeer, environment: dic
     """Ensure the installed CLI cannot issue navigation commands outside v1."""
     result = run_cli(binary, environment, "goto", "45.5", "-73.5", "10")
     require(
-        result.returncode != 0 and "unsupported_request" in result.stderr,
+        result.returncode != 0 and "Usage: nomad" in result.stdout and not result.stderr,
         "C++ CLI rejects navigation outside protocol v1",
     )
     require(len(wait_for_commands(peer, 1)) == 1, "rejected navigation produces no MAVLink command")

@@ -8,23 +8,16 @@
 
 using System.Drawing;
 using System.Windows.Forms;
-using NOMAD.MissionPlanner.Core;
 
 namespace NOMAD.MissionPlanner
 {
     /// <summary>
-    /// Base class for NOMAD views with common styling. Implements the optional
-    /// <see cref="INomadView"/> activation hooks as no-ops so a view only
-    /// overrides the one(s) it needs (e.g. to pause work when swapped out).
+    /// Shared styling for NOMAD views.
     /// </summary>
-    public abstract class NOMADViewBase : UserControl, INomadView
+    public abstract class NOMADViewBase : UserControl
     {
         /// <summary>Called after the view is shown in the content area. Default: no-op.</summary>
-        public virtual void OnActivated() { }
-
         /// <summary>Called before the view is swapped out (kept cached). Default: no-op.</summary>
-        public virtual void OnDeactivated() { }
-
         // Colors delegated to NOMADTheme for consistency
         protected static readonly Color CARD_BG = NOMADTheme.CARD_BG;
         protected static readonly Color ACCENT_COLOR = NOMADTheme.ACCENT;
@@ -44,46 +37,5 @@ namespace NOMAD.MissionPlanner
             this.AutoScroll = true;
         }
 
-        protected Panel CreateCard(string title, int width = -1, int height = -1)
-        {
-            var card = new Panel
-            {
-                BackColor = CARD_BG,
-                Margin = new Padding(5),
-                Padding = new Padding(15),
-            };
-
-            if (width > 0) card.Width = width;
-            if (height > 0) card.Height = height;
-
-            var titleLabel = new Label
-            {
-                Text = title.ToUpper(),
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                ForeColor = ACCENT_COLOR,
-                Location = new Point(15, 15),
-                AutoSize = true,
-            };
-            card.Controls.Add(titleLabel);
-
-            return card;
-        }
-
-        protected Button CreateButton(string text, Color bgColor, int width = 150, int height = 45)
-        {
-            var btn = new Button
-            {
-                Text = text,
-                Size = new Size(width, height),
-                Margin = new Padding(5),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = bgColor,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                Cursor = Cursors.Hand,
-            };
-            btn.FlatAppearance.BorderSize = 0;
-            return btn;
-        }
     }
 }

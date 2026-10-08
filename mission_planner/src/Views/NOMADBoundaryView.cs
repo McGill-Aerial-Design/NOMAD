@@ -43,7 +43,6 @@ namespace NOMAD.MissionPlanner
         // Preset management
         private ComboBox _cmbPresets;
         private List<BoundaryPreset> _presets = new List<BoundaryPreset>();
-        private string _presetMigrationNotice;
         private static readonly string PresetsDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Mission Planner", "plugins", "NOMAD", "boundary_presets");

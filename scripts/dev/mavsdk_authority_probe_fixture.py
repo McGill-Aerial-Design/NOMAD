@@ -20,10 +20,10 @@ RETRY_WINDOW_SECONDS = 1.8
 
 def find_probe() -> Path:
     """Find the CMake-built interactive MAVSDK test probe."""
-    if os.environ.get("NOMAD_RESOURCE_BUILD_DIR"):
-        from resource_footprint import release_binary
+    if os.environ.get("NOMAD_QUALIFICATION_BUILD_DIR"):
+        from mavsdk_build_metrics import release_binary
 
-        return release_binary(Path(os.environ["NOMAD_RESOURCE_BUILD_DIR"]), "nomad_mavsdk_authority_wire_probe")
+        return release_binary(Path(os.environ["NOMAD_QUALIFICATION_BUILD_DIR"]), "nomad_mavsdk_authority_wire_probe")
     names = ("nomad_mavsdk_authority_wire_probe.exe", "nomad_mavsdk_authority_wire_probe")
     for base in (ROOT / "build/mavsdk-qualification", ROOT / "build/core"):
         for directory in (base / "Release", base / "Debug", base):

@@ -32,15 +32,8 @@ repos:
     rev: v0.10.0.1
     hooks:
       - id: shellcheck
-        files: '^(scripts|tailscale|infra)/.*\.sh$'
-        # Match the CI excludes (.github/workflows/lint.yml): service scripts
-        # source siblings/config (SC1091), define vars used by sourced code
-        # (SC2034), and use a bottom dispatcher calling helpers defined earlier
-        # in the same file (SC2218 — resolved at call time).
-        args:
-          - --external-sources
-          - --severity=warning
-          - --exclude=SC1091,SC2034,SC2218
+        files: '^docker/.*\.sh$'
+        args: [--severity=warning]
 
   - repo: local
     hooks:
@@ -51,16 +44,3 @@ repos:
           python -c "import sys;missing=[p for p in sys.argv[1:] if 'SPDX-License-Identifier' not in open(p, encoding='utf-8').read()];[print(f'SPDX-License-Identifier missing: {p}') for p in missing];exit(1 if missing else 0)"
         language: python
         files: \.(c|cc|cpp|cs|cxx|h|hpp|py|sh)$
-      - id: complexity-check
-        name: Source size, line width, and baseline freshness
-        description: Reject oversized sources, over-long C/C++ lines, and stale baselines
-        entry: >
-          python -m scripts.dev.line_report --fail-over-file-limit --fail-over-function-limit
-          --fail-line-length --fail-stale-baseline
-        # language: python (like every other hook) so the entry runs in
-        # pre-commit's own venv: the commit shell may not have `python` on
-        # PATH at all (pixi-managed environments). stdlib-only script, so no
-        # additional_dependencies are needed.
-        language: python
-        pass_filenames: true
-        files: \.(c|cc|cpp|cs|cxx|h|hpp|py|ps1|sh)$

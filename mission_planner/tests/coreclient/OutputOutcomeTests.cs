@@ -20,11 +20,11 @@ internal static partial class NomadCoreClientTests
         )
         {
             using var runtime = new MockRuntime(1, outcome: outcome, acknowledged: outcome != "rejected");
-            var result = new NomadCoreClient("test-key", runtime.Port).ServoAsync(8, 1500).GetAwaiter().GetResult();
+            var result1 = new NomadCoreClient("test-key", runtime.Port).ServoAsync(8, 1500).GetAwaiter().GetResult();
             runtime.Wait();
-            Expect(!result.Succeeded, "raw primitive preserves exact request outcome");
+            Expect(!result1.Succeeded, "raw primitive preserves exact request outcome");
             if (outcome == "unknown" || outcome == "interrupted")
-            { Expect(OutputController.DescribeFailure("Output", result).Contains("Do not retry blindly"), "uncertainty has no retry advice"); }
+            { Expect(OutputController.DescribeFailure("Output", result1).Contains("Do not retry blindly"), "uncertainty has no retry advice"); }
         }
     }
 
@@ -54,29 +54,29 @@ internal static partial class NomadCoreClientTests
         bool attempted = false, bool commandSuccess = false, string outcome = "success")
     {
         string type = Convert.ToString(request["type"]);
-        var result = new Dictionary<string, object>
+        var result1 = new Dictionary<string, object>
         {
             ["protocol"] = "nomad-core", ["version"] = 1, ["id"] = request["id"], ["ok"] = true,
             ["runtime_incarnation"] = "mock-runtime-incarnation", ["outcome"] = outcome
         };
         if (type == "get_actuators")
         {
-            result["type"] = "actuators_response";
-            result["actuator_configuration_revision"] = 1UL;
-            result["configuration_recovery_required"] = false;
-            result["actuators"] = new object[] { DiscoveredActuator() };
+            result1["type"] = "actuators_response";
+            result1["actuator_configuration_revision"] = 1UL;
+            result1["configuration_recovery_required"] = false;
+            result1["actuators"] = new object[] { DiscoveredActuator() };
         }
         else
         {
-            result["type"] = "actuator_response";
-            result["request_result"] = new Dictionary<string, object> { ["success"] = outcome == "success", ["message"] = "Backend confirmation accepted." };
-            result["command_result"] = new Dictionary<string, object> { ["success"] = commandSuccess, ["acknowledged"] = commandSuccess };
-            result["execution_attempted"] = attempted;
-            result["actuator_state"] = DisplayState(request.ContainsKey("actuator_id") ? Convert.ToString(request["actuator_id"]) : "release", success: commandSuccess);
+            result1["type"] = "actuator_response";
+            result1["request_result"] = new Dictionary<string, object> { ["success"] = outcome == "success", ["message"] = "Backend confirmation accepted." };
+            result1["command_result"] = new Dictionary<string, object> { ["success"] = commandSuccess, ["acknowledged"] = commandSuccess };
+            result1["execution_attempted"] = attempted;
+            result1["actuator_state"] = DisplayState(request.ContainsKey("actuator_id") ? Convert.ToString(request["actuator_id"]) : "release", success: commandSuccess);
             if (type == "configure_actuators")
-            { result["actuators"] = new object[] { DiscoveredActuator() }; result["actuator_configuration_revision"] = 2UL; }
+            { result1["actuators"] = new object[] { DiscoveredActuator() }; result1["actuator_configuration_revision"] = 2UL; }
         }
-        return result;
+        return result1;
     }
 
     private static void ActuatorClient_ReportsBackendEvidence()
@@ -97,9 +97,9 @@ internal static partial class NomadCoreClientTests
         }
         using (var runtime = new MockRuntime(1, semanticResponse: request => SemanticResponse(request, true, true, "interrupted")))
         {
-            var result = new NomadCoreClient("test-key", runtime.Port).ActuatorActionAsync("release", "safe").GetAwaiter().GetResult();
+            var result1 = new NomadCoreClient("test-key", runtime.Port).ActuatorActionAsync("release", "safe").GetAwaiter().GetResult();
             runtime.Wait();
-            Expect(result.Outcome == NomadCoreRequestOutcome.Interrupted && result.SoftwareCommandSuccess == true,
+            Expect(result1.Outcome == NomadCoreRequestOutcome.Interrupted && result1.SoftwareCommandSuccess == true,
                 "request disposition and observed command success remain independent");
         }
         Projection_EmptyRuntimeRetiresPriorDisplay();
@@ -130,10 +130,10 @@ internal static partial class NomadCoreClientTests
             response["error"] = new Dictionary<string, object> { ["code"] = "configuration_recovery_required", ["message"] = "Persistence result needs review." };
             return response;
         });
-        var result = new NomadCoreClient("test-key", runtime.Port).ConfigureActuatorsAsync("[]").GetAwaiter().GetResult();
+        var result1 = new NomadCoreClient("test-key", runtime.Port).ConfigureActuatorsAsync("[]").GetAwaiter().GetResult();
         runtime.Wait();
-        var description = OutputController.DescribeConfigurationResult(result);
-        Expect(result.ConfigurationChanged && result.ConfigurationRecoveryRequired &&
+        var description = OutputController.DescribeConfigurationResult(result1);
+        Expect(result1.ConfigurationChanged && result1.ConfigurationRecoveryRequired &&
             description.Contains("Restart and review") && !description.Contains("vehicle state"),
             "configuration error preserves backend changed/recovery facts without claiming vehicle uncertainty");
         var saved = new NomadCoreRequestResult(NomadCoreRequestOutcome.Succeeded, "",

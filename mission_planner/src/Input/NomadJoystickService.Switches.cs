@@ -98,7 +98,7 @@ namespace NOMAD.MissionPlanner
                 if (now && !_previousKill)
                 {
                     Log.Warn("Termination button pressed.");
-                    if (!FlightModeController.RequestTermination())
+                    if (!TerminationControl.RequestTermination())
                     { AudioAlerts.Speak("Termination unavailable. Take manual control.", component: "joystick"); }
                 }
                 _previousKill = now;

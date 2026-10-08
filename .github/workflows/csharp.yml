@@ -79,14 +79,10 @@ jobs:
       - name: Gimbal command tests
         run: pwsh -File scripts/build/test_plugin_gimbal.ps1
 
-      - name: Flight log analysis tests
-        run: pwsh -File scripts/build/test_plugin_logs.ps1
 
       - name: Altitude callout tests
         run: pwsh -File scripts/build/test_plugin_audio.ps1
 
-      - name: Local Mission Planner notification tests
-        run: pwsh -File scripts/build/test_plugin_local_messages.ps1
 
       - name: Semantic client, actuator UI and USB HID mapping tests
         run: pwsh -File scripts/build/test_plugin_core_client.ps1
@@ -184,8 +180,8 @@ jobs:
       - name: Mission Planner dead-code lint
         run: pwsh -File scripts/build/lint_plugin_deadcode.ps1
 
-      - name: Persisted configuration migration and settings UI tests
-        run: pwsh -File scripts/build/test_plugin_config_migration.ps1
+      - name: Current configuration validation and settings UI tests
+        run: pwsh -File scripts/build/test_plugin_config_validation.ps1
 
       - name: Gimbal joystick UI smoke
         run: pwsh -File scripts/build/test_plugin_gimbal_ui.ps1
@@ -193,8 +189,6 @@ jobs:
       - name: Video lifetime and cleanup tests
         run: pwsh -File scripts/build/test_plugin_video.ps1
 
-      - name: Flight log adapter smoke test
-        run: pwsh -File scripts/build/test_plugin_log_adapters.ps1
 
       - name: Upload plugin artifact
         uses: actions/upload-artifact@v6

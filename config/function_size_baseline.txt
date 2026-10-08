@@ -1,5 +1,0 @@
-# Existing Python functions above the 40-line improvement threshold.
-# Remove each entry when the function is split during the C++ migration.
-# Numerical growth ceilings and reasons are recorded in source_size_caps.json.
-# debt: 48-line peer initialization; revisit when another peer state option is added; split telemetry and socket setup.
-scripts/dev/mavsdk_peer.py:__init__

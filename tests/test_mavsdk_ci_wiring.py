@@ -103,11 +103,6 @@ def test_mavsdk_job_retains_build_metrics() -> None:
     assert "if-no-files-found: error" in qualification_job
 
 
-def test_ros_workflow_does_not_claim_runtime_qualification() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "ros-sim.yml").read_text(encoding="utf-8")
-    assert "This is compile evidence only" in workflow
-
-
 def test_safety_changes_require_full_copter_and_quadplane_sitl() -> None:
     workflow = (ROOT / ".github" / "workflows" / "sitl.yml").read_text(encoding="utf-8")
     assert workflow.startswith("name: safety-qualification")

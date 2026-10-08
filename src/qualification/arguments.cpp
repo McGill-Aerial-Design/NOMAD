@@ -47,7 +47,7 @@ std::optional<QualificationArguments> parse_qualification_arguments(int argc, ch
         result.system_id = *system_id;
     }
 
-    const auto command = parse_arguments(static_cast<int>(command_argv.size()), command_argv.data());
+    const auto command = parse_direct_arguments(static_cast<int>(command_argv.size()), command_argv.data());
     if (!command.has_value()) {
         return std::nullopt;
     }

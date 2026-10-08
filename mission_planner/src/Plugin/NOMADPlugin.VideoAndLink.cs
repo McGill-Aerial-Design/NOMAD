@@ -14,7 +14,6 @@ using System.Drawing;
 using System.Windows.Forms;
 using MissionPlanner;
 using MissionPlanner.Utilities;
-using NOMAD.MissionPlanner.Core;
 
 namespace NOMAD.MissionPlanner
 {
@@ -34,7 +33,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                if (!_config.DualLinkEnabled)
+                if (!_config.RouterClientEnabled)
                 {
                     if (_connectionManager != null)
                     {
@@ -68,7 +67,6 @@ namespace NOMAD.MissionPlanner
                 // screen (and its Links view) sees the live instance instead of
                 // the stale one captured at plugin load.
                 NOMADMainScreen.SetStaticConfig(_config, _connectionManager, _geofenceConfig, _advisoryBoundaryMonitor);
-                NOMADMainScreen.SetStaticModuleHost(BuildModuleHost());
             }
         }
 

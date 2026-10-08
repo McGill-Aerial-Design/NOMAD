@@ -49,13 +49,11 @@ namespace NOMAD.MissionPlanner
             var btnPlay = CreateButton("Play", 10, 5, 55, Color.FromArgb(60, 120, 60));
             var btnStop = CreateButton("Stop", 70, 5, 55, Color.FromArgb(120, 60, 60));
             var btnFull = CreateButton("Full", 130, 5, 50, Color.FromArgb(70, 70, 75));
-            var btnVlc = CreateButton("VLC", 185, 5, 45, Color.FromArgb(70, 70, 75));
             var btnSnap = CreateButton("Snap", 235, 5, 50, Color.FromArgb(80, 80, 120));
 
             btnPlay.Click += (s, e) => StartStream();
             btnStop.Click += (s, e) => StopStream();
             btnFull.Click += (s, e) => ToggleFullscreen();
-            btnVlc.Click += (s, e) => OpenExternal();
             btnSnap.Click += (s, e) => TakeSnapshot();
 
             var lblLatency = new Label
@@ -112,7 +110,7 @@ namespace NOMAD.MissionPlanner
 
             ctrlPanel.Controls.AddRange(new Control[]
             {
-                btnPlay, btnStop, btnFull, btnVlc, btnSnap,
+                btnPlay, btnStop, btnFull, btnSnap,
                 lblLatency, _trkLatency, _lblLatencyValue, btnApplyLatency,
             });
 
@@ -209,24 +207,6 @@ namespace NOMAD.MissionPlanner
 
             _fullscreenForm.Controls.Add(_fullscreenBox);
             _fullscreenForm.Show();
-        }
-
-        public void OpenExternal()
-        {
-            ValidateUiThread();
-            if (_session.State == VideoState.Disposed)
-            {
-                return;
-            }
-            try
-            {
-                _external.Start(_streamUrl, _latencyMs, ExtractUdpPort(_streamUrl));
-                _lblStatus.Text = "Opened in VLC";
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(ex.Message, "VLC Not Found", MessageBoxButtons.OK);
-            }
         }
 
         public void TakeSnapshot()

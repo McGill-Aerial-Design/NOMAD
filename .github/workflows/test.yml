@@ -34,8 +34,6 @@ jobs:
           --ignore=tests/test_release_lifecycle.py
           --ignore=tests/test_release_windows.py
           --ignore=tests/test_release_linux.py
-      - name: Verify authority SITL observation and guard regressions
-        run: pixi run test-authority-sitl-harness
 
   core:
     name: C++ core (${{ matrix.os }})
@@ -55,8 +53,6 @@ jobs:
           cache: true
       - name: Build and test C++ core
         run: pixi run test-core
-      - name: Validate legacy actuator exports through the native backend
-        run: pixi run python -m pytest tests/test_actuator_migration.py
       - name: Exercise authenticated runtime and installed CLI against a deterministic peer
         run: pixi run python scripts/dev/runtime_ipc_smoke.py
       - name: Qualify clean/crash restart and persistent audit history without hardware

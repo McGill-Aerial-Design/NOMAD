@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 import socket
 import subprocess
 from pathlib import Path
@@ -116,6 +117,80 @@ def test_runtime_listener_blocks_direct_actuation(monkeypatch) -> None:
 
         result = invoke("arm", "--endpoint", "invalid")
 
+    assert result.returncode != 0
+    assert "runtime_owner_active" in result.stderr
+    assert "heartbeat" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("takeoff", "banana"),
+        ("takeoff", "nan"),
+        ("takeoff", "inf"),
+        ("mode", "1x"),
+        ("goto", "nan", "9.0", "5"),
+        ("goto", "45.0", "inf", "5"),
+        ("goto", "45.0", "9.0", "nan"),
+        ("velocity", "--vx", "nan", "--duration", "1"),
+        ("velocity", "--vx", "1", "--duration", "inf"),
+        ("takeoff", "5", "9"),
+        ("vtol-takeoff", "banana"),
+        ("vtol-takeoff", "nan"),
+        ("vtol-takeoff", "5", "9"),
+        ("transition-to-vtol", "45.0", "-73.0"),
+        ("transition-to-vtol", "nan", "-73.0", "20"),
+        ("transition-to-vtol", "45.0", "-73.0", "inf"),
+        ("transition-to-vtol", "45.0", "-73.0", "20", "30"),
+        ("mode", "4", "extra"),
+        ("goto", "45.0", "-73.0"),
+        ("goto", "45.0", "banana", "5"),
+        ("goto", "45.0", "9.0", "5", "7"),
+        ("payload-demo", "16", "1.5"),
+        ("payload-demo",),
+        ("payload-demo", "3"),
+        ("payload-demo", "3", "1.5", "9"),
+        ("fixed-wing-route", "45", "-73", "10", "45.1", "-73.1"),
+        ("fixed-wing-route", "nan", "-73", "10", "45.1", "-73.1", "10"),
+        ("fixed-wing-recovery", "45", "-73", "inf"),
+        ("quadplane-vtol-land", "45", "-73", "extra"),
+    ],
+)
+def test_malformed_direct_arguments_fail_before_admission(monkeypatch, arguments: tuple[str, ...]) -> None:
+    monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", "invalid")
+    result = invoke(*arguments)
+    assert result.returncode != 0
+    assert "Usage: nomad-qualification" in result.stdout
+    assert "audit command=" not in result.stderr
+    assert "heartbeat" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "port",
+    [
+        pytest.param(
+            "", marks=pytest.mark.skipif(os.name == "nt", reason="Windows CRT treats empty environment values as unset")
+        ),
+        "0",
+        "65536",
+        "invalid",
+        "99999999999999999999",
+    ],
+)
+def test_invalid_owner_probe_port_inhibits_direct_commands(monkeypatch, port: str) -> None:
+    monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", port)
+    monkeypatch.setenv("NOMAD_API_KEY", "qualification-key")
+    result = invoke("arm", "--endpoint", "invalid")
+    assert result.returncode != 0
+    assert "runtime_owner_active" in result.stderr
+    assert "heartbeat" not in result.stderr
+
+
+def test_bound_owner_port_inhibits_before_listening(monkeypatch) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as owner:
+        owner.bind(("127.0.0.1", 0))
+        monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", str(owner.getsockname()[1]))
+        result = invoke("arm", "--endpoint", "invalid")
     assert result.returncode != 0
     assert "runtime_owner_active" in result.stderr
     assert "heartbeat" not in result.stderr

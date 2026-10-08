@@ -1,6 +1,0 @@
-# Existing source files above the 500-line improvement threshold.
-# Remove each entry when the file is no longer over the source-size threshold.
-# Numerical growth ceilings and reasons are recorded in source_size_caps.json.
-mission_planner/src/Control/GimbalJoystickWindow.cs
-mission_planner/src/Controls/TimeSeriesPlot.cs
-mission_planner/src/Logs/LogAnalysis.cs

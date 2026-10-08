@@ -20,12 +20,12 @@ void check(bool condition, std::string_view message) {
     }
 }
 
-nomad::mavsdk_phase_a::StatusValues valid_status() {
+nomad::mavlink::validation::StatusValues valid_status() {
     return {45.5, -73.6, 8.0, 3, 10, 12.6, 75.0, 1};
 }
 
 void test_endpoints() {
-    using nomad::mavsdk_phase_a::canonicalize_udp_endpoint;
+    using nomad::mavlink::validation::canonicalize_udp_endpoint;
     check(canonicalize_udp_endpoint("udpin:0.0.0.0:14550") == "udpin://0.0.0.0:14550", "canonical udpin");
     check(canonicalize_udp_endpoint("udpout://127.0.0.1:65535") == "udpout://127.0.0.1:65535", "udpout");
     check(!canonicalize_udp_endpoint("udp:0.0.0.0:14550"), "ambiguous udp alias rejected");
@@ -33,16 +33,16 @@ void test_endpoints() {
     check(!canonicalize_udp_endpoint("udpin:127.0.0.1:0"), "zero port rejected");
     check(!canonicalize_udp_endpoint("udpin:bad host:14550"), "whitespace host rejected");
     check(!canonicalize_udp_endpoint("udpout:0.0.0.0:14550"), "wildcard output rejected");
-    using nomad::mavsdk_phase_a::canonicalize_udp_input_endpoint;
+    using nomad::mavlink::validation::canonicalize_udp_input_endpoint;
     check(canonicalize_udp_input_endpoint("udpin:0.0.0.0:14550") == "udpin://0.0.0.0:14550",
           "observer accepts UDP input");
     check(!canonicalize_udp_input_endpoint("udpout:127.0.0.1:14550"), "observer rejects UDP output");
 }
 
 void test_system_identity() {
-    using nomad::mavsdk_phase_a::classify_system_ids;
-    using nomad::mavsdk_phase_a::parse_system_id;
-    using nomad::mavsdk_phase_a::SystemSelection;
+    using nomad::mavlink::validation::classify_system_ids;
+    using nomad::mavlink::validation::parse_system_id;
+    using nomad::mavlink::validation::SystemSelection;
     check(parse_system_id("1") == 1, "system one accepted");
     check(parse_system_id("255") == 255, "system 255 accepted");
     check(!parse_system_id("0") && !parse_system_id("256") && !parse_system_id("one"), "bad IDs rejected");
@@ -55,10 +55,10 @@ void test_system_identity() {
 }
 
 void test_status_validation() {
-    using nomad::mavsdk_phase_a::has_valid_battery;
-    using nomad::mavsdk_phase_a::has_valid_gps;
-    using nomad::mavsdk_phase_a::has_valid_position;
-    using nomad::mavsdk_phase_a::has_valid_status;
+    using nomad::mavlink::validation::has_valid_battery;
+    using nomad::mavlink::validation::has_valid_gps;
+    using nomad::mavlink::validation::has_valid_position;
+    using nomad::mavlink::validation::has_valid_status;
     auto status = valid_status();
     check(has_valid_status(status), "complete status accepted");
     check(has_valid_position(status), "global position accepted");
@@ -84,8 +84,8 @@ void test_status_validation() {
 }
 
 void test_freshness() {
-    using nomad::mavsdk_phase_a::has_fresh_telemetry;
-    using nomad::mavsdk_phase_a::has_fresh_position_stream;
+    using nomad::mavlink::validation::has_fresh_telemetry;
+    using nomad::mavlink::validation::has_fresh_position_stream;
     check(has_fresh_position_stream(3, 1000, 0), "sustained fresh stream accepted");
     check(!has_fresh_position_stream(2, 1000, 0), "multiple updates required");
     check(!has_fresh_position_stream(3, 999, 0), "observation duration required");

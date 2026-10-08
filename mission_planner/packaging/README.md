@@ -50,8 +50,7 @@ reporting success. Cleanup refuses the active and rollback releases.
 The installer preserves Mission Planner settings, other plugins and AppData
 `nomad_config.json`, including `CoreClientCredential`. It does not remove the
 legacy AppData DLL; an operator must resolve duplicate discovery separately.
-AppData is neither a package payload nor rollback storage. Configuration migration
-remains the plugin's existing load behavior when the operator later opens it;
+AppData is neither a package payload nor rollback storage. Unsupported saved schemas fail explicitly when the plugin loads;
 deployment never rewrites or rolls back configuration files.
 
 After an interrupted activation, inspect `status` and explicitly run `recover`
@@ -73,8 +72,7 @@ configured `mission_planner` consumer, normally port `14600`.
 The standalone host enforces `mission_planner` as receive-only. An explicit host
 JSON entry with `AllowOutbound` omitted (default true) or set true is rejected;
 the sample sets it false while preserving the separate command-capable
-`nomad_core` consumer. Mission Planner's obsolete `IntegratedFlightMode` field
-is removed during config migration and never rewrites host configuration. The
+`nomad_core` consumer. Plugin settings never rewrite host routing configuration. The
 plugin installer below
 installs only `NOMADPlugin.dll`; it does not install or register a router service.
 
@@ -97,7 +95,6 @@ Runtime-backed requests also need one running, compatible `nomad-runtime` with
 the same configured IPC endpoint. See the [operations guide](../../docs/operations.md).
 Plugin video uses Mission Planner's GStreamer wrapper and SkiaSharp frame support.
 The installer deploys only NOMADPlugin.dll; GStreamer is supplied by the
-Mission Planner installation. The Jetson ROS image bridge and MediaMTX are
-separate video infrastructure. Qualify the complete package at G8; a DLL-only
+Mission Planner installation. Qualify the complete package at G8; a DLL-only
 install does not establish task readiness. Installation changes the local
 Mission Planner deployment and requires operator authorization.

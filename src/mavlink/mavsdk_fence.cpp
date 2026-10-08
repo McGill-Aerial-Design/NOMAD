@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 //
-// Phase D fence operations of the MAVSDK-backed MavlinkConnection.
+// Fence operations of the MAVSDK-backed MavlinkConnection.
 //
 // MAVSDK's Geofence plugin transfers the fence as MAV_MISSION_TYPE_FENCE items
 // and owns that handshake, so the plan upload and the readback that verifies it

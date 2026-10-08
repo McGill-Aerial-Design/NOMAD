@@ -126,7 +126,7 @@ namespace NOMAD.MissionPlanner
 
                 // Link Status (Multi-Link Failover)
                 var linkStatusItem = new ToolStripMenuItem("Link Status (Failover)");
-                linkStatusItem.ForeColor = _config.DualLinkEnabled ? Color.LimeGreen : Color.Gray;
+                linkStatusItem.ForeColor = _config.RouterClientEnabled ? Color.LimeGreen : Color.Gray;
                 linkStatusItem.Click += (s, e) => ShowLinkHealthPanel();
                 nomadMenu.DropDownItems.Add(linkStatusItem);
 
@@ -152,7 +152,7 @@ namespace NOMAD.MissionPlanner
                     $"plugin-wide alerts with toast overlays, standalone-router\n" +
                     $"management and status, and configurable payload controls.\n\n" +
                     $"Video: {_config.VideoUrl}\n" +
-                    $"Multi-Link: {(_config.DualLinkEnabled ? "Enabled" : "Disabled")}\n" +
+                    $"Multi-Link: {(_config.RouterClientEnabled ? "Enabled" : "Disabled")}\n" +
                     $"Log: %LOCALAPPDATA%\\Mission Planner\\plugins\\NOMAD\\nomad.log",
                     "About NOMAD"
                 );

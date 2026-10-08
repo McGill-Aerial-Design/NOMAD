@@ -18,35 +18,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-EXPECTED_VERBS = (
-    "connect",
-    "status",
-    "admit",
-    "revoke",
-    "handback",
-    "arm",
-    "disarm",
-    "mode",
-    "takeoff",
-    "vtol-takeoff",
-    "transition-to-fixed-wing",
-    "fixed-wing-route",
-    "fixed-wing-recovery",
-    "transition-to-vtol",
-    "quadplane-vtol-land",
-    "goto",
-    "land",
-    "rtl",
-    "servo",
-    "relay",
-    "motor-test",
-    "gimbal-config",
-    "mission-demo",
-    "velocity",
-    "velocity-demo",
-    "fence-demo",
-    "payload-demo",
-)
+EXPECTED_VERBS = ("status", "admit", "revoke", "handback", "servo", "relay", "motor-test", "gimbal-config")
 
 UNSUPPORTED_REQUESTS = (
     ("connect",),
@@ -194,29 +166,6 @@ def test_removed_user_command_cannot_reach_runtime() -> None:
 @pytest.mark.parametrize(
     "arguments",
     [
-        ("takeoff", "banana"),
-        ("takeoff", "nan"),
-        ("takeoff", "inf"),
-        ("mode", "1x"),
-        ("goto", "nan", "9.0", "5"),
-        ("goto", "45.0", "inf", "5"),
-        ("goto", "45.0", "9.0", "nan"),
-        ("velocity", "--vx", "nan", "--duration", "1"),
-        ("velocity", "--vx", "1", "--duration", "inf"),
-        ("takeoff", "5", "9"),
-        ("vtol-takeoff", "banana"),
-        ("vtol-takeoff", "nan"),
-        ("vtol-takeoff", "5", "9"),
-        ("transition-to-vtol", "45.0", "-73.0"),
-        ("transition-to-vtol", "nan", "-73.0", "20"),
-        ("transition-to-vtol", "45.0", "-73.0", "inf"),
-        ("transition-to-vtol", "45.0", "-73.0", "20", "30"),
-        ("mode", "4", "extra"),
-        ("goto", "45.0", "-73.0"),
-        ("goto", "45.0", "banana", "5"),
-        ("goto", "45.0", "9.0", "5", "7"),
-        ("payload-demo", "16", "1.5"),
-        ("payload-demo", "3", "1.5", "9"),
         ("servo", "1"),
         ("servo", "1", "1500", "9"),
         ("relay", "3"),
@@ -275,7 +224,8 @@ def test_unsupported_commands_report_unavailable_without_transport_fallback(
     result = invoke(*arguments)
 
     assert result.returncode != 0
-    assert "error[unsupported_request]" in result.stderr
-    assert f"{arguments[0]} is not available through runtime protocol v1" in result.stderr
+    assert "Usage: nomad" in result.stdout
+    assert "takeoff" not in result.stdout
+    assert result.stderr == ""
     assert "invalid_configuration" not in result.stderr
     assert "heartbeat" not in result.stderr

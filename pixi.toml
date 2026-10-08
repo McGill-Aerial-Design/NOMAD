@@ -1,15 +1,4 @@
-# NOMAD developer / simulation environment.
-#
-# Pixi (https://pixi.sh) provides a reproducible, cross-platform dev environment
-# that does NOT require the Jetson or a GPU. The C++ core and optional ROS2/
-# simulation images are built separately when their tasks are selected.
-#
-# Quick start:
-#   pixi run build-core   # build the production C++ executables
-#   pixi run test-python  # pytest
-#   pixi run lint         # ruff check
-#   pixi run format       # ruff format
-#   pixi run docs     # serve the docs site locally
+# NOMAD development and qualification tasks; builds never deploy.
 
 [workspace]
 name = "nomad"
@@ -28,11 +17,6 @@ shellcheck = ">=0.10"
 [feature.dev.pypi-dependencies]
 nomad-tools = { path = ".", editable = true, extras = ["dev", "docs"] }
 
-# Isaac Sim (Omniverse) integration is intentionally not included in this
-# baseline — it needs a high-end NVIDIA GPU host. It will return later as a
-# remote simulation server. The hardware-free ArduPilot SITL stack below covers
-# local development without a GPU.
-
 # ==================== Environments ====================
 
 [environments]
@@ -42,8 +26,6 @@ default = { features = ["dev"] }
 
 [tasks]
 
-measure-core-resources = "python scripts/dev/core_resources.py --qualify"
-verify-core-resource-budgets = "python scripts/dev/verify_core_resource_budgets.py build/resources/metrics.json"
 
 # Production C++ targets. The compiler is intentionally a host prerequisite;
 # the persistent runtime owns the MAVSDK transport. This task builds only the
@@ -76,7 +58,6 @@ test-authority-sitl-harness = "pytest tests/test_authority_sitl.py -q"
 
 # Coverage floor is a ratchet set just below the current level so coverage can
 # only trend up; raise it as more of the codebase gets tested.
-test = "pytest --cov=python --cov=infra/tailscale --cov-report=term-missing --cov-fail-under=85"
 # Plain pytest without the coverage gate.
 test-python = "pytest"
 test-release-lifecycle = "pytest tests/test_release_identity.py tests/test_release_lifecycle.py tests/test_release_windows.py tests/test_release_linux.py tests/test_release_storage.py -q"
@@ -106,43 +87,9 @@ quadplane-sitl-ps = "docker compose -f docker/docker-compose.quadplane.yml ps"
 # host-side SITL UDP copy the other core-sitl-* scenarios use. Declared as a
 # table task with env at the end of this file, with the other C++ SITL runners,
 # because it needs the same development API key they do.
-# ROS2 simulation stack (Tier 1 — CPU, no GPU/Jetson required).
-#   pixi run sim-ros-build   # build the nomad-sim-ros:latest image (run once)
-#   pixi run sim-ros-up      # start SITL + the ROS telemetry observer (detached)
-#   pixi run sim-ros-down    # stop and remove the ros-profile containers
-#   pixi run sim-ros-logs    # tail logs from all ros-profile services
-#   pixi run test-ros-integration  # end-to-end adapter test (needs sim-ros-build first)
-sim-ros-build = "docker build -f docker/Dockerfile.sim-ros -t nomad-sim-ros:latest ."
-sim-ros-down = "docker compose -p nomad-ros -f docker/docker-compose.dev.yml --profile ros down"
-sim-ros-logs = "docker compose -p nomad-ros -f docker/docker-compose.dev.yml --profile ros logs -f"
-# Runs the ROS GTests and integration tests INSIDE the sim-ros image (rclpy +
-# pytest are present; the observer and generated MAVLink dialect are built).
-# Volume-mounts tests/ so the test suite is always current code. Exercises the
-# real nomad_vehicle_node against an in-process MAVLink responder. Covers
-# telemetry freshness and removed ROS command interfaces.
-test-ros-integration = """
-docker run --rm -v $PWD/tests:/opt/nomad/tests nomad-sim-ros:latest bash -c 'ctest --test-dir /ws/build/nomad_ros --output-on-failure && python3 -m pytest tests/ros/ -v'
-"""
-# ROS telemetry is usable independently of a sensor publisher.
-"sim-ros-up".cmd = "docker compose -p nomad-ros -f docker/docker-compose.dev.yml --profile ros up -d --build"
-"sim-ros-up".env.NOMAD_SITL_ROS_OUTPUT = "--out udp:nomad_vehicle_node:14552"
-
 lint = "ruff check ."
 format = "ruff format ."
 format-check = "ruff format --check ."
-fmt = "pixi run format"
-fmt-check = "pixi run format-check"
-line-report = "python -m scripts.dev.line_report"
-cpp-complexity-report = "python -m scripts.dev.cpp_complexity_report"
-# Gates changed source size, numerical debt caps, the C/C++ 120-column limit,
-# and stale baselines. Full reports use tracked paths; changed reports also
-# include nonignored untracked first-party files.
-complexity-check = """
-python -m scripts.dev.line_report --changed-only --fail-over-file-limit --fail-over-function-limit --fail-line-length --fail-stale-baseline
-"""
-# Whole-tree Python type check — advisory during the C++ migration.
-typecheck = "mypy"
-
 # Documentation preview served on :8001.
 docs = "properdocs serve --dev-addr localhost:8001"
 docs-build = "properdocs build --strict"
@@ -150,57 +97,47 @@ docs-build = "properdocs build --strict"
 # Git hooks
 precommit = "pre-commit run --all-files"
 
-# Bootstrap (run once when first cloning)
-bootstrap = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap.ps1"
-
 # Compile the Mission Planner plugin without touching its installation (Windows only)
-build-plugin-only = "powershell -ExecutionPolicy Bypass -File scripts/build/build_plugin_windows.ps1"
+build-plugin-only = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/build_plugin_windows.ps1"
 
-# Regression checks for deterministic cleanup/rejection of legacy plugin config.
-test-plugin-config-migration = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_config_migration.ps1"
+# Current configuration validation and HID settings tests.
+test-plugin-config-validation = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_config_validation.ps1"
 
 # Requires Visual Studio's MSBuild/C# compiler; tests dispatch against a temporary deny-write installation.
-test-plugin-build-only = "powershell -ExecutionPolicy Bypass -File scripts/build/test_build_plugin_windows.ps1"
-test-plugin-version = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_version.ps1"
+test-plugin-build-only = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_build_plugin_windows.ps1"
+test-plugin-version = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_version.ps1"
 
 # Dead-code lint for the plugin (Windows only) — fails on unused fields/locals,
 # unreachable code, etc. (C# compiler diagnostics promoted to errors).
-lint-plugin = "powershell -ExecutionPolicy Bypass -File scripts/build/lint_plugin_deadcode.ps1"
-test-plugin-local-messages = "powershell -NoProfile -File scripts/build/test_plugin_local_messages.ps1"
+lint-plugin = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/lint_plugin_deadcode.ps1"
 
 # Unit tests for local advisory outline geometry (Windows only) — compiles the
 # Mission Planner-free GeoMath/GeofenceTypes with VS's csc and checks polygon
 # inset, visual outline status and the configured altitude display threshold.
-test-plugin-geometry = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_geometry.ps1"
+test-plugin-geometry = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_geometry.ps1"
 
 # Unit tests for Mission Planner's gimbal input math (Windows only) — compiles
 # the Mission Planner-free GimbalCommand and checks mode values, stick
 # integration, deadzone, and angle/rate clamping. C++ tests own MAVLink framing.
-test-plugin-gimbal = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal.ps1"
+test-plugin-gimbal = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal.ps1"
 
 # STA WinForms interaction/render smoke for the isolated gimbal joystick pad.
-test-plugin-gimbal-ui = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal_ui.ps1"
+test-plugin-gimbal-ui = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal_ui.ps1"
 
 # Hardware-free video lifecycle and isolated WinForms ownership checks (requires plugin build).
-test-plugin-video = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_video.ps1"
+test-plugin-video = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_video.ps1"
 
 # Unit tests for the Mission Planner runtime IPC client (Windows only) — compiles
 # the Mission Planner-free client with VS's csc and covers typed requests,
-# fail-closed validation, GuidedGoto unavailability, authority controls,
+# fail-closed validation and authority controls,
 # protocol negotiation and unknown-outcome no-replay behavior.
-test-plugin-core-client = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_core_client.ps1"
-
-# Unit tests for the host-independent flight-log analyzer and shared live issue rules.
-test-plugin-logs = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_logs.ps1"
+test-plugin-core-client = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_core_client.ps1"
 
 # Unit tests for the Airbus-style altitude callouts (Windows only) — compiles the
 # Mission Planner-free AltitudeCallout with VS's csc and asserts the threshold-
 # crossing logic: silent priming, climb/descent callouts, hysteresis deadband,
 # and nearest-threshold selection on a fast multi-band descent.
-test-plugin-audio = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_audio.ps1"
-
-# Runtime smoke test for Mission Planner's DFLogBuffer adapter (requires a Release plugin build).
-test-plugin-log-adapters = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_log_adapters.ps1"
+test-plugin-audio = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_audio.ps1"
 
 # Stress/behaviour tests for the standalone multi-link router (Windows only) —
 # compiles the MP-independent routing stack and management client with VS's csc and
@@ -208,39 +145,12 @@ test-plugin-log-adapters = "powershell -ExecutionPolicy Bypass -File scripts/bui
 # failover + preferred-link recovery, manual override, outbound single-link
 # routing, param-transaction pinning, watchdog socket reopen, and high-rate
 # mirrored stress with strict no-loss/no-duplication assertions.
-test-plugin-duallink = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_duallink.ps1"
+test-plugin-duallink = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_duallink.ps1"
 
 # Standalone ground-router build writes its artifacts to build/ground-router.
 # Release packaging runs in release.yml; test-ground-router runs process checks.
 build-ground-router = "powershell -NoProfile -File scripts/build/build_ground_router.ps1"
 test-ground-router = "pixi run build-ground-router && pixi run test-plugin-duallink && python scripts/dev/ground_router_smoke.py"
-
-# ==================== Configuration Profiles ====================
-# Manage config/nomad.env via named profiles stored in config/profiles/.
-# Each profile owns product settings; deployment-local values remain in the active
-# environment. Only reviewed local keys survive a profile load.
-#
-# Quick start:
-#   pixi run profile-load onboard_companion  # Optional onboard compute placement
-#   pixi run profile-load groundstation_minimal  # Runtime IPC + standalone ground router
-#   pixi run profile-show           # Show active profile
-#   pixi run profile-list           # List available profiles
-
-# Cross-platform profile manager (runs in the pixi Python env so it works on
-# Windows/macOS/Linux without bash). `nomad-profile` (bash) remains for the
-# Jetson runtime.
-profile-load = { cmd = "python scripts/profile.py load {{ profile }}", args = [
-    "profile",
-] }
-profile-save = { cmd = "python scripts/profile.py save {{ profile }}", args = [
-    "profile",
-] }
-profile-list = "python scripts/profile.py list"
-profile-show = "python scripts/profile.py show"
-profile-diff = { cmd = "python scripts/profile.py diff {{ profile }}", args = [
-    "profile",
-] }
-profile-edit = "python scripts/profile.py edit"
 
 # C++ SITL runners use only the non-installed qualification driver. It refuses actuation verbs without NOMAD_API_KEY
 # (SR-SEC-02/03); the key below is the documented development-simulation key

@@ -7,13 +7,11 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using MissionPlanner;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 
 namespace NOMAD.MissionPlanner
 {
@@ -51,91 +49,16 @@ namespace NOMAD.MissionPlanner
 
         private BoundaryPreset ReadPreset(string file)
         {
-            var json = File.ReadAllText(file);
-            var source = JObject.Parse(json);
-            var legacyLimit = source["MaxAltitudeMeters"];
-            var currentLimit = source[nameof(BoundaryPreset.AdvisoryAltitudeDisplayThresholdMeters)];
-            var parsedCurrentLimit = ParseAdvisoryAltitude(currentLimit);
-            if (currentLimit != null && !parsedCurrentLimit.HasValue)
+            var preset = JsonConvert.DeserializeObject<BoundaryPreset>(File.ReadAllText(file), new JsonSerializerSettings
             {
-                source[nameof(BoundaryPreset.AdvisoryAltitudeDisplayThresholdMeters)] = 122.0;
-            }
-
-            var preset = source.ToObject<BoundaryPreset>();
-            if (preset == null)
+                MissingMemberHandling = MissingMemberHandling.Error,
+            });
+            if (preset == null || preset.SoftBoundary == null || preset.HardBoundary == null ||
+                !IsValidAdvisoryAltitude(preset.AdvisoryAltitudeDisplayThresholdMeters))
             {
-                return null;
+                throw new JsonSerializationException("Invalid advisory boundary preset; original file preserved.");
             }
-
-            var notices = new List<string>();
-            MigratePresetAltitude(preset, legacyLimit, currentLimit, parsedCurrentLimit, notices);
-
-            if (notices.Count > 0)
-            {
-                SaveMigratedPreset(file, preset, notices);
-            }
-
             return preset;
-        }
-
-        private static void MigratePresetAltitude(
-            BoundaryPreset preset,
-            JToken legacyLimit,
-            JToken currentLimit,
-            double? parsedCurrentLimit,
-            List<string> notices)
-        {
-            if (parsedCurrentLimit.HasValue)
-            {
-                preset.AdvisoryAltitudeDisplayThresholdMeters = parsedCurrentLimit.Value;
-            }
-            else if (currentLimit != null)
-            {
-                preset.AdvisoryAltitudeDisplayThresholdMeters = 122.0;
-                notices.Add("an invalid preset altitude threshold was reset to 122 m for display");
-            }
-
-            if (legacyLimit == null)
-            {
-                return;
-            }
-
-            if (currentLimit != null)
-            {
-                notices.Add("a retired preset altitude field was removed");
-                return;
-            }
-
-            var parsedLegacyLimit = ParseAdvisoryAltitude(legacyLimit);
-            preset.AdvisoryAltitudeDisplayThresholdMeters = parsedLegacyLimit ?? 122.0;
-            notices.Add(parsedLegacyLimit.HasValue
-                ? "a saved preset altitude was retained as a display-only threshold"
-                : "an invalid legacy preset altitude was reset to 122 m for display");
-        }
-
-        private void SaveMigratedPreset(string file, BoundaryPreset preset, List<string> notices)
-        {
-            _presetMigrationNotice = "Preset migration: " + string.Join("; ", notices) + ".";
-            try
-            {
-                File.WriteAllText(file, JsonConvert.SerializeObject(preset, Formatting.Indented));
-            }
-            catch (Exception ex)
-            {
-                _presetMigrationNotice += " The preset migration could not be saved.";
-                Log.Error($"Could not save migrated boundary preset '{Path.GetFileName(file)}' - {ex.Message}");
-            }
-        }
-
-        private static double? ParseAdvisoryAltitude(JToken token)
-        {
-            if (token == null || !double.TryParse(token.ToString(), NumberStyles.Float,
-                CultureInfo.InvariantCulture, out double altitude) || !IsValidAdvisoryAltitude(altitude))
-            {
-                return null;
-            }
-
-            return altitude;
         }
 
         private void RefreshPresetCombo()

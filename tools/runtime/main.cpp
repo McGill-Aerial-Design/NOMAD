@@ -215,7 +215,7 @@ int run_runtime(int argc, char **argv) {
     if (!arguments) {
         return fail_runtime("runtime configuration error: invalid endpoint/IPC/system arguments");
     }
-    const auto endpoint = nomad::mavsdk_phase_a::canonicalize_udp_endpoint(arguments->endpoint);
+    const auto endpoint = nomad::mavlink::validation::canonicalize_udp_endpoint(arguments->endpoint);
     if (!endpoint) {
         return fail_runtime(
             "runtime configuration error: NOMAD_MAVLINK_ENDPOINT must be a supported UDP MAVSDK endpoint");

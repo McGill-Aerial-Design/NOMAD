@@ -42,7 +42,7 @@ def test_requirements_have_source_status_owner_and_evidence():
 
 def test_canonical_requirement_references_resolve():
     requirements = read_requirements()
-    documents = [*sorted((ROOT / "docs").glob("*.md")), ROOT / "PLAN.md", ROOT / "TODO.md"]
+    documents = [*sorted((ROOT / "docs").glob("*.md")), ROOT / "TODO.md"]
     for document in documents:
         for requirement in ID_PATTERN.findall(document.read_text(encoding="utf-8")):
             assert requirement in requirements, f"Unknown requirement {requirement} in {document.name}"
@@ -56,14 +56,3 @@ def test_unresolved_requirements_name_a_question():
             references = set(re.findall(r"\bQ\d{2}\b", cells[7]))
             assert references, f"Unresolved requirement has no question: {requirement}"
             assert references <= questions, f"Unknown question for {requirement}: {references - questions}"
-
-
-def test_gap_rows_preserve_acceptance_fields_and_single_active_item():
-    migration = (ROOT / "docs" / "migration.md").read_text(encoding="utf-8")
-    gaps = [line for line in migration.splitlines() if line.startswith("| GAP-")]
-    assert gaps, "No implementation gap matrix"
-    for line in gaps:
-        cells = [cell.strip() for cell in line.strip("|").split("|")]
-        assert len(cells) == 8 and all(cells), f"Incomplete gap: {line}"
-    ledger = (ROOT / "TODO.md").read_text(encoding="utf-8")
-    assert len(re.findall(r"^- \[~\]", ledger, re.MULTILINE)) == 1, "Ledger must have one active item"

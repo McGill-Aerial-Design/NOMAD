@@ -17,39 +17,17 @@ namespace NOMAD.MissionPlanner
             _txtCoreClientCredential.Text = Config.CoreClientCredential ?? "";
 
             _txtVideoUrl.Text = Config.VideoUrl;
-            _numVideoCaching.Value = ClampValue(_numVideoCaching, Config.VideoNetworkCaching);
-            SetComboBoxValue(_cmbVideoPlayer, Config.PreferredVideoPlayer);
-            _chkVideoAutoStart.Checked = Config.VideoAutoStart;
             _chkAutoStartHudVideo.Checked = Config.AutoStartHudVideo;
 
-            _chkRouterClientEnabled.Checked = Config.DualLinkEnabled;
+            _chkRouterClientEnabled.Checked = Config.RouterClientEnabled;
             _numRouterLocalPort.Value = ClampValue(_numRouterLocalPort, Config.RouterLocalPort);
             _numManagementPort.Value = ClampValue(_numManagementPort, Config.ManagementPort);
 
-            _chkDarkMode.Checked = Config.DarkMode;
-            _chkShowNotifications.Checked = Config.ShowNotifications;
-            SetComboBoxValue(_cmbDefaultTab, Config.DefaultTab);
             _chkDebugMode.Checked = Config.DebugMode;
-            _numSlamFov.Value = ClampValue(_numSlamFov, Config.SlamCameraFovDeg);
-            _numSlamMapRadius.Value = ClampValue(_numSlamMapRadius, Config.SlamMapRadiusM);
 
-            _numTempWarning.Value = ClampValue(_numTempWarning, Config.TempWarningC);
-            _numTempCritical.Value = ClampValue(_numTempCritical, Config.TempCriticalC);
             _chkAudioAlerts.Checked = Config.AudioAlerts;
             _chkAltitudeCallouts.Checked = Config.AltitudeCallouts;
 
-            _txtDefaultLogDirectory.Text = Config.DefaultLogDirectory ?? "";
-            _numLogVibrationWarning.Value = ClampValue(_numLogVibrationWarning, Config.LogVibrationWarning);
-            _numLogVibrationCritical.Value = ClampValue(_numLogVibrationCritical, Config.LogVibrationCritical);
-            _numLogHdopWarning.Value = ClampValue(_numLogHdopWarning, Config.LogHdopWarning);
-            _numLogHdopCritical.Value = ClampValue(_numLogHdopCritical, Config.LogHdopCritical);
-            _numLogMinimumSatellites.Value = ClampValue(_numLogMinimumSatellites, Config.LogMinimumSatellites);
-            _numLogTuneWarning.Value = ClampValue(_numLogTuneWarning, Config.LogTuneRmsWarning);
-            _numLogTuneCritical.Value = ClampValue(_numLogTuneCritical, Config.LogTuneRmsCritical);
-            _numLogEkfWarning.Value = ClampValue(_numLogEkfWarning, Config.LogEkfVarianceWarning);
-            _numLogEkfCritical.Value = ClampValue(_numLogEkfCritical, Config.LogEkfVarianceCritical);
-            _numLogLiveBufferPoints.Value = ClampValue(_numLogLiveBufferPoints, Config.LogLiveBufferPoints);
-            _chkLogInjectHud.Checked = Config.LogInjectAlertsToHud;
 
 
 
@@ -98,39 +76,17 @@ namespace NOMAD.MissionPlanner
             Config.CoreClientCredential = _txtCoreClientCredential.Text.Trim();
 
             Config.VideoUrl = _txtVideoUrl.Text.Trim();
-            Config.VideoNetworkCaching = (int)_numVideoCaching.Value;
-            Config.PreferredVideoPlayer = _cmbVideoPlayer.SelectedItem?.ToString() ?? "Embedded";
-            Config.VideoAutoStart = _chkVideoAutoStart.Checked;
             Config.AutoStartHudVideo = _chkAutoStartHudVideo.Checked;
 
-            Config.DualLinkEnabled = _chkRouterClientEnabled.Checked;
+            Config.RouterClientEnabled = _chkRouterClientEnabled.Checked;
             Config.RouterLocalPort = (int)_numRouterLocalPort.Value;
             Config.ManagementPort = (int)_numManagementPort.Value;
 
-            Config.DarkMode = _chkDarkMode.Checked;
-            Config.ShowNotifications = _chkShowNotifications.Checked;
-            Config.DefaultTab = _cmbDefaultTab.SelectedItem?.ToString() ?? "Dashboard";
             Config.DebugMode = _chkDebugMode.Checked;
-            Config.SlamCameraFovDeg = (float)_numSlamFov.Value;
-            Config.SlamMapRadiusM = (float)_numSlamMapRadius.Value;
-            Config.TempWarningC = (float)_numTempWarning.Value;
-            Config.TempCriticalC = (float)_numTempCritical.Value;
             Config.AudioAlerts = _chkAudioAlerts.Checked;
             Config.AltitudeCallouts = _chkAltitudeCallouts.Checked;
             AudioAlerts.ApplyConfig(Config);
 
-            Config.DefaultLogDirectory = _txtDefaultLogDirectory.Text.Trim();
-            Config.LogVibrationWarning = (double)_numLogVibrationWarning.Value;
-            Config.LogVibrationCritical = Math.Max(Config.LogVibrationWarning, (double)_numLogVibrationCritical.Value);
-            Config.LogHdopWarning = (double)_numLogHdopWarning.Value;
-            Config.LogHdopCritical = Math.Max(Config.LogHdopWarning, (double)_numLogHdopCritical.Value);
-            Config.LogMinimumSatellites = (int)_numLogMinimumSatellites.Value;
-            Config.LogTuneRmsWarning = (double)_numLogTuneWarning.Value;
-            Config.LogTuneRmsCritical = Math.Max(Config.LogTuneRmsWarning, (double)_numLogTuneCritical.Value);
-            Config.LogEkfVarianceWarning = (double)_numLogEkfWarning.Value;
-            Config.LogEkfVarianceCritical = Math.Max(Config.LogEkfVarianceWarning, (double)_numLogEkfCritical.Value);
-            Config.LogLiveBufferPoints = (int)_numLogLiveBufferPoints.Value;
-            Config.LogInjectAlertsToHud = _chkLogInjectHud.Checked;
 
 
 

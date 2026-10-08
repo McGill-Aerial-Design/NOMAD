@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nomad-tools"
 version = "0.2.1"
-description = "NOMAD retained Python tools and media adapters"
+description = "NOMAD development and qualification tools"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "The NOMAD Authors" }]
-keywords = ["drone", "uav", "mavlink", "ros2", "jetson", "robotics"]
+keywords = ["drone", "uav", "mavlink"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -20,30 +20,24 @@ classifiers = [
 ]
 
 # Runtime dependencies
-dependencies = ["numpy>=1.26"]
+dependencies = []
 
 [project.optional-dependencies]
-hardware = ["pyserial>=3.5"]
 dev = [
     "pymavlink>=2.4",
     "psutil>=5.9",
     "ruff==0.15.16",
-    "mypy>=1.11",
     "pytest>=8.0",
-    "pytest-cov>=5.0",
     "pre-commit>=3.8",
 ]
-docs = ["properdocs>=1.6", "mkdocs-material>=9.5", "mkdocs-redirects>=1.2"]
+docs = ["properdocs>=1.6", "mkdocs-material>=9.5"]
 
 [project.urls]
 Homepage = "https://github.com/YoussGm3o8/NOMAD"
 Repository = "https://github.com/YoussGm3o8/NOMAD"
 
-[tool.setuptools.packages.find]
-# infra.transport holds only configs (no Python), so it is not packaged.
-include = ["python", "python.tools", "infra", "infra.tailscale"]
-namespaces = false
-exclude = ["tests*", "scripts*", "docs*", "build*", "examples*"]
+[tool.setuptools]
+packages = []
 
 [tool.ruff]
 line-length = 120
@@ -61,21 +55,8 @@ ignore = []
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["F403", "F405", "E402"]
-# The ROS integration test splits its imports around the rclpy
-# importorskip guard on purpose: nothing ROS-dependent may import on hosts
-# without rclpy, so the block ordering is intentional.
-"tests/ros/*.py" = ["I001"]
 "scripts/dev/**" = ["E402", "E501"]
 "__init__.py" = ["F401"]
-
-[tool.mypy]
-python_version = "3.10"
-files = ["python", "infra/tailscale"]
-ignore_missing_imports = true
-follow_imports = "silent"
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

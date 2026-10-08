@@ -20,7 +20,6 @@ using System.Windows.Forms;
 using MissionPlanner;
 using MissionPlanner.Plugin;
 using MissionPlanner.Utilities;
-using NOMAD.MissionPlanner.Core;
 
 namespace NOMAD.MissionPlanner
 {
@@ -67,6 +66,7 @@ namespace NOMAD.MissionPlanner
 
                 // Load configuration
                 _config = NOMADConfig.Load();
+                _geofenceConfig = GeofenceConfig.Load();
 
                 // OutputController builds the loopback runtime client from the
                 // saved port and local actuation gate.
@@ -81,7 +81,6 @@ namespace NOMAD.MissionPlanner
 
                 // Local outline preview lives at plugin level so its advisory
                 // status remains visible across page switches.
-                _geofenceConfig = GeofenceConfig.Load();
                 _advisoryBoundaryMonitor = new AdvisoryBoundaryMonitor(_geofenceConfig);
                 _notificationService.SetAdvisoryBoundaryMonitor(_advisoryBoundaryMonitor);
                 if (_geofenceConfig.AdvisoryPreviewEnabled)
@@ -92,15 +91,6 @@ namespace NOMAD.MissionPlanner
                 // Toast overlay: warnings pop bottom-right
                 // on every MP page, not just inside the NOMAD screen.
                 NotificationToast.Attach(_notificationService, Host?.MainForm);
-                if (!string.IsNullOrWhiteSpace(_geofenceConfig.MigrationNotice))
-                {
-                    _notificationService.AddNotification(
-                        NotificationSeverity.Warning,
-                        NotificationCategory.Boundary,
-                        "Boundary settings migrated to visual advisory data",
-                        _geofenceConfig.MigrationNotice);
-                }
-
                 // Apply saved audio preferences (master mute, altitude callouts)
                 // before anything speaks.
                 AudioAlerts.ApplyConfig(_config);
@@ -109,7 +99,7 @@ namespace NOMAD.MissionPlanner
                 AudioAlerts.PlayWelcomeOnce();
 
                 // Initialize the standalone ground router management client
-                if (_config.DualLinkEnabled)
+                if (_config.RouterClientEnabled)
                 {
                     InitializeConnectionManager();
                 }
@@ -270,7 +260,6 @@ namespace NOMAD.MissionPlanner
                 _gimbalArrowKeyFilter?.Dispose();
                 _gimbalArrowKeyFilter = null;
 
-                // Kill serial bridge subprocess
 
                 if (_popOutForm != null && !_popOutForm.IsDisposed)
                 {
@@ -278,8 +267,6 @@ namespace NOMAD.MissionPlanner
                     _popOutForm = null;
                 }
 
-                _moduleHost?.StopAll();
-                _moduleHost = null;
             }
             catch
             {
@@ -290,70 +277,7 @@ namespace NOMAD.MissionPlanner
         }
 
         // ============================================================
-        // Module Host (NOMAD module SDK — see src/Core)
         // ============================================================
-
-        /// <summary>
-        /// Shared module context so the NOMADMainScreen pop-out and any registered
-        /// modules can re-use plugin-level config (theme, runtime client credential, etc.) without
-        /// requiring a full NOMADConfig instance. Built and cached on first read,
-        /// with <see cref="EnvFlag"/> resolving module enable flags.
-        /// </summary>
-        internal static NomadModuleContext SharedContext
-        {
-            get
-            {
-                if (_sharedContext == null)
-                    _sharedContext = new NomadModuleContext(EnvFlag);
-                return _sharedContext;
-            }
-        }
-
-        private static NomadModuleContext _sharedContext;
-
-        private static ModuleHost _moduleHost;
-
-        /// <summary>
-        /// Build the module host once and return it. Register new modules here.
-        /// Modules read services (e.g. the plugin config) from the shared context
-        /// and contribute their own sidebar views/actions to the NOMAD screen.
-        /// </summary>
-        private ModuleHost BuildModuleHost()
-        {
-            if (_moduleHost != null) return _moduleHost;
-
-            SharedContext.Register(_config); // expose the plugin config to modules
-
-            var host = new ModuleHost();
-            host.Register(new Modules.ExampleModule());
-            host.Configure(SharedContext); // resolve order + Configure each module
-            host.StartAll();
-
-            _moduleHost = host;
-            return host;
-        }
-
-        /// <summary>Resolve a module enable flag from an environment variable (true/false/null).</summary>
-        private static bool? EnvFlag(string name)
-        {
-            var raw = Environment.GetEnvironmentVariable(name);
-            if (string.IsNullOrEmpty(raw)) return null;
-            switch (raw.Trim().ToLowerInvariant())
-            {
-                case "1":
-                case "true":
-                case "yes":
-                case "on":
-                    return true;
-                case "0":
-                case "false":
-                case "no":
-                case "off":
-                    return false;
-                default:
-                    return null;
-            }
-        }
 
         // Screen registration and pop-out hosting live in NOMADPlugin.Screens.cs.
 
@@ -361,7 +285,6 @@ namespace NOMAD.MissionPlanner
         {
             using (var form = new NOMADSettingsForm(_config))
             {
-                // Live serial bridge status indicator on the Joystick tab.
 
                 if (form.ShowDialog() == DialogResult.OK)
                 {

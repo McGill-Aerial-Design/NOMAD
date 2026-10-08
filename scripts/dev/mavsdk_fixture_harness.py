@@ -26,10 +26,10 @@ BUILD_DIR = Path(os.environ.get("NOMAD_MAVSDK_FIXTURE_BUILD_DIR", ROOT / "build"
 
 
 def find_binary(name: str) -> Path | None:
-    if os.environ.get("NOMAD_RESOURCE_BUILD_DIR"):
-        from resource_footprint import release_binary
+    if os.environ.get("NOMAD_QUALIFICATION_BUILD_DIR"):
+        from mavsdk_build_metrics import release_binary
 
-        return release_binary(Path(os.environ["NOMAD_RESOURCE_BUILD_DIR"]), name)
+        return release_binary(Path(os.environ["NOMAD_QUALIFICATION_BUILD_DIR"]), name)
     names = (f"{name}.exe", name)
     for directory in (BUILD_DIR / "Release", BUILD_DIR / "Debug", BUILD_DIR):
         for candidate_name in names:

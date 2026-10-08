@@ -1,6 +1,0 @@
-nomad_vehicle_node:
-  ros__parameters:
-    # Transitional receive-only MAVLink telemetry feed from mavlink-router.
-    observation_endpoint: "udpin:0.0.0.0:14552"
-    expected_system_id: 1
-    publish_rate_hz: 10.0

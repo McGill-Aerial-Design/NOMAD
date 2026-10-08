@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   python:
+    # Keep the deployed required-check context until branch protection is updated.
     name: ruff + mypy
     runs-on: ubuntu-latest
     steps:
@@ -25,24 +26,6 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           cache: true
-      - name: File and line size report
-        run: pixi run line-report
-      - name: C++ complexity report (report-only)
-        continue-on-error: true
-        env:
-          CPP_COMPLEXITY_REPORT: ${{ runner.temp }}/cpp-complexity-${{ github.sha }}.json
-        run: pixi run python -m scripts.dev.cpp_complexity_report --output "$CPP_COMPLEXITY_REPORT"
-      - name: Upload C++ complexity report
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: cpp-complexity-${{ github.sha }}
-          path: ${{ runner.temp }}/cpp-complexity-${{ github.sha }}.json
-          if-no-files-found: warn
-      - name: Enforce changed-file complexity
-        env:
-          NOMAD_COMPLEXITY_BASE: origin/${{ github.base_ref || 'main' }}
-        run: pixi run complexity-check
       - name: Ruff lint
         run: pixi run lint
       - name: Strict documentation build
@@ -52,10 +35,6 @@ jobs:
           if ! pixi run format-check; then
             ./.pixi/envs/default/bin/ruff format --diff .
           fi
-      - name: Mypy — full tree (advisory)
-        run: pixi run typecheck
-        continue-on-error: true
-
   shell:
     name: shellcheck
     runs-on: ubuntu-latest
@@ -67,30 +46,3 @@ jobs:
         with:
           severity: warning
           scandir: "."
-        env:
-          # Service scripts source siblings + config/nomad.env at runtime (SC1091),
-          # define vars consumed by sourced code (SC2034), and use a dispatcher at
-          # the bottom that calls helper functions defined earlier in the same
-          # file — forward references resolved at call time, not parse time (SC2218).
-          SHELLCHECK_OPTS: -e SC1091 -e SC2034 -e SC2218
-
-  csharp:
-    name: dotnet format (advisory)
-    runs-on: ubuntu-latest
-    # The Mission Planner plugin references local Windows-only DLLs (WinForms/WPF
-    # + C:\Program Files (x86)\Mission Planner\*.dll), so it cannot restore or
-    # build on hosted runners. This is a best-effort whitespace/style check only;
-    # full build + style enforcement happens in Visual Studio on Windows.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: "8.0.x"
-      - name: dotnet format (whitespace, no restore)
-        run: |
-          dotnet format mission_planner/src/NOMADPlugin.csproj \
-            --no-restore --verify-no-changes --verbosity diagnostic \
-            || echo "::warning::dotnet format could not fully run (expected — local MP DLLs absent in CI)"

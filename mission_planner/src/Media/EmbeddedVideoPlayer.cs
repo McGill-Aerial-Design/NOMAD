@@ -12,7 +12,6 @@ namespace NOMAD.MissionPlanner
         private string _streamUrl;
         private int _latencyMs = 100;
         private readonly VideoSession _session;
-        private readonly OwnedVideoProcess _external = new OwnedVideoProcess();
         private readonly System.Windows.Forms.Timer _frameTimer;
         private CancellationTokenRegistration _shutdown;
         private Bitmap _displayFrame;
@@ -87,7 +86,6 @@ namespace NOMAD.MissionPlanner
             _session.Dispose();
             try
             {
-                _external.Dispose();
             }
             finally
             {
@@ -101,7 +99,6 @@ namespace NOMAD.MissionPlanner
         private void OnPluginShutdown()
         {
             _session.Dispose();
-            _external.Dispose();
             if (Thread.CurrentThread.ManagedThreadId == _uiThread)
             {
                 Dispose();
