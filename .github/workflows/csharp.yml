@@ -224,6 +224,9 @@ jobs:
             test "$PLUGIN_TEST_RESULT" = "success"
             test "$ROUTER_TEST_RESULT" = "success"
             test "$PLUGIN_BUILD_RESULT" = "success"
-          else
+          elif [[ "$REQUIRED" == "false" ]]; then
             echo "Windows plugin and router qualification was not required for this change; those jobs were skipped by path scope."
+          else
+            echo "Invalid qualification scope output; expected true or false." >&2
+            exit 1
           fi

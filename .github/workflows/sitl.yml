@@ -339,6 +339,9 @@ jobs:
           if [[ "$REQUIRED" == "true" ]]; then
             test "$COPTER_RESULT" = "success"
             test "$QUADPLANE_RESULT" = "success"
-          else
+          elif [[ "$REQUIRED" == "false" ]]; then
             echo "Full SITL was not required for this change; the Copter and QuadPlane jobs were skipped by path scope."
+          else
+            echo "Invalid qualification scope output; expected true or false." >&2
+            exit 1
           fi

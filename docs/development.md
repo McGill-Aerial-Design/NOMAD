@@ -345,7 +345,8 @@ for unrelated changes. `sitl.yml` runs the full Copter and QuadPlane
 qualification for safety-sensitive pull requests and main pushes. Its scope
 gate skips both simulator builds for unrelated changes, and a required gate
 fails if either full suite does not pass when those paths change. Scheduled and
-manual runs always perform both suites. Each full job builds the runtime and
+manual runs always perform both suites. Both qualification gates reject missing
+or malformed scope outputs. Each full job builds the runtime and
 non-installed qualification driver once, then uses `pixi run --skip-deps` to
 run its scenarios serially with their task-specific environments. Ordinary
 standalone scenario commands retain their `build-sitl-tools` dependency.
