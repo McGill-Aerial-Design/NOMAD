@@ -36,9 +36,13 @@ Use `lint-plugin` and focused `test-plugin-*` tasks for non-deploying checks.
 IPC. It performs HELLO negotiation and sends the typed requests supported by
 protocol v1. If the runtime is unavailable, commands fail closed; Mission Planner
 does not launch the CLI or fall back to native MAVLink or direct vehicle writes.
-Requests with an unknown outcome are not replayed. GuidedGoto is unavailable
-until runtime protocol v1 adds a typed navigation request, and the boundary
-monitor tells the operator to take manual control. `CoreApiKey` is retired; the
+Requests with an unknown outcome are not replayed. Runtime protocol v1 does not
+expose navigation requests. The saved inner/outer boundary outlines and altitude
+reference are Mission Planner-only visual advisory data: runtime has no boundary
+configuration, evaluation, or status API, and the plugin does not upload them to
+the runtime or aircraft. Their position preview cannot report runtime or aircraft
+safety state. Legacy return-location, boundary-action, and termination-delay
+settings are removed with a visible migration notice. `CoreApiKey` is retired; the
 new `CoreClientCredential` is a per-client shared secret for HMAC-authenticated IPC.
 Portable profile exports omit this secret. The runtime deployment
 `NOMAD_API_KEY` gate remains separate; provision the plugin
@@ -56,11 +60,14 @@ commanded actuator state and explicitly leave physical state unverified; a
 failed or uncertain request does not change the recorded commanded state.
 Reel messages describe accepted movement/stop commands and local timer expiry,
 without asserting motion or stopping. Gimbal mode readouts say selected mode:
-they show operator intent rather than observed vehicle configuration.
+they show operator intent rather than observed vehicle configuration. Selecting
+a preset configures the mount immediately. A target sent while that request is
+pending waits for its result; actions that change mode and target together use
+one runtime request.
 For CONOPS v1.0, the dedicated GCS display must show live aircraft position and
 competition area (AE27-OPS-004). The LAND-as-termination recipe and descent-speed
-settings are removed. The monitored termination button and hard-boundary request
-report termination unavailable and send no substitute aircraft command. Direct
+settings are removed. The monitored termination button reports termination
+unavailable and sends no substitute aircraft command. Direct
 vehicle-fence upload/clear is removed; only visual export to the Plan map remains.
 Flight-controller fence installation/readback is not exposed through runtime
 IPC v1. A future request must use the C++ core and complete integrated authority

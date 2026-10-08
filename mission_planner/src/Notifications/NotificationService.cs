@@ -5,7 +5,7 @@
 // ============================================================
 // Centralized notification system for flight-critical warnings.
 // Monitors GPS health, EKF source changes, battery, optical flow,
-// and flight boundary proximity. Non-intrusive timestamped alerts.
+// and local advisory outline position. Non-intrusive timestamped alerts.
 // ============================================================
 
 using System;
@@ -80,13 +80,13 @@ namespace NOMAD.MissionPlanner
         private bool _disposed;
         private int _pollGuard;
 
-        private BoundaryMonitor _boundaryMonitor;
+        private AdvisoryBoundaryMonitor _advisoryBoundaryMonitor;
         private int _lastEkfSource = -1;
         private int _lastGpsFix = -1;
         private readonly Dictionary<int, int> _lastBatterySeverity = new Dictionary<int, int>();
         private readonly Dictionary<int, DateTime> _lastBatterySpeechUtc = new Dictionary<int, DateTime>();
         private static readonly TimeSpan BatterySpeechInterval = TimeSpan.FromSeconds(10);
-        private string _lastBoundaryStatus = "inside";
+        private AdvisoryOutlineStatus _lastBoundaryStatus = AdvisoryOutlineStatus.NoPosition;
 
         public event EventHandler<NotificationEventArgs> NotificationAdded;
         public event EventHandler NotificationsCleared;
@@ -115,9 +115,9 @@ namespace NOMAD.MissionPlanner
 
         public bool IsMonitoring { get; private set; }
 
-        public NotificationService(BoundaryMonitor boundaryMonitor = null)
+        public NotificationService(AdvisoryBoundaryMonitor boundaryMonitor = null)
         {
-            SetBoundaryMonitor(boundaryMonitor);
+            SetAdvisoryBoundaryMonitor(boundaryMonitor);
         }
 
         public void StartMonitoring(int intervalMs = 1000)
@@ -186,52 +186,48 @@ namespace NOMAD.MissionPlanner
             NotificationsCleared?.Invoke(this, EventArgs.Empty);
         }
 
-        public void SetBoundaryMonitor(BoundaryMonitor monitor)
+        public void SetAdvisoryBoundaryMonitor(AdvisoryBoundaryMonitor monitor)
         {
-            if (_boundaryMonitor != null)
+            if (_advisoryBoundaryMonitor != null)
             {
-                _boundaryMonitor.BoundaryViolation -= OnBoundaryViolation;
-                _boundaryMonitor.BoundaryStatusChanged -= OnBoundaryStatusChanged;
+                _advisoryBoundaryMonitor.StatusChanged -= OnAdvisoryBoundaryStatusChanged;
             }
 
-            _boundaryMonitor = monitor;
-            if (_boundaryMonitor != null)
+            _advisoryBoundaryMonitor = monitor;
+            if (_advisoryBoundaryMonitor != null)
             {
-                _boundaryMonitor.BoundaryViolation += OnBoundaryViolation;
-                _boundaryMonitor.BoundaryStatusChanged += OnBoundaryStatusChanged;
+                _advisoryBoundaryMonitor.StatusChanged += OnAdvisoryBoundaryStatusChanged;
             }
         }
 
-        private void OnBoundaryViolation(object sender, BoundaryViolationEventArgs e)
+        private void OnAdvisoryBoundaryStatusChanged(object sender, AdvisoryBoundaryStatusEventArgs e)
         {
-            var severity = e.BoundaryType == "hard"
-                ? NotificationSeverity.Critical
-                : NotificationSeverity.Warning;
-            AddNotification(severity, NotificationCategory.Boundary,
-                $"{e.BoundaryType.ToUpper()} Boundary Violation", e.RequiredAction);
-        }
-
-        private void OnBoundaryStatusChanged(object sender, BoundaryStatusEventArgs e)
-        {
-            if (e.Status == _lastBoundaryStatus) return;
-
-            if (e.Status == "inside" && _lastBoundaryStatus != "inside")
+            if (e.Status == _lastBoundaryStatus)
             {
-                AddNotification(NotificationSeverity.Info, NotificationCategory.Boundary,
-                    "Back Inside Boundary", "Drone has returned to safe area");
+                return;
             }
-            else if (e.Status == "soft_violation")
+
+            if (IsOutsideOutline(e.Status))
             {
                 AddNotification(NotificationSeverity.Warning, NotificationCategory.Boundary,
-                    "Approaching Boundary", "Turn around - soft boundary crossed");
+                    "Outside local advisory outline",
+                    $"Mission Planner telemetry is outside {e.OutlineName}. " +
+                    "This outline is not enforced by NOMAD runtime or the aircraft.");
             }
-            else if (e.Status == "hard_violation")
+            else if (e.Status == AdvisoryOutlineStatus.InsideOutlines && IsOutsideOutline(_lastBoundaryStatus))
             {
-                AddNotification(NotificationSeverity.Critical, NotificationCategory.Boundary,
-                    "HARD BOUNDARY CROSSED", "Termination required; plugin activation unavailable");
+                AddNotification(NotificationSeverity.Info, NotificationCategory.Boundary,
+                    "Position inside local advisory outlines",
+                    "The saved outlines are visual references and do not report vehicle safety state.");
             }
 
             _lastBoundaryStatus = e.Status;
+        }
+
+        private static bool IsOutsideOutline(AdvisoryOutlineStatus status)
+        {
+            return status == AdvisoryOutlineStatus.OutsideInnerOutline ||
+                status == AdvisoryOutlineStatus.OutsideOuterOutline;
         }
 
         private bool IsOnCooldown(string key)
@@ -263,7 +259,7 @@ namespace NOMAD.MissionPlanner
             if (_disposed) return;
             _disposed = true;
             StopMonitoring();
-            SetBoundaryMonitor(null);
+            SetAdvisoryBoundaryMonitor(null);
         }
     }
 }

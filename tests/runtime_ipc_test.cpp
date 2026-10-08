@@ -46,6 +46,15 @@ namespace {
 
 using Json = nlohmann::json;
 
+template <typename T>
+concept HasFencePolicy = requires(T value) { value.fence_policy; };
+
+template <typename T>
+concept HasVelocityLimits = requires(T value) { value.velocity_limits; };
+
+static_assert(!HasFencePolicy<nomad::runtime::RuntimeConfig>);
+static_assert(!HasVelocityLimits<nomad::runtime::RuntimeConfig>);
+
 #include "runtime_test_clients.hpp"
 
 Json base_request(std::string id, std::string type, std::string client = "test-client") {

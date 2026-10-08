@@ -38,7 +38,7 @@ namespace NOMAD.MissionPlanner
         private NOMADConfig _config;
         private NotificationService _notificationService;
         private GeofenceConfig _geofenceConfig;               // Plugin-owned: survives NOMAD screen disposal
-        private BoundaryMonitor _boundaryMonitor;             // Plugin-owned: alerts fire on every MP page
+        private AdvisoryBoundaryMonitor _advisoryBoundaryMonitor; // Plugin-owned local outline preview
         private MAVLinkConnectionManager _connectionManager;  // Standalone router management/status client
         private NomadJoystickService _joystickService;        // Physical joysticks → gimbal + camera tilt
         private GimbalArrowKeyFilter _gimbalArrowKeyFilter;    // Mission Planner-wide arrow key nudges
@@ -69,7 +69,7 @@ namespace NOMAD.MissionPlanner
                 _config = NOMADConfig.Load();
 
                 // OutputController builds the loopback runtime client from the
-                // saved port and local actuation gate. GuidedGoto remains unavailable.
+                // saved port and local actuation gate.
                 OutputController.Initialize(_config);
 
                 // Notification service runs plugin-wide so battery / GPS
@@ -79,21 +79,27 @@ namespace NOMAD.MissionPlanner
                 NotificationService.Shared = _notificationService;
                 _notificationService.StartMonitoring();
 
-                // Geofence boundary monitor lives at plugin level so the
-                // "Real-time Monitor" setting persists and violation alerts
-                // keep firing even when the NOMAD screen is disposed (MainSwitcher
-                // recreates it on every page switch).
+                // Local outline preview lives at plugin level so its advisory
+                // status remains visible across page switches.
                 _geofenceConfig = GeofenceConfig.Load();
-                _boundaryMonitor = new BoundaryMonitor(_geofenceConfig, _config);
-                _notificationService.SetBoundaryMonitor(_boundaryMonitor);
-                if (_geofenceConfig.MonitoringEnabled)
+                _advisoryBoundaryMonitor = new AdvisoryBoundaryMonitor(_geofenceConfig);
+                _notificationService.SetAdvisoryBoundaryMonitor(_advisoryBoundaryMonitor);
+                if (_geofenceConfig.AdvisoryPreviewEnabled)
                 {
-                    _boundaryMonitor.StartMonitoring();
+                    _advisoryBoundaryMonitor.StartMonitoring();
                 }
 
-                // Toast overlay: Warning/Critical notifications pop bottom-right
+                // Toast overlay: warnings pop bottom-right
                 // on every MP page, not just inside the NOMAD screen.
                 NotificationToast.Attach(_notificationService, Host?.MainForm);
+                if (!string.IsNullOrWhiteSpace(_geofenceConfig.MigrationNotice))
+                {
+                    _notificationService.AddNotification(
+                        NotificationSeverity.Warning,
+                        NotificationCategory.Boundary,
+                        "Boundary settings migrated to visual advisory data",
+                        _geofenceConfig.MigrationNotice);
+                }
 
                 // Apply saved audio preferences (master mute, altitude callouts)
                 // before anything speaks.
@@ -242,9 +248,9 @@ namespace NOMAD.MissionPlanner
                 NotificationToast.Detach();
                 MapOverlayManager.StopBoundaryRendering();
 
-                // Stop boundary monitor (plugin-owned)
-                _boundaryMonitor?.Dispose();
-                _boundaryMonitor = null;
+                // Stop local advisory outline preview.
+                _advisoryBoundaryMonitor?.Dispose();
+                _advisoryBoundaryMonitor = null;
 
                 // Stop notification service
                 if (NotificationService.Shared == _notificationService) NotificationService.Shared = null;

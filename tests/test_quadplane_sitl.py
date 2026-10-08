@@ -26,7 +26,11 @@ def test_rc_probe_ci_is_isolated_bounded_and_preserves_the_flight_chain() -> Non
     yaml = pytest.importorskip("yaml")
     workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "sitl.yml").read_text(encoding="utf-8"))
     job = workflow["jobs"]["quadplane-observation"]
-    assert job["if"] == "github.event_name != 'push'"
+    assert job["needs"] == "qualification-scope"
+    assert job["if"] == "needs.qualification-scope.outputs.required == 'true'"
+    gate = workflow["jobs"]["safety-qualification-gate"]
+    assert gate["needs"] == ["qualification-scope", "sitl", "quadplane-observation"]
+    assert gate["if"] == "always()"
     steps = job["steps"]
     probe_index = next(index for index, step in enumerate(steps) if "two clean instances" in step.get("name", ""))
     flight_index = next(index for index, step in enumerate(steps) if step.get("run") == "pixi run quadplane-sitl-up")
@@ -49,7 +53,7 @@ def test_rc_probe_ci_is_isolated_bounded_and_preserves_the_flight_chain() -> Non
     artifact = steps[probe_index + 1]
     assert artifact["if"] == "always()"
     assert artifact["with"]["path"].endswith("quadplane-rc-probe-*.json")
-    assert any(step.get("run") == "pixi run core-sitl-quadplane-vtol-landing" for step in steps)
+    assert any(step.get("run") == "pixi run --skip-deps core-sitl-quadplane-vtol-landing" for step in steps)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="CI cleanup shell requires native Bash")

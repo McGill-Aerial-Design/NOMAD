@@ -1,38 +1,15 @@
-name: sitl
+name: safety-qualification
 
-# End-to-end loop-closure against a real ArduPilot SITL vehicle for the
-# safety-critical velocity and geofence core (the §4.5 verification the safety
-# case calls for — see tests/sitl/README.md and docs/safety.md).
-#
-# The full suite is deliberately NOT on every push/PR: it builds ArduPilot from
-# source and drives a live autopilot, so it runs nightly and on demand. Main
-# pushes that change MAVSDK connectivity/SITL qualification inputs run only the
-# reduced live MAVSDK connect/status smoke below. The fast unit + SC-coverage
-# gates in test.yml protect every PR.
+# Run the full Copter and QuadPlane suites whenever a PR or main push changes
+# runtime, vehicle, actuator, fence, or simulator behavior. The scope gate keeps
+# ordinary UI/docs changes from rebuilding both simulators. Scheduled and
+# manual runs always perform the full qualification.
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
-    paths:
-      - ".github/workflows/sitl.yml"
-      - ".gitmodules"
-      - "CMakeLists.txt"
-      - "pixi.toml"
-      - "third_party/MAVSDK"
-      - "third_party/MAVSDK/**"
-      - "third_party/ardupilot-mavlink"
-      - "third_party/ardupilot-mavlink/**"
-      - "include/nomad/mavlink/mavsdk_*.hpp"
-      - "src/mavlink/mavsdk_*.cpp"
-      - "examples/mavsdk_connectivity_smoke.cpp"
-      - "scripts/dev/mavsdk_build_metrics.py"
-      - "scripts/dev/mavsdk_connectivity_*.py"
-      - "scripts/dev/check_mavsdk_provenance.py"
-      - "tests/mavsdk_validation_test.cpp"
-      - "tests/test_mavsdk_build_metrics.py"
-      - "tests/test_mavsdk_connectivity_*.py"
-      - "tests/test_mavsdk_provenance.py"
-      - "licenses/mavsdk-phase-a/**"
   workflow_dispatch:
   schedule:
     - cron: "0 7 * * *" # 07:00 UTC nightly
@@ -45,66 +22,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mavsdk-connectivity-sitl:
-    name: MAVSDK connectivity SITL smoke
-    if: github.event_name == 'push'
+  qualification-scope:
+    name: Determine full SITL scope
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      NOMAD_CORE_SITL_PORT: "14570"
+    outputs:
+      required: ${{ steps.scope.outputs.required }}
     steps:
       - uses: actions/checkout@v5
         with:
-          submodules: recursive
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Build ArduPilot SITL image
-        uses: docker/build-push-action@v7
-        with:
-          context: https://github.com/radarku/ardupilot-sitl-docker.git
-          build-args: COPTER_TAG=Copter-4.7.1
-          push: false
-          load: true
-          tags: nomad-sitl:copter-4.7.1
-          cache-from: type=gha,scope=sitl
-          cache-to: type=gha,mode=max,scope=sitl
-
-      - uses: prefix-dev/setup-pixi@v0.9.6
-        with:
-          cache: true
-
-      - name: Bring up the dev + SITL stack
-        run: pixi run dev-up
-
-      - name: Let SITL warm up
-        run: sleep 25
-
-      - name: MAVSDK connect/status smoke
-        run: pixi run run-mavsdk-sitl-smoke | tee "$RUNNER_TEMP/mavsdk-connectivity-runtime.txt"
-
-      - name: Retain connectivity runtime metrics
-        uses: actions/upload-artifact@v6
-        with:
-          name: mavsdk-connectivity-runtime
-          path: ${{ runner.temp }}/mavsdk-connectivity-runtime.txt
-          if-no-files-found: error
-
-      - name: Record connectivity build metrics
-        run: python scripts/dev/mavsdk_build_metrics.py
-
-      - name: SITL logs on failure
-        if: failure()
-        run: docker logs nomad-dev-sitl-1 2>&1 | tail -120 || true
-
-      - name: Tear down
-        if: always()
-        run: pixi run dev-down
+          fetch-depth: 0
+      - name: Select qualification scope
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          BASE_BRANCH: origin/${{ github.base_ref }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python scripts/ci/sitl_scope.py
 
   sitl:
     name: SITL loop closure (velocity + geofence)
-    if: github.event_name != 'push'
+    needs: qualification-scope
+    if: needs.qualification-scope.outputs.required == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     # Most scenarios read the regular host copy on 14570. The link-recovery
@@ -149,8 +88,8 @@ jobs:
       - name: Let SITL warm up
         run: sleep 25
 
-      - name: Build production runtime for authority qualification
-        run: pixi run build-core
+      - name: Build runtime and qualification tools once
+        run: pixi run build-sitl-tools
 
       - name: Qualify runtime authority and independent source on isolated Copter
         timeout-minutes: 6
@@ -181,7 +120,7 @@ jobs:
           if-no-files-found: warn
 
       - name: C++ runtime telemetry observation scenario
-        run: pixi run core-sitl-status
+        run: pixi run --skip-deps core-sitl-status
 
       - name: MAVSDK connect/status smoke
         run: pixi run run-mavsdk-sitl-smoke | tee "$RUNNER_TEMP/mavsdk-connectivity-runtime.txt"
@@ -197,47 +136,47 @@ jobs:
         run: python scripts/dev/mavsdk_build_metrics.py
 
       - name: C++ command authorization and flow scenario
-        run: pixi run core-sitl-command-flow
+        run: pixi run --skip-deps core-sitl-command-flow
 
       - name: C++ mission execution scenario
-        run: pixi run core-sitl-mission
+        run: pixi run --skip-deps core-sitl-mission
 
       - name: C++ velocity watchdog scenario (H-01..H-04)
-        run: pixi run core-sitl-velocity-watchdog
+        run: pixi run --skip-deps core-sitl-velocity-watchdog
 
-      - name: C++ payload relay scenario (H-06, SR-PAY-01..03)
-        run: pixi run core-sitl-payload
+      - name: C++ relay pulse acknowledgements (H-06, SR-PAY-01..03)
+        run: pixi run --skip-deps core-sitl-payload
 
       - name: C++ link-loss injection scenario (H-03, SR-LNK-01/03)
-        run: pixi run core-sitl-link-loss
+        run: pixi run --skip-deps core-sitl-link-loss
 
       # SR-LNK-03 transport-level zero-delivery proof: a pymavlink observer
       # watches the CLI's actual wire setpoints through a tee relay and the
       # vehicle must stop after the zero. Runs on the stack's 14572 copy like
       # the link-recovery scenario (the relay binds it as upstream).
       - name: C++ zero-delivery proof (SR-LNK-03, H-03)
-        run: pixi run core-sitl-zero-delivery
+        run: pixi run --skip-deps core-sitl-zero-delivery
 
       - name: C++ link-recovery scenario (degraded-link semantics)
-        run: pixi run core-sitl-link-recovery
+        run: pixi run --skip-deps core-sitl-link-recovery
 
       # Proves the 1 Hz GCS heartbeat opens a heartbeat-gated relay leg (the
       # mechanism real mavlink-router and MAVProxy setups require). Must run
       # on the stack's default 14570 copy; it binds its own client port.
       - name: C++ GCS-heartbeat relay-gate scenario (SR-LNK-04)
-        run: pixi run core-sitl-gcs-heartbeat
+        run: pixi run --skip-deps core-sitl-gcs-heartbeat
 
       - name: Velocity loop-closure scenario (H-01..H-04, SR-VEL/LNK/VIO)
-        run: pixi run sitl-scenario
+        run: pixi run --skip-deps sitl-scenario
 
       - name: Geofence containment scenario (H-05, SR-FEN-02; C++ CLI drives the vehicle)
-        run: pixi run sitl-fence
+        run: pixi run --skip-deps sitl-fence
 
       # Upload/readback leaves an ArduPilot polygon active. Keep it after the
       # guided-flight containment check so that persisted autopilot state cannot
       # reject the containment scenario's in-fence target.
       - name: C++ geofence upload/readback scenario (H-05, SR-FEN-01)
-        run: pixi run core-sitl-geofence
+        run: pixi run --skip-deps core-sitl-geofence
 
       - name: SITL logs on failure
         if: failure()
@@ -249,7 +188,8 @@ jobs:
 
   quadplane-observation:
     name: QuadPlane identity, takeoff, transitions, route, recovery and landing qualification
-    if: github.event_name != 'push'
+    needs: qualification-scope
+    if: needs.qualification-scope.outputs.required == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -309,6 +249,9 @@ jobs:
           path: ${{ runner.temp }}/quadplane-rc-probe-*.json
           if-no-files-found: warn
 
+      - name: Build runtime and qualification tools once
+        run: pixi run build-sitl-tools
+
       - name: Bring up pinned QuadPlane SITL
         run: pixi run quadplane-sitl-up
 
@@ -320,10 +263,10 @@ jobs:
         run: sleep 25
 
       - name: Observe identity, telemetry and baseline modes
-        run: pixi run core-sitl-quadplane-observe
+        run: pixi run --skip-deps core-sitl-quadplane-observe
 
       - name: Qualify NOMAD arm and QuadPlane VTOL takeoff
-        run: pixi run core-sitl-quadplane-vtol-takeoff
+        run: pixi run --skip-deps core-sitl-quadplane-vtol-takeoff
 
       - name: Reset QuadPlane SITL before transition qualification
         run: |
@@ -332,7 +275,7 @@ jobs:
           sleep 25
 
       - name: Qualify pinned QuadPlane VTOL-to-fixed-wing transition
-        run: pixi run core-sitl-quadplane-transition
+        run: pixi run --skip-deps core-sitl-quadplane-transition
 
       - name: Reset QuadPlane SITL before route qualification
         run: |
@@ -341,7 +284,7 @@ jobs:
           sleep 25
 
       - name: Qualify pinned QuadPlane fixed-wing route navigation
-        run: pixi run core-sitl-quadplane-route
+        run: pixi run --skip-deps core-sitl-quadplane-route
 
       - name: Reset QuadPlane SITL before recovery qualification
         run: |
@@ -350,7 +293,7 @@ jobs:
           sleep 25
 
       - name: Qualify pinned QuadPlane fixed-wing recovery after route
-        run: pixi run core-sitl-quadplane-recovery
+        run: pixi run --skip-deps core-sitl-quadplane-recovery
 
       - name: Reset QuadPlane SITL before transition-back qualification
         run: |
@@ -359,7 +302,7 @@ jobs:
           sleep 25
 
       - name: Qualify recovered QuadPlane fixed-wing-to-VTOL transition
-        run: pixi run core-sitl-quadplane-transition-back
+        run: pixi run --skip-deps core-sitl-quadplane-transition-back
 
       - name: Reset QuadPlane SITL before VTOL landing qualification
         run: |
@@ -368,7 +311,7 @@ jobs:
           sleep 25
 
       - name: Qualify full pinned QuadPlane chain through VTOL landing
-        run: pixi run core-sitl-quadplane-vtol-landing
+        run: pixi run --skip-deps core-sitl-quadplane-vtol-landing
 
       - name: QuadPlane SITL logs on failure
         if: failure()
@@ -377,3 +320,28 @@ jobs:
       - name: Tear down
         if: always()
         run: pixi run quadplane-sitl-down
+
+  safety-qualification-gate:
+    name: Safety qualification gate
+    if: always()
+    needs: [qualification-scope, sitl, quadplane-observation]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both full suites when safety paths change
+        env:
+          SCOPE_RESULT: ${{ needs.qualification-scope.result }}
+          REQUIRED: ${{ needs.qualification-scope.outputs.required }}
+          COPTER_RESULT: ${{ needs.sitl.result }}
+          QUADPLANE_RESULT: ${{ needs.quadplane-observation.result }}
+        run: |
+          set -euo pipefail
+          test "$SCOPE_RESULT" = "success"
+          if [[ "$REQUIRED" == "true" ]]; then
+            test "$COPTER_RESULT" = "success"
+            test "$QUADPLANE_RESULT" = "success"
+          elif [[ "$REQUIRED" == "false" ]]; then
+            echo "Full SITL was not required for this change; the Copter and QuadPlane jobs were skipped by path scope."
+          else
+            echo "Invalid qualification scope output; expected true or false." >&2
+            exit 1
+          fi

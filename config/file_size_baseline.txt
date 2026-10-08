@@ -4,4 +4,3 @@
 mission_planner/src/Control/GimbalJoystickWindow.cs
 mission_planner/src/Controls/TimeSeriesPlot.cs
 mission_planner/src/Logs/LogAnalysis.cs
-mission_planner/src/Views/NOMADBoundaryView.cs

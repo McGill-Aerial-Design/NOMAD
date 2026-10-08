@@ -64,8 +64,9 @@ namespace NOMAD.MissionPlanner
                 if (points.Count > 0)
                 {
                     var result = CustomMessageBox.Show(
-                        $"Import {points.Count} fence points as Soft (Yes) or Hard (No) boundary?",
-                        "Select Boundary Type",
+                        $"Import {points.Count} Mission Planner fence points as inner advisory (Yes) " +
+                        "or outer advisory (No) outline?",
+                        "Select Advisory Outline",
                         CustomMessageBox.MessageBoxButtons.YesNo);
 
                     if (result == CustomMessageBox.DialogResult.Yes)
@@ -108,20 +109,20 @@ namespace NOMAD.MissionPlanner
             if (hasSoft && hasHard)
             {
                 var result = CustomMessageBox.Show(
-                    "Export Soft boundary (Yes) or Hard boundary (No)?",
-                    "Select Boundary",
+                    "Export inner advisory outline (Yes) or outer advisory outline (No)?",
+                    "Select Outline",
                     CustomMessageBox.MessageBoxButtons.YesNo);
                 if (result == CustomMessageBox.DialogResult.Yes)
                 {
-                    boundaryName = "Soft";
+                    boundaryName = "Inner advisory";
                     return soft;
                 }
-                boundaryName = "Hard";
+                boundaryName = "Outer advisory";
                 return hard;
             }
 
-            if (hasSoft) { boundaryName = "Soft"; return soft; }
-            boundaryName = "Hard";
+            if (hasSoft) { boundaryName = "Inner advisory"; return soft; }
+            boundaryName = "Outer advisory";
             return hard;
         }
 
@@ -133,14 +134,14 @@ namespace NOMAD.MissionPlanner
                 if (hardVerts == null || hardVerts.Count < 3)
                 {
                     CustomMessageBox.Show(
-                        "Hard boundary needs at least 3 points before exporting to the Plan map.",
+                        "Outer advisory outline needs at least 3 points before exporting to the Plan map.",
                         "Warning");
                     return;
                 }
                 var vertices = hardVerts;
                 var strokeColor = Color.Red;
                 var fillColor = Color.Transparent;
-                string polyName = "NOMAD_Hard_Fence";
+                string polyName = "NOMAD_Advisory_Outer_Outline";
 
                 // 1) Refresh the saved-config zone masks on both maps.
                 try
@@ -163,8 +164,10 @@ namespace NOMAD.MissionPlanner
                 catch (Exception ex) { Log.Error($"Plan map inject failed - {ex.Message}"); }
 
                 CustomMessageBox.Show(
-                    planInjected ? "Hard boundary exported to the Plan map. No aircraft fence was changed."
-                                 : "Plan map export unavailable. No aircraft fence was changed.",
+                    planInjected
+                        ? "Outer advisory outline exported to the Plan map. " +
+                            "No runtime or aircraft fence was changed."
+                        : "Plan map export unavailable. No runtime or aircraft fence was changed.",
                     "Plan Map Export");
             }
             catch (Exception ex)

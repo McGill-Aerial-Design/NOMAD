@@ -325,11 +325,14 @@ verification (`core-release`). Each job builds its own inputs. MAVSDK peer and w
 qualification remains in its own Linux/Windows matrix. The Python job runs tools
 and regression guards; service and release pytest suites belong to `core-release`.
 
-`csharp.yml` separates pure plugin logic (`plugin-tests`), standalone router build,
+`csharp.yml` reports a scope and qualification gate on every pull request. Its
+path selector runs pure plugin logic (`plugin-tests`), standalone router build,
 dual-link/process tests and release rollback qualification (`router-tests`), and
 Mission Planner reference staging, plugin build, build dispatch and UI/video/log
-adapter integration (`plugin-build`). Router and plugin artifacts stay with their
-owning jobs. Existing path triggers apply to all three jobs.
+adapter integration (`plugin-build`) when those inputs change. The gate requires
+all three Windows jobs for a relevant change and clearly records when they were
+skipped for an unrelated change. Router and plugin artifacts stay with their
+owning jobs.
 
 `lint.yml` owns static and quality checks; native core tests belong to `test.yml`.
 Resource measurement, budget checks and retained evidence stay together in
@@ -337,12 +340,49 @@ Resource measurement, budget checks and retained evidence stay together in
 and verifying the complete release set.
 
 Hosted `test.yml`, `lint.yml`, `ros-sim.yml` and `csharp.yml` run pull-request
-checks for their configured scopes. `sitl.yml` runs a path-triggered reduced
-connectivity smoke on selected pushes to `main`; its full Copter and QuadPlane
-jobs run nightly or by manual dispatch, not on every PR. `docker.yml` is manual
-and targets self-hosted Jetson/GPU runners. The
+checks for their configured scopes; `csharp.yml` also reports its required gate
+for unrelated changes. `sitl.yml` runs the full Copter and QuadPlane
+qualification for safety-sensitive pull requests and main pushes. Its scope
+gate skips both simulator builds for unrelated changes, and a required gate
+fails if either full suite does not pass when those paths change. Scheduled and
+manual runs always perform both suites. Both qualification gates reject missing
+or malformed scope outputs. Each full job builds the runtime and
+non-installed qualification driver once, then uses `pixi run --skip-deps` to
+run its scenarios serially with their task-specific environments. Ordinary
+standalone scenario commands retain their `build-sitl-tools` dependency.
+This avoids repeated MAVSDK reconfiguration consuming the qualification timeout.
+The Copter harness invokes each mutation once and reports any failed or uncertain
+outcome. Only read-only status observations may retry; cleanup actions remain
+distinct commands followed by authoritative state checks.
+The separate
+[`mavsdk-sitl-smoke.yml`](../.github/workflows/mavsdk-sitl-smoke.yml) checks
+connectivity only and is not reported as full SITL qualification. `docker.yml`
+is manual and targets self-hosted Jetson/GPU runners. The
 [qualification page](qualification.md) records the exact current-base run and
 its limits.
+
+## Main branch protection
+
+The repository administrator applies the policy in
+[`config/github-main-protection.json`](../config/github-main-protection.json)
+to the exact `main` branch. It requires pull requests and the listed GitHub Actions
+checks, requires branches to be up to date, includes administrators, and disables
+force pushes and branch deletion. It has no bypass actors. The required approval
+count is zero so a single maintainer can merge after the required checks pass.
+
+Apply the template explicitly from the repository checkout:
+
+```sh
+gh api --method PUT 'repos/{owner}/{repo}/branches/main/protection' \
+  --input config/github-main-protection.json
+gh api 'repos/{owner}/{repo}/branches/main/protection'
+```
+
+If GitHub reports that branch protection is disabled for the repository, an
+administrator must enable that capability before applying the policy. In the
+GitHub settings UI, select all eleven checks from the template with GitHub Actions
+as their source. Confirm the API returns the active policy; workflow files alone
+do not enforce branch protection. Build and test tasks do not apply this policy.
 
 ## Package, stage and install
 

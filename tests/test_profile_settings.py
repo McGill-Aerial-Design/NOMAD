@@ -7,13 +7,22 @@ from pathlib import Path
 from scripts import profile
 from scripts.profile_settings import DEPLOYMENT_KEYS, PROFILE_KEYS
 
+QUALIFICATION_ONLY_KEYS = {
+    "NOMAD_FENCE_POLYGON",
+    "NOMAD_FENCE_MARGIN_M",
+    "NOMAD_VELOCITY_MAX_XY",
+    "NOMAD_VELOCITY_MAX_Z",
+    "NOMAD_VELOCITY_MAX_YAW_RATE",
+}
+
 
 def test_reviewed_example_keys_have_one_owner() -> None:
     example = profile.read_env_file(profile.REPO_ROOT / "config/nomad.env.example")
     assert PROFILE_KEYS.isdisjoint(DEPLOYMENT_KEYS)
-    assert set(example) <= PROFILE_KEYS | DEPLOYMENT_KEYS
+    assert set(example) <= PROFILE_KEYS | DEPLOYMENT_KEYS | QUALIFICATION_ONLY_KEYS
     for name in profile.PROFILES:
         assert set(profile.read_env_file(profile.PROFILES_DIR / f"{name}.env")) <= PROFILE_KEYS
+    assert QUALIFICATION_ONLY_KEYS.isdisjoint(PROFILE_KEYS)
 
 
 def test_load_retains_all_reviewed_locals_and_replaces_owned_values(tmp_path: Path, monkeypatch) -> None:
@@ -22,7 +31,10 @@ def test_load_retains_all_reviewed_locals_and_replaces_owned_values(tmp_path: Pa
     locals_text = "\n".join(f'{key}="local value\\{key}"' for key in sorted(DEPLOYMENT_KEYS))
     active.write_text(
         locals_text + "\nNOMAD_PROFILE=old\nNOMAD_SIM_MODE=true\n"
-        "NOMAD_ENABLE_SERVOS=true\nNOMAD_AUTOSTART_EDGE_CORE=true\nUNKNOWN_LEGACY=value\n",
+        "NOMAD_ENABLE_SERVOS=true\nNOMAD_AUTOSTART_EDGE_CORE=true\nUNKNOWN_LEGACY=value\n"
+        "NOMAD_FENCE_POLYGON=old-boundary\nNOMAD_FENCE_MARGIN_M=20.0\n"
+        "NOMAD_VELOCITY_MAX_XY=20.0\nNOMAD_VELOCITY_MAX_Z=20.0\n"
+        "NOMAD_VELOCITY_MAX_YAW_RATE=20.0\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(profile, "ENV_FILE", active)
@@ -34,6 +46,7 @@ def test_load_retains_all_reviewed_locals_and_replaces_owned_values(tmp_path: Pa
     assert env["NOMAD_PROFILE"] == "groundstation_minimal"
     assert env["NOMAD_SIM_MODE"] == "false"
     assert env["NOMAD_AUTOSTART_MAVLINK_ROUTER"] == "false"
+    assert not QUALIFICATION_ONLY_KEYS.intersection(env)
     assert set(env) <= PROFILE_KEYS | DEPLOYMENT_KEYS
 
 

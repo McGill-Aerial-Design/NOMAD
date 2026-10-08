@@ -9,6 +9,7 @@
 // ============================================================
 
 using System;
+using NOMAD.MissionPlanner;
 using NOMAD.MissionPlanner.Connectivity;
 
 internal static partial class NomadCoreClientTests
@@ -39,6 +40,7 @@ internal static partial class NomadCoreClientTests
         MotorTest_FailsClosedOnInvalidInput();
         GimbalConfigure_FailsClosedOnInvalidInput();
         GimbalTarget_FailsClosedOnInvalidInput();
+        GimbalConfigureAndTarget_FailsClosedOnInvalidInput();
         Runtime_SendsTypedRequestOnce();
         Runtime_PreservesCommandOutcomeMatrix();
         Runtime_PreservesErrorOutcomeMatrix();
@@ -53,6 +55,13 @@ internal static partial class NomadCoreClientTests
         Runtime_AuditFailureAfterSendIsUnknown();
         Runtime_GimbalTarget_UsesTypedRequestAndRequiresAuthority();
         Runtime_GimbalTargetDoesNotReplayUnknownOutcome();
+        Gimbal_ModeAndImmediateTargetAreSequenced();
+        Gimbal_ModeAndTargetUseOneRuntimeRequest();
+        Gimbal_UnknownModeOutcomeDoesNotReplay();
+        Gimbal_UnknownCompositeDoesNotReplay();
+        Gimbal_StaleStandaloneModeDoesNotWriteAfterHello();
+        Gimbal_StaleTargetDoesNotWriteAfterHello();
+        Gimbal_StaleCompositeDoesNotWriteAfterHello();
         Runtime_ReportsUnknownOutcomeWithoutReplay();
         Runtime_RejectsIncompatibleHelloBeforeCommand();
         Runtime_RejectsIncompatibleCommandResponseAsUnknown();
@@ -120,6 +129,19 @@ internal static partial class NomadCoreClientTests
         Expect(!client.GimbalTarget(0, 30.01), "roll above limit rejected");
         Expect(client.LastOutcome == NomadCoreRequestOutcome.NotAttempted, "invalid target is never attempted");
         Expect(client.LastErrorCode == "invalid_argument", "invalid target has a stable error code");
+    }
+
+    private static void GimbalConfigureAndTarget_FailsClosedOnInvalidInput()
+    {
+        var client = new NomadCoreClient("test-key", ReservePort());
+        Expect(!client.GimbalConfigureAndTargetAsync(5, 0, 0).GetAwaiter().GetResult().Succeeded,
+            "invalid paired mount mode rejected");
+        Expect(!client.GimbalConfigureAndTargetAsync(2, 90.01, 0).GetAwaiter().GetResult().Succeeded,
+            "invalid paired pitch rejected before mode write");
+        Expect(!client.GimbalConfigureAndTargetAsync(2, 0, 30.01).GetAwaiter().GetResult().Succeeded,
+            "invalid paired roll rejected before mode write");
+        Expect(client.LastOutcome == NomadCoreRequestOutcome.NotAttempted,
+            "invalid paired target is never attempted");
     }
 
     private static void Expect(bool condition, string message)

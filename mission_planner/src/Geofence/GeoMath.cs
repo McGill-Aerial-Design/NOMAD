@@ -3,9 +3,7 @@
 // ============================================================
 // NOMAD Geofence Geometry
 // ============================================================
-// Pure polygon math for the geofence subsystem: point-in-polygon,
-// inward polygon offset (derived soft boundary), and nearest-
-// inside-point (soft-boundary return target). No Mission Planner
+// Pure polygon math for local advisory-outline drawing and preview. No Mission Planner
 // dependencies — unit-tested standalone via
 // `pixi run test-plugin-geometry`.
 //
@@ -22,8 +20,8 @@ namespace NOMAD.MissionPlanner
     public static class GeoMath
     {
         /// <summary>
-        /// Ray-casting point-in-polygon test on raw lat/lon.
-        /// Fewer than 3 vertices counts as "inside" (no boundary defined).
+        /// Ray-casting point-in-polygon test used by the local visual preview.
+        /// Fewer than 3 vertices counts as inside because no outline is defined.
         /// </summary>
         public static bool IsInside(List<GpsPoint> vertices, GpsPoint point)
         {
@@ -49,12 +47,48 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Offset a polygon inward by <paramref name="meters"/>: each edge is
-        /// shifted along its inward normal and adjacent shifted edges are
-        /// intersected (winding-agnostic). If the inset is too large for the
-        /// polygon (area would invert or grow — e.g. miter blowup at a sharp
-        /// corner), falls back to pulling each vertex toward the centroid by
-        /// the same distance (capped at 90% of the way).
+        /// Describes where a point lies relative to local advisory outlines.
+        /// This geometry result is presentation data, not a vehicle safety decision.
+        /// </summary>
+        public static AdvisoryOutlineStatus GetAdvisoryOutlineStatus(
+            List<GpsPoint> innerOutline,
+            List<GpsPoint> outerOutline,
+            GpsPoint position)
+        {
+            if (position == null || !IsValidCoordinate(position.Lat, position.Lon))
+            {
+                return AdvisoryOutlineStatus.NoPosition;
+            }
+
+            bool hasInnerOutline = innerOutline != null && innerOutline.Count >= 3;
+            bool hasOuterOutline = outerOutline != null && outerOutline.Count >= 3;
+            if (!hasInnerOutline && !hasOuterOutline)
+            {
+                return AdvisoryOutlineStatus.NoOutline;
+            }
+
+            if (hasOuterOutline && !IsInside(outerOutline, position))
+            {
+                return AdvisoryOutlineStatus.OutsideOuterOutline;
+            }
+
+            if (hasInnerOutline && !IsInside(innerOutline, position))
+            {
+                return AdvisoryOutlineStatus.OutsideInnerOutline;
+            }
+
+            return AdvisoryOutlineStatus.InsideOutlines;
+        }
+
+        private static bool IsValidCoordinate(double latitude, double longitude)
+        {
+            return !double.IsNaN(latitude) && !double.IsInfinity(latitude) &&
+                !double.IsNaN(longitude) && !double.IsInfinity(longitude) &&
+                latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
+        }
+
+        /// <summary>
+        /// Offset a polygon inward for a second local display outline.
         /// </summary>
         public static List<GpsPoint> InsetPolygon(List<GpsPoint> verts, double meters)
         {
@@ -111,58 +145,6 @@ namespace NOMAD.MissionPlanner
                 result.Add(new GpsPoint(lat0 + outY[i] / mPerDegLat, verts[0].Lon + outX[i] / mPerDegLon));
             }
             return result;
-        }
-
-        /// <summary>
-        /// Closest point on the polygon outline to <paramref name="pos"/>,
-        /// nudged <paramref name="marginM"/> meters toward the polygon centroid
-        /// so the target sits just inside. Null without a valid polygon.
-        /// </summary>
-        public static GpsPoint NearestPointInside(List<GpsPoint> verts, GpsPoint pos, double marginM)
-        {
-            if (verts == null || verts.Count < 3) return null;
-
-            // Local equirectangular frame centered on the drone.
-            double mPerDegLat = 110540.0;
-            double mPerDegLon = 111320.0 * Math.Cos(pos.Lat * Math.PI / 180.0);
-
-            int n = verts.Count;
-            var x = new double[n];
-            var y = new double[n];
-            double cx = 0, cy = 0;
-            for (int i = 0; i < n; i++)
-            {
-                x[i] = (verts[i].Lon - pos.Lon) * mPerDegLon;
-                y[i] = (verts[i].Lat - pos.Lat) * mPerDegLat;
-                cx += x[i];
-                cy += y[i];
-            }
-            cx /= n;
-            cy /= n;
-
-            // Closest point on any edge to the drone (the local origin).
-            double bestD2 = double.MaxValue, bx = 0, by = 0;
-            for (int i = 0; i < n; i++)
-            {
-                int j = (i + 1) % n;
-                double ex = x[j] - x[i], ey = y[j] - y[i];
-                double len2 = ex * ex + ey * ey;
-                double t = len2 < 1e-9 ? 0 : Math.Max(0, Math.Min(1, -(x[i] * ex + y[i] * ey) / len2));
-                double px = x[i] + t * ex, py = y[i] + t * ey;
-                double d2 = px * px + py * py;
-                if (d2 < bestD2) { bestD2 = d2; bx = px; by = py; }
-            }
-
-            // Step off the edge toward the interior (centroid direction).
-            double dx = cx - bx, dy = cy - by;
-            double dist = Math.Sqrt(dx * dx + dy * dy);
-            if (dist > 1e-6)
-            {
-                bx += dx / dist * marginM;
-                by += dy / dist * marginM;
-            }
-
-            return new GpsPoint(pos.Lat + by / mPerDegLat, pos.Lon + bx / mPerDegLon);
         }
 
         private static double Shoelace(double[] x, double[] y)

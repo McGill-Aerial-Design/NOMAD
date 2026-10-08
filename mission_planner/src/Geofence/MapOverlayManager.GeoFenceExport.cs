@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// NOMAD Map Overlay Manager — native Mission Planner geofence export
+// NOMAD Map Overlay Manager — local Mission Planner plan-map outline export
 // ============================================================
-// Partial of MapOverlayManager: injects NOMAD boundary vertices into Mission
-// Planner's own FlightPlanner geofence overlay so the fence renders as a real
-// MP fence on the Plan and Data maps. See MapOverlayManager.cs for the NOMAD
-// overlay drawing and the GMap.NET reflection helpers.
+// Partial of MapOverlayManager: draws NOMAD outline vertices in Mission
+// Planner's Plan map. This does not upload a fence to the vehicle or runtime.
 // ============================================================
 
 using System;
@@ -19,9 +17,8 @@ namespace NOMAD.MissionPlanner
     public static partial class MapOverlayManager
     {
         /// <summary>
-        /// Export boundary vertices into Mission Planner's native geofence system
-        /// by injecting into FlightPlanner's geofenceoverlay and geofencepolygon.
-        /// This makes the fence visible on both Plan and Data maps as a real MP fence.
+        /// Draw outline vertices in Mission Planner's Plan map. No vehicle fence
+        /// configuration or runtime safety policy is changed.
         /// </summary>
         public static bool ExportToMPGeoFence(List<GpsPoint> vertices, string name, Color strokeColor, Color fillColor, int strokeWidth = 2)
         {

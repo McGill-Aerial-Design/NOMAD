@@ -11,7 +11,7 @@ Runtime::Implementation::Implementation(std::unique_ptr<mavlink::MavlinkConnecti
     : incarnation_(new_incarnation()), journal_(std::make_shared<detail::AuditJournal>(config.audit_write_guard)),
       authority_gate_(std::make_shared<AuthorityGate>()),
       connection_(std::move(connection)), config_(std::move(config)),
-      vehicle_(require_connection(connection_), make_vehicle_config(config_)), actuators_(config_.actuators) {
+      vehicle_(require_connection(connection_), vehicle::VehicleConfig{}), actuators_(config_.actuators) {
     authority_gate_->incarnation = incarnation_;
     const std::weak_ptr<AuthorityGate> weak_gate = authority_gate_;
     const auto journal = journal_;

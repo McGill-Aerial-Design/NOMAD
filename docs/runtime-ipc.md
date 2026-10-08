@@ -52,13 +52,14 @@ longer connected. Client connect/disconnect does not create or destroy the
 vehicle connection. The runtime starts its IPC listener even while aircraft
 identity is unresolved, so `STATUS` can report partial startup state.
 
-The runtime loads the existing fence and velocity policies from environment
-configuration and passes them to the existing `Vehicle`. Typed command handlers
-call `Vehicle::set_servo`, `Vehicle::set_relay`, `Vehicle::motor_test`,
-`Vehicle::configure_gimbal` or `Vehicle::set_gimbal_target` directly. The IPC layer
-does not pack MAVLink or copy Vehicle capability checks. No Vehicle API,
-capability table, transition behavior, route behavior or completion rule is
-changed here.
+Runtime IPC v1 does not expose position targets, velocity setpoints, missions,
+or fence transfer. The runtime does not apply `NOMAD_FENCE_*` or
+`NOMAD_VELOCITY_*` settings to its accepted requests. Those core policies remain
+available to direct C++ `Vehicle` callers and the non-installed
+`nomad-qualification` driver; they are not a runtime boundary monitor or an
+operator-facing safety decision API. Typed runtime handlers call only the
+supported actuator and gimbal operations. The IPC layer does not pack MAVLink
+or copy Vehicle capability checks.
 
 The C++ library, installed `nomad` executable, `nomad-runtime` executable and
 Mission Planner client now have these roles:
@@ -122,6 +123,7 @@ fields are ignored. Clients negotiate with `hello` before sending a command.
 | `motor_test` | Calls `Vehicle::motor_test` with instance, PWM microseconds and timeout seconds |
 | `configure_gimbal` | Calls `Vehicle::configure_gimbal` with mount mode |
 | `set_gimbal_target` | Calls `Vehicle::set_gimbal_target` with finite `pitch_deg` and `roll_deg`; pitch is limited to -90..90 degrees and roll to -30..30 degrees |
+| `configure_gimbal_target` | Calls `Vehicle::configure_gimbal_and_set_target` with `mount_mode`, `pitch_deg` and `roll_deg`. It validates all fields before writing, configures the mount first, and sends the target only after the mode command succeeds. The pair is one authenticated, deduplicated request; a failed or unknown result is never replayed by the client. |
 
 Vehicle navigation requests are intentionally absent from protocol v1. The
 two-point QuadPlane fixed-wing route is qualified in the core, but it is not

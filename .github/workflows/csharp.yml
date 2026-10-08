@@ -15,41 +15,8 @@ name: csharp
 on:
   push:
     branches: [main]
-    paths:
-      - "pixi.toml"
-      - "pixi.lock"
-      - "mission_planner/**"
-      - "infra/transport/ground_router/**"
-      - "scripts/build/**"
-      - "scripts/dev/ground_router_smoke.py"
-      - "scripts/dev/ground_router_fixture_support.py"
-      - "scripts/dev/runtime_*support.py"
-      - "scripts/dev/runtime_lifecycle_fixture.py"
-      - "scripts/dev/release_process*"
-      - "scripts/dev/release_router_launcher.py"
-      - "scripts/dev/release_supervisor_fixture.py"
-      - "scripts/dev/mavsdk_peer*.py"
-      - "scripts/dev/verify_core_package.py"
-      - "scripts/release/**"
-      - ".github/workflows/csharp.yml"
   pull_request:
-    paths:
-      - "pixi.toml"
-      - "pixi.lock"
-      - "mission_planner/**"
-      - "infra/transport/ground_router/**"
-      - "scripts/build/**"
-      - "scripts/dev/ground_router_smoke.py"
-      - "scripts/dev/ground_router_fixture_support.py"
-      - "scripts/dev/runtime_*support.py"
-      - "scripts/dev/runtime_lifecycle_fixture.py"
-      - "scripts/dev/release_process*"
-      - "scripts/dev/release_router_launcher.py"
-      - "scripts/dev/release_supervisor_fixture.py"
-      - "scripts/dev/mavsdk_peer*.py"
-      - "scripts/dev/verify_core_package.py"
-      - "scripts/release/**"
-      - ".github/workflows/csharp.yml"
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -67,8 +34,28 @@ defaults:
     shell: pwsh
 
 jobs:
+  csharp-scope:
+    name: Determine plugin and router test scope
+    runs-on: ubuntu-latest
+    outputs:
+      required: ${{ steps.scope.outputs.required }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Select qualification scope
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          BASE_BRANCH: origin/${{ github.base_ref }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python scripts/ci/csharp_scope.py
+
   plugin-tests:
     name: Plugin logic tests (Windows)
+    needs: csharp-scope
+    if: needs.csharp-scope.outputs.required == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -85,6 +72,9 @@ jobs:
 
       - name: Geofence geometry tests
         run: pwsh -File scripts/build/test_plugin_geometry.ps1
+
+      - name: Mission Planner direct-command architectural guard
+        run: pixi run python -m pytest tests/test_mission_planner_command_boundary.py -q
 
       - name: Gimbal command tests
         run: pwsh -File scripts/build/test_plugin_gimbal.ps1
@@ -106,6 +96,8 @@ jobs:
 
   router-tests:
     name: Router tests and release qualification (Windows)
+    needs: csharp-scope
+    if: needs.csharp-scope.outputs.required == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -139,6 +131,8 @@ jobs:
 
   plugin-build:
     name: Plugin build and integration (Windows)
+    needs: csharp-scope
+    if: needs.csharp-scope.outputs.required == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -208,3 +202,31 @@ jobs:
           name: NOMADPlugin
           path: mission_planner/src/bin/Release/NOMADPlugin.dll
           if-no-files-found: error
+
+  csharp-qualification-gate:
+    name: Mission Planner and router qualification gate
+    if: always()
+    needs: [csharp-scope, plugin-tests, router-tests, plugin-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Windows qualification for relevant changes
+        env:
+          SCOPE_RESULT: ${{ needs.csharp-scope.result }}
+          REQUIRED: ${{ needs.csharp-scope.outputs.required }}
+          PLUGIN_TEST_RESULT: ${{ needs.plugin-tests.result }}
+          ROUTER_TEST_RESULT: ${{ needs.router-tests.result }}
+          PLUGIN_BUILD_RESULT: ${{ needs.plugin-build.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SCOPE_RESULT" = "success"
+          if [[ "$REQUIRED" == "true" ]]; then
+            test "$PLUGIN_TEST_RESULT" = "success"
+            test "$ROUTER_TEST_RESULT" = "success"
+            test "$PLUGIN_BUILD_RESULT" = "success"
+          elif [[ "$REQUIRED" == "false" ]]; then
+            echo "Windows plugin and router qualification was not required for this change; those jobs were skipped by path scope."
+          else
+            echo "Invalid qualification scope output; expected true or false." >&2
+            exit 1
+          fi

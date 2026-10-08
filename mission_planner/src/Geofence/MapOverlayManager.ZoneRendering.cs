@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// MapOverlayManager.ZoneRendering.cs - safety-zone map masks
+// MapOverlayManager.ZoneRendering.cs - local advisory outline rendering
 // ============================================================
 
 using System;

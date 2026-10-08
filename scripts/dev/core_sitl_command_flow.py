@@ -16,17 +16,16 @@ class ScenarioError(RuntimeError):
     """The C++ command flow did not reach an expected vehicle state."""
 
 
-def run_cli(binary: Path, port: str, *arguments: str, attempts: int = 5) -> str:
-    """Run one C++ CLI command against the SITL UDP copy, retrying on link loss.
+def run_cli(binary: Path, port: str, *arguments: str, attempts: int = 1) -> str:
+    """Run a mutation once; only read-only status observations may retry.
 
-    The Docker Desktop UDP relay that carries the host-side SITL copy on
-    Windows intermittently drops datagrams, so a command acknowledgement or
-    the initial heartbeat can be lost on a single attempt. The commands in
-    these scenarios are idempotent (mode, arm, takeoff, rtl, land, disarm) and
-    every step is still verified by authoritative status polling afterwards,
-    so a bounded retry is safe here; the C++ core itself fails closed on a
-    lost acknowledgement.
+    A failed mutation may have reached the vehicle or partially executed a
+    sequence. Propagate that failure without replaying uncertain commands.
     """
+    if attempts < 1:
+        raise ScenarioError("command attempts must be positive")
+    if attempts > 1 and arguments != ("status",):
+        raise ScenarioError("retries are allowed only for status observations")
     command = [str(binary), *arguments, "--endpoint", f"udpin:0.0.0.0:{port}"]
     for attempt in range(1, attempts + 1):
         result = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -67,7 +66,7 @@ def parse_status(output: str) -> dict[str, str]:
 
 
 def read_status(binary: Path, port: str) -> dict[str, str]:
-    return parse_status(run_cli(binary, port, "status"))
+    return parse_status(run_cli(binary, port, "status", attempts=5))
 
 
 def wait_for_status(binary: Path, port: str, expected: dict[str, str], timeout: float) -> dict[str, str]:

@@ -189,14 +189,21 @@ internal static partial class DualLinkStressTests
                 Check(await WaitUntil(() => router.Links[0].IsConnected, 2000),
                     "physical peer is live before checking outbound admission");
 
-                var downlink = Frames.Marker(91001, 4, 1, 1);
-                aircraft.Send(downlink);
-                var missionPlannerTelemetry = new List<uint>();
-                Check(await WaitUntil(() =>
+                bool missionPlannerReady = await WaitUntil(
+                    () => HasLearnedConsumerEndpoint(router, "mission_planner"), 1000);
+                Check(missionPlannerReady,
+                    "Mission Planner consumer endpoint is learned before testing downlink delivery");
+
+                if (missionPlannerReady)
                 {
-                    DrainMarkers(missionPlanner, missionPlannerTelemetry);
-                    return missionPlannerTelemetry.Contains(91001);
-                }, 1000), "receive-only Mission Planner consumer still receives aircraft telemetry");
+                    aircraft.Send(Frames.Marker(91001, 4, 1, 1));
+                    var missionPlannerTelemetry = new List<uint>();
+                    Check(await WaitUntil(() =>
+                    {
+                        DrainMarkers(missionPlanner, missionPlannerTelemetry);
+                        return missionPlannerTelemetry.Contains(91001);
+                    }, 1000), "receive-only Mission Planner consumer still receives aircraft telemetry");
+                }
 
                 var commandLong = MakeArmCommandLong(21);
                 var commandInt = Frames.V2(255, 190, 75, 22, new byte[35]);
@@ -276,6 +283,17 @@ internal static partial class DualLinkStressTests
 
         Check(new ConsumerConfig { Id = "legacy", RouterPort = port }.AllowOutbound,
             "omitting AllowOutbound preserves the existing bidirectional default");
+    }
+
+    private static bool HasLearnedConsumerEndpoint(GroundLinkRouter router, string consumerId)
+    {
+        var gate = TimingField<object>(router, "_gate");
+        lock (gate)
+        {
+            var consumer = TimingField<List<LocalConsumer>>(router, "_consumers")
+                .FirstOrDefault(candidate => candidate.Config.Id == consumerId);
+            return consumer != null && TimingField<IPEndPoint>(consumer, "_client") != null;
+        }
     }
 
     private static byte[] MakeArmCommandLong(byte sequence)
