@@ -361,6 +361,29 @@ is manual and targets self-hosted Jetson/GPU runners. The
 [qualification page](qualification.md) records the exact current-base run and
 its limits.
 
+## Main branch protection
+
+The repository administrator applies the policy in
+[`config/github-main-protection.json`](../config/github-main-protection.json)
+to the exact `main` branch. It requires pull requests and the listed GitHub Actions
+checks, requires branches to be up to date, includes administrators, and disables
+force pushes and branch deletion. It has no bypass actors. The required approval
+count is zero so a single maintainer can merge after the required checks pass.
+
+Apply the template explicitly from the repository checkout:
+
+```sh
+gh api --method PUT 'repos/{owner}/{repo}/branches/main/protection' \
+  --input config/github-main-protection.json
+gh api 'repos/{owner}/{repo}/branches/main/protection'
+```
+
+If GitHub reports that branch protection is disabled for the repository, an
+administrator must enable that capability before applying the policy. In the
+GitHub settings UI, select all eleven checks from the template with GitHub Actions
+as their source. Confirm the API returns the active policy; workflow files alone
+do not enforce branch protection. Build and test tasks do not apply this policy.
+
 ## Package, stage and install
 
 Core build, package creation, staged verification and deployment are separate:

@@ -1,0 +1,62 @@
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [],
+    "checks": [
+      {
+        "context": "Python tools and regression guards",
+        "app_id": 15368
+      },
+      {
+        "context": "C++ core (ubuntu-latest)",
+        "app_id": 15368
+      },
+      {
+        "context": "C++ core (windows-latest)",
+        "app_id": 15368
+      },
+      {
+        "context": "Core release qualification (ubuntu-latest)",
+        "app_id": 15368
+      },
+      {
+        "context": "Core release qualification (windows-latest)",
+        "app_id": 15368
+      },
+      {
+        "context": "MAVSDK qualification (ubuntu-latest)",
+        "app_id": 15368
+      },
+      {
+        "context": "MAVSDK qualification (windows-latest)",
+        "app_id": 15368
+      },
+      {
+        "context": "ruff + mypy",
+        "app_id": 15368
+      },
+      {
+        "context": "shellcheck",
+        "app_id": 15368
+      },
+      {
+        "context": "Safety qualification gate",
+        "app_id": 15368
+      },
+      {
+        "context": "Mission Planner and router qualification gate",
+        "app_id": 15368
+      }
+    ]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "dismiss_stale_reviews": true,
+    "require_code_owner_reviews": false,
+    "require_last_push_approval": false,
+    "required_approving_review_count": 0
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
