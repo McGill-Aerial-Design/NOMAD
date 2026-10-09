@@ -17,6 +17,8 @@ namespace nomad::mavlink {
 struct Command {
     std::uint16_t id{};
     std::array<float, 7> parameters{};
+    // The vehicle may require current observation facts at every covered send.
+    std::function<bool(const telemetry::VehicleState &)> state_admission{};
 };
 
 struct CommandAck {

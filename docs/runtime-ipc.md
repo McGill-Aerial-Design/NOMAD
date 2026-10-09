@@ -40,6 +40,7 @@ fields are ignored. Clients negotiate with `hello` before sending a command.
 | `admit_authority` | Explicit first admission of one local software source into a new generation |
 | `revoke_authority` | Invalidate the current generation and inhibit mutations |
 | `handback_authority` | Explicit admission after revocation into another new generation |
+| `land` | Bounded Copter LAND engagement; accepted ACK plus a fresh later LAND heartbeat, not touchdown or termination |
 | `set_servo` | Calls `Vehicle::set_servo` with channel and PWM microseconds |
 | `set_relay` | Calls `Vehicle::set_relay` with relay number and boolean state |
 | `motor_test` | Calls `Vehicle::motor_test` with instance, PWM microseconds and timeout seconds |
@@ -47,11 +48,30 @@ fields are ignored. Clients negotiate with `hello` before sending a command.
 | `set_gimbal_target` | Calls `Vehicle::set_gimbal_target` with finite `pitch_deg` and `roll_deg`; pitch is limited to -90..90 degrees and roll to -30..30 degrees |
 | `configure_gimbal_target` | Calls `Vehicle::configure_gimbal_and_set_target` with `mount_mode`, `pitch_deg` and `roll_deg`. It validates all fields before writing, configures the mount first, and sends the target only after the mode command succeeds. The pair is one authenticated, deduplicated request; a failed or unknown result is never replayed by the client. |
 
-Vehicle navigation requests are intentionally absent from protocol v1. The
+Other vehicle navigation requests are absent from protocol v1. The
 two-point QuadPlane fixed-wing route is qualified in the core, but it is not
 exposed through runtime IPC v1. The installed CLI rejects `goto` during argument parsing; the non-installed
 qualification driver retains direct
 navigation for its SITL evidence.
+
+### Copter LAND engagement
+
+`land` accepts no operation parameters and inherits the authenticated mutation contract.
+Clients require `land` in a fresh authenticated HELLO; there is no direct fallback.
+Unknown additive metadata stays ignored; known operation parameter fields are rejected.
+The runtime rechecks the original Copter identity/session, heartbeat freshness and
+deadline at every covered send/retry through existing authority/audit admission.
+
+One three-second monotonic budget covers ACK and observation. Success requires an
+accepted ACK followed by a newer same-aircraft/session LAND heartbeat before expiry:
+**LAND mode observed; touchdown not verified**. It proves neither continued LAND,
+exclusive control, descent, touchdown nor termination. Negative ACK is `failed`;
+missing ACK, unverified engagement or admission expiry with intact context is `unknown`.
+Known authority/identity/session/lifecycle loss is `interrupted`; pre-dispatch refusal
+is `rejected`. ACK evidence stays separate. No timeout/disconnect/revoke causes replay
+or an undo command. Safe actuator requests retain their original expiry after waiting
+behind LAND. Scheduling, IPC and audit I/O overhead are measured separately; this is
+not a hard real-time response guarantee.
 
 `STATUS` reports runtime IPC readiness, MAVSDK connection open, vehicle
 transport connected, vehicle heartbeat/session, identity resolution and
@@ -423,7 +443,7 @@ One admitted software source does not establish one writer for the aircraft. Nat
 GCS, RC/pilot and maintenance tools remain independent. The ground router rejects outbound
 traffic from its receive-only Mission Planner consumer; consumer IDs do not authenticate
 external sources. Direct qualification is non-installed and inhibited by an occupied
-runtime port or `NOMAD_INTEGRATED_FLIGHT`. Runtime IPC exposes no mission/navigation,
+runtime port or `NOMAD_INTEGRATED_FLIGHT`. Apart from Copter LAND engagement, runtime IPC exposes no mission/navigation,
 QuadPlane, authoritative geofence or VIO request. Configured actuator operations and
 primitive outputs remain as specified above. Physical pilot arbitration and total C2-loss
 behavior require the separate [safety procedure](safety.md#controller-bench-and-aircraft-procedure).

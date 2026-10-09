@@ -34,6 +34,10 @@ namespace NOMAD.MissionPlanner.Connectivity
         public Task<NomadCoreRequestResult> HandbackAuthorityAsync(CancellationToken cancellationToken = default) =>
             RunCoreAsync("handback", cancellationToken);
 
+        /// <summary>Request Copter LAND mode engagement. Success does not verify touchdown.</summary>
+        public Task<NomadCoreRequestResult> LandAsync(CancellationToken cancellationToken = default) =>
+            RunCoreAsync("land", cancellationToken);
+
         /// <summary>
         /// Drive an ArduPilot servo channel through the runtime.
         /// Fails closed on out-of-range input or unavailable runtime.

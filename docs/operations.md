@@ -50,6 +50,14 @@ exports omit the client credential. Advisory map files/presets also reject old p
 fields; outlines never enforce an aircraft boundary. Mission Planner's native tools
 own flight-log analysis.
 
+## Copter LAND engagement
+
+After explicit admission (`nomad admit`, or `nomad handback` after revocation), use
+`nomad land`. Mission Planner provides **Engage Copter LAND** in Settings > Core.
+Success means mode observed, not touchdown or termination. An unknown result may
+leave ArduPilot landing; inspect fresh telemetry and never replay blindly.
+The [IPC contract](runtime-ipc.md#copter-land-engagement) owns the exact conditions and limits.
+
 ## Aircraft serial router
 
 When an onboard host fans FC serial traffic onto the network, use standard

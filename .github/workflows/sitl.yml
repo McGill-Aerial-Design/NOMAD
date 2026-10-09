@@ -119,6 +119,38 @@ jobs:
           path: ${{ runner.temp }}/runtime-authority-sitl.json
           if-no-files-found: warn
 
+      - name: Qualify installed CLI Copter LAND on three clean isolated simulators
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          land_container=""
+          stop_land() {
+            if [[ -n "$land_container" ]]; then
+              docker stop "$land_container" >/dev/null 2>&1 || true
+            fi
+          }
+          trap stop_land EXIT
+          for attempt in 1 2 3; do
+            land_container=$(docker compose -p nomad-authority -f docker/docker-compose.dev.yml run \
+              --rm --name nomad-authority-sitl -d --no-deps \
+              -e SITL_UDP_OUTPUT_ADDRESS="udp:host.docker.internal:14690 --out udp:host.docker.internal:14691" \
+              sitl)
+            sleep 25
+            pixi run --frozen python scripts/dev/core_sitl_copter_land.py \
+              2>&1 | tee "$RUNNER_TEMP/runtime-copter-land-$attempt.json"
+            docker stop "$land_container" >/dev/null
+            land_container=""
+          done
+
+      - name: Retain installed CLI Copter LAND timing and observation evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: runtime-copter-land-sitl
+          path: ${{ runner.temp }}/runtime-copter-land-*.json
+          if-no-files-found: warn
+
       - name: C++ runtime telemetry observation scenario
         run: pixi run --skip-deps core-sitl-status
 

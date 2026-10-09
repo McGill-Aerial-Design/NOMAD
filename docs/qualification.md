@@ -1,7 +1,6 @@
 # Qualification status
 
-Software tests establish only their asserted boundary. This cleanup starts from
-PR 71 (`e3478ec`); earlier runs do not qualify its new head. Run the retained gates
+Software tests establish only their asserted boundary. Run the retained gates
 below for every release and retain exact source/build/firmware/configuration with
 results. Full physical aircraft qualification remains open. [Safety](safety.md)
 defines obligations; [TODO](../TODO.md) lists implementation work.
@@ -22,6 +21,7 @@ defines obligations; [TODO](../TODO.md) lists implementation work.
 | `test-core` | Fake-transport vehicle policy, command verification, telemetry/watchdogs, fence/velocity, QuadPlane phase/fault paths, authority/concurrency and actuator state |
 | `test-python`, `lint`, `format-check`, `docs-build` | Retained harnesses, release/security/service regressions and repository consistency |
 | `test-runtime-ipc`, `test-runtime-lifecycle` | Authenticated real runtime/CLI, stale/replayed contexts, clean/crash restart with durable history, lost/returning peer and no restored owner |
+| `test-runtime-land` | Installed CLI/runtime LAND, one-hertz heartbeats, shared ACK/observation budget, explicit uncertainty, wire attempts and durable no-replay evidence |
 | `test-mavsdk-connectivity`, `test-mavsdk-transport-qualification`, `test-mavsdk-authority-wire` | Selection, framing, ACK/state checks, session/connection retirement, retries/cancellation and final-send fencing at independent peers |
 | `verify-mavsdk-provenance` | Exact reviewed dependency pins, generator/hash patches and selected-license bundle |
 | Mission Planner tests in development guide | Immutable outcomes, cancellation/freshness/no replay, HID interlocks, advisory geometry, video disposal and host message boundary |
@@ -53,7 +53,7 @@ some setup states, including AUTO. This is not an autonomous Task 1 mission.
 
 No production RC/ELRS channel map, aircraft-wide writer arbitration, physical
 pilot takeover/handback, complete C2-loss policy or independent termination mechanism
-is qualified. Runtime IPC currently exposes no QuadPlane mutation or navigation,
+is qualified. Beyond Copter LAND engagement, runtime IPC exposes no QuadPlane mutation or navigation,
 boundary enforcement, VIO submission or mission API. Mission Planner boundary
 outlines are advisory only. Native GCS and RC remain external writers.
 

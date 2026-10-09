@@ -37,6 +37,11 @@ an aircraft fence or implement the official 100 m AGL containment requirement.
 Termination is unavailable: the plugin sends no substitute LAND command. Native
 ArduPilot failsafes and an approved independent termination mechanism remain required.
 
+SR-LND-02: Copter LAND engagement requires accepted ACK and fresh post-ACK same-session
+LAND mode within one three-second budget; it is not touchdown or termination.
+The [IPC contract](runtime-ipc.md#copter-land-engagement) defines admission and outcomes;
+the traceability below binds success, timeout, final-send and safe-output fault tests.
+
 ## Competition safety obligations
 
 These source requirements supplement, without renumbering or weakening, the SR
@@ -385,6 +390,10 @@ mark this procedure passed. Qualification records belong in
 These references identify code and tests, not full requirement closure.
 
 ```cpp_traceability
+SR-LND-02 | src/vehicle/vehicle_land.cpp:engage_copter_land | tests/copter_land_test.cpp::test_land_observes_engagement_without_touchdown
+SR-LND-02 | src/vehicle/vehicle_land.cpp:wait_for_copter_land | tests/copter_land_test.cpp::test_land_ack_and_verification_share_three_seconds
+SR-LND-02 | src/vehicle/vehicle_land.cpp:engage_copter_land | tests/copter_land_test.cpp::test_land_rechecks_identity_at_final_send
+SR-LND-02 | src/runtime/runtime_mutation.cpp:invoke_vehicle | tests/runtime_land_cases.hpp::test_runtime_land_expired_safe_output_is_not_sent
 SR-VEL-01 | src/vehicle/vehicle_velocity.cpp:set_velocity | tests/safety_test.cpp::test_safety_velocity_accepts_clamped_frd_command
 SR-VEL-01 | src/safety/velocity_config.cpp:load_velocity_limits | tests/velocity_config_test.cpp::test_configured_limits_are_loaded
 SR-VEL-02 | src/vehicle/vehicle_velocity.cpp:set_velocity | tests/safety_test.cpp::test_safety_velocity_accepts_clamped_frd_command

@@ -2,8 +2,9 @@
 
 These tests drive isolated ArduPilot SITL with the non-installed
 `nomad-qualification` executable and observe authoritative vehicle state. The
-runtime authority scenario instead uses the production `nomad-runtime` and its
-typed IPC boundary, with an independent simulator GCS and observer. The
+runtime authority and Copter LAND scenarios instead use the production
+`nomad-runtime` and its typed IPC boundary, with an independent simulator GCS
+and observer. The Copter LAND scenario invokes the installed-behavior `nomad` CLI. The
 installed `nomad` CLI uses runtime IPC only; commands without a typed v1 request
 report unavailable.
 Normal pytest skips live scenarios without an explicitly configured simulation.
@@ -142,3 +143,17 @@ capability policy: all current v1 mutations are unavailable for QuadPlane.
 The new runtime output result is therefore Copter evidence only. Keep the
 QuadPlane gate intact and qualify any future typed QuadPlane request separately;
 do not add a generic mode/MAVLink request or enable a capability just to pass.
+
+## Installed Copter LAND engagement
+
+Run `pixi run core-sitl-runtime-copter-land` on a fresh dedicated container using
+the authority-probe guard and ports above. Source 250 prepares the airborne Copter
+only while the runtime is absent; then the installed CLI admits and requests LAND once.
+CI runs three clean instances, failing on any unsuccessful repetition.
+
+The relay requires accepted ACK plus later LAND heartbeat within 3 seconds; CLI
+wall time includes a 0.5-second process/IPC margin. A separate later ground check
+requires fresh LAND, `ON_GROUND`, disarm and stable altitude. It does not change
+the [engagement contract](../../docs/runtime-ipc.md#copter-land-engagement) or qualify hardware.
+Stop the dedicated container on success or failure; never replay an uncertain
+flight request or send a cleanup flight command.
