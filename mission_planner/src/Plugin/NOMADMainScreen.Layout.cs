@@ -5,7 +5,7 @@
 // ============================================================
 // Builds the default (hardcoded) sidebar, sidebar buttons, section
 // separators, and the header/content panels. View switching and
-// the optional module-driven sidebar live in the other partials.
+// view switching lives in NOMADMainScreen.cs.
 // ============================================================
 
 using System.Drawing;
@@ -60,19 +60,6 @@ namespace NOMAD.MissionPlanner
             };
             logoPanel.Controls.Add(logoLabel);
 
-            // Active-profile indicator (set by scripts/profile.py on profile load).
-            var profileText = string.IsNullOrWhiteSpace(_config?.ActiveProfile) ? "dev" : _config.ActiveProfile;
-            _profileLabel = new Label
-            {
-                Text = "● " + profileText,
-                Font = new Font("Segoe UI", 8, FontStyle.Bold),
-                ForeColor = Color.FromArgb(120, 200, 120),
-                Dock = DockStyle.Right,
-                TextAlign = ContentAlignment.MiddleRight,
-                AutoSize = false,
-                Width = 110,
-            };
-            logoPanel.Controls.Add(_profileLabel);
             var navPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -97,9 +84,6 @@ namespace NOMAD.MissionPlanner
             navPanel.Controls.Add(_btnBoundaries);
 
             navPanel.Controls.Add(CreateSeparatorLabel("ANALYSIS"));
-            _btnLogs = CreateSidebarButton("Log Analysis");
-            _btnLogs.Click += (s, e) => ShowView("Logs");
-            navPanel.Controls.Add(_btnLogs);
 
             navPanel.Controls.Add(CreateSeparatorLabel("TOOLS"));
 
@@ -119,7 +103,6 @@ namespace NOMAD.MissionPlanner
             navPanel.Controls.Add(btnGimbal);
 
             // Append any module-contributed entries (NOMAD module SDK — see src/Core).
-            AppendModuleEntries(navPanel);
 
             // IMPORTANT: In Windows Forms, docking order is reverse of Z-order
             // Add navPanel FIRST (will be at back, fills remaining space)

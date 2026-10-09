@@ -27,12 +27,14 @@ void close_socket(Socket socket) {
 #endif
 }
 
-void set_timeout(Socket socket) {
+void set_timeout(Socket socket, std::chrono::milliseconds duration = std::chrono::seconds(2)) {
 #ifdef _WIN32
-    const DWORD timeout = 2000;
+    const DWORD timeout = static_cast<DWORD>(duration.count());
     CHECK(setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&timeout), sizeof(timeout)) == 0);
 #else
-    const timeval timeout{2, 0};
+    const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(duration);
+    const timeval timeout{static_cast<long>(seconds.count()),
+        static_cast<long>(std::chrono::duration_cast<std::chrono::microseconds>(duration - seconds).count())};
     CHECK(setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
 #endif
 }
@@ -89,7 +91,7 @@ std::uint16_t free_port() {
 
 class Client {
   public:
-    explicit Client(std::uint16_t port) {
+    explicit Client(std::uint16_t port, std::chrono::milliseconds timeout = std::chrono::seconds(2)) {
         initialize_sockets();
         socket_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         CHECK(socket_ != kInvalidSocket);
@@ -98,7 +100,7 @@ class Client {
         address.sin_port = htons(port);
         address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         CHECK(::connect(socket_, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) == 0);
-        set_timeout(socket_);
+        set_timeout(socket_, timeout);
     }
 
     ~Client() {

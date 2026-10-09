@@ -128,6 +128,9 @@ Json Runtime::Implementation::request_record(
         normalized = {{"mount_mode", request.mount_mode}};
     } else if (request.type == "set_gimbal_target") {
         normalized = {{"pitch_deg", request.pitch_deg}, {"roll_deg", request.roll_deg}};
+    } else if (request.type == "configure_gimbal_target") {
+        normalized = {{"mount_mode", request.mount_mode}, {"pitch_deg", request.pitch_deg},
+                      {"roll_deg", request.roll_deg}};
     }
     Json record{{"event", event}, {"client", request.client_id}, {"request_id", request.id},
             {"request_incarnation", request.incarnation}, {"vehicle_session", request.session},

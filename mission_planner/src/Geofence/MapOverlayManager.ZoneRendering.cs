@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// MapOverlayManager.ZoneRendering.cs - safety-zone map masks
+// MapOverlayManager.ZoneRendering.cs - local advisory outline rendering
 // ============================================================
 
 using System;
@@ -9,7 +9,8 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
-using System.Reflection;
+using GMap.NET;
+using GMap.NET.WindowsForms;
 using System.Windows.Forms;
 
 namespace NOMAD.MissionPlanner
@@ -45,7 +46,6 @@ namespace NOMAD.MissionPlanner
             RemoveDisposedMapControls();
             BindBoundaryMap(GetMapControl(), "Data");
             BindBoundaryMap(GetPlanMapControl(), "Plan");
-            MakeLegacyNomadFenceOutlineOnly();
             return BoundaryMapControls.Count;
         }
 
@@ -105,7 +105,7 @@ namespace NOMAD.MissionPlanner
 
         private static void BoundaryMap_Paint(object sender, PaintEventArgs e)
         {
-            var map = sender as Control;
+            var map = sender as GMapControl;
             if (map == null || _renderHardBoundary.Count < 3)
                 return;
 
@@ -163,37 +163,20 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private static PointF[] ProjectBoundary(object map, List<GpsPoint> vertices)
+        private static PointF[] ProjectBoundary(GMapControl map, List<GpsPoint> vertices)
         {
-            if (_pointType == null || vertices == null || vertices.Count < 3)
-                return new PointF[0];
-
-            var project = map.GetType().GetMethod(
-                "FromLatLngToLocal",
-                BindingFlags.Public | BindingFlags.Instance,
-                null,
-                new[] { _pointType },
-                null);
-            if (project == null)
-                return new PointF[0];
-
-            var points = new PointF[vertices.Count];
-            for (int i = 0; i < vertices.Count; i++)
+            if (vertices == null || vertices.Count < 3)
             {
-                var gps = vertices[i];
-                var latLng = Activator.CreateInstance(_pointType, new object[] { gps.Lat, gps.Lon });
-                var local = project.Invoke(map, new[] { latLng });
-                points[i] = new PointF(
-                    ClampCoordinate(GetCoordinate(local, "X")),
-                    ClampCoordinate(GetCoordinate(local, "Y")));
+                return Array.Empty<PointF>();
+            }
+            var points = new PointF[vertices.Count];
+            for (int index = 0; index < vertices.Count; index++)
+            {
+                var gps = vertices[index];
+                var local = map.FromLatLngToLocal(new PointLatLng(gps.Lat, gps.Lon));
+                points[index] = new PointF(ClampCoordinate(local.X), ClampCoordinate(local.Y));
             }
             return points;
-        }
-
-        private static long GetCoordinate(object point, string memberName)
-        {
-            var value = GetMemberValue(point, memberName);
-            return value == null ? 0L : Convert.ToInt64(value);
         }
 
         private static float ClampCoordinate(long value)
@@ -202,40 +185,5 @@ namespace NOMAD.MissionPlanner
             return Math.Max(-limit, Math.Min(limit, value));
         }
 
-        private static void MakeLegacyNomadFenceOutlineOnly()
-        {
-            var planner = GetFlightPlannerInstance();
-            if (planner == null)
-                return;
-
-            var geofenceOverlay = GetMemberValue(planner, "geofenceoverlay");
-            var geofencePolygons = GetOverlayCollection(geofenceOverlay, "Polygons");
-            if (geofencePolygons != null)
-            {
-                foreach (var polygon in geofencePolygons)
-                {
-                    var fill = GetMemberValue(polygon, "Fill") as SolidBrush;
-                    if (IsNomadPolygon(polygon) && (fill == null || fill.Color.A != 0))
-                        SetMemberValue(polygon, "Fill", new SolidBrush(Color.Transparent));
-                }
-            }
-
-            var drawnOverlay = GetMemberValue(planner, "drawnpolygonsoverlay");
-            var drawnPolygons = GetOverlayCollection(drawnOverlay, "Polygons");
-            if (drawnPolygons == null)
-                return;
-
-            for (int i = drawnPolygons.Count - 1; i >= 0; i--)
-            {
-                if (IsNomadPolygon(drawnPolygons[i]))
-                    drawnPolygons.RemoveAt(i);
-            }
-        }
-
-        private static bool IsNomadPolygon(object polygon)
-        {
-            var name = GetMemberValue(polygon, "Name")?.ToString();
-            return name != null && name.StartsWith("NOMAD_", StringComparison.OrdinalIgnoreCase);
-        }
     }
 }

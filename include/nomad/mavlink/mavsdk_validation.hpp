@@ -10,7 +10,7 @@
 #include <string_view>
 #include <vector>
 
-namespace nomad::mavsdk_phase_a {
+namespace nomad::mavlink::validation {
 
 enum class SystemSelection {
     Selected,
@@ -42,4 +42,4 @@ bool has_valid_status(const StatusValues &values);
 bool has_fresh_position_stream(std::size_t update_count, std::int64_t observation_ms, std::int64_t age_ms);
 bool has_fresh_telemetry(std::int64_t age_ms, std::int64_t maximum_age_ms = 1500);
 
-} // namespace nomad::mavsdk_phase_a
+} // namespace nomad::mavlink::validation

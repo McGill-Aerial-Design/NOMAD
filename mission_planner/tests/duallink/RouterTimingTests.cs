@@ -324,30 +324,64 @@ internal static partial class DualLinkStressTests
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         int requests = 0;
-        var server = Task.Run(() => ServeTimingStatus(listener, () => Interlocked.Increment(ref requests)));
-        var config = new MAVLinkConnectionManager.ConnectionConfig
-            { ManagementPort = ((IPEndPoint)listener.LocalEndpoint).Port };
-        using (var client = new StandaloneRouterClient(config, clock.Source))
+        using (var serverStarted = new ManualResetEventSlim())
         {
-            client.Start();
-            Check(await WaitUntil(() => Volatile.Read(ref requests) == 1, 2000), "initial status poll is immediate");
-            clock.Jump(48);
-            Check(!await WaitUntil(() => Volatile.Read(ref requests) > 1, 1100),
-                "forward UTC jump and real-time waits do not advance injected polling clock");
-            clock.Seconds = .999;
-            Check(!await WaitUntil(() => Volatile.Read(ref requests) > 1, 350), "polling waits below 1000ms");
-            clock.Seconds = 1;
-            Check(await WaitUntil(() => Volatile.Read(ref requests) == 2, 1000), "poll occurs at exactly 1000ms");
-            clock.Jump(-96);
-            Check(!await WaitUntil(() => Volatile.Read(ref requests) > 2, 350), "backward UTC jump does not repoll");
-            clock.Seconds = 2;
-            Check(await WaitUntil(() => Volatile.Read(ref requests) == 3, 1000),
-                "polling continues after backward jump");
-            client.Stop();
+            var server = StartTimingStatusServer(
+                listener, () => Interlocked.Increment(ref requests), serverStarted);
+            bool serverReady = serverStarted.Wait(2000);
+            Check(serverReady, "blocking status server worker starts before client polling");
+            if (!serverReady)
+            {
+                listener.Stop();
+                try { await server; }
+                catch (SocketException) { }
+                return;
+            }
+
+            var config = new MAVLinkConnectionManager.ConnectionConfig
+                { ManagementPort = ((IPEndPoint)listener.LocalEndpoint).Port };
+            using (var client = new StandaloneRouterClient(config, clock.Source))
+            {
+                client.Start();
+                Check(await WaitUntil(() => Volatile.Read(ref requests) == 1, 2000),
+                    "initial status poll is immediate");
+                clock.Jump(48);
+                Check(!await WaitUntil(() => Volatile.Read(ref requests) > 1, 1100),
+                    "forward UTC jump and real-time waits do not advance injected polling clock");
+                clock.Seconds = .999;
+                Check(!await WaitUntil(() => Volatile.Read(ref requests) > 1, 350),
+                    "polling waits below 1000ms");
+                clock.Seconds = 1;
+                Check(await WaitUntil(() => Volatile.Read(ref requests) == 2, 1000),
+                    "poll occurs at exactly 1000ms");
+                clock.Jump(-96);
+                Check(!await WaitUntil(() => Volatile.Read(ref requests) > 2, 350),
+                    "backward UTC jump does not repoll");
+                clock.Seconds = 2;
+                Check(await WaitUntil(() => Volatile.Read(ref requests) == 3, 1000),
+                    "polling continues after backward jump");
+                client.Stop();
+            }
+            listener.Stop();
+            Check(await WaitUntil(() => server.IsCompleted, 2000), "timing status server closes with client");
+            await server;
         }
-        listener.Stop();
-        Check(await WaitUntil(() => server.IsCompleted, 2000), "timing status server closes with client");
-        await server;
+    }
+
+    private static Task StartTimingStatusServer(
+        TcpListener listener,
+        Action observedStatus,
+        ManualResetEventSlim started)
+    {
+        return Task.Factory.StartNew(
+            () =>
+            {
+                started.Set();
+                ServeTimingStatus(listener, observedStatus);
+            },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
     }
 
     private static void ServeTimingStatus(TcpListener listener, Action observedStatus)

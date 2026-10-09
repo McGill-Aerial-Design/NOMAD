@@ -16,6 +16,14 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BUILD_DIR = ROOT / "build" / "mavsdk-qualification"
 
 
+def release_binary(build: Path, name: str) -> Path:
+    candidates = [build / "Release" / f"{name}.exe", build / f"{name}.exe", build / name]
+    binary = next((item for item in candidates if item.is_file()), None)
+    if binary is None:
+        raise FileNotFoundError(f"Release {name} not found; build production targets first")
+    return binary
+
+
 def run_build(build_dir: Path = DEFAULT_BUILD_DIR) -> dict[str, float]:
     """Configure and build the connectivity smoke while measuring both steps."""
     configure = [

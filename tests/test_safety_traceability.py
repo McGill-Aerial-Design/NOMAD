@@ -1,12 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Traceability CI gate for the consolidated safety case.
-
-Parses the machine-checked ``cpp_traceability`` block in ``docs/safety.md`` and
-asserts that every mapping resolves to real code and a real test. This keeps
-requirement evidence honest after the Python transition block was retired with
-the Python safety implementation (C++ cutover, 2026-09-05).
-"""
+"""Resolve current safety requirement references to implementation and focused tests."""
 
 from __future__ import annotations
 

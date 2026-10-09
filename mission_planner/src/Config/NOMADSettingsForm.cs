@@ -11,7 +11,6 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Linq;
-using System.IO.Ports;
 using System.Text;
 using System.Windows.Forms;
 
@@ -31,9 +30,6 @@ namespace NOMAD.MissionPlanner
 
         // Video Tab
         private TextBox _txtVideoUrl;
-        private NumericUpDown _numVideoCaching;
-        private ComboBox _cmbVideoPlayer;
-        private CheckBox _chkVideoAutoStart;
         private CheckBox _chkAutoStartHudVideo;
 
         // Dual Link Tab
@@ -43,31 +39,12 @@ namespace NOMAD.MissionPlanner
 
         // UI Tab
         private CheckBox _chkDebugMode;
-        private CheckBox _chkShowNotifications;
-        private ComboBox _cmbDefaultTab;
-        private CheckBox _chkDarkMode;
-        private NumericUpDown _numSlamFov;
-        private NumericUpDown _numSlamMapRadius;
 
         // Alerts Tab
-        private NumericUpDown _numTempWarning;
-        private NumericUpDown _numTempCritical;
         private CheckBox _chkAudioAlerts;
         private CheckBox _chkAltitudeCallouts;
 
         // Log Analysis Tab
-        private TextBox _txtDefaultLogDirectory;
-        private NumericUpDown _numLogVibrationWarning;
-        private NumericUpDown _numLogVibrationCritical;
-        private NumericUpDown _numLogHdopWarning;
-        private NumericUpDown _numLogHdopCritical;
-        private NumericUpDown _numLogMinimumSatellites;
-        private NumericUpDown _numLogTuneWarning;
-        private NumericUpDown _numLogTuneCritical;
-        private NumericUpDown _numLogEkfWarning;
-        private NumericUpDown _numLogEkfCritical;
-        private NumericUpDown _numLogLiveBufferPoints;
-        private CheckBox _chkLogInjectHud;
 
 
         // Joystick Tab
@@ -139,7 +116,6 @@ namespace NOMAD.MissionPlanner
             _tabControl.TabPages.Add(CreateDualLinkTab());
             _tabControl.TabPages.Add(CreateUiTab());
             _tabControl.TabPages.Add(CreateAlertsTab());
-            _tabControl.TabPages.Add(CreateLogsTab());
             _tabControl.TabPages.Add(CreateActuatorsTab());
             _tabControl.TabPages.Add(CreateJoystickTab());
 

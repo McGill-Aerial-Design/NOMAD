@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "support/fake_connection.hpp"
+#include "support/copter_land_connection.hpp"
 #include "nomad/runtime/runtime.hpp"
 #include "../src/runtime/auth_proof.hpp"
 #include "../src/runtime/client_auth.hpp"
@@ -45,6 +46,15 @@
 namespace {
 
 using Json = nlohmann::json;
+
+template <typename T>
+concept HasFencePolicy = requires(T value) { value.fence_policy; };
+
+template <typename T>
+concept HasVelocityLimits = requires(T value) { value.velocity_limits; };
+
+static_assert(!HasFencePolicy<nomad::runtime::RuntimeConfig>);
+static_assert(!HasVelocityLimits<nomad::runtime::RuntimeConfig>);
 
 #include "runtime_test_clients.hpp"
 
@@ -125,6 +135,7 @@ void wait_until(const std::function<bool()> &predicate) {
 #include "runtime_client_cases.hpp"
 #include "runtime_actuator_cases.hpp"
 #include "runtime_actuator_pending_cases.hpp"
+#include "runtime_land_cases.hpp"
 void test_protocol_and_status(std::uint16_t port, FakeConnection &connection) {
     Client client(port);
     const auto hello = client.request(base_request("1", "hello"));
@@ -385,6 +396,14 @@ void test_competing_admission() {
 
 void run_runtime_scenarios() {
     using nomad::test::run_scenario;
+    run_scenario("land_engagement_and_replay", test_runtime_land_engagement_and_replay);
+    run_scenario("land_outcomes", test_runtime_land_outcomes);
+    run_scenario("land_validation", test_runtime_land_validation);
+    run_scenario("land_revoke", test_runtime_land_revoke);
+    run_scenario("land_safe_output_budget", test_runtime_land_safe_output_budget);
+    run_scenario("land_expired_safe_output", test_runtime_land_expired_safe_output_is_not_sent);
+    run_scenario("land_audit_failure_before_send", [] { test_runtime_land_audit_failure(false); });
+    run_scenario("land_audit_failure_after_send", [] { test_runtime_land_audit_failure(true); });
     run_scenario("socket_failure_classification", test_socket_failure_classification);
     run_scenario("backend_actuator_authorization", test_backend_actuator_authorization_and_raw_boundary);
     run_scenario("backend_pulse_recovery", test_backend_pulse_failure_and_explicit_recovery);

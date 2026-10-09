@@ -18,19 +18,13 @@ namespace NOMAD.MissionPlanner.Connectivity
         public const int DefaultRuntimePort = 14611;
 
         public int RuntimePort { get; }
-        // Legacy synchronous API snapshot; async callers must use their returned result.
-        public NomadCoreRequestOutcome LastOutcome { get; private set; }
-        public string LastErrorCode { get; private set; } = "";
-        public string LastMessage { get; private set; } = "";
-        public bool? LastAcknowledged { get; private set; }
 
         private readonly NomadRuntimeClient _runtimeClient;
 
-        // apiKey retains named-call compatibility; it is the runtime client credential, not NOMAD_API_KEY.
-        public NomadCoreClient(string apiKey, int runtimePort = DefaultRuntimePort)
+        public NomadCoreClient(string credential, int runtimePort = DefaultRuntimePort)
         {
             RuntimePort = runtimePort >= 1 && runtimePort <= 65535 ? runtimePort : DefaultRuntimePort;
-            _runtimeClient = new NomadRuntimeClient(RuntimePort, apiKey ?? "", ProcessSource);
+            _runtimeClient = new NomadRuntimeClient(RuntimePort, credential ?? "", ProcessSource);
         }
 
         public Task<NomadCoreRequestResult> AdmitAuthorityAsync(CancellationToken cancellationToken = default) =>
@@ -39,6 +33,10 @@ namespace NOMAD.MissionPlanner.Connectivity
             RunCoreAsync("revoke", cancellationToken);
         public Task<NomadCoreRequestResult> HandbackAuthorityAsync(CancellationToken cancellationToken = default) =>
             RunCoreAsync("handback", cancellationToken);
+
+        /// <summary>Request Copter LAND mode engagement. Success does not verify touchdown.</summary>
+        public Task<NomadCoreRequestResult> LandAsync(CancellationToken cancellationToken = default) =>
+            RunCoreAsync("land", cancellationToken);
 
         /// <summary>
         /// Drive an ArduPilot servo channel through the runtime.
@@ -92,13 +90,13 @@ namespace NOMAD.MissionPlanner.Connectivity
         /// Select the gimbal mount mode through the runtime.
         /// </summary>
         public async Task<NomadCoreRequestResult> GimbalConfigureAsync(int mountMode,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default, Func<bool> inputStillCurrent = null)
         {
             if (mountMode < 0 || mountMode > 4)
             {
                 return RejectLocal("Gimbal mount mode must be between 0 and 4.");
             }
-            return await RunCoreAsync("gimbal-config", cancellationToken,
+            return await RunCoreAsync("gimbal-config", cancellationToken, inputStillCurrent,
                 mountMode.ToString(CultureInfo.InvariantCulture)).ConfigureAwait(false);
         }
 
@@ -106,7 +104,7 @@ namespace NOMAD.MissionPlanner.Connectivity
         /// Set a finite absolute gimbal angle through the runtime.
         /// </summary>
         public async Task<NomadCoreRequestResult> GimbalTargetAsync(double pitchDeg, double rollDeg,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default, Func<bool> inputStillCurrent = null)
         {
             if (!IsFinite(pitchDeg) || pitchDeg < -90.0 || pitchDeg > 90.0)
             {
@@ -117,7 +115,33 @@ namespace NOMAD.MissionPlanner.Connectivity
                 return RejectLocal("Gimbal roll must be finite and between -30 and 30 degrees.");
             }
             return await RunCoreAsync(
-                "gimbal-target", cancellationToken,
+                "gimbal-target", cancellationToken, inputStillCurrent,
+                pitchDeg.ToString("R", CultureInfo.InvariantCulture),
+                rollDeg.ToString("R", CultureInfo.InvariantCulture)).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Configure the mount and set its first absolute-angle target as one
+        /// runtime operation, so the runtime owns the required command order.
+        /// </summary>
+        public async Task<NomadCoreRequestResult> GimbalConfigureAndTargetAsync(int mountMode,
+            double pitchDeg, double rollDeg, CancellationToken cancellationToken = default,
+            Func<bool> inputStillCurrent = null)
+        {
+            if (mountMode < 0 || mountMode > 4)
+            {
+                return RejectLocal("Gimbal mount mode must be between 0 and 4.");
+            }
+            if (!IsFinite(pitchDeg) || pitchDeg < -90.0 || pitchDeg > 90.0)
+            {
+                return RejectLocal("Gimbal pitch must be finite and between -90 and 90 degrees.");
+            }
+            if (!IsFinite(rollDeg) || rollDeg < -30.0 || rollDeg > 30.0)
+            {
+                return RejectLocal("Gimbal roll must be finite and between -30 and 30 degrees.");
+            }
+            return await RunCoreAsync("gimbal-config-target", cancellationToken, inputStillCurrent,
+                mountMode.ToString(CultureInfo.InvariantCulture),
                 pitchDeg.ToString("R", CultureInfo.InvariantCulture),
                 rollDeg.ToString("R", CultureInfo.InvariantCulture)).ConfigureAwait(false);
         }
@@ -138,26 +162,11 @@ namespace NOMAD.MissionPlanner.Connectivity
             return _runtimeClient.RunAsync(verb, values, cancellationToken);
         }
 
-        // Compatibility only. Production callers await the immutable request result.
-        private bool CompleteLegacy(Task<NomadCoreRequestResult> request)
+        private Task<NomadCoreRequestResult> RunCoreAsync(string verb, CancellationToken cancellationToken,
+            Func<bool> inputStillCurrent, params string[] values)
         {
-            var result = request.GetAwaiter().GetResult();
-            LastOutcome = result.Outcome;
-            LastErrorCode = result.ErrorCode;
-            LastMessage = result.Message;
-            LastAcknowledged = result.Acknowledged;
-            return result.Succeeded;
+            return _runtimeClient.RunAsync(verb, values, cancellationToken, inputStillCurrent);
         }
 
-        public bool AdmitAuthority() => CompleteLegacy(AdmitAuthorityAsync());
-        public bool RevokeAuthority() => CompleteLegacy(RevokeAuthorityAsync());
-        public bool HandbackAuthority() => CompleteLegacy(HandbackAuthorityAsync());
-        public bool Servo(int channel, int pwmUs) => CompleteLegacy(ServoAsync(channel, pwmUs));
-        public bool SetRelay(int relayNumber, bool on) => CompleteLegacy(SetRelayAsync(relayNumber, on));
-        public bool MotorTest(int motorInstance, int pwmUs, double timeoutSeconds) =>
-            CompleteLegacy(MotorTestAsync(motorInstance, pwmUs, timeoutSeconds));
-        public bool GimbalConfigure(int mountMode) => CompleteLegacy(GimbalConfigureAsync(mountMode));
-        public bool GimbalTarget(double pitchDeg, double rollDeg) =>
-            CompleteLegacy(GimbalTargetAsync(pitchDeg, rollDeg));
     }
 }

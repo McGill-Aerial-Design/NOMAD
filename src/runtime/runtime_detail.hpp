@@ -2,7 +2,6 @@
 #pragma once
 
 #include "nomad/runtime/runtime.hpp"
-#include "nomad/vehicle/vehicle.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -92,7 +91,6 @@ std::string new_incarnation();
 bool has_supported_version(const Json &value);
 mavlink::MavlinkConnection &require_connection(
     const std::unique_ptr<mavlink::MavlinkConnection> &connection);
-vehicle::VehicleConfig make_vehicle_config(const RuntimeConfig &config);
 bool validate_request_fields(Request &request, Json &error);
 ParsedRequest parse_request(std::string_view line);
 bool is_mutating(const std::string &type);

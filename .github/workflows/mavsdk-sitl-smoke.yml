@@ -1,0 +1,92 @@
+name: mavsdk-connectivity-smoke
+
+# This lightweight check verifies only that MAVSDK connects and reads status.
+# Safety-sensitive changes are covered by the separate full safety-qualification
+# workflow and never report this smoke as SITL qualification.
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/mavsdk-sitl-smoke.yml"
+      - ".gitmodules"
+      - "CMakeLists.txt"
+      - "pixi.toml"
+      - "third_party/MAVSDK"
+      - "third_party/MAVSDK/**"
+      - "third_party/ardupilot-mavlink"
+      - "third_party/ardupilot-mavlink/**"
+      - "include/nomad/mavlink/mavsdk_*.hpp"
+      - "src/mavlink/mavsdk_*.cpp"
+      - "examples/mavsdk_connectivity_smoke.cpp"
+      - "scripts/dev/mavsdk_build_metrics.py"
+      - "scripts/dev/mavsdk_connectivity_*.py"
+      - "scripts/dev/check_mavsdk_provenance.py"
+      - "tests/mavsdk_validation_test.cpp"
+      - "tests/test_mavsdk_build_metrics.py"
+      - "tests/test_mavsdk_connectivity_*.py"
+      - "tests/test_mavsdk_provenance.py"
+      - "licenses/mavsdk-phase-a/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mavsdk-connectivity-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  connectivity-smoke:
+    name: MAVSDK connectivity smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NOMAD_CORE_SITL_PORT: "14570"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build ArduPilot SITL image
+        uses: docker/build-push-action@v7
+        with:
+          context: https://github.com/radarku/ardupilot-sitl-docker.git
+          build-args: COPTER_TAG=Copter-4.7.1
+          push: false
+          load: true
+          tags: nomad-sitl:copter-4.7.1
+          cache-from: type=gha,scope=sitl
+          cache-to: type=gha,mode=max,scope=sitl
+
+      - uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          cache: true
+
+      - name: Bring up the dev + SITL stack
+        run: pixi run dev-up
+
+      - name: Let SITL warm up
+        run: sleep 25
+
+      - name: MAVSDK connect/status smoke
+        run: pixi run run-mavsdk-sitl-smoke | tee "$RUNNER_TEMP/mavsdk-connectivity-runtime.txt"
+
+      - name: Retain connectivity runtime metrics
+        uses: actions/upload-artifact@v6
+        with:
+          name: mavsdk-connectivity-runtime
+          path: ${{ runner.temp }}/mavsdk-connectivity-runtime.txt
+          if-no-files-found: error
+
+      - name: Record connectivity build metrics
+        run: python scripts/dev/mavsdk_build_metrics.py
+
+      - name: SITL logs on failure
+        if: failure()
+        run: docker logs nomad-dev-sitl-1 2>&1 | tail -120 || true
+
+      - name: Tear down
+        if: always()
+        run: pixi run dev-down

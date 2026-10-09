@@ -6,8 +6,6 @@
 #include "actuator_storage.hpp"
 #include "lifecycle.hpp"
 #include "service_config.hpp"
-#include "nomad/safety/fence_config.hpp"
-#include "nomad/safety/velocity_config.hpp"
 
 #include <array>
 #include <charconv>
@@ -165,11 +163,6 @@ std::optional<nomad::runtime::RuntimeConfig> load_runtime_config(const Arguments
         std::cerr << actuator_error << '\n';
         return std::nullopt;
     }
-    config.fence_policy = nomad::safety::load_fence_policy(std::getenv("NOMAD_FENCE_POLYGON"),
-                                                            std::getenv("NOMAD_FENCE_MARGIN_M"));
-    config.velocity_limits = nomad::safety::load_velocity_limits(
-        std::getenv("NOMAD_VELOCITY_MAX_XY"), std::getenv("NOMAD_VELOCITY_MAX_Z"),
-        std::getenv("NOMAD_VELOCITY_MAX_YAW_RATE"));
     return config;
 }
 
@@ -222,7 +215,7 @@ int run_runtime(int argc, char **argv) {
     if (!arguments) {
         return fail_runtime("runtime configuration error: invalid endpoint/IPC/system arguments");
     }
-    const auto endpoint = nomad::mavsdk_phase_a::canonicalize_udp_endpoint(arguments->endpoint);
+    const auto endpoint = nomad::mavlink::validation::canonicalize_udp_endpoint(arguments->endpoint);
     if (!endpoint) {
         return fail_runtime(
             "runtime configuration error: NOMAD_MAVLINK_ENDPOINT must be a supported UDP MAVSDK endpoint");

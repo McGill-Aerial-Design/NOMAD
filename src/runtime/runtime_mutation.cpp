@@ -4,6 +4,28 @@
 namespace nomad::runtime {
 
 using namespace detail;
+namespace {
+
+std::string command_outcome(const vehicle::CommandResult &result, bool admission_checked) {
+    switch (result.outcome) {
+    case vehicle::CommandOutcome::Rejected:
+        return "rejected";
+    case vehicle::CommandOutcome::Failed:
+        return "failed";
+    case vehicle::CommandOutcome::Unknown:
+        return admission_checked || result.acknowledged ? "unknown" : "rejected";
+    case vehicle::CommandOutcome::Interrupted:
+        return admission_checked || result.acknowledged ? "interrupted" : "rejected";
+    case vehicle::CommandOutcome::Success:
+        return "success";
+    case vehicle::CommandOutcome::Unspecified:
+        return result.success ? "success" : result.acknowledged ? "failed" :
+               admission_checked ? "unknown" : "rejected";
+    }
+    return "unknown";
+}
+
+} // namespace
 
 Json Runtime::Implementation::handle_mutating_request(const Request &request) {
     auto response = process_mutating_request(request);
@@ -108,13 +130,15 @@ Json Runtime::Implementation::execute_mutating_request(const Request &request) {
                   {"ok", true}, {"type", "command_response"},
                   {"command_result", {{"success", result.success}, {"message", result.message},
                                       {"acknowledged", result.acknowledged}}}};
-    const auto outcome = result.success ? "success" : result.acknowledged ? "failed" :
-                         request.admission_check_passed->load() ? "unknown" : "rejected";
+    const auto outcome = command_outcome(result, request.admission_check_passed->load());
     response["outcome"] = outcome;
     return finish_operation(request, response, outcome);
 }
 
 vehicle::CommandResult Runtime::Implementation::invoke_vehicle(const Request &request) {
+    if (request.type == "land") {
+        return vehicle_.engage_copter_land([&] { return owns_generation(request); });
+    }
     if (request.type == "set_servo") {
         return vehicle_.set_servo(request.channel, request.pwm_microseconds);
     }
@@ -130,6 +154,9 @@ vehicle::CommandResult Runtime::Implementation::invoke_vehicle(const Request &re
     }
     if (request.type == "set_gimbal_target") {
         return vehicle_.set_gimbal_target(request.pitch_deg, request.roll_deg);
+    }
+    if (request.type == "configure_gimbal_target") {
+        return vehicle_.configure_gimbal_and_set_target(request.mount_mode, request.pitch_deg, request.roll_deg);
     }
     return {false, "request type is not supported in protocol v1"};
 }

@@ -2,7 +2,6 @@
 #include "runtime_detail.hpp"
 
 #include "ipc_server.hpp"
-#include "nomad/vehicle/vehicle.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -144,15 +143,21 @@ mavlink::MavlinkConnection &require_connection(
     return *connection;
 }
 
-vehicle::VehicleConfig make_vehicle_config(const RuntimeConfig &config) {
-    vehicle::VehicleConfig vehicle_config{};
-    vehicle_config.fence = config.fence_policy;
-    vehicle_config.velocity = config.velocity_limits;
-    return vehicle_config;
-}
-
 bool validate_request_fields(Request &request, Json &error) {
     auto &body = request.original;
+    if (request.type == "land") {
+        constexpr std::string_view parameters[]{"altitude_m", "latitude_deg", "longitude_deg", "custom_mode", "mode",
+            "command", "command_id", "channel", "pwm_microseconds", "relay_number", "on", "motor_instance",
+            "timeout_seconds", "mount_mode", "pitch_deg", "roll_deg", "actuator_id", "operation", "input_source",
+            "input_slot", "value", "actuator_configs"};
+        for (const auto parameter : parameters) {
+            if (body.contains(parameter)) {
+                error = error_response(request.id, "invalid_request", "LAND accepts no operation parameters");
+                return false;
+            }
+        }
+        return true;
+    }
     if (request.type == "hello" || request.type == "ping" || request.type == "status" ||
         request.type == "admit_authority" || request.type == "revoke_authority" ||
         request.type == "handback_authority" || request.type == "get_actuators") {
@@ -197,10 +202,17 @@ bool validate_request_fields(Request &request, Json &error) {
         read_finite_number(body, "roll_deg", request.roll_deg)) {
         return true;
     }
+    if (request.type == "configure_gimbal_target" &&
+        read_integer(body, "mount_mode", request.mount_mode) &&
+        read_finite_number(body, "pitch_deg", request.pitch_deg) &&
+        read_finite_number(body, "roll_deg", request.roll_deg)) {
+        return true;
+    }
     const bool known_type = request.type == "actuator_action" || request.type == "configure_actuators" ||
                             request.type == "set_servo" || request.type == "set_relay" ||
                             request.type == "motor_test" ||
-                            request.type == "configure_gimbal" || request.type == "set_gimbal_target";
+                            request.type == "configure_gimbal" || request.type == "set_gimbal_target" ||
+                            request.type == "configure_gimbal_target";
     if (!known_type && request.type != "hello" && request.type != "ping" && request.type != "status") {
         error = error_response(request.id, "unsupported_request", "request type is not supported in protocol v1");
         return false;
@@ -252,9 +264,9 @@ ParsedRequest parse_request(std::string_view line) {
 }
 
 bool is_mutating(const std::string &type) {
-    return type == "actuator_action" || type == "configure_actuators" ||
+    return type == "land" || type == "actuator_action" || type == "configure_actuators" ||
            type == "set_servo" || type == "set_relay" || type == "motor_test" ||
-           type == "configure_gimbal" || type == "set_gimbal_target";
+           type == "configure_gimbal" || type == "set_gimbal_target" || type == "configure_gimbal_target";
 }
 
 std::optional<std::int64_t> age_milliseconds(Clock::time_point timestamp) {

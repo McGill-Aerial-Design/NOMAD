@@ -1,26 +1,18 @@
 [Unit]
-Description=NOMAD MAVLink Router
+Description=NOMAD aircraft serial MAVLink fan-out
 After=network-online.target
 Wants=network-online.target
-PartOf=nomad.target
 
 [Service]
-# Keep the wrapper in the foreground so systemd sees router exits after flight
-# controller USB resets and the wrapper can rediscover the serial device.
 Type=simple
-User=__NOMAD_USER__
-Group=__NOMAD_USER__
-WorkingDirectory=__NOMAD_ROOT__
-EnvironmentFile=__NOMAD_ROOT__/config/nomad.env
-
-ExecStart=/bin/bash __NOMAD_ROOT__/scripts/services/mavlink_router.sh run
-ExecStop=/bin/bash __NOMAD_ROOT__/scripts/services/mavlink_router.sh stop
+User=nomad
+SupplementaryGroups=dialout
+ExecStart=/usr/bin/mavlink-routerd -c /etc/nomad/router.conf
 Restart=always
 RestartSec=3
-
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=nomad-mavlink-router
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
 
 [Install]
-WantedBy=nomad.target
+WantedBy=multi-user.target

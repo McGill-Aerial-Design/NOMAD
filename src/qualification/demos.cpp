@@ -4,7 +4,6 @@
 // scenarios in tests/sitl drive the same verbs.
 #include "commands.hpp"
 
-#include "nomad/mission/executor.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -15,15 +14,35 @@
 #include <vector>
 
 int run_mission_demo(nomad::vehicle::Vehicle &vehicle) {
-    const nomad::mission::Mission mission{
-        nomad::mission::Action{"guided"}, nomad::mission::Action{"arm"}, nomad::mission::Takeoff{5.0F},
-        nomad::mission::ReturnToLaunch{}, nomad::mission::Land{},        nomad::mission::Action{"wait_disarmed"},
+    std::size_t completed = 0;
+    const auto step = [&completed](const nomad::vehicle::CommandResult &result) {
+        if (!result.success) {
+            std::cerr << "mission failed after " << completed << " steps: " << result.message << '\n';
+            return false;
+        }
+        ++completed;
+        return true;
     };
-    nomad::mission::MissionExecutor executor(vehicle);
-    const auto result = executor.execute(mission);
-    std::cout << "mission_success=" << (result.success ? "true" : "false")
-              << " completed_steps=" << result.completed_steps << " message=" << result.message << '\n';
-    return result.success ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (!step(vehicle.set_guided_mode())) {
+        return EXIT_FAILURE;
+    }
+    if (!step(vehicle.arm())) {
+        return EXIT_FAILURE;
+    }
+    if (!step(vehicle.takeoff(5.0F))) {
+        return EXIT_FAILURE;
+    }
+    if (!step(vehicle.return_to_launch())) {
+        return EXIT_FAILURE;
+    }
+    if (!step(vehicle.land())) {
+        return EXIT_FAILURE;
+    }
+    if (!step(vehicle.wait_until_disarmed(std::chrono::seconds(90)))) {
+        return EXIT_FAILURE;
+    }
+    std::cout << "mission_success=true completed_steps=" << completed << " message=mission completed\n";
+    return EXIT_SUCCESS;
 }
 
 int run_fence_demo(nomad::vehicle::Vehicle &vehicle) {
@@ -51,7 +70,7 @@ int run_fence_demo(nomad::vehicle::Vehicle &vehicle) {
     return verification.success ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-// Legacy test-driver verb; production actuator behavior is owned by runtime IPC.
+// Qualification-only output scenario; production actuator behavior is owned by runtime IPC.
 int run_payload_demo(nomad::vehicle::Vehicle &vehicle, int relay_number, float duration_seconds) {
     if (!std::isfinite(duration_seconds)) {
         return print_result({false, "pulse duration must be finite"});

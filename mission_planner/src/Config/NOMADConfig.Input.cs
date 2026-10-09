@@ -23,7 +23,7 @@ namespace NOMAD.MissionPlanner
                 if (string.IsNullOrEmpty(binding) || binding == "None") { continue; }
                 int separator = binding.LastIndexOf(':');
                 if (separator <= 0 || separator == binding.Length - 1)
-                { return "Joystick actions must refer to runtime actuator IDs and operations. Migrate legacy mappings before loading."; }
+                { return "Joystick actions must refer to runtime actuator IDs and operations. Review unsupported mappings before loading."; }
                 if (!active.Add(index)) { return "Active actuator bindings must use unique physical HID button indices."; }
                 if (JoystickKillSwitchEnabled && index == JoystickTerminationButtonIndex)
                 { return "Termination monitor button must be disjoint from active actuator HID bindings."; }

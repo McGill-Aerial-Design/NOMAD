@@ -17,12 +17,21 @@ def test_plugin_has_no_land_as_termination_recipe():
         assert "forced descent required" not in text.lower(), f"Misleading termination warning in {source}"
 
 
-def test_both_activation_callers_report_unavailable():
-    for name in ("Input/NomadJoystickService.Switches.cs", "Geofence/BoundaryManager.cs"):
-        text = (ROOT / name).read_text(encoding="utf-8")
-        assert "if (!FlightModeController.RequestTermination())" in text, name
-        assert "Termination unavailable. Take manual control." in text, name
-        assert "Forced descent engaged" not in text, name
+def test_joystick_termination_request_reports_unavailable():
+    text = (ROOT / "Input/NomadJoystickService.Switches.cs").read_text(encoding="utf-8")
+    assert "if (!TerminationControl.RequestTermination())" in text
+    assert "Termination unavailable. Take manual control." in text
+    assert "Forced descent engaged" not in text
+
+
+def test_boundary_preview_has_no_vehicle_action_path():
+    text = (ROOT / "Geofence/BoundaryManager.cs").read_text(encoding="utf-8")
+    assert "class AdvisoryBoundaryMonitor" in text
+    assert "TerminationControl" not in text
+    assert "GuidedGoto" not in text
+    assert "RequestTermination" not in text
+    view = (ROOT / "Views/NOMADBoundaryView.cs").read_text(encoding="utf-8")
+    assert "VISUAL ADVISORY ONLY" in view
 
 
 def test_plugin_fence_export_cannot_write_or_disable_aircraft_fence():
@@ -30,7 +39,7 @@ def test_plugin_fence_export_cannot_write_or_disable_aircraft_fence():
     assert not (ROOT / "Geofence/MPFenceUploader.cs").exists(), "Direct fence writer must remain removed"
     assert "MPFenceUploader" not in text
     assert "BtnClearVehicleFence_Click" not in text
-    assert "No aircraft fence was changed." in text
+    assert "No runtime or aircraft fence was changed." in text
     assert "MapOverlayManager.ExportToMPGeoFence(" in text
     assert "MapFenceActionToParam" not in text
 

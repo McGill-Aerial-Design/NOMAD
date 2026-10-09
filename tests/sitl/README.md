@@ -2,17 +2,17 @@
 
 These tests drive isolated ArduPilot SITL with the non-installed
 `nomad-qualification` executable and observe authoritative vehicle state. The
-runtime authority scenario instead uses the production `nomad-runtime` and its
-typed IPC boundary, with an independent simulator GCS and observer. The
+runtime authority and Copter LAND scenarios instead use the production
+`nomad-runtime` and its typed IPC boundary, with an independent simulator GCS
+and observer. The Copter LAND scenario invokes the installed-behavior `nomad` CLI. The
 installed `nomad` CLI uses runtime IPC only; commands without a typed v1 request
 report unavailable.
 Normal pytest skips live scenarios without an explicitly configured simulation.
-Pull request CI runs deterministic software tests; path-triggered pushes run a
-reduced Copter connect/status smoke, while scheduled and manually dispatched
-SITL workflows run the full Copter scenarios, RC-fault delivery probe and
-pinned QuadPlane chain. See [current SITL/ROS evidence](../../docs/qualification.md#sitl-and-ros-readiness)
-for the exact run SHAs and limits. A workflow definition alone is not passed-run
-evidence, and a reduced smoke is not the full matrix.
+Safety-sensitive PR/main changes require full Copter and pinned QuadPlane jobs;
+scheduled and manual runs always require both. The separate main connectivity smoke
+is not full qualification. [Qualification status](../../docs/qualification.md#sitl-qualification)
+defines evidence limits; retain exact source/firmware/configuration and actual run
+results for a release. A workflow definition alone is not passed-run evidence.
 
 ## Local test responsibilities
 
@@ -55,7 +55,7 @@ evidence, and a reduced smoke is not the full matrix.
   complete hosted route run was a dated result at implementation head
   `7f6206cbad51aade79ae86b20983d4e1fb818901` in [workflow run 35818612311](https://github.com/YoussGm3o8/NOMAD/actions/runs/35818612311);
   current full-chain evidence and limits are in
-  [qualification status](../../docs/qualification.md#sitl-and-ros-readiness).
+  [qualification status](../../docs/qualification.md#sitl-qualification).
 
 The obsolete sitl-gimbal task was removed with runtime wiring repair. No successful gimbal evidence is claimed.
 
@@ -89,7 +89,7 @@ Flight scenarios remain Copter-oriented except for the separately pinned
 QuadPlane chain through return/recovery, VTOL-back and QLAND landing, plus the
 disarmed receiver-fault delivery probe. Those slices do not qualify link loss,
 authority, manual takeover, handback, termination or complete Task 1 flight. Required gate artifacts and historical/current distinctions live in
-[migration archive](../../docs/migration.md); do not duplicate pass counts here.
+[qualification status](../../docs/qualification.md); do not duplicate pass counts here.
 
 ## Runtime authority and independent source
 
@@ -98,7 +98,7 @@ request while a dedicated pinned Copter stays disarmed. This scenario is
 separate from the flight chain and does not use the direct qualification driver
 to execute a NOMAD mutation. The independent source-250 test GCS requests modes;
 that is simulated external-source behavior, not physical pilot takeover.
-The [source model and hardware procedure](../../docs/source-arbitration.md)
+The [source model and hardware procedure](../../docs/safety.md#controller-bench-and-aircraft-procedure)
 define the exact evidence boundaries and required production RC decisions.
 
 Run against its dedicated container, serially with other simulator scenarios:
@@ -143,3 +143,17 @@ capability policy: all current v1 mutations are unavailable for QuadPlane.
 The new runtime output result is therefore Copter evidence only. Keep the
 QuadPlane gate intact and qualify any future typed QuadPlane request separately;
 do not add a generic mode/MAVLink request or enable a capability just to pass.
+
+## Installed Copter LAND engagement
+
+Run `pixi run core-sitl-runtime-copter-land` on a fresh dedicated container using
+the authority-probe guard and ports above. Source 250 prepares the airborne Copter
+only while the runtime is absent; then the installed CLI admits and requests LAND once.
+CI runs three clean instances, failing on any unsuccessful repetition.
+
+The relay requires accepted ACK plus later LAND heartbeat within 3 seconds; CLI
+wall time includes a 0.5-second process/IPC margin. A separate later ground check
+requires fresh LAND, `ON_GROUND`, disarm and stable altitude. It does not change
+the [engagement contract](../../docs/runtime-ipc.md#copter-land-engagement) or qualify hardware.
+Stop the dedicated container on success or failure; never replay an uncertain
+flight request or send a cleanup flight command.

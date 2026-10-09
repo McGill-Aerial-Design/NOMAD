@@ -1,92 +1,52 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// NOMAD Geofence Configuration
+// Mission Planner advisory boundary configuration
 // ============================================================
-// General, reusable flight-geofence and failsafe configuration.
-// Holds soft/hard boundary polygons, altitude limits, failsafe
-// behavior, and boundary-violation checking. Task-agnostic.
-//
-// Data types live in GeofenceTypes.cs; pure polygon math lives in
-// GeoMath.cs (both Mission Planner-free and unit-tested via
-// `pixi run test-plugin-geometry`).
+// Stores local polygons for map drawing and position preview. The runtime
+// protocol does not expose boundary enforcement or evaluation.
 // ============================================================
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace NOMAD.MissionPlanner
 {
     /// <summary>
-    /// General geofence + failsafe configuration with boundary checking and
-    /// JSON persistence. Task-agnostic; adapt as needed per deployment.
+    /// Mission Planner-only boundary outlines and display preferences.
+    /// These values are not sent to the runtime or flight controller.
     /// </summary>
     public class GeofenceConfig
     {
-        /// <summary>
-        /// Soft flight boundary (yellow - warning).
-        /// </summary>
         public FlightBoundary SoftBoundary { get; set; } = new FlightBoundary
         {
-            Name = "Soft Boundary",
-            BoundaryType = "soft",
-            DisplayColor = "#FFFF00"
+            Name = "Inner Advisory Outline",
         };
 
-        /// <summary>
-        /// Hard flight boundary (red - termination required; plugin activation unavailable).
-        /// </summary>
         public FlightBoundary HardBoundary { get; set; } = new FlightBoundary
         {
-            Name = "Hard Boundary",
-            BoundaryType = "hard",
-            DisplayColor = "#FF0000"
+            Name = "Outer Advisory Outline",
         };
 
-        /// <summary>
-        /// Return point for geofence breach (centroid used if null).
-        /// </summary>
-        public GpsPoint ReturnPoint { get; set; }
+        /// <summary>Altitude display threshold for Mission Planner-reported altitude telemetry.</summary>
+        public double AdvisoryAltitudeDisplayThresholdMeters { get; set; } = 122.0;
+
+        /// <summary>Whether to show local position relative to the saved outlines.</summary>
+        public bool AdvisoryPreviewEnabled { get; set; }
+
+        /// <summary>Whether a local advisory-outline transition can speak an alert.</summary>
+        public bool AdvisoryAudioAlertsEnabled { get; set; } = true;
 
         /// <summary>
-        /// Maximum altitude AGL (400ft = 122m default).
-        /// </summary>
-        public double MaxAltitudeAglMeters { get; set; } = 122.0;
-
-        /// <summary>
-        /// Failsafe behavior settings.
-        /// </summary>
-        public FailsafeBehavior Failsafe { get; set; } = new FailsafeBehavior();
-
-        /// <summary>
-        /// Whether real-time boundary monitoring is active. Persisted so the
-        /// monitor survives Mission Planner page switches and restarts.
-        /// </summary>
-        public bool MonitoringEnabled { get; set; }
-
-        /// <summary>
-        /// When true the soft boundary is derived automatically by insetting
-        /// the hard boundary by <see cref="SoftBoundaryInsetMeters"/> instead
-        /// of using manually entered coordinates.
+        /// When true, derive the inner display outline from the outer outline.
+        /// This changes only Mission Planner's saved map geometry.
         /// </summary>
         public bool SoftBoundaryFromHard { get; set; }
 
-        /// <summary>
-        /// Inward offset (meters) applied to the hard boundary to produce the
-        /// derived soft boundary when <see cref="SoftBoundaryFromHard"/> is on.
-        /// </summary>
         public double SoftBoundaryInsetMeters { get; set; } = 5.0;
-
-        /// <summary>
-        /// Boundary violations log.
-        /// </summary>
-        public List<BoundaryViolation> BoundaryViolations { get; set; } = new List<BoundaryViolation>();
-
-        // ============================================================
-        // Persistence
-        // ============================================================
 
         private static readonly string ConfigDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -94,60 +54,63 @@ namespace NOMAD.MissionPlanner
 
         private static readonly string ConfigPath = Path.Combine(ConfigDir, "geofence_config.json");
 
-        /// <summary>
-        /// Load geofence configuration from file (defaults if missing/invalid).
-        /// </summary>
         public static GeofenceConfig Load()
         {
-            try
+            if (!File.Exists(ConfigPath))
             {
-                if (File.Exists(ConfigPath))
-                {
-                    var json = File.ReadAllText(ConfigPath);
-                    return JsonConvert.DeserializeObject<GeofenceConfig>(json) ?? new GeofenceConfig();
-                }
+                return new GeofenceConfig();
             }
-            catch (Exception ex)
-            {
-                Log.Error($"Failed to load geofence config — {ex.Message}");
-            }
-            return new GeofenceConfig();
+
+            return LoadFromJson(File.ReadAllText(ConfigPath));
         }
 
-        /// <summary>
-        /// Save geofence configuration to file.
-        /// </summary>
-        public void Save()
+        internal static GeofenceConfig LoadFromJson(string json)
+        {
+            var document = JObject.Parse(json, new JsonLoadSettings
+            {
+                DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error,
+            });
+            var config = document.ToObject<GeofenceConfig>(JsonSerializer.Create(new JsonSerializerSettings
+            {
+                MissingMemberHandling = MissingMemberHandling.Error,
+            }));
+            if (config == null || config.SoftBoundary?.Vertices == null || config.HardBoundary?.Vertices == null)
+            {
+                throw new JsonSerializationException("Advisory boundary outlines must contain vertex arrays.");
+            }
+            if (double.IsNaN(config.AdvisoryAltitudeDisplayThresholdMeters) ||
+                double.IsInfinity(config.AdvisoryAltitudeDisplayThresholdMeters) ||
+                config.AdvisoryAltitudeDisplayThresholdMeters < 0 || config.AdvisoryAltitudeDisplayThresholdMeters > 10000)
+            {
+                throw new JsonSerializationException("Advisory altitude display threshold must be between 0 and 10000 m.");
+            }
+            return config;
+        }
+
+        public bool Save()
         {
             try
             {
-                if (!Directory.Exists(ConfigDir))
-                {
-                    Directory.CreateDirectory(ConfigDir);
-                }
-
+                Directory.CreateDirectory(ConfigDir);
                 var json = JsonConvert.SerializeObject(this, Formatting.Indented);
                 File.WriteAllText(ConfigPath, json);
+                return true;
             }
             catch (Exception ex)
             {
-                Log.Error($"Failed to save geofence config — {ex.Message}");
+                Log.Error($"Failed to save advisory boundary config — {ex.Message}");
+                return false;
             }
         }
 
-        // ============================================================
-        // Derived soft boundary (hard boundary inset)
-        // ============================================================
-
-        /// <summary>
-        /// Recompute the soft boundary from the hard boundary when
-        /// <see cref="SoftBoundaryFromHard"/> is enabled. Returns true if the
-        /// soft boundary was (re)generated. Caller is responsible for Save().
-        /// </summary>
         public bool RegenerateSoftFromHard()
         {
-            if (!SoftBoundaryFromHard) return false;
+            if (!SoftBoundaryFromHard)
+            {
+                return false;
+            }
 
+            SoftBoundary ??= new FlightBoundary { Name = "Inner Advisory Outline" };
             if (HardBoundary?.Vertices == null || HardBoundary.Vertices.Count < 3)
             {
                 SoftBoundary.Vertices.Clear();
@@ -158,40 +121,5 @@ namespace NOMAD.MissionPlanner
             return true;
         }
 
-        // ============================================================
-        // Boundary checking
-        // ============================================================
-
-        /// <summary>
-        /// Check if a GPS point is inside a boundary polygon (ray casting).
-        /// </summary>
-        public bool IsInsideBoundary(GpsPoint point, FlightBoundary boundary)
-        {
-            return GeoMath.IsInside(boundary?.Vertices, point);
-        }
-
-        /// <summary>
-        /// Check boundary status for a GPS point.
-        /// Returns: "inside", "soft_violation", "hard_violation".
-        /// </summary>
-        public string CheckBoundaryStatus(GpsPoint point, double? altitudeAgl = null)
-        {
-            if (altitudeAgl.HasValue && altitudeAgl > MaxAltitudeAglMeters)
-            {
-                return "hard_violation";
-            }
-
-            if (!IsInsideBoundary(point, HardBoundary))
-            {
-                return "hard_violation";
-            }
-
-            if (!IsInsideBoundary(point, SoftBoundary))
-            {
-                return "soft_violation";
-            }
-
-            return "inside";
-        }
     }
 }

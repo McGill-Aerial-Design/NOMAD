@@ -9,7 +9,7 @@
 # packages required.
 #
 # The harness exercises typed runtime requests, fail-closed validation,
-# explicit GuidedGoto unavailability, authority controls, protocol negotiation,
+# authority controls, protocol negotiation,
 # and unknown-outcome no-replay behavior without Mission Planner assemblies.
 #
 # Usage: pixi run test-plugin-core-client
@@ -45,11 +45,17 @@ $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Network.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Requests.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Control\FlightModeController.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Land.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Control\TerminationControl.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Control\GimbalCommand.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Control\GimbalController.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\TerminationRequestTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientRuntimeTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientLandTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\LandControlPanelTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientAsyncTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientGimbalTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\AsyncRuntimeTestFixture.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientOutcomeTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputOutcomeTests.cs'),
@@ -59,6 +65,7 @@ $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Input\NomadJoystickService.Switches.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Input\NomadJoystickService.Axis.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Control\OutputController.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Control\LandControlPanel.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Config\NOMADConfig.Input.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadActuatorModels.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadCoreClient.Actuators.cs'),

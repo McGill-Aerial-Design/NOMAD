@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Non-installed test driver for direct SITL and MAVSDK transport qualification.
-#include "cli_command_table.hpp"
+#include "command_table.hpp"
 #include "arguments.hpp"
 #include "commands.hpp"
 #include "nomad/mavlink/mavsdk_transport.hpp"
-#include "runtime/cli_client.hpp"
+#include "owner_probe.hpp"
 #include "nomad/safety/fence_config.hpp"
 #include "nomad/safety/velocity_config.hpp"
 #include "nomad/vehicle/vehicle.hpp"
@@ -66,34 +66,35 @@ void print_connect_failure(const nomad::mavlink::MavlinkConnection &connection, 
               << "; stop the NOMAD runtime before running direct qualification\n";
 }
 
-int run_command(nomad::mavlink::MavlinkConnection &connection, const Arguments &arguments,
+int run_command(nomad::mavlink::MavlinkConnection &connection, const DirectArguments &arguments,
                 const std::string &endpoint) {
-    if (is_actuation_command(arguments.command)) {
+    const auto &common = arguments.common;
+    if (is_direct_actuation_command(common.command)) {
         if (runtime_endpoint_is_open()) {
-            audit_command(arguments.command, "refused", "none", "runtime_owner_active");
+            audit_command(common.command, "refused", "none", "runtime_owner_active");
             std::cerr << "error: direct actuation is inhibited while the NOMAD runtime is listening\n";
             return EXIT_FAILURE;
         }
         const auto integrated = integrated_flight_enabled();
         if (!integrated.has_value()) {
-            audit_command(arguments.command, "refused", "none", "invalid_integrated_flight_setting");
+            audit_command(common.command, "refused", "none", "invalid_integrated_flight_setting");
             std::cerr << "error: NOMAD_INTEGRATED_FLIGHT must be a boolean value\n";
             return EXIT_FAILURE;
         }
         if (*integrated) {
-            audit_command(arguments.command, "refused", "none", "runtime_owner_required");
+            audit_command(common.command, "refused", "none", "runtime_owner_required");
             std::cerr << "error: direct actuation is inhibited in integrated flight mode\n";
             return EXIT_FAILURE;
         }
         if (!api_key_configured()) {
-            audit_command(arguments.command, "refused", "none", "missing_api_key");
+            audit_command(common.command, "refused", "none", "missing_api_key");
             std::cerr << "error: actuation command refused: NOMAD_API_KEY is not set\n";
             return EXIT_FAILURE;
         }
-        audit_command(arguments.command, "accepted", "api-key", "");
+        audit_command(common.command, "accepted", "api-key", "");
     }
 
-    if (arguments.command == "goto" && arguments.latitude.has_value() && arguments.longitude.has_value() &&
+    if (common.command == "goto" && arguments.latitude.has_value() && arguments.longitude.has_value() &&
         arguments.altitude.has_value()) {
         // The NOMAD-side projected fence (SR-FEN-02) rejects an out-of-fence
         // target before any socket work; a malformed fence fails closed.
@@ -112,10 +113,10 @@ int run_command(nomad::mavlink::MavlinkConnection &connection, const Arguments &
         return EXIT_FAILURE;
     }
 
-    if (arguments.command == "status") {
+    if (common.command == "status") {
         return run_status(connection);
     }
-    if (arguments.command == "connect") {
+    if (common.command == "connect") {
         const auto heartbeat = connection.wait_for_heartbeat(std::chrono::seconds(6));
         if (!heartbeat.has_value()) {
             std::cerr << "timed out waiting for ArduPilot heartbeat\n";
@@ -148,25 +149,25 @@ int run_command(nomad::mavlink::MavlinkConnection &connection, const Arguments &
     vehicle_config.fence = fence_policy;
     vehicle_config.velocity = velocity_limits;
     nomad::vehicle::Vehicle vehicle(connection, vehicle_config);
-    if (arguments.command == "arm") {
+    if (common.command == "arm") {
         return print_result(vehicle.arm());
     }
-    if (arguments.command == "disarm") {
+    if (common.command == "disarm") {
         return print_result(vehicle.disarm());
     }
-    if (arguments.command == "mode" && arguments.mode.has_value()) {
+    if (common.command == "mode" && arguments.mode.has_value()) {
         return print_result(vehicle.set_mode(*arguments.mode));
     }
-    if (arguments.command == "takeoff" && arguments.altitude.has_value()) {
+    if (common.command == "takeoff" && arguments.altitude.has_value()) {
         return print_result(vehicle.takeoff(*arguments.altitude));
     }
-    if (arguments.command == "vtol-takeoff" && arguments.altitude.has_value()) {
+    if (common.command == "vtol-takeoff" && arguments.altitude.has_value()) {
         return print_result(vehicle.vtol_takeoff(*arguments.altitude));
     }
-    if (arguments.command == "transition-to-fixed-wing") {
+    if (common.command == "transition-to-fixed-wing") {
         return print_result(vehicle.transition_to_fixed_wing());
     }
-    if (arguments.command == "fixed-wing-route" && arguments.fixed_wing_route_values.size() == 6) {
+    if (common.command == "fixed-wing-route" && arguments.fixed_wing_route_values.size() == 6) {
         const auto &values = arguments.fixed_wing_route_values;
         const std::vector<nomad::vehicle::RouteWaypoint> route{
             {values[0], values[1], static_cast<float>(values[2])},
@@ -174,78 +175,78 @@ int run_command(nomad::mavlink::MavlinkConnection &connection, const Arguments &
         };
         return print_result(vehicle.fixed_wing_route(route));
     }
-    if (arguments.command == "fixed-wing-recovery" && arguments.fixed_wing_recovery_values.size() == 3) {
+    if (common.command == "fixed-wing-recovery" && arguments.fixed_wing_recovery_values.size() == 3) {
         const auto &values = arguments.fixed_wing_recovery_values;
         const nomad::vehicle::RecoveryPoint point{values[0], values[1], static_cast<float>(values[2])};
         return print_result(vehicle.fixed_wing_recovery(point));
     }
-    if (arguments.command == "transition-to-vtol" && arguments.transition_to_vtol_values.size() == 3) {
+    if (common.command == "transition-to-vtol" && arguments.transition_to_vtol_values.size() == 3) {
         const auto &values = arguments.transition_to_vtol_values;
         const nomad::vehicle::RecoveryPoint point{values[0], values[1], static_cast<float>(values[2])};
         return print_result(vehicle.transition_to_vtol(point));
     }
-    if (arguments.command == "quadplane-vtol-land" && arguments.quadplane_landing_values.size() == 2) {
+    if (common.command == "quadplane-vtol-land" && arguments.quadplane_landing_values.size() == 2) {
         const auto &values = arguments.quadplane_landing_values;
         const nomad::vehicle::LandingPoint point{values[0], values[1]};
         return print_result(vehicle.quadplane_vtol_land(point));
     }
-    if (arguments.command == "goto" && arguments.latitude.has_value() && arguments.longitude.has_value() &&
+    if (common.command == "goto" && arguments.latitude.has_value() && arguments.longitude.has_value() &&
         arguments.altitude.has_value()) {
         const nomad::vehicle::Location target{*arguments.latitude, *arguments.longitude, *arguments.altitude};
         return print_result(vehicle.goto_location(target));
     }
-    if (arguments.command == "land") {
+    if (common.command == "land") {
         return print_result(vehicle.land());
     }
-    if (arguments.command == "rtl") {
+    if (common.command == "rtl") {
         return print_result(vehicle.return_to_launch());
     }
-    if (arguments.command == "servo" && arguments.channel.has_value() && arguments.pwm_microseconds.has_value()) {
-        return print_result(vehicle.set_servo(*arguments.channel, *arguments.pwm_microseconds));
+    if (common.command == "servo" && common.channel.has_value() && common.pwm_microseconds.has_value()) {
+        return print_result(vehicle.set_servo(*common.channel, *common.pwm_microseconds));
     }
-    if (arguments.command == "relay" && arguments.relay_number.has_value() && arguments.relay_on.has_value()) {
-        return print_result(vehicle.set_relay(*arguments.relay_number, *arguments.relay_on));
+    if (common.command == "relay" && common.relay_number.has_value() && common.relay_on.has_value()) {
+        return print_result(vehicle.set_relay(*common.relay_number, *common.relay_on));
     }
-    if (arguments.command == "motor-test" && arguments.motor_instance.has_value() &&
-        arguments.pwm_microseconds.has_value() && arguments.timeout_seconds.has_value()) {
+    if (common.command == "motor-test" && common.motor_instance.has_value() &&
+        common.pwm_microseconds.has_value() && common.timeout_seconds.has_value()) {
         return print_result(
-            vehicle.motor_test(*arguments.motor_instance, *arguments.pwm_microseconds, *arguments.timeout_seconds));
+            vehicle.motor_test(*common.motor_instance, *common.pwm_microseconds, *common.timeout_seconds));
     }
-    if (arguments.command == "gimbal-config" && arguments.mount_mode.has_value()) {
-        return print_result(vehicle.configure_gimbal(*arguments.mount_mode));
+    if (common.command == "gimbal-config" && common.mount_mode.has_value()) {
+        return print_result(vehicle.configure_gimbal(*common.mount_mode));
     }
-    if (arguments.command == "mission-demo") {
+    if (common.command == "mission-demo") {
         return run_mission_demo(vehicle);
     }
-    if (arguments.command == "velocity-demo") {
+    if (common.command == "velocity-demo") {
         return run_velocity_demo(vehicle);
     }
-    if (arguments.command == "velocity" && arguments.velocity_vx.has_value() &&
+    if (common.command == "velocity" && arguments.velocity_vx.has_value() &&
         arguments.duration_seconds.has_value()) {
         return run_velocity(vehicle, *arguments.velocity_vx, arguments.velocity_vy.value_or(0.0F),
                             arguments.velocity_vz.value_or(0.0F), arguments.velocity_yaw_rate.value_or(0.0F),
                             *arguments.duration_seconds);
     }
-    if (arguments.command == "fence-demo") {
+    if (common.command == "fence-demo") {
         return run_fence_demo(vehicle);
     }
-    if (arguments.command == "payload-demo" && arguments.relay_number.has_value() &&
+    if (common.command == "payload-demo" && common.relay_number.has_value() &&
         arguments.duration_seconds.has_value()) {
-        return run_payload_demo(vehicle, *arguments.relay_number, *arguments.duration_seconds);
+        return run_payload_demo(vehicle, *common.relay_number, *arguments.duration_seconds);
     }
 
     // Every verb in the table is dispatched above, so reaching this point means
     // a verb was added to the table without a handler. Report it instead of
     // exiting silently the way the old fall-through did.
-    audit_command(arguments.command, "failed", "api-key", "verb_not_dispatched");
-    std::cerr << "error: " << arguments.command << " has no handler in this build\n";
+    audit_command(common.command, "failed", "api-key", "verb_not_dispatched");
+    std::cerr << "error: " << common.command << " has no handler in this build\n";
     return EXIT_FAILURE;
 }
 
 } // namespace
 
 void print_qualification_usage() {
-    const auto commands = cli_commands();
+    const auto commands = direct_commands();
     std::cout << "Non-installed NOMAD qualification driver. Usage: nomad-qualification <";
     for (std::size_t index = 0; index < commands.size(); ++index) {
         std::cout << (index == 0 ? "" : "|") << commands[index].name;

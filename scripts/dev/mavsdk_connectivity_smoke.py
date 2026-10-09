@@ -30,10 +30,10 @@ def get_system_id() -> str:
 
 
 def find_binary() -> Path | None:
-    if os.environ.get("NOMAD_RESOURCE_BUILD_DIR"):
-        from resource_footprint import release_binary
+    if os.environ.get("NOMAD_QUALIFICATION_BUILD_DIR"):
+        from mavsdk_build_metrics import release_binary
 
-        return release_binary(Path(os.environ["NOMAD_RESOURCE_BUILD_DIR"]), "nomad_mavsdk_connectivity_smoke")
+        return release_binary(Path(os.environ["NOMAD_QUALIFICATION_BUILD_DIR"]), "nomad_mavsdk_connectivity_smoke")
     names = ("nomad_mavsdk_connectivity_smoke.exe", "nomad_mavsdk_connectivity_smoke")
     build_dir = ROOT / "build" / "mavsdk-qualification"
     for directory in (build_dir, build_dir / "Debug", build_dir / "Release"):

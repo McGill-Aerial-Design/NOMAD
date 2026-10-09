@@ -30,13 +30,8 @@ described below.
 
 ## Topology and socket ownership
 
-Historically, plugin-owned `GroundLinkRouter` bound LTE UDP `14560`,
-RadioMaster UDP `14550` (or opened a TCP/COM connection), and loopback UDP `14600`.
-Mission Planner used UDPCl to `14600` from an ephemeral source port; the router
-remembered only the most recent sender. `NomadCoreClient` separately launched
-one-shot MAVSDK CLI processes whose default listener was also `14550`, conflicting
-with RadioMaster when run on the same computer. The aircraft-side
-`infra/transport/mavlink_router` configuration belongs to a different host.
+The aircraft-side serial router belongs to a different host and does not own
+the ground listener or loopback consumer ports.
 
 The [example](example.json) has the following ownership on the ground computer:
 

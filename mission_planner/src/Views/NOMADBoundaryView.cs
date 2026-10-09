@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// NOMAD Boundary View - Flight Boundary Configuration & Monitoring
+// NOMAD Boundary View - Local Advisory Outline Editing & Preview
 // ============================================================
 
 using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Windows.Forms;
 using MissionPlanner;
 
 namespace NOMAD.MissionPlanner
 {
-    /// <summary>
-    /// Boundary preset for save/load functionality
-    /// </summary>
+    /// <summary>Saved Mission Planner-only advisory outlines.</summary>
     public class BoundaryPreset
     {
         public string Name { get; set; }
@@ -23,35 +22,23 @@ namespace NOMAD.MissionPlanner
         public DateTime CreatedAt { get; set; }
         public List<GpsPoint> SoftBoundary { get; set; } = new List<GpsPoint>();
         public List<GpsPoint> HardBoundary { get; set; } = new List<GpsPoint>();
-        public double MaxAltitudeMeters { get; set; } = 122.0; // 400ft
+        public double AdvisoryAltitudeDisplayThresholdMeters { get; set; } = 122.0;
     }
 
     public partial class NOMADBoundaryView : NOMADViewBase, IUpdatableView
     {
         private readonly GeofenceConfig _missionConfig;
-        private readonly NOMADConfig _config;
-        private readonly BoundaryMonitor _monitor;
+        private readonly AdvisoryBoundaryMonitor _monitor;
 
         // Status display
         private Panel _statusPanel;
         private Label _lblStatus;
-        private Label _lblCountdown;
         private Label _lblAltitude;
         private Label _lblPosition;
 
         // Boundary grids
         private DataGridView _dgvSoftBoundary;
         private DataGridView _dgvHardBoundary;
-
-        private CheckBox _chkEnableMonitoring;
-        private NumericUpDown _nudMaxAlt;
-
-        // Building location
-
-        // Violation action controls
-        private ComboBox _cmbSoftAction;
-        private ComboBox _cmbHardAction;
-        private NumericUpDown _nudKillDelay;
 
         // Preset management
         private ComboBox _cmbPresets;
@@ -60,10 +47,9 @@ namespace NOMAD.MissionPlanner
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Mission Planner", "plugins", "NOMAD", "boundary_presets");
 
-        public NOMADBoundaryView(GeofenceConfig missionConfig, NOMADConfig config, BoundaryMonitor monitor)
+        public NOMADBoundaryView(GeofenceConfig missionConfig, AdvisoryBoundaryMonitor monitor)
         {
             _missionConfig = missionConfig ?? GeofenceConfig.Load();
-            _config = config;
             _monitor = monitor;
 
             LoadPresets();
@@ -73,14 +59,13 @@ namespace NOMAD.MissionPlanner
             // Subscribe to monitor events
             if (_monitor != null)
             {
-                _monitor.BoundaryStatusChanged += Monitor_BoundaryStatusChanged;
-                _monitor.BoundaryViolation += Monitor_BoundaryViolation;
+                _monitor.StatusChanged += Monitor_AdvisoryStatusChanged;
+                if (_missionConfig.AdvisoryPreviewEnabled)
+                {
+                    _monitor.StartMonitoring();
+                }
             }
         }
-
-        // Return location fields
-        private TextBox _txtReturnLat;
-        private TextBox _txtReturnLon;
 
         // ============================================================
         // Small layout helpers — everything reflows (docked cards of AutoSize
@@ -203,7 +188,7 @@ namespace NOMAD.MissionPlanner
 
         private void InitializeUI()
         {
-            // Two-column layout: Left = boundaries, Right = settings. Columns are
+            // Two-column layout: Left = local outlines, Right = display settings. Columns are
             // percentage-based and each column scrolls, so content never clips.
             var mainLayout = new TableLayoutPanel
             {
@@ -214,7 +199,7 @@ namespace NOMAD.MissionPlanner
             };
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 82)); // status banner
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 96)); // advisory status banner
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // content
 
             mainLayout.Controls.Add(BuildStatusPanel(), 0, 0);
@@ -253,16 +238,31 @@ namespace NOMAD.MissionPlanner
                 Margin = new Padding(0),
                 Padding = new Padding(0),
             };
-            _lblCountdown = new Label { Text = "", Font = NOMADTheme.Font(NOMADTheme.SIZE_LARGE, FontStyle.Bold), ForeColor = Color.Yellow, AutoSize = true, Visible = false, Margin = new Padding(0, 2, NOMADTheme.PAD, 0) };
+            var advisory = new Label
+            {
+                Text = "VISUAL ADVISORY ONLY — outlines and altitude values are not sent to " +
+                    "NOMAD runtime or the aircraft.",
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Bold),
+                ForeColor = Color.Gold,
+                AutoSize = true,
+                Margin = new Padding(0, 2, NOMADTheme.PAD, 0),
+            };
             _lblPosition = new Label { Text = "Position: --", Font = NOMADTheme.Mono(NOMADTheme.SIZE_SMALL), ForeColor = Color.White, AutoSize = true, Margin = new Padding(0, 4, NOMADTheme.PAD, 0) };
-            _lblAltitude = new Label { Text = "Alt: -- / 122m", Font = NOMADTheme.Mono(NOMADTheme.SIZE_SMALL), ForeColor = Color.White, AutoSize = true, Margin = new Padding(0, 4, 0, 0) };
-            info.Controls.Add(_lblCountdown);
+            _lblAltitude = new Label
+            {
+                Text = FormatAltitudeUnavailable(),
+                Font = NOMADTheme.Mono(NOMADTheme.SIZE_SMALL),
+                ForeColor = Color.White,
+                AutoSize = true,
+                Margin = new Padding(0, 4, 0, 0),
+            };
+            info.Controls.Add(advisory);
             info.Controls.Add(_lblPosition);
             info.Controls.Add(_lblAltitude);
 
             _lblStatus = new Label
             {
-                Text = "[?] Waiting for GPS Position",
+                Text = "[visual] Waiting for Mission Planner position",
                 Font = NOMADTheme.Font(NOMADTheme.SIZE_TITLE, FontStyle.Bold),
                 ForeColor = Color.White,
                 AutoSize = true,
@@ -289,7 +289,7 @@ namespace NOMAD.MissionPlanner
 
         private TableLayoutPanel BuildSoftBoundaryCard()
         {
-            var card = Card("SOFT BOUNDARY (Warning)", out var body);
+            var card = Card("INNER OUTLINE (VISUAL ADVISORY)", out var body);
 
             _dgvSoftBoundary = ControlFactory.BoundaryGrid();
             _dgvSoftBoundary.CellValueChanged += (s, e) => SaveBoundaryFromGrid(_dgvSoftBoundary, _missionConfig.SoftBoundary);
@@ -302,9 +302,16 @@ namespace NOMAD.MissionPlanner
             var lblSoftCount = new Label { Name = "lblSoftCount", Text = $"{_missionConfig.SoftBoundary.Vertices.Count} pts", Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Bold), ForeColor = Color.Yellow, AutoSize = true, Margin = new Padding(0, 4, 0, 0) };
             AddRow(body, Row(btnPasteSoft, btnAddSoft, btnDelSoft, btnClearSoft, lblSoftCount));
 
-            // Derived mode: soft boundary auto-generated as hard boundary inset
-            // inward by a configurable distance. Locks manual soft editing.
-            var chkAutoSoft = new CheckBox { Text = "Auto: hard boundary −", ForeColor = Color.White, Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL), AutoSize = true, Checked = _missionConfig.SoftBoundaryFromHard, Margin = new Padding(0, 2, NOMADTheme.GAP, 0) };
+            // The inner outline may be generated from the outer display outline.
+            var chkAutoSoft = new CheckBox
+            {
+                Text = "Auto: inset outer outline −",
+                ForeColor = Color.White,
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL),
+                AutoSize = true,
+                Checked = _missionConfig.SoftBoundaryFromHard,
+                Margin = new Padding(0, 2, NOMADTheme.GAP, 0),
+            };
             var nudSoftInset = ControlFactory.Numeric(1, 100, (decimal)Math.Max(1, Math.Min(100, _missionConfig.SoftBoundaryInsetMeters)), width: 52);
             AddRow(body, Row(chkAutoSoft, nudSoftInset, Lbl("m inward", TEXT_SECONDARY)));
 
@@ -343,7 +350,7 @@ namespace NOMAD.MissionPlanner
 
         private TableLayoutPanel BuildHardBoundaryCard()
         {
-            var card = Card("HARD BOUNDARY (Termination Required)", out var body);
+            var card = Card("OUTER OUTLINE (VISUAL ADVISORY)", out var body);
 
             _dgvHardBoundary = ControlFactory.BoundaryGrid();
             _dgvHardBoundary.CellValueChanged += (s, e) => SaveBoundaryFromGrid(_dgvHardBoundary, _missionConfig.HardBoundary);
@@ -384,127 +391,26 @@ namespace NOMAD.MissionPlanner
         }
 
         // ============================================================
-        // RIGHT COLUMN: Settings, return point, actions, presets
+        // RIGHT COLUMN: advisory display settings and presets
         // ============================================================
         private void BuildRightColumn(Panel host)
         {
-            host.Controls.Add(BuildActionCard());
-            host.Controls.Add(BuildReturnCard());
             host.Controls.Add(BuildMonitoringCard());
             host.Controls.Add(BuildPresetCard());
         }
 
-        private TableLayoutPanel BuildMonitoringCard()
-        {
-            var card = Card("MONITORING", out var body);
-
-            _chkEnableMonitoring = new CheckBox { Text = "Real-time Monitor", ForeColor = Color.White, Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL), AutoSize = true, Checked = _monitor?.IsMonitoring ?? _missionConfig.MonitoringEnabled };
-            _chkEnableMonitoring.CheckedChanged += (s, e) =>
-            {
-                // Persist so monitoring survives page switches and MP restarts
-                // (the monitor itself is plugin-owned and keeps running).
-                _missionConfig.MonitoringEnabled = _chkEnableMonitoring.Checked;
-                _missionConfig.Save();
-                if (_chkEnableMonitoring.Checked) _monitor?.StartMonitoring(); else _monitor?.StopMonitoring();
-            };
-            AddRow(body, _chkEnableMonitoring);
-
-            _nudMaxAlt = ControlFactory.Numeric(10, 150, (decimal)_missionConfig.MaxAltitudeAglMeters, width: 60);
-            _nudMaxAlt.ValueChanged += (s, e) => { _missionConfig.MaxAltitudeAglMeters = (double)_nudMaxAlt.Value; _missionConfig.Save(); };
-            AddRow(body, Row(Lbl("Max Alt:", TEXT_PRIMARY), _nudMaxAlt, Lbl("m AGL", TEXT_SECONDARY)));
-
-            // Test audio: pick a pattern from a dropdown and play it. Lets the user
-            // confirm the alert sound + know what each in-flight beep means.
-            var cmbTestAudio = Combo(130, "Soft boundary", "Hard boundary", "Battery warning", "Battery critical");
-            cmbTestAudio.SelectedIndex = 0;
-            var btnTestAudio = Btn("Test", ACCENT_COLOR, (s, e) =>
-            {
-                var kind = (AlertKind)cmbTestAudio.SelectedIndex;
-                AudioAlerts.Play(kind, ignoreRateLimit: true);
-                string spoken;
-                switch (kind)
-                {
-                    case AlertKind.BoundarySoft: spoken = "Soft boundary warning. Turn around."; break;
-                    case AlertKind.BoundaryHard: spoken = "Hard boundary violation. Termination required. Plugin termination unavailable."; break;
-                    case AlertKind.BatteryWarning: spoken = "Battery low. Test alert."; break;
-                    case AlertKind.BatteryCritical: spoken = "Battery critical. Land now. Test alert."; break;
-                    default: spoken = "Test alert."; break;
-                }
-                AudioAlerts.Speak(spoken, ignoreRateLimit: true);
-                CustomMessageBox.Show(AudioAlerts.DescribePattern(kind) + "\n\nSpoken: " + spoken, "Playing test alert");
-            });
-            AddRow(body, Row(Lbl("Test audio:", TEXT_PRIMARY), cmbTestAudio, btnTestAudio));
-
-            return card;
-        }
-
-        private TableLayoutPanel BuildReturnCard()
-        {
-            var card = Card("RETURN LOCATION", out var body);
-
-            _txtReturnLat = new TextBox { Width = 110, BackColor = NOMADTheme.CONTROL_BG, ForeColor = Color.White, Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL), Margin = new Padding(0, 1, NOMADTheme.GAP, 0) };
-            _txtReturnLon = new TextBox { Width = 110, BackColor = NOMADTheme.CONTROL_BG, ForeColor = Color.White, Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL), Margin = new Padding(0, 1, NOMADTheme.GAP, 0) };
-            if (_missionConfig.ReturnPoint != null)
-            {
-                _txtReturnLat.Text = _missionConfig.ReturnPoint.Lat.ToString("F7");
-                _txtReturnLon.Text = _missionConfig.ReturnPoint.Lon.ToString("F7");
-            }
-            AddRow(body, Row(Lbl("Lat:", TEXT_PRIMARY), _txtReturnLat, Lbl("Lon:", TEXT_PRIMARY), _txtReturnLon));
-
-            var btnReturnCurrent = Btn("Use Current", ACCENT_COLOR, (s, e) =>
-            {
-                double lat = MainV2.comPort?.MAV?.cs?.lat ?? 0; double lon = MainV2.comPort?.MAV?.cs?.lng ?? 0;
-                if (lat != 0 || lon != 0) { _txtReturnLat.Text = lat.ToString("F7"); _txtReturnLon.Text = lon.ToString("F7"); SaveReturnPoint(); }
-                else CustomMessageBox.Show("No GPS position available.", "Warning");
-            });
-            var btnReturnSave = Btn("Save", SUCCESS_COLOR, (s, e) => SaveReturnPoint());
-            var btnReturnCentroid = Btn("Use Centroid", INFO_COLOR, (s, e) =>
-            {
-                var boundary = _missionConfig.HardBoundary?.Vertices?.Count > 0 ? _missionConfig.HardBoundary : _missionConfig.SoftBoundary;
-                if (boundary?.Vertices?.Count >= 3)
-                {
-                    double cLat = 0, cLon = 0;
-                    foreach (var v in boundary.Vertices) { cLat += v.Lat; cLon += v.Lon; }
-                    cLat /= boundary.Vertices.Count; cLon /= boundary.Vertices.Count;
-                    _txtReturnLat.Text = cLat.ToString("F7"); _txtReturnLon.Text = cLon.ToString("F7"); SaveReturnPoint();
-                }
-                else CustomMessageBox.Show("No boundary defined.", "Warning");
-            });
-            AddRow(body, Row(btnReturnCurrent, btnReturnSave, btnReturnCentroid));
-
-            return card;
-        }
-
-        private TableLayoutPanel BuildActionCard()
-        {
-            var card = Card("VIOLATION ACTIONS", out var body);
-
-            _cmbSoftAction = Combo(150, "Warn (Audio)", "Warn (Visual)", "Warn (Both)", "Return to Boundary");
-            // Display labels are decoupled from the persisted action strings — map
-            // by index so the UI wording can change without breaking configs.
-            var softActions = new[] { "warn_audio", "warn_visual", "warn_both", "return_to_boundary" };
-            _cmbSoftAction.SelectedIndex = Math.Max(0, Array.IndexOf(softActions, _missionConfig.Failsafe.SoftBoundaryAction ?? "warn_both"));
-            _cmbSoftAction.SelectedIndexChanged += (s, e) => { _missionConfig.Failsafe.SoftBoundaryAction = softActions[_cmbSoftAction.SelectedIndex]; _missionConfig.Save(); };
-            AddRow(body, Row(Lbl("Soft:", TEXT_PRIMARY), _cmbSoftAction));
-
-            _cmbHardAction = Combo(150, "Delayed Request (Unavailable)", "Request (Unavailable)", "Warn Only");
-            var hardActions = new[] { "warn_and_kill", "auto_kill", "warn_only" };
-            _cmbHardAction.SelectedIndex = Math.Max(0, Array.IndexOf(hardActions, _missionConfig.Failsafe.HardBoundaryAction ?? "warn_and_kill"));
-            _cmbHardAction.SelectedIndexChanged += (s, e) => { _missionConfig.Failsafe.HardBoundaryAction = hardActions[_cmbHardAction.SelectedIndex]; _missionConfig.Save(); };
-            _nudKillDelay = ControlFactory.Numeric(1, 30, _missionConfig.Failsafe.HardBoundaryKillDelaySec, width: 48);
-            _nudKillDelay.ValueChanged += (s, e) => { _missionConfig.Failsafe.HardBoundaryKillDelaySec = (int)_nudKillDelay.Value; _missionConfig.Save(); };
-            AddRow(body, Row(Lbl("Hard:", TEXT_PRIMARY), _cmbHardAction, Lbl("Delay:", TEXT_PRIMARY), _nudKillDelay, Lbl("s", TEXT_SECONDARY)));
-
-            AddRow(body, Row(Lbl("Aircraft termination unavailable; flight qualification blocked.", TEXT_SECONDARY)));
-
-            return card;
-        }
-
         private TableLayoutPanel BuildPresetCard()
         {
-            var card = Card("SAVED BOUNDARIES (Plugin Storage)", out var body);
+            var card = Card("SAVED ADVISORY OUTLINES (Plugin Storage)", out var body);
 
-            AddRow(body, new Label { Text = "Current points auto-save. Use this to save named copies you can reload later.", Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL), ForeColor = TEXT_SECONDARY, AutoSize = true, MaximumSize = new Size(320, 0) });
+            AddRow(body, new Label
+            {
+                Text = "Current advisory outlines auto-save. Presets store local display data only.",
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL),
+                ForeColor = TEXT_SECONDARY,
+                AutoSize = true,
+                MaximumSize = new Size(320, 0),
+            });
 
             _cmbPresets = Combo(150);
             RefreshPresetCombo();
@@ -513,24 +419,17 @@ namespace NOMAD.MissionPlanner
             var btnDeletePreset = Btn("Del", ERROR_COLOR, DeleteSelectedPreset);
             AddRow(body, Row(_cmbPresets, btnLoadPreset, btnSavePreset, btnDeletePreset));
 
-            AddRow(body, new Label { Name = "lblAutoSaveStatus", Text = "Auto-saved to plugin config", Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Italic), ForeColor = SUCCESS_COLOR, AutoSize = true });
+            AddRow(body, new Label
+            {
+                Name = "lblAutoSaveStatus",
+                Text = "Auto-saved locally; not sent to runtime or aircraft",
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Italic),
+                ForeColor = SUCCESS_COLOR,
+                AutoSize = true,
+            });
 
             return card;
         }
 
-        private void SaveReturnPoint()
-        {
-            if (double.TryParse(_txtReturnLat.Text, out double lat) &&
-                double.TryParse(_txtReturnLon.Text, out double lon))
-            {
-                _missionConfig.ReturnPoint = new GpsPoint(lat, lon);
-                _missionConfig.Save();
-                CustomMessageBox.Show($"Return point saved: {lat:F7}, {lon:F7}", "Saved");
-            }
-            else
-            {
-                CustomMessageBox.Show("Enter valid latitude and longitude.", "Warning");
-            }
-        }
     }
 }

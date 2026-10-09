@@ -26,10 +26,18 @@ namespace NOMAD.MissionPlanner
                 {
                     foreach (var file in Directory.GetFiles(PresetsDir, "*.json"))
                     {
-                        var json = File.ReadAllText(file);
-                        var preset = JsonConvert.DeserializeObject<BoundaryPreset>(json);
-                        if (preset != null)
-                            _presets.Add(preset);
+                        try
+                        {
+                            var preset = ReadPreset(file);
+                            if (preset != null)
+                            {
+                                _presets.Add(preset);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error($"Error loading boundary preset '{Path.GetFileName(file)}' - {ex.Message}");
+                        }
                     }
                 }
             }
@@ -37,6 +45,20 @@ namespace NOMAD.MissionPlanner
             {
                 Log.Error($"Error loading presets - {ex.Message}");
             }
+        }
+
+        private BoundaryPreset ReadPreset(string file)
+        {
+            var preset = JsonConvert.DeserializeObject<BoundaryPreset>(File.ReadAllText(file), new JsonSerializerSettings
+            {
+                MissingMemberHandling = MissingMemberHandling.Error,
+            });
+            if (preset == null || preset.SoftBoundary == null || preset.HardBoundary == null ||
+                !IsValidAdvisoryAltitude(preset.AdvisoryAltitudeDisplayThresholdMeters))
+            {
+                throw new JsonSerializationException("Invalid advisory boundary preset; original file preserved.");
+            }
+            return preset;
         }
 
         private void RefreshPresetCombo()
@@ -62,13 +84,16 @@ namespace NOMAD.MissionPlanner
             {
                 _missionConfig.SoftBoundary.Vertices = preset.SoftBoundary.ToList();
                 _missionConfig.HardBoundary.Vertices = preset.HardBoundary.ToList();
-                _missionConfig.MaxAltitudeAglMeters = preset.MaxAltitudeMeters;
+                _missionConfig.AdvisoryAltitudeDisplayThresholdMeters =
+                    IsValidAdvisoryAltitude(preset.AdvisoryAltitudeDisplayThresholdMeters)
+                        ? preset.AdvisoryAltitudeDisplayThresholdMeters
+                        : 122.0;
 
                 _missionConfig.Save();
                 LoadBoundaries();
-                _nudMaxAlt.Value = (decimal)preset.MaxAltitudeMeters;
+                _nudMaxAlt.Value = (decimal)_missionConfig.AdvisoryAltitudeDisplayThresholdMeters;
 
-                CustomMessageBox.Show($"Preset '{preset.Name}' loaded.", "Success");
+                CustomMessageBox.Show($"Preset '{preset.Name}' loaded as local advisory display data.", "Success");
             }
         }
 
@@ -140,7 +165,7 @@ namespace NOMAD.MissionPlanner
                         CreatedAt = DateTime.Now,
                         SoftBoundary = _missionConfig.SoftBoundary.Vertices.ToList(),
                         HardBoundary = _missionConfig.HardBoundary.Vertices.ToList(),
-                        MaxAltitudeMeters = _missionConfig.MaxAltitudeAglMeters,
+                        AdvisoryAltitudeDisplayThresholdMeters = _missionConfig.AdvisoryAltitudeDisplayThresholdMeters,
                     };
 
                     try
@@ -205,54 +230,46 @@ namespace NOMAD.MissionPlanner
         // Monitor Events
         // ============================================================
 
-        private void Monitor_BoundaryStatusChanged(object sender, BoundaryStatusEventArgs e)
+        private void Monitor_AdvisoryStatusChanged(object sender, AdvisoryBoundaryStatusEventArgs e)
         {
             if (InvokeRequired)
             {
-                Invoke(new Action(() => Monitor_BoundaryStatusChanged(sender, e)));
+                Invoke(new Action(() => Monitor_AdvisoryStatusChanged(sender, e)));
                 return;
             }
 
             switch (e.Status)
             {
-                case "inside":
-                    _statusPanel.BackColor = Color.FromArgb(40, 100, 40);
-                    _lblStatus.Text = "[OK] Inside Boundaries";
-                    _lblCountdown.Visible = false;
+                case AdvisoryOutlineStatus.InsideOutlines:
+                    _statusPanel.BackColor = Color.FromArgb(50, 70, 90);
+                    _lblStatus.Text = "[visual advisory] Position is inside the saved outlines";
                     break;
 
-                case "soft_violation":
-                    _statusPanel.BackColor = Color.FromArgb(180, 150, 0);
-                    _lblStatus.Text = "[!] SOFT BOUNDARY - Turn Around!";
-                    _lblCountdown.Visible = false;
+                case AdvisoryOutlineStatus.OutsideInnerOutline:
+                    _statusPanel.BackColor = Color.FromArgb(130, 105, 25);
+                    _lblStatus.Text = "[visual advisory] Position is outside the inner outline";
                     break;
 
-                    case "hard_violation":
-                    _statusPanel.BackColor = Color.FromArgb(180, 40, 40);
-                    _lblStatus.Text = "[!!] HARD BOUNDARY VIOLATION!";
-                    _lblCountdown.Visible = true;
+                case AdvisoryOutlineStatus.OutsideOuterOutline:
+                    _statusPanel.BackColor = Color.FromArgb(115, 70, 45);
+                    _lblStatus.Text = "[visual advisory] Position is outside the outer outline";
                     break;
 
-                case "no_position":
+                case AdvisoryOutlineStatus.NoOutline:
                     _statusPanel.BackColor = Color.FromArgb(80, 80, 90);
-                    _lblStatus.Text = "[?] Waiting for GPS Position";
-                    _lblCountdown.Visible = false;
+                    _lblStatus.Text = "[visual advisory] No valid outline configured";
+                    break;
+
+                case AdvisoryOutlineStatus.NoPosition:
+                    _statusPanel.BackColor = Color.FromArgb(80, 80, 90);
+                    _lblStatus.Text = "[visual advisory] Waiting for Mission Planner position";
                     break;
             }
         }
 
-        private void Monitor_BoundaryViolation(object sender, BoundaryViolationEventArgs e)
+        private static bool IsValidAdvisoryAltitude(double altitude)
         {
-            if (InvokeRequired)
-            {
-                Invoke(new Action(() => Monitor_BoundaryViolation(sender, e)));
-                return;
-            }
-
-            if (e.BoundaryType == "hard")
-            {
-                _lblCountdown.Text = "TERMINATION REQUIRED — PLUGIN ACTIVATION UNAVAILABLE";
-            }
+            return !double.IsNaN(altitude) && !double.IsInfinity(altitude) && altitude >= 0 && altitude <= 10000;
         }
 
         public void UpdateData()
@@ -268,11 +285,7 @@ namespace NOMAD.MissionPlanner
                 if (cs != null)
                 {
                     _lblPosition.Text = $"Position: {cs.lat:F6}, {cs.lng:F6}";
-                    _lblAltitude.Text = $"Alt: {cs.alt:F1}m / 122m";
-                    if (cs.alt > 122)
-                        _lblAltitude.ForeColor = Color.Red;
-                    else
-                        _lblAltitude.ForeColor = Color.White;
+                    UpdateAdvisoryAltitude(ReadCurrentAltitude());
                 }
             }
             catch { }

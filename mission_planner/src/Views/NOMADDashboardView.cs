@@ -33,16 +33,16 @@ namespace NOMAD.MissionPlanner
         private Label _lblVideoStatus;
         private EmbeddedVideoPlayer _videoPlayer;
 
-        private BoundaryMonitor _boundaryMonitor;
+        private AdvisoryBoundaryMonitor _advisoryBoundaryMonitor;
         private NotificationService _notificationService;
         private NotificationPanel _notificationPanel;
 
         public NotificationService NotificationService => _notificationService;
 
-        public void SetBoundaryMonitor(BoundaryMonitor monitor)
+        public void SetAdvisoryBoundaryMonitor(AdvisoryBoundaryMonitor monitor)
         {
-            _boundaryMonitor = monitor;
-            _notificationService?.SetBoundaryMonitor(monitor);
+            _advisoryBoundaryMonitor = monitor;
+            _notificationService?.SetAdvisoryBoundaryMonitor(monitor);
         }
 
         public NOMADDashboardView(NOMADConfig config, MAVLinkConnectionManager connectionManager = null)
@@ -113,7 +113,7 @@ namespace NOMAD.MissionPlanner
             {
                 var cs = MainV2.comPort?.MAV?.cs;
                 UpdateFlightCards(cs);
-                UpdateGeofenceCard();
+                UpdateAdvisoryBoundaryCard();
                 UpdateLinksCard();
                 UpdateCoreCard();
             }
@@ -172,38 +172,42 @@ namespace NOMAD.MissionPlanner
                 : (battery.Severity == 1 ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
         }
 
-        private void UpdateGeofenceCard()
+        private void UpdateAdvisoryBoundaryCard()
         {
-            if (_boundaryMonitor == null)
+            if (_advisoryBoundaryMonitor == null)
             {
-                _lblGeofence.Text = "No monitor";
+                _lblGeofence.Text = "LOCAL ADVISORY OFF";
                 _lblGeofence.ForeColor = NOMADTheme.TEXT_MUTED;
                 return;
             }
 
-            if (!_boundaryMonitor.IsMonitoring)
+            if (!_advisoryBoundaryMonitor.IsMonitoring)
             {
-                _lblGeofence.Text = "Monitor OFF";
+                _lblGeofence.Text = "LOCAL ADVISORY OFF";
                 _lblGeofence.ForeColor = NOMADTheme.TEXT_SECONDARY;
                 return;
             }
 
-            switch (_boundaryMonitor.CurrentStatus)
+            switch (_advisoryBoundaryMonitor.CurrentStatus)
             {
-                case "inside":
-                    _lblGeofence.Text = "INSIDE";
-                    _lblGeofence.ForeColor = NOMADTheme.SUCCESS;
+                case AdvisoryOutlineStatus.InsideOutlines:
+                    _lblGeofence.Text = "ADVISORY · INSIDE SAVED OUTLINES";
+                    _lblGeofence.ForeColor = NOMADTheme.TEXT_PRIMARY;
                     break;
-                case "soft_violation":
-                    _lblGeofence.Text = "SOFT VIOLATION";
+                case AdvisoryOutlineStatus.OutsideInnerOutline:
+                    _lblGeofence.Text = "ADVISORY · OUTSIDE INNER OUTLINE";
                     _lblGeofence.ForeColor = NOMADTheme.WARNING;
                     break;
-                case "hard_violation":
-                    _lblGeofence.Text = "HARD — TERMINATION UNAVAILABLE";
-                    _lblGeofence.ForeColor = NOMADTheme.ERROR;
+                case AdvisoryOutlineStatus.OutsideOuterOutline:
+                    _lblGeofence.Text = "ADVISORY · OUTSIDE OUTER OUTLINE";
+                    _lblGeofence.ForeColor = NOMADTheme.WARNING;
+                    break;
+                case AdvisoryOutlineStatus.NoOutline:
+                    _lblGeofence.Text = "ADVISORY · NO OUTLINE CONFIGURED";
+                    _lblGeofence.ForeColor = NOMADTheme.TEXT_SECONDARY;
                     break;
                 default:
-                    _lblGeofence.Text = "Waiting for GPS";
+                    _lblGeofence.Text = "ADVISORY · WAITING FOR POSITION";
                     _lblGeofence.ForeColor = NOMADTheme.WARNING;
                     break;
             }
@@ -229,8 +233,8 @@ namespace NOMAD.MissionPlanner
         {
             bool configured = _config.CoreRuntimePort >= 1 && _config.CoreRuntimePort <= 65535
                 && !string.IsNullOrWhiteSpace(_config.CoreClientCredential);
-            _lblCore.Text = configured ? "IPC configured" : "Not configured";
-            _lblCore.ForeColor = configured ? NOMADTheme.SUCCESS : NOMADTheme.WARNING;
+            _lblCore.Text = configured ? "IPC configured; readiness unverified" : "Not configured";
+            _lblCore.ForeColor = configured ? NOMADTheme.TEXT_SECONDARY : NOMADTheme.WARNING;
         }
 
         protected override void Dispose(bool disposing)

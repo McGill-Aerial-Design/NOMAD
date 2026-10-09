@@ -1,31 +1,75 @@
 # Operations
 
-## Release deployment audit (base `1efaa335`)
+Operate only an approved aircraft/firmware/link profile with separate physical
+safety acceptance. [Safety](safety.md) and [qualification](qualification.md) define
+what software evidence cannot guarantee. Never disable ArduPilot failsafes.
 
-Before the versioned deployment slice, CPack generated core ZIP/TGZ archives
-and the staged verifier checked contents and an offline CLI. The release
-workflow published only separately assembled plugin/router ZIPs and a loose
-plugin DLL. It did not aggregate core packages, bind package digests to one
-source/tag identity, or refuse a partial component set. CMake/runtime used a
-fixed `0.1.0`; plugin/router implementation metadata did not establish the
-same authoritative release identity. A manual workflow run could borrow its
-branch name as a package label.
+## Processes and endpoints
 
-PR56 systemd/SCM lifecycle provisioning keeps protected configuration,
-credentials and audit journals external, and restart invalidates software
-authority. PR57 records reviewed dependency/build/resource provenance. These
-are useful foundations, but neither is an installation activation journal or
-rollback qualification. Prefix installation could overwrite an existing
-prefix. The plugin installer overwrote `NOMADPlugin.dll` and deleted a legacy
-AppData copy without retaining an immutable previous payload. Router packages
-contained an example configuration; deployed topology remained operator-owned
-but had no versioned activation procedure. No component had a durable pending
-activation record, failed-candidate recovery, or exact previous-version check.
+| Process | Default local endpoint | Owner |
+|---|---|---|
+| `nomad-runtime` | IPC TCP 127.0.0.1:14611; MAVLink UDP 127.0.0.1:14601 | Vehicle commands, authority, actuator policy, audit/recovery |
+| Ground router | Management TCP 127.0.0.1:14610 | Physical links, routing, health, deduplication |
+| Mission Planner | Router telemetry UDP 14600 | UI/input/presentation; receive-only router consumer |
 
-The executable disproof check for this slice is an A → B → A transition through
-the deployment engine, including failed B health, corrupt packages, interrupted
-activation, retained operator state, and real runtime/router processes. A failed
-restoration must remain pending/failed and must never report successful rollback.
+Use [ground router configuration](../infra/transport/ground_router/example.json)
+and its [protocol README](../infra/transport/ground_router/README.md). Do not have
+two processes bind a physical-link or consumer port. Runtime/CLI clients remain
+loopback-only. Consumer IDs and routing priority do not authenticate a writer or
+establish physical flight authority.
+
+## Current configuration
+
+Managed services read protected [runtime JSON](../infra/runtime/runtime.example.json)
+with `nomad-runtime --config <absolute-path>`. Unknown keys, relative protected paths,
+unsafe permissions/reparse points and invalid values fail closed. Console mode may
+use the retained [environment template](../config/nomad.env.example). Do not mix
+competing sources of defaults. The runtime alone receives the aircraft endpoint.
+
+Provision independent random 32-byte client credentials, mapped to `nomad-cli` and
+`mission-planner`, in a protected local JSON object. Tokens must never be logged or
+committed. POSIX protected files are owned by the service user with mode 0600 and
+trusted parents; use the Windows helper to protect/validate ACLs. Keep the nonempty
+actuation-enable gate distinct from authentication. Clients receive only their own
+credential. Credential rotation requires stop, protected replacement and fresh
+client authentication/admission after restart.
+
+The durable audit directory and actuator JSON belong under the service's writable
+state root; credentials/configuration live outside it. Use current
+[actuator schema](../config/actuators.example.json) and validate under the service
+account with `nomad-runtime --validate-actuators <file>`. Configuration replacement
+through IPC requires protected storage, revision fencing and safe output recovery.
+Never replace operator data from a sample or an old settings export automatically.
+
+Mission Planner uses current JSON only. Unknown/retired fields, duplicate properties
+and invalid input mappings are rejected. Invalid primary settings stop plugin loading;
+they are not rewritten or replaced by defaults/backup. Defaults apply only when no
+saved settings exist; the backup is used only when the primary is missing. Preserve
+unsupported files, review them and create current settings explicitly. Portable
+exports omit the client credential. Advisory map files/presets also reject old policy
+fields; outlines never enforce an aircraft boundary. Mission Planner's native tools
+own flight-log analysis.
+
+## Copter LAND engagement
+
+After explicit admission (`nomad admit`, or `nomad handback` after revocation), use
+`nomad land`. Mission Planner provides **Engage Copter LAND** in Settings > Core.
+Success means mode observed, not touchdown or termination. An unknown result may
+leave ArduPilot landing; inspect fresh telemetry and never replay blindly.
+The [IPC contract](runtime-ipc.md#copter-land-engagement) owns the exact conditions and limits.
+
+## Aircraft serial router
+
+When an onboard host fans FC serial traffic onto the network, use standard
+`mavlink-routerd` with a reviewed explicit serial device and destination.
+[router.conf template](../infra/transport/mavlink_router/main.conf) and the
+[systemd unit](../infra/systemd/nomad-mavlink-router.service) are independent of the
+ground router. Provision `/etc/nomad/router.conf`, device permissions and the `nomad`
+service account; install/enable/start the reviewed unit with standard systemd commands.
+It runs the daemon in the foreground and retries through systemd. Missing/renamed
+serial devices require the operator's stable device path; there is no automatic peer
+or serial-device selection. Use standard Tailscale tooling if that network is chosen.
+There is no NOMAD service dispatcher or profile generator.
 
 ## Versioned release deployment
 
@@ -86,505 +130,6 @@ A version already present with different bytes fails. Staging never stops an
 active process. Cleanup is explicit and refuses active, previous and pending
 versions. It never traverses operator state or deletes audit evidence.
 
-### Linux core
-
-Keep `/etc/nomad/runtime.json`, its credential map and `/var/lib/nomad` audit
-history outside `<root>`. Provision the existing PR56 systemd unit using
-`install_systemd.py install --executable <root>/core/current/bin/nomad-runtime
---config <config> --state <audit-parent> --user nomad`. The service account must
-be able to traverse the protected program directories. Registration does not
-start or enable the service. Stage A, provision the unit, then explicitly
-activate A. For an existing versioned pointer, stage the exact matching release
-and use `adopt` after checking its running version and health.
-
-Activation stops systemd and verifies its stopped state, atomically replaces
-`core/current` with a symlink to the complete candidate payload, starts systemd
-and checks read-only IPC hello/status, implementation version, readiness and no
-authority owner. PR56 SIGTERM closes final-send admission. Upgrade and rollback
-each start a fresh incarnation; old contexts fail and fresh authentication and
-explicit admission are required. The service never receives authority from the
-deployment tool.
-
-### Windows core
-
-Use `--adapter scm`, with the same stage/status/activate/rollback/recover/cleanup
-actions. No symlink privilege is required. SCM must first be provisioned through
-PR56 `Manage-NomadRuntime.ps1` to point at staged A's absolute
-`payload/bin/nomad-runtime.exe` and external protected configuration. Explicitly
-start that service and `adopt --release <A>` to establish the initial verified
-record. Adoption refuses a different SCM executable/config path. Activation
-stops and waits for SCM STOPPED, changes only the executable command to the
-candidate's complete versioned path, starts and verifies read-only IPC health.
-Service account/recovery policy and external settings are preserved. Rollback
-restores the exact previous executable path and verifies the restarted runtime.
-
-### Router and plugin
-
-The [router deployment guide](../infra/transport/ground_router/README.md) describes
-the independent foreground supervisor and Windows scheduled-task start command.
-Use `--component router --config <external-router.json>
---router-start-command <operator-owned-argv.json>` for activate/rollback/recover.
-Before stopping the deployed router, candidate preflight runs a separate router
-against loopback-only endpoints and requires hello, management status, expected
-version/protocol and safe shutdown. This test router grants no authority and
-does not connect to physical links. Authoritative endpoints, consumer ports,
-preferred link and topology stay in the unchanged external configuration.
-
-Use `--component plugin --mission-planner <installation>` for activation,
-rollback and recovery. The [plugin packaging guide](../mission_planner/packaging/README.md)
-gives the PowerShell wrapper commands. Mission Planner must be closed; the tool
-never kills it. Only `plugins/NOMADPlugin.dll` is atomically replaced. The target
-Mission Planner version and PE DLL are checked before replacement, and the final
-DLL embedded version/source and final hash are checked. Settings, `CoreClientCredential`, Mission Planner
-configuration, other plugins and legacy AppData files remain untouched. Plugin
-health qualifies replacement bytes, not GUI startup.
-
-On a common Windows groundstation, stage and verify all candidates first. Close
-Mission Planner deliberately, activate core, then router, then plugin, verifying
-each before proceeding. Core can be ready/degraded without a router or vehicle.
-Reopen Mission Planner only after the component statuses match the intended set;
-fresh authentication/admission remains mandatory. On failure, stop the sequence
-and restore affected components individually. Across machines, coordinate this
-same procedure per host and retain each host record; no all-or-nothing operation
-is promised.
-
-### Failure, interruption and host acceptance
-
-The engine durably writes `activating` with candidate and previous records before
-stopping anything. Any ordinary failure after that boundary attempts restoration:
-write `rollback_pending`, stop candidate, validate retained previous bytes,
-restore its pointer/payload, start and health-check previous, then record
-`rolled_back`. If restoration or its record write fails, pending intent remains
-and `recover` deterministically restores the recorded previous version. A missing
-or corrupt previous version fails clearly; restore its reviewed archive before
-retrying. An initial activation failure leaves no committed active release.
-Never interpret a nonzero activation command as success even if A was recovered.
-
-After a host/tool crash during a pending transition, run `status`, then `recover`
-before another activation. Supervision may have restarted a component during
-that interruption; recovery stops it and restores the journal's exact previous
-release. Temporary `.stage-*` trees left by a staging crash are never active and
-may be removed by an operator after confirming no staging tool is running.
-
-Directory publication, POSIX symlink switches and individual state replacements
-use same-filesystem atomic rename. Windows deployment records use `ReplaceFileW`
-with readers permitting delete sharing. A per-record Windows kernel mutex guards
-recovery checks, existence probes, snapshot opening and replacement/backup cleanup
-across processes and sessions; readers release it once their snapshot is open.
-A stalled writer causes a clear failure after a 30-second guard wait; no record
-read or repair is retried. Process exit releases ownership, so a reader then
-checks the records left on disk. A failed replacement attempts to restore
-its retained old record before reporting failure. If that restoration is blocked,
-the deterministic `.deployment.json.previous` backup makes commands fail closed.
-Any retained backup blocks mutations; reads require a present, valid primary and
-never substitute the backup. A missing primary with a backup requires repair,
-including when checking whether this is a new deployment.
-Repair storage permissions, stop the affected deployment tool/supervisor, preserve
-both records as evidence, and restore the backup to `deployment.json` if the target
-is absent; if both exist, inspect them and retain the record with pending intent.
-Remove the backup only after recording that repair, then run `status` and `recover`.
-The same procedure applies to other `.NAME.previous` record backups.
-POSIX writes synchronize files and parent
-directories. Windows uses flushed file writes and atomic replacement, but cannot
-promise directory/power-loss durability equivalent to POSIX fsync. SCM changes,
-process lifecycle and plugin replacement are separate steps guarded by the
-pending record; the overall transaction is recoverable, not one filesystem
-atomic operation. Multi-process and multi-host deployment is not atomic.
-
-The router supervisor retains its lifetime lock after a record-write failure until
-its owned child has exited and the final stopped/failed record can be written.
-If storage remains unavailable or shutdown is refused, activation/rollback times
-out with a pending journal. Repair storage or shutdown on that host, then run
-`recover`; a stale running marker is never accepted as proof of process exit.
-
-Hosted/unprivileged fixtures prove byte identity, state preservation, real child
-runtime/router transitions, authority reset and recovery failures. Privileged
-host acceptance still requires actual systemd/SCM permissions, account access,
-Windows task supervision, protected parent ACLs, stop timeouts, locked DLLs,
-power-loss recovery and operator restart procedures. Software rollback evidence
-does not establish aircraft readiness or physical flight safety.
-
-This guide covers the supported ground deployment. For build and qualification
-workflows, see [Development](development.md) and [Qualification status](qualification.md).
-For the current component boundaries, see [Architecture](architecture.md).
-
-## Processes and endpoints
-
-### Supported deployment matrix
-
-| Profile / placement | Runtime host and supervisor | Client / router boundary |
-| --- | --- | --- |
-| `groundstation_minimal` | Windows groundstation: native SCM service | Mission Planner requires runtime on the same Windows host; standalone ground router remains separate |
-| `groundstation_gpu` | Same ground runtime placement as minimal | Optional GPU/ROS workloads do not own commands or supervise runtime |
-| `onboard_companion` | Linux onboard CLI deployment: systemd; Windows Mission Planner deployment retains a ground runtime | Loopback IPC cannot reach an onboard runtime from Mission Planner; do not run both command owners for one vehicle |
-| Development / deterministic peers | Foreground console, either OS | No privileged service installation required |
-
-Profiles describe optional compute and endpoint defaults, not runtime placement
-discovery. The onboard profile's wildcard UDP endpoint must be reviewed for the
-chosen host; a ground runtime uses the standalone router's loopback endpoint.
-The checked-in standalone ground router requires Windows; a Linux groundstation
-profile is not currently supported. Linux supervision supports the onboard
-local-client placement and software-only peers. Optional compute profiles do not
-constitute OS or hardware qualification.
-The existing `infra/systemd/install.sh` manages optional aircraft router/media/ROS
-units from a checkout, and `scripts/setup/setup_service.sh` delegates to it.
-Neither currently supervises the production runtime. Keep that optional setup
-separate from the packaged runtime service and from the Windows ground router.
-
-Run one `nomad-runtime` process for each vehicle connection. It owns the
-long-lived MAVSDK connection, vehicle policy, authority/request lifecycle, and
-runtime IPC listener. The runtime does not load `config/nomad.env` itself.
-Use the packaged systemd or native Windows SCM deployment below. Do not start a
-second runtime against the same vehicle endpoint.
-
-The runtime and installed CLI accept these process-environment settings:
-
-| Setting | Purpose |
-| --- | --- |
-| `NOMAD_MAVLINK_ENDPOINT` | MAVSDK vehicle endpoint, such as `udpin:127.0.0.1:14601` |
-| `NOMAD_RUNTIME_IPC_PORT` | Loopback TCP port for installed CLI and typed clients; default `14611` |
-| `NOMAD_API_KEY` | Nonempty deployment actuation enable gate; not identity authentication |
-| `NOMAD_CLIENT_CREDENTIALS_FILE` | Protected JSON identity-to-token map, loaded once at startup |
-| `NOMAD_AUDIT_DIRECTORY` | Private runtime journal directory; parent must exist |
-| `NOMAD_CLIENT_CREDENTIAL` | CLI-only shared-secret credential; do not give clients the full runtime map |
-| `NOMAD_CLIENT_ID` | CLI identity, default `nomad-cli` |
-| `--system-id` | Optional runtime command system ID; defaults to `1` |
-
-Use the example environment file for console development. Services use a
-protected external JSON configuration, loaded with `--config`. Keep credentials local. Runtime IPC is
-bound to loopback and is not authenticated as a general remote API; the API key
-is an actuation gate, not a substitute for host access control. The example key
-is blank; configure a nonempty secret value or runtime mutations remain unavailable.
-
-After the supervisor has loaded the configured environment, a direct console
-launch is:
-
-```powershell
-nomad-runtime --endpoint udpin:127.0.0.1:14601 --ipc-port 14611 --system-id 1
-```
-
-The runtime status endpoint can report that the process is available even when
-the vehicle link is disconnected. Check vehicle/link state separately before
-requesting an action. Installed `nomad` CLI commands such as `status`, `admit`,
-`revoke`, and `handback` use runtime IPC; the CLI does not open its own flight
-connection.
-
-## Ground router
-
-The standalone ground router is a separately supervised Windows/.NET Framework
-4.8 process. It owns configured physical ground links and routes MAVLink among
-its configured clients. Build and check it with:
-
-```powershell
-pixi run build-ground-router
-pixi run test-ground-router
-```
-
-The checked-in template uses these local endpoints:
-
-| Consumer | Router endpoint | Purpose |
-| --- | --- | --- |
-| Mission Planner | `127.0.0.1:14600` | Receive-only telemetry/status consumer |
-| Runtime | Router output `14602` to runtime listener `14601` | Vehicle traffic for the sole NOMAD command path |
-| Router management | `127.0.0.1:14610` | Local router management interface |
-| Runtime clients | `127.0.0.1:14611` | Runtime IPC for CLI and typed clients |
-
-Use `infra/transport/ground_router/example.json` as the router configuration
-template to select physical serial or UDP links and client endpoints. The ground
-router routes packets; it does not grant NOMAD authority or make flight decisions.
-For a downloaded router package, start its executable from the directory that
-contains the matching configuration; for example, `nomad-link-router.exe router.example.json`.
-The aircraft-side `mavlink-router` is a different process, typically managed
-on the aircraft by the optional `nomad.target` systemd setup. Enabling
-`NOMAD_AUTOSTART_MAVLINK_ROUTER` concerns that aircraft-side service only.
-
-## Mission Planner
-
-Mission Planner provides UI, management, and status. The NOMAD plugin submits
-only the typed requests currently supported by runtime IPC. Its router
-telemetry consumer is receive-only. A Mission Planner native/direct vehicle
-connection is external to NOMAD's software authority boundary and can provide
-an independent control path; configure deployment wiring intentionally.
-
-Configure the native telemetry connection as UDPCl to the ground router's
-`127.0.0.1:14600` receive-only consumer. The plugin's router status panel uses
-management TCP `127.0.0.1:14610`; its runtime client uses loopback IPC
-`127.0.0.1:14611` by default. The panel reports stale or unavailable router
-status when that separate process is stopped or disconnected.
-
-For local development, use `pixi run build-plugin-only` and
-`pixi run test-plugin-build-only`. Build the release archives through the
-repository release workflow: a `v*` tag publishes release artifacts, while a
-manual workflow run uploads downloadable artifacts. The plugin installation
-script is `mission_planner/packaging/INSTALL.ps1`; inspect the generated
-artifact and target installation before running it. `build-plugin-only` only
-compiles the plugin and does not install it. See the
-[plugin packaging guide](../mission_planner/packaging/README.md) for staging the
-DLL beside the installer and installing the release ZIP.
-
-## Product profiles
-
-Profiles under `config/profiles/` are deployment templates. Inspect available
-profiles and compare settings before applying one:
-
-```powershell
-pixi run profile-list
-pixi run profile-show
-pixi run profile-diff <profile>
-pixi run profile-load <profile>
-```
-
-Loading a profile identifies the intended file paths and reports a final result
-for each target before the overall completion message:
-
-| Target result | Meaning |
-|---|---|
-| `[APPLIED] env` | `config/nomad.env` was atomically replaced with profile-owned settings and the canonical MAVLink endpoint while retaining reviewed deployment-local settings. |
-| `[APPLIED] mission_planner` | Profile-owned MP settings were synced: `ActiveProfile`, `VideoUrl`, and supported legacy migration. Unrelated settings and the separately provisioned `CoreClientCredential` remain. Retired settings, including `CoreApiKey`, are removed. |
-| `[SKIPPED] mission_planner: config path unavailable` | MP sync is optional when neither `NOMAD_MP_CONFIG` nor `LOCALAPPDATA` supplies a path. Only env was applied; exit status is 0. Set `NOMAD_MP_CONFIG` to require a specific MP target. |
-| `[SKIPPED] ... unchanged` or `... rolled back` | That target was not applied because another target failed, or its change was restored. |
-| `[FAILED] ...` | The requested load failed; exit status is 1 and no overall success message is printed. Read both target results before using the configuration. |
-
-A known MP path is an intended target even if the file does not exist yet; the
-loader creates its parent directory and config. Unreadable, malformed/non-object
-JSON and unsupported legacy settings fail preflight instead of silently skipping
-MP. Both outputs and the original env restoration copy are staged in private,
-unique sibling files before either config changes. Existing permission bits are
-retained. A timestamped `nomad.env.bak.*` backup is kept before env replacement.
-If env replacement fails, MP remains unchanged. If MP replacement fails after
-env replacement, env is restored atomically (or removed if it was newly created).
-Temporary files are cleaned up on handled failures. Backups contain credentials;
-keep them private as you would `nomad.env`.
-
-Profile-owned settings are identity/compute placement, service autostarts, runtime
-MAVLink and video endpoints, simulation/qualification inhibition, fences and
-velocity limits. Deployment-local settings include both credentials, protected
-credential/audit paths, CLI identity, runtime IPC port, host/data/log/run paths,
-GCS/Tailscale addresses and ports, UART devices and retained service settings.
-The reviewed key sets are in `scripts/profile_settings.py`; unknown and retired
-keys are discarded, rather than carried into a new deployment. Existing local
-assignments are retained verbatim. Missing local keys use the example defaults;
-an absent active env is created from those defaults and the selected profile.
-Blank required credential/audit paths still require provisioning before startup.
-Saving a profile writes only its owned keys, never local deployment settings.
-Profile diff compares only those owned assignments and omits credentials and
-deployment-local configuration from its output.
-
-`NOMAD_AUTOSTART_MAVLINK_ROUTER` enables the optional aircraft-side
-`mavlink-routerd`: the onboard profile enables it; both ground-station profiles
-disable it. The Windows standalone ground router owns its own `Links` and
-`Consumers` JSON configuration, independent of that service flag. Set `GCS_IP`
-in ignored `config/nomad.env` to direct aircraft-side telemetry to the ground
-station's Tailscale address; profile loading retains that local wiring.
-
-For example, an env-only load reports `[APPLIED] env`, `[SKIPPED] mission_planner`,
-then `[OK] Profile load completed` and exits 0. Invalid MP JSON reports
-`[SKIPPED] env: Mission Planner preflight failed; unchanged`,
-`[FAILED] mission_planner`, then `[FAILED] Profile load` and exits 1. An MP commit
-failure reports `[SKIPPED] env: rolled back` and `[FAILED] mission_planner`.
-If rollback itself fails, `[FAILED] env: changed; rollback failed` explicitly
-requires restoring the reported backup before use (or removing a newly created
-env manually). The env backup remains available.
-
-Run `load` while configuration editors and other loaders are stopped. The two
-files do not form a crash-atomic transaction: process termination, power loss,
-concurrent edits, or a second filesystem failure during rollback can require
-manual recovery. Newly created parent directories may remain after a failed
-load. Replacement files belong to the invoking user and inherit directory ACLs;
-the loader preserves permission bits but does not provision ownership or ACLs.
-
-Loading does not start processes, prove that hardware is present, or
-qualify the resulting deployment. Review every endpoint and device setting.
-The installed CLI/runtime IPC v1 does not expose mission upload, navigation,
-geofence, or payload request paths; profile text must not be read as evidence
-that those functions are usable through NOMAD.
-
-## ROS observer
-
-ROS 2 is optional and observation-only. It consumes MAVLink telemetry for ROS
-applications; it does not issue vehicle commands or load NOMAD authority.
-Profiles leave it disabled unless deliberately configured. The development
-guide covers `sim-ros-build`, `test-ros-integration`, and `sim-ros-up`.
-
-## Build, package, and install
-
-Build and test the core before preparing an archive:
-
-```powershell
-pixi run build-core-release
-pixi run test-core
-pixi run package-core
-pixi run verify-core-package
-pixi run verify-core-staged-install
-```
-
-Packaging creates release archives. Package verification inspects those
-archives; staged verification installs into `build/package/stage` only. Neither
-step writes to the host install prefix. A real prefix install is an explicit
-operation and requires a destination:
-
-```powershell
-pixi run install-core <prefix>
-```
-
-The core package includes `nomad` and `nomad-runtime`; qualification drivers are
-not installed. Templates, explicit registration helpers, a blank service JSON
-example and this guide are in `share/nomad/`. Package/prefix installation never
-registers, starts or enables a service, or overwrites operator secrets/state.
-Linux runtime/client binaries require the compatible system OpenSSL
-Crypto shared library used by that build (Ubuntu builds use `libcrypto.so.3`);
-Windows uses the OS BCrypt library. Mission Planner packaging is separate and handled by the release
-workflow described above.
-
-## Failure states and authority limits
-
-Treat disconnected, stale, unavailable, invalid, busy, and unauthorized results
-as failures. Check runtime status and fresh vehicle telemetry before retrying.
-Admission expiry, sequence rejection, revocation, and reconnect do not restore
-authority automatically; explicit handback is required by the software
-lifecycle. Do not infer vehicle action from a request acceptance response.
-
-NOMAD's guarantees cover its own software request path. They do not arbitrate
-the flight controller's other MAVLink sources, RC/ELRS input, a native GCS, or
-physical pilot control. Production C2-loss, termination, pilot takeover, and
-hardware flight behavior remain unqualified; see [Qualification status](qualification.md).
-
-## Local client credential deployment
-
-Generate independent 32-byte random credentials (for example Python
-`secrets.token_hex(32)`) for `nomad-cli` and `mission-planner`. Write only the
-identity/token object into a local protected file outside tracked configuration;
-never print tokens to shared logs or copy example/gate values as credentials.
-On POSIX use an owner-only directory and mode 0600 file. On Windows restrict the
-file/directory DACL to the runtime account, SYSTEM and administrators, removing
-broad inherited access, and explicitly set the owner to the runtime account
-(for example `icacls <credential-file> /setowner <runtime-account>` when provisioning
-from an elevated shell). Provision only each client's token into its protected
-environment (CLI) or `CoreClientCredential` plugin setting. Protect that plugin
-JSON configuration and its `.bak`/`.tmp` siblings as credential stores with the
-client account's ACL. Portable plugin exports omit the credential. These controls
-do not protect against malware that can read the account's credentials.
-
-Set the runtime's credential-file and audit-directory environment variables,
-and independently set the nonempty `NOMAD_API_KEY` deployment gate. The runtime
-does not automatically load `config/nomad.env`. Rotating the file while running
-has no effect: stop the runtime, replace protected credentials, provision clients,
-and restart; authority must be admitted again. Profile loading never substitutes
-the API gate for the plugin credential. Existing `CoreApiKey` is discarded,
-so upgrading the plugin requires explicit provisioning.
-
-For audit startup failure, preserve the files and inspect permissions, space,
-JSONL integrity and any competing directory owner. The journal is an operational
-record, not a cryptographic tamper-evident ledger against its host administrator.
-Do not delete evidence to
-hide an error. Damaged history requires operator investigation and preservation
-outside the active directory before starting a fresh journal. Intent without
-outcome remains unknown; a restart must never replay it. Runtime audit failure
-latches mutations off; status remains available. See the precise
-[durability policy](runtime-ipc.md#durable-runtime-command-evidence).
-
-Keep these states separate: actuation enabled; client authenticated; client
-admitted as software authority; command eligible for final send; vehicle command
-accepted by an observed response; physical outcome. None implies the next.
-
-Mission Planner reports vehicle mutations using the
-[runtime outcome contract](runtime-ipc.md#vehicle-mutation-outcomes).
-Rejected means no eligible vehicle send; failed means a definite unsuccessful
-attempt; interrupted and unknown mean the final vehicle effect is uncertain.
-Do not retry an uncertain actuator mutation automatically. Read backend state,
-inspect the mechanism and use the configured safe action. Backend commanded state
-records software evidence only; a successful safe command is not physical proof.
-
-## Generic actuator configuration and frontend migration
-
-`nomad-runtime` owns output mapping, values, confirmations, timing and recovery.
-Mission Planner discovers names, labels, available actions and state with
-authenticated `get_actuators`; it sends `actuator_action` with a stable ID and
-operation. Position is normalized from 0 to 1; only the backend converts it to PWM.
-UI confirmations are discrete requests. USB HID uses the actual selected device,
-configured button indices, real neutral observations and backend-provided release
-metadata. There is no Python serial/virtual-gamepad helper. Input loss cancels
-unsent stale observations and sends a semantic safe intent once; uncertain begun
-mutations are never retried. Continuous HID position input is available only when
-runtime discovery advertises `continuous_axis_allowed`; unsupported bindings are
-disabled with the backend reason. Hazardous or confirmation-required positions use
-discrete UI confirmations, and the runtime independently rejects their HID position requests.
-Active semantic bindings must use unique physical HID button indices. The termination
-monitor button is configurable (default index 6) and must be disjoint from active
-actuator mappings when enabled; it still reports termination as unavailable.
-
-| Behavior | Configured actions |
-|---|---|
-| ServoToggle | Two PWM endpoints with operator-defined labels and an explicit safe endpoint |
-| ServoPosition | Bounded normalized position and a configured safe PWM |
-| ServoBidirectional | Negative/positive values, neutral safe value and short bounded runs |
-| RelayToggle | Configured ON/OFF labels |
-| RelayPulse | ON, configured wait, explicit OFF; any unsuccessful OFF requires recovery |
-
-Provision an absolute protected `NOMAD_ACTUATORS_FILE` outside the installation
-tree. A blank path configures no outputs. Begin with
-[`actuators.example.json`](../config/actuators.example.json), review every physical
-channel, value, label and hazard classification. The package includes the example at
-`share/nomad/config/actuators.example.json` and the standalone Python 3 migration tool
-at `share/nomad/lifecycle/migrate_actuators.py`. Put the actuator file in its own private
-directory: atomic replacement requires create/delete access to that directory. Protect
-the file and directory for the runtime account as described below. Validate without any vehicle connection:
-
-```sh
-nomad-runtime --validate-actuators <absolute-protected-actuators.json>
-```
-
-The offline validator must run as the file owner. On Windows, validate the reviewed
-export under the operator account before `Protect` transfers backend ownership to
-LocalService; service startup then validates it again under LocalService.
-
-Actuator configuration uses `configure_actuators` under ordinary admitted authority
-and requires fresh disarmed state, no active/pending/recovery output, and a configured
-file path. Startup, replacement and authority/session changes require explicit safe
-commands. Ambiguous persistence, post-save arming/authority changes, or failed outcome
-auditing inhibit activation until restart and operator review. The API reports that
-the configuration changed or may have changed; it never fabricates vehicle-send evidence.
-
-Old nonempty Mission Planner `Payloads`/`Actuators` settings fail visibly and leave
-the original file unchanged. Export a supported legacy configuration to two new files:
-
-```sh
-python <prefix>/share/nomad/lifecycle/migrate_actuators.py <old-mp.json> <new-backend.json> <new-private-mp.json> --runtime <nomad-runtime>
-```
-
-The converter preserves exact channels, endpoints, reversal, pulse values, names and
-stable list-index IDs, and maps old switch actions to semantic IDs. It preserves the
-old direct-HID button indices (0–5); select the actual USB HID device explicitly.
-It preserves legacy termination monitoring on button index 6 and rejects an
-incompatible supplied index before exporting either file.
-Backend exports contain no frontend credentials. The private frontend output preserves
-independently provisioned credentials; it is not a portable profile template. The
-native backend validates the candidate before either export. Unsupported RC pass-through,
-disabled/ambiguous outputs, missing mapped targets, enabled virtual bridging, enabled
-relative-rate axes, conflicting legacy relay UI-toggle/HID-pulse actions, and waits
-beyond the reviewed 1500 ms limit require explicit review.
-No value is silently clamped or remapped. Review both exports before provisioning them.
-
-## Managed runtime configuration
-
-Copy the packaged `share/nomad/lifecycle/runtime.example.json` outside the
-installation tree. Values are strings: set the endpoint, IPC port, absolute
-credential-file and audit-directory paths, optional `NOMAD_ACTUATORS_FILE`, and independent API gate. The protected
-`--config` loader rejects unknown/duplicate keys, non-string values and missing
-required settings. It replaces inherited runtime settings, so a missing API gate
-stays disabled. Optional fence/velocity settings use their console environment
-names. JSON is data, never shell code. Keep per-client tokens in the separate
-protected identity/token map; both files load once per process.
-
-The stable service account must own configuration, credential file and audit
-directory, actuator file and its private parent. Linux files require mode 0600 and state directories 0700. Windows
-uses `NT AUTHORITY\LocalService`, with owner/DACL restricted to that account,
-SYSTEM and administrators. Protect parent directories against untrusted replacement
-as well. Keep binaries administrator-owned but readable/executable by the service
-account, and keep configuration/state outside the package prefix. Use local
-persistent storage with durable flush support, not network shares. Provision the
-audit parent directory first. Runtime startup verifies credential and audit
-protection; registration alone is not deployment readiness.
 
 ## Linux systemd procedure
 
@@ -601,7 +146,7 @@ Generate a separate `/etc/nomad/clients.json` identity/token map using independe
 `secrets.token_hex(32)` credentials in a secure provisioning tool/editor, without
 printing them. Set owner `nomad:nomad` and mode 0600. Provision each client's token
 separately. Edit the protected runtime JSON to reference that file and
-`/var/lib/nomad/audit`. For actuator deployments, review an example or migrated file,
+`/var/lib/nomad/audit`. For actuator deployments, review the current actuator schema,
 then provision it without changing the private Mission Planner settings export:
 
 ```sh
@@ -613,8 +158,8 @@ Set `NOMAD_ACTUATORS_FILE` to `/var/lib/nomad/actuators/actuators.json`. Do not 
 it in `/etc/nomad`: the hardened service cannot replace files there. Validate the
 protected file under the service account with `sudo -u nomad /opt/nomad/bin/nomad-runtime
 --validate-actuators /var/lib/nomad/actuators/actuators.json`.
-For the onboard profile, review its
-`NOMAD_MAVLINK_ENDPOINT` (`udpin:0.0.0.0:14550`) and the separately supervised
+For an onboard placement, explicitly configure its
+MAVLink endpoint and the separately supervised
 aircraft-side router's output; the example's ground loopback port is not an
 onboard deployment default. Keep IPC loopback-only and deliberately set the API gate if
 actuation is wanted. The account must traverse all these paths. `ProtectHome=yes`
@@ -650,6 +195,7 @@ sudo python3 /opt/nomad/share/nomad/lifecycle/install_systemd.py uninstall
 This disables/stops and removes only the unit, retaining secrets and audit history.
 Remove the package prefix separately if wanted.
 
+
 ## Windows native service procedure
 
 Mission Planner needs the Windows core package on the same host.
@@ -680,8 +226,7 @@ Restart-Service nomad-runtime
 
 For actuator deployments, create a dedicated directory such as
 `C:\ProgramData\NOMAD\actuators`, put only the reviewed backend JSON there, and set
-`NOMAD_ACTUATORS_FILE` to its absolute path in the runtime JSON. Keep the migrated
-private Mission Planner settings under the operator account. Leave the runtime field
+`NOMAD_ACTUATORS_FILE` to its absolute path in the runtime JSON. Keep private Mission Planner settings under the operator account. Leave the runtime field
 blank only when no configured outputs are wanted.
 Use fully qualified paths; drive-relative forms such as `C:runtime.json` or
 `\NOMAD\runtime.json` depend on the caller's current drive/directory and are rejected.
@@ -689,7 +234,7 @@ Use fully qualified paths; drive-relative forms such as `C:runtime.json` or
 `Protect` explicitly provisions owner/DACL for config, credentials, audit directory,
 and the optional actuator file and its dedicated parent. It refuses reparse points,
 including in ancestor directories, and refuses a shared actuator directory. This
-transfers a migrated backend file from the operator to LocalService and grants the
+transfers the reviewed backend file from the operator to LocalService and grants the
 create/delete access required for atomic runtime replacement. Run it before first start. It does not
 recursively rewrite prior journals; retain the same identity on upgrade.
 Give LocalService read/execute access to the binary prefix; avoid user-profile
@@ -710,6 +255,7 @@ Unregister with elevated `& $helper -Action Uninstall`; it waits for stop and
 deletes only the SCM registration, preserving credentials, journals and event
 evidence. Default startup is demand/manual; explicitly use
 `sc.exe config nomad-runtime start= delayed-auto` after provisioning if wanted.
+
 
 ## Lifecycle, recovery and health
 

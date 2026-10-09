@@ -30,7 +30,7 @@ struct MavlinkObservationOptions {
 };
 
 struct MavlinkObservationSnapshot {
-    mavsdk_phase_a::StatusValues values;
+    validation::StatusValues values;
     std::size_t position_updates{};
     std::int64_t observation_ms{};
     std::int64_t age_ms{};

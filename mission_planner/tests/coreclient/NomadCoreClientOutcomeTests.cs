@@ -16,10 +16,11 @@ internal static partial class NomadCoreClientTests
         {
             using var runtime = new MockRuntime(1, outcome: outcomes[index], acknowledged: index == 1);
             var client = new NomadCoreClient("test-key", runtime.Port);
-            Expect(!client.Servo(8, 1500), $"{outcomes[index]} is not software success");
+            var result1 = client.ServoAsync(8, 1500).GetAwaiter().GetResult();
+            Expect(!result1.Succeeded, $"{outcomes[index]} is not software success");
             runtime.Wait();
-            Expect(client.LastOutcome == expected[index], $"command preserves {outcomes[index] ?? "missing"} outcome");
-            Expect(client.LastAcknowledged == (index == 1), "negative ACK remains independent of failure outcome");
+            Expect(result1.Outcome == expected[index], $"command preserves {outcomes[index] ?? "missing"} outcome");
+            Expect(result1.Acknowledged == (index == 1), "negative ACK remains independent of failure outcome");
             Expect(runtime.CommandCount == 1, "non-success mutation is never replayed");
         }
     }
@@ -34,11 +35,12 @@ internal static partial class NomadCoreClientTests
                     errorCode: error ? "internal_error" : null, includeErrorResult: error,
                     resultSuccess: !acknowledged);
                 var client = new NomadCoreClient("test-key", runtime.Port);
-                Expect(!client.Servo(8, 1500), "contradictory no-send response cannot report success");
+                var result1 = client.ServoAsync(8, 1500).GetAwaiter().GetResult();
+                Expect(!result1.Succeeded, "contradictory no-send response cannot report success");
                 runtime.Wait();
-                Expect(client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome,
+                Expect(result1.Outcome == NomadCoreRequestOutcome.UnknownOutcome,
                     "ACK or software success contradicts rejected-before-send and must remain unknown");
-                Expect(client.LastAcknowledged == acknowledged, "contradictory response preserves actual ACK evidence");
+                Expect(result1.Acknowledged == acknowledged, "contradictory response preserves actual ACK evidence");
                 Expect(runtime.CommandCount == 1, "contradictory response is never replayed");
             }
         }
@@ -62,11 +64,12 @@ internal static partial class NomadCoreClientTests
         using var interrupted = new MockRuntime(1, outcome: "interrupted", errorCode: "authority_interrupted",
             includeErrorResult: true);
         var client = new NomadCoreClient("test-key", interrupted.Port);
-        Expect(!client.Servo(8, 1500), "interrupted error is not success even with ACK evidence");
+        var result1 = client.ServoAsync(8, 1500).GetAwaiter().GetResult();
+        Expect(!result1.Succeeded, "interrupted error is not success even with ACK evidence");
         interrupted.Wait();
-        Expect(client.LastOutcome == NomadCoreRequestOutcome.Interrupted,
+        Expect(result1.Outcome == NomadCoreRequestOutcome.Interrupted,
             "ACK does not erase interrupted classification");
-        Expect(client.LastAcknowledged == true, "interrupted error preserves received acknowledgement");
+        Expect(result1.Acknowledged == true, "interrupted error preserves received acknowledgement");
         Expect(interrupted.CommandCount == 1, "acknowledged interruption is never replayed");
     }
 
@@ -74,11 +77,12 @@ internal static partial class NomadCoreClientTests
     {
         using var runtime = new MockRuntime(1, outcome: outcome, errorCode: code);
         var client = new NomadCoreClient("test-key", runtime.Port);
-        Expect(!client.Servo(8, 1500), $"{code} response is not success");
+        var result1 = client.ServoAsync(8, 1500).GetAwaiter().GetResult();
+        Expect(!result1.Succeeded, $"{code} response is not success");
         runtime.Wait();
-        Expect(client.LastOutcome == expected, $"{code} preserves {outcome ?? "missing"} classification");
-        Expect(client.LastErrorCode == code, "error reason remains independent of outcome");
-        Expect(client.LastAcknowledged == null, "error without command result does not invent an ACK");
+        Expect(result1.Outcome == expected, $"{code} preserves {outcome ?? "missing"} classification");
+        Expect(result1.ErrorCode == code, "error reason remains independent of outcome");
+        Expect(result1.Acknowledged == null, "error without command result1 does not invent an ACK");
         Expect(runtime.CommandCount == 1, $"{code} is not automatically replayed");
     }
 
@@ -86,37 +90,45 @@ internal static partial class NomadCoreClientTests
     {
         using var runtime = new MockRuntime(5);
         var client = new NomadCoreClient("test-key", runtime.Port);
-        CheckSoftwareSuccess(client, () => client.Servo(8, 1500));
-        CheckSoftwareSuccess(client, () => client.SetRelay(3, true));
-        CheckSoftwareSuccess(client, () => client.MotorTest(1, 1000, 0.5));
-        CheckSoftwareSuccess(client, () => client.GimbalConfigure(2));
-        CheckSoftwareSuccess(client, () => client.GimbalTarget(10, 5));
+        CheckSoftwareSuccess(() => client.ServoAsync(8, 1500).GetAwaiter().GetResult());
+        CheckSoftwareSuccess(() => client.SetRelayAsync(3, true).GetAwaiter().GetResult());
+        CheckSoftwareSuccess(() => client.MotorTestAsync(1, 1000, 0.5).GetAwaiter().GetResult());
+        CheckSoftwareSuccess(() => client.GimbalConfigureAsync(2).GetAwaiter().GetResult());
+        CheckSoftwareSuccess(() => client.GimbalTargetAsync(10, 5).GetAwaiter().GetResult());
         runtime.Wait();
         Expect(runtime.CommandCount == 5, "all five supported mutations are sent exactly once");
     }
 
-    private static void CheckSoftwareSuccess(NomadCoreClient client, Func<bool> operation)
+    private static void CheckSoftwareSuccess(Func<NomadCoreRequestResult> operation)
     {
-        Expect(operation(), "software success retains Boolean convenience result");
-        Expect(client.LastOutcome == NomadCoreRequestOutcome.Succeeded, "explicit runtime success is preserved");
-        Expect(client.LastAcknowledged == true, "protocol acknowledgement is separately preserved");
+        var result1 = operation();
+        Expect(result1.Succeeded, "software success is preserved");
+        Expect(result1.Outcome == NomadCoreRequestOutcome.Succeeded, "explicit runtime success is preserved");
+        Expect(result1.Acknowledged == true, "protocol acknowledgement is separately preserved");
     }
 
     private static void LocalValidation_ClearsPreviousSuccess()
     {
         using var runtime = new MockRuntime(1);
         var client = new NomadCoreClient("test-key", runtime.Port);
-        Expect(client.Servo(8, 1500), "establish previous success and acknowledgement");
+        var result1 = client.ServoAsync(8, 1500).GetAwaiter().GetResult();
+        Expect(result1.Succeeded, "establish previous success and acknowledgement");
         runtime.Wait();
-        var invalid = new Func<bool>[] { () => client.Servo(0, 1500), () => client.SetRelay(-1, true),
-            () => client.MotorTest(0, 1500, 1), () => client.GimbalConfigure(5),
-            () => client.GimbalTarget(double.NaN, 0) };
+        var invalid = new Func<NomadCoreRequestResult>[]
+        {
+            () => client.ServoAsync(0, 1500).GetAwaiter().GetResult(),
+            () => client.SetRelayAsync(-1, true).GetAwaiter().GetResult(),
+            () => client.MotorTestAsync(0, 1500, 1).GetAwaiter().GetResult(),
+            () => client.GimbalConfigureAsync(5).GetAwaiter().GetResult(),
+            () => client.GimbalTargetAsync(double.NaN, 0).GetAwaiter().GetResult(),
+        };
         foreach (var operation in invalid)
         {
-            Expect(!operation(), "local invalid request fails without dispatch");
-            Expect(client.LastOutcome == NomadCoreRequestOutcome.NotAttempted, "local validation clears stale success");
-            Expect(client.LastErrorCode == "invalid_argument", "local validation gives its own reason");
-            Expect(client.LastAcknowledged == null, "local validation clears stale ACK evidence");
+            var invalidResult = operation();
+            Expect(!invalidResult.Succeeded, "local invalid request fails without dispatch");
+            Expect(invalidResult.Outcome == NomadCoreRequestOutcome.NotAttempted, "validation has its own outcome");
+            Expect(invalidResult.ErrorCode == "invalid_argument", "local validation gives its own reason");
+            Expect(invalidResult.Acknowledged == null, "local validation does not inherit ACK evidence");
         }
         Expect(runtime.CommandCount == 1, "local validation transmits no additional mutation");
     }

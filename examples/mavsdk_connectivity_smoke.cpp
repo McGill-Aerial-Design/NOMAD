@@ -67,7 +67,7 @@ int main(int argc, char **argv) {
     }
 
     const auto endpoint = std::string(argc >= 3 ? argv[2] : kDefaultEndpoint);
-    const auto expected_id = nomad::mavsdk_phase_a::parse_system_id(argc == 4 ? argv[3] : kDefaultSystemId);
+    const auto expected_id = nomad::mavlink::validation::parse_system_id(argc == 4 ? argv[3] : kDefaultSystemId);
     if (!expected_id) {
         std::cerr << "invalid MAVLink UDP input endpoint or expected system ID\n";
         return EXIT_FAILURE;

@@ -19,6 +19,10 @@ namespace NOMAD.MissionPlanner.Connectivity
             {
                 return BuildActuatorRequest(verb, values);
             }
+            if (verb == "land")
+            {
+                return values.Length == 0 ? BaseRequest("", "land") : null;
+            }
             var type = verb switch
             {
                 "servo" => "set_servo",
@@ -26,6 +30,7 @@ namespace NOMAD.MissionPlanner.Connectivity
                 "motor-test" => "motor_test",
                 "gimbal-config" => "configure_gimbal",
                 "gimbal-target" => "set_gimbal_target",
+                "gimbal-config-target" => "configure_gimbal_target",
                 _ => null,
             };
             if (type == null)
@@ -57,6 +62,12 @@ namespace NOMAD.MissionPlanner.Connectivity
             {
                 request["pitch_deg"] = ParseProtocolNumber(values[0]);
                 request["roll_deg"] = ParseProtocolNumber(values[1]);
+            }
+            else if (verb == "gimbal-config-target" && values.Length == 3)
+            {
+                request["mount_mode"] = int.Parse(values[0], CultureInfo.InvariantCulture);
+                request["pitch_deg"] = ParseProtocolNumber(values[1]);
+                request["roll_deg"] = ParseProtocolNumber(values[2]);
             }
             else
             {

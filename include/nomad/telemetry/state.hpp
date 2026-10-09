@@ -122,6 +122,7 @@ struct VehicleState {
     // Changes whenever this connection selects a new autopilot session, even
     // when the autopilot reuses the same MAVLink system and component IDs.
     std::uint64_t session_id{};
+    std::chrono::steady_clock::time_point heartbeat_updated_at{};
 };
 
 }  // namespace nomad::telemetry

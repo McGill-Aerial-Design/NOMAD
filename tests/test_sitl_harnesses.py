@@ -19,7 +19,55 @@ sys.path.insert(0, str(SCRIPTS))
 import core_sitl_command_flow as command_flow  # noqa: E402
 import core_sitl_containment as containment  # noqa: E402
 import core_sitl_gcs_heartbeat as gcs_heartbeat  # noqa: E402
+import core_sitl_payload as payload  # noqa: E402
 import core_sitl_zero_delivery as zero_delivery  # noqa: E402
+
+
+@pytest.mark.parametrize("verb", ["mission-demo", "velocity-demo", "fence-demo", "payload-demo", "takeoff"])
+def test_failed_mutation_is_invoked_once_without_replay(monkeypatch, verb) -> None:
+    calls = []
+
+    def fail_command(*args, **kwargs):
+        calls.append(args[0])
+        return subprocess.CompletedProcess(args[0], 1, "", "outcome unknown")
+
+    monkeypatch.setattr(command_flow.subprocess, "run", fail_command)
+
+    with pytest.raises(command_flow.ScenarioError, match="command failed after 1 attempts"):
+        command_flow.run_cli(Path("nomad"), "14570", verb)
+
+    assert len(calls) == 1, "an uncertain mutation must not be replayed"
+
+
+@pytest.mark.parametrize("arguments", [("arm",), ("mission-demo",), ("status", "extra")])
+def test_mutation_retry_request_is_rejected_before_subprocess(monkeypatch, arguments) -> None:
+    calls = []
+    monkeypatch.setattr(command_flow.subprocess, "run", lambda *args, **kwargs: calls.append(args))
+
+    with pytest.raises(command_flow.ScenarioError, match="only for status observations"):
+        command_flow.run_cli(Path("nomad"), "14570", *arguments, attempts=2)
+
+    assert calls == [], "invalid retry policy must fail before transmission"
+
+
+@pytest.mark.parametrize("eventual_success", [True, False])
+def test_only_status_observations_can_retry_and_exhaustion_remains_failure(monkeypatch, eventual_success) -> None:
+    calls = []
+
+    def observe(*args, **kwargs):
+        calls.append(args[0])
+        success = eventual_success and len(calls) == 2
+        return subprocess.CompletedProcess(args[0], 0 if success else 1, "connected=true" if success else "", "")
+
+    monkeypatch.setattr(command_flow.subprocess, "run", observe)
+    monkeypatch.setattr(command_flow.time, "sleep", lambda seconds: None)
+
+    if eventual_success:
+        assert command_flow.read_status(Path("nomad"), "14570") == {"connected": "true"}
+    else:
+        with pytest.raises(command_flow.ScenarioError, match="command failed after 2 attempts"):
+            command_flow.run_cli(Path("nomad"), "14570", "status", attempts=2)
+    assert len(calls) == 2
 
 
 def test_run_cli_rejection_requires_nonzero_result_and_expected_message(monkeypatch) -> None:
@@ -37,6 +85,31 @@ def test_run_cli_rejection_rejects_a_successful_command(monkeypatch) -> None:
 
     with pytest.raises(command_flow.ScenarioError, match="expected command to fail"):
         command_flow.run_cli_rejection(Path("nomad"), "14570", "outside the geofence", "goto", "1", "2", "3")
+
+
+def test_payload_harness_checks_acknowledgement_not_physical_release() -> None:
+    payload.validate_relay_pulse_output("relay command acknowledged\n")
+
+    with pytest.raises(payload.ScenarioError, match="relay pulse command was not acknowledged"):
+        payload.validate_relay_pulse_output("payload release verified\n")
+
+
+def test_payload_harness_does_not_replay_an_uncertain_relay_pulse(monkeypatch, capsys) -> None:
+    calls = []
+    monkeypatch.setattr(payload, "get_sitl_port", lambda: "14570")
+    monkeypatch.setattr(payload, "find_binary", lambda: Path("nomad"))
+    monkeypatch.setattr(payload, "print_watch_hint", lambda: None)
+    monkeypatch.setattr(payload, "wait_for_status", lambda *args: {"connected": "true", "armed": "false"})
+
+    def fail_pulse(binary, port, *arguments, **options):
+        calls.append((binary, port, arguments, options))
+        raise payload.ScenarioError("relay outcome is unknown")
+
+    monkeypatch.setattr(payload, "run_cli", fail_pulse)
+
+    assert payload.main() == 1
+    assert calls == [(Path("nomad"), "14570", ("payload-demo", "0", "0.1"), {"attempts": 1})]
+    assert "relay outcome is unknown" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("port, expected", [("1", (1, 2, 3)), ("65533", (65533, 65534, 65535))])
@@ -189,6 +262,7 @@ def test_containment_cleanup_attempts_every_safe_action_after_failures(monkeypat
     attempted: list[str] = []
 
     def fail_command(binary, port, action, **kwargs):
+        assert kwargs.get("attempts", 1) == 1, "cleanup mutations must not be replayed"
         attempted.append(action)
         raise containment.ScenarioError(f"{action} failed")
 
@@ -203,3 +277,24 @@ def test_containment_cleanup_attempts_every_safe_action_after_failures(monkeypat
 
     assert attempted == ["rtl", "land", "status", "disarm"]
     assert len(errors) == 4
+
+
+def test_zero_delivery_cleanup_reports_each_failure_without_replaying_actions(monkeypatch) -> None:
+    attempted = []
+
+    def fail_command(binary, port, action, **kwargs):
+        assert kwargs.get("attempts", 1) == 1, "cleanup mutations must not be replayed"
+        attempted.append(action)
+        raise zero_delivery.ScenarioError(f"{action} failed")
+
+    def fail_status(*args):
+        attempted.append("status")
+        raise zero_delivery.ScenarioError("status failed")
+
+    monkeypatch.setattr(zero_delivery, "run_cli", fail_command)
+    monkeypatch.setattr(zero_delivery, "wait_for_status", fail_status)
+
+    with pytest.raises(zero_delivery.ScenarioError, match="rtl failed.*land failed.*status failed.*disarm failed"):
+        zero_delivery.cleanup_zero_delivery(Path("nomad"), "14570")
+
+    assert attempted == ["rtl", "land", "status", "disarm"]

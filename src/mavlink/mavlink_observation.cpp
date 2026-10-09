@@ -97,7 +97,7 @@ struct UdpBindAddress {
 };
 
 std::optional<UdpBindAddress> parse_bind_address(std::string_view endpoint) {
-    const auto canonical = mavsdk_phase_a::canonicalize_udp_input_endpoint(endpoint);
+    const auto canonical = validation::canonicalize_udp_input_endpoint(endpoint);
     if (!canonical) {
         return {};
     }
@@ -179,7 +179,7 @@ struct MavlinkObservation::Implementation {
     std::atomic<bool> stopping{};
     mutable std::mutex mutex;
     std::condition_variable heartbeat_seen;
-    mavsdk_phase_a::StatusValues values;
+    validation::StatusValues values;
     mavlink_message_t message_buffer{};
     mavlink_status_t parser_status{};
     mavlink_status_t message_status{};
@@ -450,8 +450,8 @@ MavlinkObservation::wait_for_status(std::chrono::milliseconds timeout) const {
     const auto deadline = Clock::now() + timeout;
     while (Clock::now() < deadline && is_connected()) {
         const auto snapshot = get_status();
-        if (mavsdk_phase_a::has_valid_status(snapshot.values) &&
-            mavsdk_phase_a::has_fresh_position_stream(snapshot.position_updates, snapshot.observation_ms,
+        if (validation::has_valid_status(snapshot.values) &&
+            validation::has_fresh_position_stream(snapshot.position_updates, snapshot.observation_ms,
                                                       snapshot.age_ms)) {
             return snapshot;
         }

@@ -30,8 +30,7 @@ namespace NOMAD.MissionPlanner
 
             try
             {
-                NOMADMainScreen.SetStaticConfig(_config, _connectionManager, _geofenceConfig, _boundaryMonitor);
-                NOMADMainScreen.SetStaticModuleHost(BuildModuleHost());
+                NOMADMainScreen.SetStaticConfig(_config, _connectionManager, _geofenceConfig, _advisoryBoundaryMonitor);
 
                 object mainSwitcher = null;
 
@@ -144,8 +143,7 @@ namespace NOMAD.MissionPlanner
                 if (_popOutForm == null || _popOutForm.IsDisposed)
                 {
                     // Set static configuration for the screen
-                    NOMADMainScreen.SetStaticConfig(_config, _connectionManager, _geofenceConfig, _boundaryMonitor);
-                    NOMADMainScreen.SetStaticModuleHost(BuildModuleHost());
+                    NOMADMainScreen.SetStaticConfig(_config, _connectionManager, _geofenceConfig, _advisoryBoundaryMonitor);
 
                     var nomadScreen = new NOMADMainScreen(_config, _connectionManager);
 

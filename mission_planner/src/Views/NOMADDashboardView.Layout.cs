@@ -40,7 +40,7 @@ namespace NOMAD.MissionPlanner
             mainLayout.Controls.Add(CreateStatusCard("GPS", "No Fix", out _lblGpsFix, NOMADTheme.WARNING), 1, 0);
             mainLayout.Controls.Add(CreateStatusCard("Battery", "--.- V", out _lblBattery, NOMADTheme.TEXT_SECONDARY), 2, 0);
 
-            mainLayout.Controls.Add(CreateStatusCard("Geofence", "--", out _lblGeofence, NOMADTheme.TEXT_SECONDARY), 0, 1);
+            mainLayout.Controls.Add(CreateStatusCard("Local outline advisory", "--", out _lblGeofence, NOMADTheme.TEXT_SECONDARY), 0, 1);
             mainLayout.Controls.Add(CreateStatusCard("Links", "--", out _lblLinks, NOMADTheme.TEXT_SECONDARY, fontSize: 10), 1, 1);
             mainLayout.Controls.Add(CreateStatusCard("Core", "--", out _lblCore, NOMADTheme.TEXT_SECONDARY, fontSize: 10), 2, 1);
 

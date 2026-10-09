@@ -29,9 +29,8 @@ internal static class GeoMathTests
         OversizedInsetFallsBackToShrink();
         IsInsideBasicSquare();
         FewerThanThreeVerticesCountsAsInside();
-        NearestPointInsideTargetsNearestEdge();
-        NearestPointInsideFromCornerIsInside();
-        NearestPointInsideNullWithoutPolygon();
+        AdvisoryOutlineStatusUsesVisualPolygonsOnly();
+        AdvisoryAltitudeStatusUsesConfiguredThreshold();
 
         Console.WriteLine(_failures == 0
             ? "All geometry tests passed."
@@ -130,41 +129,33 @@ internal static class GeoMathTests
             "2-vertex polygon counts as inside (no boundary)");
     }
 
-    private static void NearestPointInsideTargetsNearestEdge()
+    private static void AdvisoryOutlineStatusUsesVisualPolygonsOnly()
     {
-        // Drone 10 m east of the square's east edge, halfway up: nearest edge
-        // point is (100, 50); with a 1 m margin the target is (99, 50) — not
-        // anywhere near the centroid (50, 50).
-        var square = Square(100);
-        var target = GeoMath.NearestPointInside(square, Pt(110, 50), 1.0);
+        var outer = Square(100);
+        var inner = Square(60);
 
-        Assert(target != null, "nearest-inside returns a point");
-        var (tx, ty) = ToLocal(target);
-        AssertNear(tx, 99.0, 0.1, "nearest-inside x (1 m inside east edge)");
-        AssertNear(ty, 50.0, 0.1, "nearest-inside y (level with drone)");
-        Assert(GeoMath.IsInside(square, target), "nearest-inside target is inside polygon");
+        Assert(GeoMath.GetAdvisoryOutlineStatus(inner, outer, Pt(30, 30)) ==
+            AdvisoryOutlineStatus.InsideOutlines, "position within both advisory outlines");
+        Assert(GeoMath.GetAdvisoryOutlineStatus(inner, outer, Pt(80, 50)) ==
+            AdvisoryOutlineStatus.OutsideInnerOutline, "position between advisory outlines");
+        Assert(GeoMath.GetAdvisoryOutlineStatus(inner, outer, Pt(110, 50)) ==
+            AdvisoryOutlineStatus.OutsideOuterOutline, "position outside outer advisory outline");
+        Assert(GeoMath.GetAdvisoryOutlineStatus(null, null, Pt(30, 30)) ==
+            AdvisoryOutlineStatus.NoOutline, "no configured outline has no visual status");
+        Assert(GeoMath.GetAdvisoryOutlineStatus(null, outer, null) ==
+            AdvisoryOutlineStatus.NoPosition, "missing telemetry has no visual status");
     }
 
-    private static void NearestPointInsideFromCornerIsInside()
+    private static void AdvisoryAltitudeStatusUsesConfiguredThreshold()
     {
-        // Outside the corner diagonally: closest outline point is the corner
-        // vertex itself; the margin step must still land inside.
-        var square = Square(100);
-        var target = GeoMath.NearestPointInside(square, Pt(110, 110), 1.0);
-
-        Assert(target != null, "corner nearest-inside returns a point");
-        Assert(GeoMath.IsInside(square, target), "corner nearest-inside target is inside polygon");
-        var (tx, ty) = ToLocal(target);
-        AssertNear(tx, 99.3, 0.5, "corner target near (99.3, 99.3)");
-        AssertNear(ty, 99.3, 0.5, "corner target near (99.3, 99.3)");
-    }
-
-    private static void NearestPointInsideNullWithoutPolygon()
-    {
-        Assert(GeoMath.NearestPointInside(null, Pt(0, 0), 1.0) == null,
-            "nearest-inside null for null polygon");
-        Assert(GeoMath.NearestPointInside(new List<GpsPoint> { Pt(0, 0) }, Pt(5, 5), 1.0) == null,
-            "nearest-inside null for degenerate polygon");
+        Assert(AdvisoryAltitudeStatus.IsAboveThreshold(91, 90),
+            "configured 90m advisory threshold colors 91m as above threshold");
+        Assert(!AdvisoryAltitudeStatus.IsAboveThreshold(90, 90),
+            "altitude equal to configured advisory threshold is not above it");
+        Assert(!AdvisoryAltitudeStatus.IsAboveThreshold(89, 90),
+            "altitude below configured advisory threshold remains normal");
+        Assert(!AdvisoryAltitudeStatus.IsAboveThreshold(double.NaN, 90),
+            "invalid telemetry does not create an above-threshold status");
     }
 
     // ============================================================

@@ -60,10 +60,10 @@ def test_authority_probe_is_bounded_isolated_and_ordered_within_copter_job() -> 
         for i, step in enumerate(steps)
         if step.get("name") == "Qualify runtime authority and independent source on isolated Copter"
     )
-    copter_index = next(i for i, step in enumerate(steps) if step.get("run") == "pixi run core-sitl-status")
+    copter_index = next(i for i, step in enumerate(steps) if step.get("run") == "pixi run --skip-deps core-sitl-status")
     step = steps[probe_index]
     assert probe_index < copter_index
-    assert steps[probe_index - 1]["name"] == "Build production runtime for authority qualification"
+    assert steps[probe_index - 1]["name"] == "Build runtime and qualification tools once"
     assert step["timeout-minutes"] == 6
     script = step["run"]
     assert "set -euo pipefail" in script

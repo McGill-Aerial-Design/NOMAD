@@ -31,7 +31,7 @@ namespace NOMAD.MissionPlanner
                 Text = "Core command actions use authenticated loopback IPC. The credential identifies " +
                        "mission-planner; runtime authority admission is still required. A separately supervised " +
                        "nomad-runtime process must be running; these commands fail closed when it is " +
-                       "unavailable. GuidedGoto is unavailable until the runtime adds a typed request.",
+                       "unavailable. Copter LAND engagement is available only when the runtime advertises it.",
                 Font = new Font("Segoe UI", 8, FontStyle.Italic),
                 ForeColor = Color.FromArgb(170, 170, 170),
                 Location = new Point(20, y),
@@ -47,6 +47,9 @@ namespace NOMAD.MissionPlanner
             AddAuthorityButton(tab, "Handback", 270, y, "handback");
             y += 40;
             AddLabel(tab, "Save core settings first. Reconnect never admits authority automatically.", 20, y);
+            y += 35;
+            AddSectionLabel(tab, "Copter LAND engagement", ref y);
+            tab.Controls.Add(new LandControlPanel { Location = new Point(20, y) });
 
             return tab;
         }
