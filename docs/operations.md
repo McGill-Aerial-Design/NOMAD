@@ -52,25 +52,11 @@ own flight-log analysis.
 
 ## Copter LAND engagement
 
-With the runtime provisioned and an explicitly admitted client, `nomad land` requests
-Copter LAND mode through authenticated IPC. For a fresh ownerless runtime:
-
-```sh
-nomad status
-nomad admit
-nomad land
-```
-
-Use explicit handback after prior revocation/session loss. Mission Planner provides
-**Engage Copter LAND** in Settings > Core beside its existing authority controls;
-save settings and admit that client's authority first. Neither client admits itself.
-
-Success says **LAND mode observed; touchdown not verified**. Continue observing the
-aircraft independently; this action is not termination and does not qualify hardware.
-A three-second engagement timeout can leave ArduPilot executing LAND. Inspect fresh
-telemetry after an unknown/interrupted result and never replay blindly. Revoke inhibits
-new NOMAD sends; it does not undo an accepted LAND or establish physical pilot control.
-The [IPC contract](runtime-ipc.md#copter-land-engagement) defines exact outcomes and limits.
+After explicit admission (`nomad admit`, or `nomad handback` after revocation), use
+`nomad land`. Mission Planner provides **Engage Copter LAND** in Settings > Core.
+Success means mode observed, not touchdown or termination. An unknown result may
+leave ArduPilot landing; inspect fresh telemetry and never replay blindly.
+The [IPC contract](runtime-ipc.md#copter-land-engagement) owns the exact conditions and limits.
 
 ## Aircraft serial router
 

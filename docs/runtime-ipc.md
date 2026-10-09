@@ -56,28 +56,22 @@ navigation for its SITL evidence.
 
 ### Copter LAND engagement
 
-`land` accepts no operation parameters and requires the ordinary authenticated,
-admitted client, incarnation/session/generation, sequence, expiry and durable audit.
-Clients require `land` in a fresh authenticated HELLO; older runtimes have no fallback.
-Unknown additive metadata remains ignored, while known operation parameter fields are rejected.
+`land` accepts no operation parameters and inherits the authenticated mutation contract.
+Clients require `land` in a fresh authenticated HELLO; there is no direct fallback.
+Unknown additive metadata stays ignored; known operation parameter fields are rejected.
+The runtime rechecks the original Copter identity/session, heartbeat freshness and
+deadline at every covered send/retry through existing authority/audit admission.
 
-The runtime requires an identified Copter and fresh heartbeat. A vehicle-owned
-predicate rechecks the original full identity/session, heartbeat freshness and absolute
-deadline at every covered MAVSDK send/retry. It uses the existing authority/audit fence.
-One three-second monotonic budget covers ACK waiting and subsequent observation; waits
-never start a second budget. Success requires a matching accepted ACK followed by a
-newer heartbeat from that aircraft/session showing LAND before the deadline.
-The result is **LAND mode observed; touchdown not verified**. It does not prove
-continued LAND, exclusive causation, descent, touchdown or termination.
-
-Negative ACK is `failed`; missing ACK or accepted-but-unverified engagement is `unknown`.
-Expired send admission with intact authority/identity is also unknown. Authority,
-identity/session or lifecycle loss remains `interrupted`; pre-dispatch rejection
-retains `rejected`. ACK evidence is separate. Unknown/interrupted results never permit
-blind replay, and no timeout/disconnect/revoke sends an undo command to ArduPilot.
-Safe actuator requests can wait behind LAND and must still pass their original expiry
-checks before sending. Tests bound the deliberate operation wait; scheduling, IPC and
-audit I/O overhead are measured separately, not promised as hard real-time behavior.
+One three-second monotonic budget covers ACK and observation. Success requires an
+accepted ACK followed by a newer same-aircraft/session LAND heartbeat before expiry:
+**LAND mode observed; touchdown not verified**. It proves neither continued LAND,
+exclusive control, descent, touchdown nor termination. Negative ACK is `failed`;
+missing ACK, unverified engagement or admission expiry with intact context is `unknown`.
+Known authority/identity/session/lifecycle loss is `interrupted`; pre-dispatch refusal
+is `rejected`. ACK evidence stays separate. No timeout/disconnect/revoke causes replay
+or an undo command. Safe actuator requests retain their original expiry after waiting
+behind LAND. Scheduling, IPC and audit I/O overhead are measured separately; this is
+not a hard real-time response guarantee.
 
 `STATUS` reports runtime IPC readiness, MAVSDK connection open, vehicle
 transport connected, vehicle heartbeat/session, identity resolution and

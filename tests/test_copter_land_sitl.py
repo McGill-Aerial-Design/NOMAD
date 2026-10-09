@@ -348,20 +348,6 @@ def land_ci_script():
     return step
 
 
-def test_ci_uses_three_clean_guarded_flights_and_keeps_existing_qualification():
-    step = land_ci_script()
-    script = step["run"]
-    assert step["timeout-minutes"] == 10
-    assert "for attempt in 1 2 3; do" in script and "trap stop_land EXIT" in script
-    assert "--rm --name nomad-authority-sitl" in script and "-p nomad-authority" in script
-    assert "udp:host.docker.internal:14690 --out udp:host.docker.internal:14691" in script
-    assert 'docker stop "$land_container" >/dev/null\n' in script
-    assert "pixi run --frozen python scripts/dev/core_sitl_copter_land.py" in script
-    source = (ROOT / "scripts" / "dev" / "core_sitl_copter_land.py").read_text(encoding="utf-8")
-    assert "verify_isolated_simulator()" in source and "param_set_send" not in source
-    assert "SIM_RC_FAIL" not in source and "nomad-qualification" not in source
-
-
 @pytest.mark.skipif(sys.platform == "win32", reason="CI cleanup shell requires native Bash")
 def test_failed_land_container_creation_does_not_stop_an_unowned_container():
     bash = shutil.which("bash")

@@ -146,32 +146,14 @@ do not add a generic mode/MAVLink request or enable a capability just to pass.
 
 ## Installed Copter LAND engagement
 
-`core-sitl-runtime-copter-land` uses a fresh dedicated container with the exact
-same guard and ports as the authority probe above. Run the probes serially;
-stop the container after each run, including failure. CI starts three clean
-instances and retains each result, never retries a failed flight on the same
-vehicle state.
+Run `pixi run core-sitl-runtime-copter-land` on a fresh dedicated container using
+the authority-probe guard and ports above. Source 250 prepares the airborne Copter
+only while the runtime is absent; then the installed CLI admits and requests LAND once.
+CI runs three clean instances, failing on any unsuccessful repetition.
 
-The independent source-250 test GCS first verifies a fresh disarmed Copter with a 3D GPS fix,
-requests `EXTENDED_SYS_STATE` at 2 Hz, then sends one-shot GUIDED, arm and 5 m
-takeoff setup requests while the runtime is absent. It changes no failsafe or
-vehicle parameters. Fresh armed GUIDED, relative altitude at least 4 m and
-`IN_AIR` are required before the runtime starts. Setup does not qualify NOMAD
-arming or takeoff. The observer issues no commands during the runtime operation.
-
-The installed CLI explicitly admits authority, then invokes LAND once through
-authenticated IPC. The relay records MAVSDK transport attempts without requiring
-one wire frame or changing its retry policy. The test requires an accepted
-ownship ACK followed by a newer LAND heartbeat on the runtime path within the
-three-second engagement budget, and a CLI result within 3.5 seconds including
-process/authentication overhead. It must say `LAND mode observed; touchdown not
-verified`. The observer is pumped throughout the CLI wait to avoid treating
-buffered telemetry as a fresh observation.
-
-A separate later check requires fresh LAND, `ON_GROUND`, disarm and at least
-five stable low relative-altitude samples spanning at least 0.5 seconds. It does not change the
-API result or qualify physical touchdown, termination, pilot priority, routers
-or link-loss behavior. A failure closes local runtime/relay/observer resources
-and stops the dedicated simulator in CI; it sends no cleanup flight command.
-The canonical [qualification contract](../../docs/qualification.md) records the
-actual run evidence and the remaining physical acceptance limits.
+The relay requires accepted ACK plus later LAND heartbeat within 3 seconds; CLI
+wall time includes a 0.5-second process/IPC margin. A separate later ground check
+requires fresh LAND, `ON_GROUND`, disarm and stable altitude. It does not change
+the [engagement contract](../../docs/runtime-ipc.md#copter-land-engagement) or qualify hardware.
+Stop the dedicated container on success or failure; never replay an uncertain
+flight request or send a cleanup flight command.

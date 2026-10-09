@@ -150,8 +150,8 @@ def authenticated_hello(hello: dict, secret: str, advertise_land: bool) -> dict:
     }
 
 
-@pytest.mark.parametrize("capabilities", [None, ["status"], "land", [1, "land"], [None, "land"]])
-def test_cli_land_requires_advertised_capability(monkeypatch, capabilities) -> None:
+def run_land_client(monkeypatch, capabilities, reply_fields: dict | None = None) -> tuple:
+    """Exchange one CLI request with an authenticated test server and observe replay."""
     secret = "a" * 64
     monkeypatch.setenv("NOMAD_CLIENT_CREDENTIAL", secret)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -160,19 +160,35 @@ def test_cli_land_requires_advertised_capability(monkeypatch, capabilities) -> N
         listener.settimeout(5)
         monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", str(listener.getsockname()[1]))
 
-        def serve() -> bytes:
+        def serve() -> tuple[dict | None, bytes]:
             with listener.accept()[0] as connection:
                 connection.settimeout(5)
-                hello = json.loads(connection.makefile("rb").readline())
-                response = authenticated_hello(hello, secret, advertise_land=False)
+                stream = connection.makefile("rb")
+                hello = json.loads(stream.readline())
+                response = authenticated_hello(hello, secret, advertise_land=True)
                 response["capabilities"] = capabilities
                 connection.sendall(json.dumps(response).encode() + b"\n")
-                return connection.recv(65536)
+                line = stream.readline()
+                if not line:
+                    return None, b""
+                mutation = json.loads(line)
+                if reply_fields is None:
+                    return mutation, b""
+                response = {"protocol": "nomad-core", "version": 1, "id": mutation["id"], **reply_fields}
+                connection.sendall(json.dumps(response).encode() + b"\n")
+                return mutation, stream.read(65536)
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             pending = executor.submit(serve)
             result = invoke("land")
-            assert pending.result() == b"", "CLI sent LAND without an advertised capability"
+            mutation, replay = pending.result()
+    return result, mutation, replay
+
+
+@pytest.mark.parametrize("capabilities", [None, ["status"], "land", [1, "land"], [None, "land"]])
+def test_cli_land_requires_advertised_capability(monkeypatch, capabilities) -> None:
+    result, mutation, _replay = run_land_client(monkeypatch, capabilities)
+    assert mutation is None, "CLI sent LAND without an advertised capability"
     assert result.returncode != 0
     assert "unsupported_request" in result.stderr
 
@@ -200,39 +216,14 @@ def test_cli_land_requires_advertised_capability(monkeypatch, capabilities) -> N
     ],
 )
 def test_cli_land_rejects_incomplete_or_contradictory_result_without_replay(monkeypatch, changes: dict) -> None:
-    secret = "a" * 64
-    monkeypatch.setenv("NOMAD_CLIENT_CREDENTIAL", secret)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        listener.settimeout(5)
-        monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", str(listener.getsockname()[1]))
-
-        def serve() -> tuple[dict, bytes]:
-            with listener.accept()[0] as connection:
-                connection.settimeout(5)
-                stream = connection.makefile("rb")
-                hello = json.loads(stream.readline())
-                response = authenticated_hello(hello, secret, advertise_land=True)
-                connection.sendall(json.dumps(response).encode() + b"\n")
-                request = json.loads(stream.readline())
-                response = {
-                    "protocol": "nomad-core",
-                    "version": 1,
-                    "id": request["id"],
-                    "ok": True,
-                    "type": "command_response",
-                    "outcome": "success",
-                    "command_result": {"success": True, "acknowledged": True, "message": "LAND observed"},
-                }
-                response.update(changes)
-                connection.sendall(json.dumps(response).encode() + b"\n")
-                return request, connection.recv(65536)
-
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            pending = executor.submit(serve)
-            result = invoke("land")
-            request, replay = pending.result()
+    fields = {
+        "ok": True,
+        "type": "command_response",
+        "outcome": "success",
+        "command_result": {"success": True, "acknowledged": True, "message": "LAND observed"},
+        **changes,
+    }
+    result, request, replay = run_land_client(monkeypatch, ["land"], fields)
     assert request["type"] == "land"
     assert replay == b"", "CLI replayed LAND after a contradictory reply"
     assert result.returncode != 0
@@ -241,36 +232,10 @@ def test_cli_land_rejects_incomplete_or_contradictory_result_without_replay(monk
 
 @pytest.mark.parametrize("outcome, code", [("unknown", "audit_failure"), ("interrupted", "authority_interrupted")])
 def test_cli_land_error_preserves_uncertainty_without_replay(monkeypatch, outcome: str, code: str) -> None:
-    secret = "a" * 64
-    monkeypatch.setenv("NOMAD_CLIENT_CREDENTIAL", secret)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        listener.settimeout(5)
-        monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", str(listener.getsockname()[1]))
-
-        def serve() -> bytes:
-            with listener.accept()[0] as connection:
-                connection.settimeout(5)
-                stream = connection.makefile("rb")
-                hello = json.loads(stream.readline())
-                connection.sendall(json.dumps(authenticated_hello(hello, secret, advertise_land=True)).encode() + b"\n")
-                request = json.loads(stream.readline())
-                response = {
-                    "protocol": "nomad-core",
-                    "version": 1,
-                    "id": request["id"],
-                    "ok": False,
-                    "outcome": outcome,
-                    "error": {"code": code, "message": "operation could not be verified"},
-                }
-                connection.sendall(json.dumps(response).encode() + b"\n")
-                return connection.recv(65536)
-
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            pending = executor.submit(serve)
-            result = invoke("land")
-            assert pending.result() == b"", "CLI replayed an uncertain LAND error"
+    fields = {"ok": False, "outcome": outcome, "error": {"code": code, "message": "operation could not be verified"}}
+    result, request, replay = run_land_client(monkeypatch, ["land"], fields)
+    assert request["type"] == "land"
+    assert replay == b"", "CLI replayed an uncertain LAND error"
     assert result.returncode != 0
     assert code in result.stderr
     assert "outcome is unknown" in result.stderr

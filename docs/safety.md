@@ -37,19 +37,10 @@ an aircraft fence or implement the official 100 m AGL containment requirement.
 Termination is unavailable: the plugin sends no substitute LAND command. Native
 ArduPilot failsafes and an approved independent termination mechanism remain required.
 
-## Copter LAND engagement requirement
-
-SR-LND-02: installed LAND success requires an accepted ACK and a fresh subsequent
-LAND heartbeat from the original Copter identity/session within one three-second
-ACK-plus-observation budget. Final-send checks preserve identity, freshness, deadline,
-authority and audit admission. Neither ACK nor engagement success establishes descent,
-touchdown, continued LAND, exclusive control or termination. ArduPilot may continue
-landing after an unknown result; NOMAD sends no automatic replay or undo command.
-
-Fault tests reject cached/pre-ACK state, identity/session changes, late observations,
-lost authority and audit failures. Safe actuator requests still expire while waiting
-behind this bounded operation; expired requests send nothing. Physical pilot priority,
-link-loss policy and termination qualification remain separate acceptance gates.
+SR-LND-02: Copter LAND engagement requires accepted ACK and fresh post-ACK same-session
+LAND mode within one three-second budget; it is not touchdown or termination.
+The [IPC contract](runtime-ipc.md#copter-land-engagement) defines admission and outcomes;
+the traceability below binds success, timeout, final-send and safe-output fault tests.
 
 ## Competition safety obligations
 

@@ -27,7 +27,7 @@ from runtime_fixture_support import (
     stop_runtime,
     wait_for_listener,
 )
-from runtime_qualification_support import wait_for_vehicle
+from runtime_qualification_support import admit, wait_for_vehicle
 
 
 class LandPeer(VehiclePeer):
@@ -139,9 +139,7 @@ def exercise_cli(port: int, peer: LandPeer) -> tuple[str, bool, float]:
 def exercise_request(
     port: int, peer: LandPeer, name: str, expected: str, acknowledged: bool
 ) -> tuple[str, bool, float]:
-    hello = request(port, name + "-admit-context", "hello")
-    admitted = request(port, name + "-admit", "admit_authority", **authority_fields(hello, "runtime-smoke"))
-    require(admitted["ok"], "runtime LAND source requires explicit authenticated admission")
+    admit(port)
     mutation = bound_land(port, name)
     started = time.monotonic()
     response = send_request(port, mutation)

@@ -5,24 +5,6 @@ below for every release and retain exact source/build/firmware/configuration wit
 results. Full physical aircraft qualification remains open. [Safety](safety.md)
 defines obligations; [TODO](../TODO.md) lists implementation work.
 
-## Baseline and current LAND scope
-
-The implementation baseline is main after PR 74, `ebaef84cb1929fbe3cec988f11086a7af633a49e`
-(tree `46c439e2de3eb1247f1a07c823a749500e1e21d3`). Core, MAVSDK, Python and Linux/Windows
-release qualification completed successfully in [the exact-main test run](https://github.com/YoussGm3o8/NOMAD/actions/runs/37721072227).
-[The scheduled aircraft run](https://github.com/YoussGm3o8/NOMAD/actions/runs/37791082193)
-passed full Copter and QuadPlane. Preserve [the earlier same-tree cadence failure](https://github.com/YoussGm3o8/NOMAD/actions/runs/37721072247):
-its GCS-heartbeat negative control observed a near-zero announcement interval. A later
-pass does not explain that nondeterminism, and the strict cadence assertion remains.
-
-Copter `land` is the first installed flight request. Its software completion means
-accepted ACK plus fresh post-ACK LAND mode, not touchdown or termination. Current-head
-acceptance requires unit/runtime/client fault tests, the real one-hertz MAVSDK peer
-matrix (`test-runtime-land`), and three clean isolated Copter flights in full CI.
-The peer tests delayed/missing ACK, late/missing engagement, identity changes, durable
-outcomes and cached no-replay behavior. SITL records engagement timing and later simulator
-ground observations separately. Baseline results never substitute for these new-head gates.
-
 ## Evidence levels
 
 1. Unit/fake transport: policy, invalid/boundary input and deterministic fault paths.
