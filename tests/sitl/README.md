@@ -148,7 +148,8 @@ do not add a generic mode/MAVLink request or enable a capability just to pass.
 
 Run `pixi run core-sitl-runtime-copter-land` on a fresh dedicated container using
 the authority-probe guard and ports above. Source 250 prepares the airborne Copter
-only while the runtime is absent; then the installed CLI admits and requests LAND once.
+only while the runtime is absent. Fresh GPS and enabled, healthy native pre-arm
+telemetry gate its one-shot setup; then the installed CLI admits and requests LAND once.
 CI runs three clean instances, failing on any unsuccessful repetition.
 
 The relay requires accepted ACK plus later LAND heartbeat within 3 seconds; CLI

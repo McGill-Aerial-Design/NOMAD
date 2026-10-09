@@ -62,6 +62,16 @@ def ground_observer():
     return observer
 
 
+def prearm_status(**fields):
+    return Message(
+        kind="SYS_STATUS",
+        onboard_control_sensors_present=observer_module.PREARM_CHECK,
+        onboard_control_sensors_enabled=observer_module.PREARM_CHECK,
+        onboard_control_sensors_health=observer_module.PREARM_CHECK,
+        **fields,
+    )
+
+
 def test_airborne_observer_filters_source_and_rejects_wrong_aircraft(monkeypatch):
     monkeypatch.setattr(observer_module.time, "monotonic", lambda: 10.0)
     observer = airborne_observer()
@@ -95,13 +105,46 @@ def test_ack_alone_and_pre_boundary_state_do_not_establish_airborne_setup(monkey
 def test_external_setup_requires_fresh_3d_gps_before_one_shot_arm(monkeypatch):
     monkeypatch.setattr(observer_module.time, "monotonic", lambda: 10.0)
     observer = ground_observer()
+    observer.record(prearm_status(), 9.9)
     assert not observer.is_ready_for_setup(), "startup with no GPS observation must not arm"
     observer.record(Message(kind="GPS_RAW_INT", fix_type=3), 8.0)
     assert not observer.is_ready_for_setup(), "historical 3D fix must not admit setup"
     observer.record(Message(kind="GPS_RAW_INT", fix_type=2), 9.9)
     assert not observer.is_ready_for_setup(), "2D fix must not admit setup"
     observer.record(Message(kind="GPS_RAW_INT", fix_type=3), 9.9)
-    assert observer.is_ready_for_setup(), "fresh 3D fix plus disarm and low altitude admits one-shot setup"
+    assert observer.is_ready_for_setup(), "fresh GPS and healthy pre-arm checks admit disarmed low-altitude setup"
+
+
+@pytest.mark.parametrize("field", ["present", "enabled", "health"])
+def test_external_setup_requires_enabled_healthy_prearm_checks(monkeypatch, field):
+    monkeypatch.setattr(observer_module.time, "monotonic", lambda: 10.0)
+    observer = ground_observer()
+    observer.record(Message(kind="GPS_RAW_INT", fix_type=3), 9.9)
+    assert not observer.is_ready_for_setup(), "GPS alone must not admit arming without controller pre-arm evidence"
+    message = prearm_status()
+    setattr(message, "onboard_control_sensors_" + field, 0)
+    observer.record(message, 9.9)
+    assert not observer.is_ready_for_setup(), f"pre-arm {field} missing must inhibit setup"
+    observer.record(prearm_status(), 9.95)
+    assert observer.is_ready_for_setup(), "fresh enabled healthy checks should admit the unchanged one-shot setup"
+
+
+@pytest.mark.parametrize("observed_at, ready", [(8.5, True), (8.499, False), (10.0, True), (10.01, False)])
+def test_external_setup_checks_prearm_age_boundaries(monkeypatch, observed_at, ready):
+    monkeypatch.setattr(observer_module.time, "monotonic", lambda: 10.0)
+    observer = ground_observer()
+    observer.record(Message(kind="GPS_RAW_INT", fix_type=3), 9.9)
+    observer.record(prearm_status(), observed_at)
+    assert observer.is_ready_for_setup() is ready, "pre-arm freshness must include its boundary and reject future data"
+
+
+@pytest.mark.parametrize("source", [{"system": 250}, {"component": 190}])
+def test_external_setup_ignores_other_sources_prearm_checks(monkeypatch, source):
+    monkeypatch.setattr(observer_module.time, "monotonic", lambda: 10.0)
+    observer = ground_observer()
+    observer.record(Message(kind="GPS_RAW_INT", fix_type=3), 9.9)
+    observer.record(prearm_status(**source), 9.9)
+    assert not observer.is_ready_for_setup(), "another source cannot supply the aircraft's pre-arm readiness"
 
 
 def test_ground_confirmation_is_separate_fresh_and_requires_disarm(monkeypatch):

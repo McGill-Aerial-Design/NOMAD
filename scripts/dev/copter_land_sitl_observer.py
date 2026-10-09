@@ -17,6 +17,7 @@ MIN_AIRBORNE_ALTITUDE = 4.0
 GROUND_ALTITUDE_LIMIT = 0.35
 GROUND_SAMPLE_COUNT = 5
 GROUND_DWELL_SECONDS = 0.5
+PREARM_CHECK = mavutil.mavlink.MAV_SYS_STATUS_PREARM_CHECK
 
 
 def latest_fresh(samples: Any, boundary: float = 0.0) -> Any:
@@ -35,6 +36,7 @@ class CopterLandObserver:
         self.heartbeats: deque[tuple[float, int, bool]] = deque(maxlen=512)
         self.positions: deque[tuple[float, float]] = deque(maxlen=512)
         self.gps_fixes: deque[tuple[float, int]] = deque(maxlen=64)
+        self.prearm_checks: deque[tuple[float, bool]] = deque(maxlen=64)
         self.landed_states: deque[tuple[float, int]] = deque(maxlen=512)
         self.acknowledgements: deque[tuple[float, int, int]] = deque(maxlen=64)
 
@@ -58,6 +60,11 @@ class CopterLandObserver:
             self.positions.append((observed_at, float(message.relative_alt) / 1000.0))
         elif kind == "GPS_RAW_INT":
             self.gps_fixes.append((observed_at, int(message.fix_type)))
+        elif kind == "SYS_STATUS":
+            present = bool(message.onboard_control_sensors_present & PREARM_CHECK)
+            enabled = bool(message.onboard_control_sensors_enabled & PREARM_CHECK)
+            healthy = bool(message.onboard_control_sensors_health & PREARM_CHECK)
+            self.prearm_checks.append((observed_at, present and enabled and healthy))
         elif kind == "EXTENDED_SYS_STATE":
             self.landed_states.append((observed_at, int(message.landed_state)))
         elif kind == "COMMAND_ACK":
@@ -99,7 +106,11 @@ class CopterLandObserver:
 
     def is_ready_for_setup(self) -> bool:
         fix = latest_fresh(self.gps_fixes)
-        return self.is_disarmed_at_low_altitude() and fix is not None and fix[1] >= 3
+        # GPS can be ready before the EKF/fence position estimate permits native arming.
+        prearm = latest_fresh(self.prearm_checks)
+        return (
+            self.is_disarmed_at_low_altitude() and fix is not None and fix[1] >= 3 and prearm is not None and prearm[1]
+        )
 
     def ground_samples(self, boundary: float) -> list[tuple[float, float]]:
         cutoff = max(boundary, time.monotonic() - MAX_SAMPLE_AGE)
