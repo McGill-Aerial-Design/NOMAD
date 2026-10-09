@@ -19,6 +19,10 @@ namespace NOMAD.MissionPlanner.Connectivity
             {
                 return BuildActuatorRequest(verb, values);
             }
+            if (verb == "land")
+            {
+                return values.Length == 0 ? BaseRequest("", "land") : null;
+            }
             var type = verb switch
             {
                 "servo" => "set_servo",

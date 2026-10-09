@@ -95,6 +95,12 @@ namespace NOMAD.MissionPlanner.Connectivity
                 {
                     return failure;
                 }
+                if (verb == "land" && !HasLandCapability(helloResponse))
+                {
+                    return new NomadCoreRequestResult(NomadCoreRequestOutcome.FailedBeforeSend,
+                        "unsupported_request", "The authenticated runtime does not advertise LAND engagement. "
+                            + "No mutation request was sent.");
+                }
                 if (inputStillCurrent != null && !inputStillCurrent())
                 {
                     return StaleInput();
@@ -284,6 +290,13 @@ namespace NOMAD.MissionPlanner.Connectivity
             if (IsActuatorVerb(verb))
             {
                 return ReadActuatorResult(response, verb, incarnation);
+            }
+            if (verb == "land" && !HasValidLandResult(response))
+            {
+                return new NomadCoreRequestResult(NomadCoreRequestOutcome.UnknownOutcome, "unknown_outcome",
+                    "The runtime returned an incomplete or contradictory LAND result. "
+                        + "LAND engagement and touchdown are unverified. Do not retry blindly.",
+                    ReadAcknowledgement(response));
             }
 
             if (TryReadError(response, out var code, out var message))

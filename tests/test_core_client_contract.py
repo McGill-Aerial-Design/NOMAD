@@ -3,11 +3,13 @@
 """Contract tests for the installed runtime-only C++ CLI.
 
 These tests exercise argument parsing and the protocol-v1 boundary without a
-vehicle. Direct vehicle commands remain in the non-installed qualification tool.
+vehicle. Other direct flight commands remain in the non-installed qualification tool.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import socket
 import subprocess
@@ -18,7 +20,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-EXPECTED_VERBS = ("status", "admit", "revoke", "handback", "servo", "relay", "motor-test", "gimbal-config")
+EXPECTED_VERBS = ("status", "admit", "revoke", "handback", "land", "servo", "relay", "motor-test", "gimbal-config")
 
 UNSUPPORTED_REQUESTS = (
     ("connect",),
@@ -33,7 +35,6 @@ UNSUPPORTED_REQUESTS = (
     ("transition-to-vtol", "45", "-73", "10"),
     ("quadplane-vtol-land", "45", "-73"),
     ("goto", "45", "-73", "10"),
-    ("land",),
     ("rtl",),
     ("mission-demo",),
     ("velocity", "--vx", "0.1", "--duration", "1"),
@@ -47,6 +48,7 @@ TYPED_REQUESTS = (
     ("admit",),
     ("revoke",),
     ("handback",),
+    ("land",),
     ("servo", "1", "1500"),
     ("relay", "3", "1"),
     ("motor-test", "1", "1000", "1.0"),
@@ -130,6 +132,151 @@ def test_rogue_or_legacy_runtime_cannot_receive_cli_mutation(monkeypatch, advert
     assert secret not in result.stdout + result.stderr
 
 
+def authenticated_hello(hello: dict, secret: str, advertise_land: bool) -> dict:
+    """Mirror only the authenticated server handshake used by the installed client."""
+    incarnation = "test-land-runtime"
+    payload = f"nomad-core:server:v1:{hello['client_id']}:{hello['auth_nonce']}:{incarnation}"
+    return {
+        "protocol": "nomad-core",
+        "version": 1,
+        "id": hello["id"],
+        "ok": True,
+        "type": "hello_response",
+        "runtime_incarnation": incarnation,
+        "authority": {"vehicle_session": 1, "generation": 1, "next_sequence": 1},
+        "client_authentication": "hmac-sha256-v1",
+        "server_proof": hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest(),
+        "capabilities": ["land"] if advertise_land else ["status"],
+    }
+
+
+@pytest.mark.parametrize("capabilities", [None, ["status"], "land", [1, "land"], [None, "land"]])
+def test_cli_land_requires_advertised_capability(monkeypatch, capabilities) -> None:
+    secret = "a" * 64
+    monkeypatch.setenv("NOMAD_CLIENT_CREDENTIAL", secret)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(5)
+        monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", str(listener.getsockname()[1]))
+
+        def serve() -> bytes:
+            with listener.accept()[0] as connection:
+                connection.settimeout(5)
+                hello = json.loads(connection.makefile("rb").readline())
+                response = authenticated_hello(hello, secret, advertise_land=False)
+                response["capabilities"] = capabilities
+                connection.sendall(json.dumps(response).encode() + b"\n")
+                return connection.recv(65536)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(serve)
+            result = invoke("land")
+            assert pending.result() == b"", "CLI sent LAND without an advertised capability"
+    assert result.returncode != 0
+    assert "unsupported_request" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"outcome": None},
+        {"outcome": 1},
+        {"outcome": "unknown"},
+        {
+            "ok": False,
+            "outcome": "rejected",
+            "error": {"code": "rejected", "message": "contradictory"},
+            "command_result": {"success": False, "acknowledged": True},
+        },
+        {"command_result": {"success": True, "acknowledged": False, "message": "LAND observed"}},
+        {"command_result": {"success": False, "acknowledged": True, "message": "LAND observed"}},
+        {"command_result": {"success": True, "message": "LAND observed"}},
+        {"command_result": {"success": True, "acknowledged": True, "message": 1}},
+        {"type": "status_response"},
+        {"ok": "true"},
+        {"version": "1"},
+        {"id": "wrong-request"},
+    ],
+)
+def test_cli_land_rejects_incomplete_or_contradictory_result_without_replay(monkeypatch, changes: dict) -> None:
+    secret = "a" * 64
+    monkeypatch.setenv("NOMAD_CLIENT_CREDENTIAL", secret)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(5)
+        monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", str(listener.getsockname()[1]))
+
+        def serve() -> tuple[dict, bytes]:
+            with listener.accept()[0] as connection:
+                connection.settimeout(5)
+                stream = connection.makefile("rb")
+                hello = json.loads(stream.readline())
+                response = authenticated_hello(hello, secret, advertise_land=True)
+                connection.sendall(json.dumps(response).encode() + b"\n")
+                request = json.loads(stream.readline())
+                response = {
+                    "protocol": "nomad-core",
+                    "version": 1,
+                    "id": request["id"],
+                    "ok": True,
+                    "type": "command_response",
+                    "outcome": "success",
+                    "command_result": {"success": True, "acknowledged": True, "message": "LAND observed"},
+                }
+                response.update(changes)
+                connection.sendall(json.dumps(response).encode() + b"\n")
+                return request, connection.recv(65536)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(serve)
+            result = invoke("land")
+            request, replay = pending.result()
+    assert request["type"] == "land"
+    assert replay == b"", "CLI replayed LAND after a contradictory reply"
+    assert result.returncode != 0
+    assert "unknown_outcome" in result.stderr
+
+
+@pytest.mark.parametrize("outcome, code", [("unknown", "audit_failure"), ("interrupted", "authority_interrupted")])
+def test_cli_land_error_preserves_uncertainty_without_replay(monkeypatch, outcome: str, code: str) -> None:
+    secret = "a" * 64
+    monkeypatch.setenv("NOMAD_CLIENT_CREDENTIAL", secret)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(5)
+        monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", str(listener.getsockname()[1]))
+
+        def serve() -> bytes:
+            with listener.accept()[0] as connection:
+                connection.settimeout(5)
+                stream = connection.makefile("rb")
+                hello = json.loads(stream.readline())
+                connection.sendall(json.dumps(authenticated_hello(hello, secret, advertise_land=True)).encode() + b"\n")
+                request = json.loads(stream.readline())
+                response = {
+                    "protocol": "nomad-core",
+                    "version": 1,
+                    "id": request["id"],
+                    "ok": False,
+                    "outcome": outcome,
+                    "error": {"code": code, "message": "operation could not be verified"},
+                }
+                connection.sendall(json.dumps(response).encode() + b"\n")
+                return connection.recv(65536)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(serve)
+            result = invoke("land")
+            assert pending.result() == b"", "CLI replayed an uncertain LAND error"
+    assert result.returncode != 0
+    assert code in result.stderr
+    assert "outcome is unknown" in result.stderr
+    assert "must not be replayed" in result.stderr
+
+
 def test_no_arguments_prints_usage_and_fails() -> None:
     result = invoke()
 
@@ -176,6 +323,7 @@ def test_removed_user_command_cannot_reach_runtime() -> None:
         ("motor-test", "1", "1000", "1.0", "9"),
         ("gimbal-config", "x"),
         ("gimbal-config", "7"),
+        ("land", "9"),
         ("--direct", "arm"),
         ("--runtime", "status"),
         ("--endpoint", "udpin:127.0.0.1:14550"),

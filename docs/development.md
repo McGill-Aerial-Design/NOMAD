@@ -12,6 +12,7 @@ pixi run test-core
 pixi run build-qualification-cli
 pixi run test-python
 pixi run test-runtime-ipc
+pixi run test-runtime-land
 pixi run test-runtime-lifecycle
 pixi run lint
 pixi run format-check

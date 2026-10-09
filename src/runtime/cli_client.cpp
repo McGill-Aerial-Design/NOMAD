@@ -264,8 +264,8 @@ Json make_request(const std::string &id, const std::string &type) {
 
 bool add_typed_arguments(const Arguments &arguments, Json &request) {
     const auto &command = arguments.command;
-    if (command == "status") {
-        request = make_request(new_request_id(), "status");
+    if (command == "status" || command == "land") {
+        request = make_request(new_request_id(), command);
         return true;
     }
     if (command == "admit" || command == "revoke" || command == "handback") {
@@ -342,7 +342,52 @@ void print_error(const Json &response) {
               << error.value("message", "runtime rejected the request") << '\n';
 }
 
-int receive_result(NativeSocket socket, const std::string &request_id, bool mutation) {
+bool valid_land_envelope(const Json &response, const std::string &request_id) {
+    return response.is_object() && response.contains("protocol") && response["protocol"].is_string() &&
+           response["protocol"].get<std::string>() == kProtocolName && response.contains("version") &&
+           response["version"].is_number_integer() && response["version"] == kProtocolVersion &&
+           response.contains("id") && response["id"].is_string() && response["id"] == request_id &&
+           response.contains("ok") && response["ok"].is_boolean();
+}
+
+bool valid_land_result(const Json &response) {
+    if (!response.contains("outcome") || !response["outcome"].is_string()) {
+        return false;
+    }
+    const auto outcome = response["outcome"].get<std::string>();
+    if (outcome != "success" && outcome != "failed" && outcome != "rejected" &&
+        outcome != "unknown" && outcome != "interrupted") {
+        return false;
+    }
+    if (!response["ok"].get<bool>()) {
+        if (outcome == "rejected" && response.contains("command_result")) {
+            const auto &facts = response["command_result"];
+            if (!facts.is_object() || (facts.contains("acknowledged") && facts["acknowledged"] != false) ||
+                (facts.contains("success") && facts["success"] != false)) {
+                return false;
+            }
+        }
+        return outcome != "success" && response.contains("error") && response["error"].is_object() &&
+               response["error"].contains("code") && response["error"]["code"].is_string() &&
+               response["error"].contains("message") && response["error"]["message"].is_string();
+    }
+    if (!response.contains("type") || response["type"] != "command_response" || !response.contains("command_result") ||
+        !response["command_result"].is_object()) {
+        return false;
+    }
+    const auto &result = response["command_result"];
+    if (!result.contains("success") || !result["success"].is_boolean() ||
+        !result.contains("acknowledged") || !result["acknowledged"].is_boolean() ||
+        !result.contains("message") || !result["message"].is_string()) {
+        return false;
+    }
+    const bool success = result["success"].get<bool>();
+    const bool acknowledged = result["acknowledged"].get<bool>();
+    return success == (outcome == "success") && (!success || acknowledged) &&
+           (outcome != "failed" || acknowledged) && (outcome != "rejected" || !acknowledged);
+}
+
+int receive_result(NativeSocket socket, const std::string &request_id, bool mutation, bool land) {
     Json response;
     if (!read_message(socket, response)) {
         if (mutation) {
@@ -353,9 +398,17 @@ int receive_result(NativeSocket socket, const std::string &request_id, bool muta
         }
         return EXIT_FAILURE;
     }
-    if (!valid_response(response, request_id)) {
-        std::cerr << "error[invalid_response]: runtime response did not match the request\n";
+    if (!(land ? valid_land_envelope(response, request_id) : valid_response(response, request_id))) {
+        std::cerr << (land ? "error[unknown_outcome]: invalid LAND response; aircraft outcome unknown\n" :
+            "error[invalid_response]: runtime response did not match the request\n");
         return EXIT_FAILURE;
+    }
+    if (land && !valid_land_result(response)) {
+        std::cerr << "error[unknown_outcome]: incomplete or contradictory LAND result; aircraft outcome unknown\n";
+        return EXIT_FAILURE;
+    }
+    if (land && response.value("outcome", "") == "interrupted") {
+        std::cerr << "vehicle outcome is unknown; request must not be replayed\n";
     }
     if (!response["ok"].get<bool>()) {
         print_error(response);
@@ -365,6 +418,9 @@ int receive_result(NativeSocket socket, const std::string &request_id, bool muta
         const auto result = response.value("command_result", Json::object());
         const bool success = result.value("success", false);
         std::cout << result.value("message", "vehicle operation returned") << '\n';
+        if (land && response.value("outcome", "") == "unknown") {
+            std::cerr << "vehicle outcome is unknown; request must not be replayed\n";
+        }
         return success ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     std::cout << response.dump(2) << '\n';
@@ -429,6 +485,15 @@ int run_runtime_command(const Arguments &arguments) {
         std::cerr << "error[authentication_required]: runtime does not support authenticated clients\n";
         return EXIT_FAILURE;
     }
+    const bool land = request.value("type", "") == "land";
+    const auto capabilities = hello_response.value("capabilities", Json::array());
+    if (land && (!capabilities.is_array() ||
+        !std::all_of(capabilities.begin(), capabilities.end(), [](const Json &entry) { return entry.is_string(); }) ||
+        std::find(capabilities.begin(), capabilities.end(), "land") == capabilities.end())) {
+        close_socket(socket);
+        std::cerr << "error[unsupported_request]: runtime does not advertise LAND engagement\n";
+        return EXIT_FAILURE;
+    }
     if (is_mutating(request)) {
         const auto payload = request.dump();
         request["auth_payload"] = payload;
@@ -446,7 +511,7 @@ int run_runtime_command(const Arguments &arguments) {
         }
         return EXIT_FAILURE;
     }
-    const auto result = receive_result(socket, request_id, mutation);
+    const auto result = receive_result(socket, request_id, mutation, land);
     close_socket(socket);
     return result;
 }

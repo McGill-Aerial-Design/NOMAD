@@ -233,8 +233,8 @@ namespace NOMAD.MissionPlanner
         {
             bool configured = _config.CoreRuntimePort >= 1 && _config.CoreRuntimePort <= 65535
                 && !string.IsNullOrWhiteSpace(_config.CoreClientCredential);
-            _lblCore.Text = configured ? "IPC configured" : "Not configured";
-            _lblCore.ForeColor = configured ? NOMADTheme.SUCCESS : NOMADTheme.WARNING;
+            _lblCore.Text = configured ? "IPC configured; readiness unverified" : "Not configured";
+            _lblCore.ForeColor = configured ? NOMADTheme.TEXT_SECONDARY : NOMADTheme.WARNING;
         }
 
         protected override void Dispose(bool disposing)

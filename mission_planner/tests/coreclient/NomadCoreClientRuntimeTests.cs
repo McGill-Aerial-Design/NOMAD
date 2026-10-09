@@ -247,6 +247,7 @@ internal static partial class NomadCoreClientTests
         private readonly bool _acknowledged;
         private readonly bool _includeErrorResult;
         private readonly bool? _resultSuccess;
+        private readonly object _capabilities;
         private readonly Func<Dictionary<string, object>, Dictionary<string, object>> _semanticResponse;
         private string _owner = "";
         private int _generation;
@@ -267,7 +268,8 @@ internal static partial class NomadCoreClientTests
                            bool wrongAuthorityResponseType = false, bool rogueRuntime = false, bool auditFailure = false,
                            string outcome = "success", string errorCode = null, bool acknowledged = true,
                            bool includeErrorResult = false, bool? resultSuccess = null,
-                           Func<Dictionary<string, object>, Dictionary<string, object>> semanticResponse = null)
+                           Func<Dictionary<string, object>, Dictionary<string, object>> semanticResponse = null,
+                           object capabilities = null)
         {
             _expectedConnections = expectedConnections;
             _dropCommandResponse = dropCommandResponse;
@@ -282,6 +284,7 @@ internal static partial class NomadCoreClientTests
             _acknowledged = acknowledged;
             _includeErrorResult = includeErrorResult;
             _resultSuccess = resultSuccess;
+            _capabilities = capabilities;
             _semanticResponse = semanticResponse;
             _listener = new TcpListener(IPAddress.Loopback, port);
             _listener.Start();
@@ -304,7 +307,7 @@ internal static partial class NomadCoreClientTests
                         AutoFlush = true
                     };
                     var hello = Parse(reader.ReadLine());
-                    writer.WriteLine(Serialize(new Dictionary<string, object>
+                    var helloResponse = new Dictionary<string, object>
                     {
                         ["protocol"] = "nomad-core", ["version"] = _helloVersion,
                         ["id"] = hello["id"], ["ok"] = true, ["type"] = "hello_response",
@@ -317,12 +320,22 @@ internal static partial class NomadCoreClientTests
                             ["vehicle_session"] = 1, ["generation"] = _enforceAuthority ? _generation : 1,
                             ["next_sequence"] = _lastSequence + 1
                         }
-                    }));
+                    };
+                    if (_capabilities != null)
+                    {
+                        helloResponse["capabilities"] = _capabilities;
+                    }
+                    writer.WriteLine(Serialize(helloResponse));
                     if (_helloVersion != 1 || _rogueRuntime)
                     {
                         continue;
                     }
-                    LastCommand = Parse(reader.ReadLine());
+                    var line = reader.ReadLine();
+                    if (line == null)
+                    {
+                        continue;
+                    }
+                    LastCommand = Parse(line);
                     Commands.Add(LastCommand);
                     LastCommandType = Convert.ToString(LastCommand["type"], CultureInfo.InvariantCulture);
                     CommandCount++;

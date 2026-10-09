@@ -45,10 +45,21 @@ struct LandingPoint {
     double longitude_deg{};
 };
 
+enum class CommandOutcome {
+    Unspecified,
+    Rejected,
+    Failed,
+    Unknown,
+    Interrupted,
+    Success,
+};
+
 struct CommandResult {
     bool success{false};
     std::string message;
     bool acknowledged{false};
+    // Existing primitives infer outcomes from ACKs; verified operations report them explicitly.
+    CommandOutcome outcome{CommandOutcome::Unspecified};
 };
 
 class Vehicle {
@@ -93,6 +104,7 @@ class Vehicle {
     safety::WatchdogReason last_velocity_stop_reason() const;
     CommandResult goto_location(const Location &location);
     CommandResult land();
+    CommandResult engage_copter_land(const std::function<bool()> &still_authorized = {});
     CommandResult wait_until_disarmed(std::chrono::milliseconds timeout);
     CommandResult return_to_launch();
     CommandResult upload_fence(const std::vector<safety::GlobalPoint> &boundary);
@@ -170,6 +182,10 @@ class Vehicle {
                                                             const telemetry::VehicleState &expected_state,
                                                             bool require_precondition) const;
     CommandResult wait_for_location(const Location &location);
+    CommandResult wait_for_copter_land(const telemetry::VehicleState &initial_state,
+                                       std::chrono::steady_clock::time_point ack_boundary,
+                                       std::chrono::steady_clock::time_point deadline,
+                                       const std::function<bool()> &still_authorized);
     CommandResult require_operation(VehicleOperation operation) const;
     // A fresh heartbeat does not imply a fresh position: callers fail closed
     // when this is true rather than trusting a stale fix.

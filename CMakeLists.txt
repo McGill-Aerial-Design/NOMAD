@@ -71,6 +71,7 @@ add_library(nomad_core
     src/vehicle/operation.cpp
     src/vehicle/output.cpp
     src/vehicle/vehicle.cpp
+    src/vehicle/vehicle_land.cpp
     src/vehicle/vehicle_vtol_takeoff.cpp
     src/vehicle/vehicle_fence.cpp
     src/vehicle/vehicle_quadplane_landing.cpp
@@ -320,6 +321,7 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     add_test(NAME nomad_mavsdk_validation_tests COMMAND nomad_mavsdk_validation_tests)
 
     nomad_add_core_test(nomad_core_tests tests/core_test.cpp)
+    nomad_add_core_test(nomad_copter_land_tests tests/copter_land_test.cpp)
     nomad_add_core_test(nomad_fake_connection_contract_tests tests/fake_connection_contract_test.cpp)
     nomad_add_core_test(nomad_vehicle_config_tests tests/vehicle_config_test.cpp)
 

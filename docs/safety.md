@@ -37,6 +37,20 @@ an aircraft fence or implement the official 100 m AGL containment requirement.
 Termination is unavailable: the plugin sends no substitute LAND command. Native
 ArduPilot failsafes and an approved independent termination mechanism remain required.
 
+## Copter LAND engagement requirement
+
+SR-LND-02: installed LAND success requires an accepted ACK and a fresh subsequent
+LAND heartbeat from the original Copter identity/session within one three-second
+ACK-plus-observation budget. Final-send checks preserve identity, freshness, deadline,
+authority and audit admission. Neither ACK nor engagement success establishes descent,
+touchdown, continued LAND, exclusive control or termination. ArduPilot may continue
+landing after an unknown result; NOMAD sends no automatic replay or undo command.
+
+Fault tests reject cached/pre-ACK state, identity/session changes, late observations,
+lost authority and audit failures. Safe actuator requests still expire while waiting
+behind this bounded operation; expired requests send nothing. Physical pilot priority,
+link-loss policy and termination qualification remain separate acceptance gates.
+
 ## Competition safety obligations
 
 These source requirements supplement, without renumbering or weakening, the SR
@@ -385,6 +399,10 @@ mark this procedure passed. Qualification records belong in
 These references identify code and tests, not full requirement closure.
 
 ```cpp_traceability
+SR-LND-02 | src/vehicle/vehicle_land.cpp:engage_copter_land | tests/copter_land_test.cpp::test_land_observes_engagement_without_touchdown
+SR-LND-02 | src/vehicle/vehicle_land.cpp:wait_for_copter_land | tests/copter_land_test.cpp::test_land_ack_and_verification_share_three_seconds
+SR-LND-02 | src/vehicle/vehicle_land.cpp:engage_copter_land | tests/copter_land_test.cpp::test_land_rechecks_identity_at_final_send
+SR-LND-02 | src/runtime/runtime_mutation.cpp:invoke_vehicle | tests/runtime_land_cases.hpp::test_runtime_land_expired_safe_output_is_not_sent
 SR-VEL-01 | src/vehicle/vehicle_velocity.cpp:set_velocity | tests/safety_test.cpp::test_safety_velocity_accepts_clamped_frd_command
 SR-VEL-01 | src/safety/velocity_config.cpp:load_velocity_limits | tests/velocity_config_test.cpp::test_configured_limits_are_loaded
 SR-VEL-02 | src/vehicle/vehicle_velocity.cpp:set_velocity | tests/safety_test.cpp::test_safety_velocity_accepts_clamped_frd_command

@@ -8,7 +8,8 @@ ArduPilot retains stabilization, navigation execution and native failsafes.
 
 The delivered control surface is authority management, validated output/gimbal
 operations and configured actuator actions. Mission Planner adds direct USB HID
-input, live video, link status and advisory map outlines. Navigation/QuadPlane,
+input, live video, link status, advisory map outlines and bounded Copter LAND engagement.
+LAND success means mode observed, not touchdown or termination. Other navigation/QuadPlane,
 fence and velocity implementations remain in the non-installed qualification
 driver; they are not production IPC features. Physical takeover, termination,
 competition integration and full aircraft qualification remain open.

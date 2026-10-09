@@ -19,6 +19,7 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
     FakeConnection() {
         state->identity = nomad::telemetry::identify_vehicle(nomad::telemetry::kArduPilotAutopilot,
                                                               nomad::telemetry::kQuadrotor);
+        state->heartbeat_updated_at = std::chrono::steady_clock::now();
     }
 
     struct GotoRequest {
@@ -87,19 +88,33 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
             std::this_thread::sleep_for(command_delay);
         }
 
-        const auto transmit = [this, &command] {
-            std::lock_guard lock(state_mutex);
+        const auto record = [this, &command] {
             last_command = command;
             command_history.push_back(command);
             update_state_for_command(command);
         };
-        if (admission) {
-            if (!admission(transmit)) {
+        if (command.state_admission) {
+            std::lock_guard lock(state_mutex);
+            if (!command.state_admission(*state) || (admission && !admission(record))) {
                 return nomad::mavlink::CommandAck{
                     command.id, 0, nomad::mavlink::CommandAck::Status::AdmissionCancelled};
             }
+            if (!admission) {
+                record();
+            }
         } else {
-            transmit();
+            const auto transmit = [this, &record] {
+                std::lock_guard lock(state_mutex);
+                record();
+            };
+            if (admission) {
+                if (!admission(transmit)) {
+                    return nomad::mavlink::CommandAck{
+                        command.id, 0, nomad::mavlink::CommandAck::Status::AdmissionCancelled};
+                }
+            } else {
+                transmit();
+            }
         }
 
         std::lock_guard lock(state_mutex);

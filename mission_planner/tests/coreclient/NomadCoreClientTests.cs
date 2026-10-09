@@ -32,6 +32,7 @@ internal static partial class NomadCoreClientTests
             return _failures == 0 ? 0 : 1;
         }
         Runtime_AsyncTests();
+        Runtime_LandTests();
         Termination_ReportsUnavailableWithoutVehicleDispatch();
         RuntimeUnavailable_FailsClosedBeforeSend();
         Servo_FailsClosedOnInvalidInput();

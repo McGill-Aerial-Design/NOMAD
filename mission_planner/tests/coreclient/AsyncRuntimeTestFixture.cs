@@ -22,6 +22,7 @@ internal static partial class NomadCoreClientTests
         private readonly int _session;
         private int _generation;
         private readonly bool _delayHello;
+        private readonly object _capabilities;
         private readonly Func<Dictionary<string, object>, Dictionary<string, object>> _semanticResponse;
         private readonly object _state = new object();
         private readonly List<Thread> _workers = new List<Thread>();
@@ -52,13 +53,15 @@ internal static partial class NomadCoreClientTests
 
         internal AsyncRuntime(int count, int port = 0, ulong sequenceFloor = 1,
             string incarnation = "async-runtime", int session = 1, int generation = 1, bool delayHello = false,
-            Func<Dictionary<string, object>, Dictionary<string, object>> semanticResponse = null)
+            Func<Dictionary<string, object>, Dictionary<string, object>> semanticResponse = null,
+            object capabilities = null)
         {
             _connectionCount = count;
             _incarnation = incarnation;
             _session = session;
             _generation = generation;
             _delayHello = delayHello;
+            _capabilities = capabilities;
             _semanticResponse = semanticResponse;
             _nextSequence = sequenceFloor;
             _listener = new TcpListener(IPAddress.Loopback, port);
@@ -170,7 +173,7 @@ internal static partial class NomadCoreClientTests
             {
                 authority.Remove("next_sequence");
             }
-            return new Dictionary<string, object>
+            var response = new Dictionary<string, object>
             {
                 ["protocol"] = "nomad-core", ["version"] = 1, ["id"] = hello["id"],
                 ["ok"] = true, ["type"] = "hello_response", ["runtime_incarnation"] = _incarnation,
@@ -179,6 +182,11 @@ internal static partial class NomadCoreClientTests
                     hello["auth_nonce"] + ":" + _incarnation),
                 ["authority"] = authority
             };
+            if (_capabilities != null)
+            {
+                response["capabilities"] = _capabilities;
+            }
+            return response;
         }
 
         private bool RecordCommand(Dictionary<string, object> command)

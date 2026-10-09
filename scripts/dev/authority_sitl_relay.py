@@ -14,6 +14,7 @@ from pymavlink import mavutil
 
 CHANNEL = 5
 SET_SERVO = mavutil.mavlink.MAV_CMD_DO_SET_SERVO
+NAV_LAND = mavutil.mavlink.MAV_CMD_NAV_LAND
 
 
 def is_servo_ack(messages: list[Any]) -> bool:
@@ -27,7 +28,7 @@ def is_servo_ack(messages: list[Any]) -> bool:
 
 
 class AuthorityRelay:
-    """Bidirectional SITL relay with ACK filtering and a SET_SERVO wire counter."""
+    """Bidirectional SITL relay with servo ACK filtering and command observations."""
 
     def __init__(self, client_port: int) -> None:
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -43,6 +44,9 @@ class AuthorityRelay:
         self.parser.robust_parsing = True
         self.paused, self.drop_acks, self.dropped_acks = False, False, 0
         self.frames: list[tuple[float, int, int, int]] = []
+        self.land_commands: list[dict[str, Any]] = []
+        self.land_acknowledgements: list[tuple[float, int]] = []
+        self.heartbeats: list[tuple[float, int]] = []
         self.running = True
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
@@ -62,15 +66,7 @@ class AuthorityRelay:
             except Exception:
                 messages = []
             if sender == self.client:
-                for message in messages:
-                    if (
-                        message.get_type() == "COMMAND_LONG"
-                        and message.command == SET_SERVO
-                        and int(message.param1) == CHANNEL
-                    ):
-                        self.frames.append(
-                            (time.monotonic(), int(message.param2), message.get_srcSystem(), message.get_srcComponent())
-                        )
+                self.record_commands(messages)
                 if self.sitl is not None and not self.paused:
                     self.socket.sendto(data, self.sitl)
                 continue
@@ -80,7 +76,37 @@ class AuthorityRelay:
             if self.drop_acks and is_servo_ack(messages):
                 self.dropped_acks += 1
                 continue
+            self.record_observations(messages)
             self.socket.sendto(data, self.client)
+
+    def record_commands(self, messages: list[Any]) -> None:
+        for message in messages:
+            if message.get_type() != "COMMAND_LONG":
+                continue
+            observed_at = time.monotonic()
+            system, component = message.get_srcSystem(), message.get_srcComponent()
+            if message.command == SET_SERVO and int(message.param1) == CHANNEL:
+                self.frames.append((observed_at, int(message.param2), system, component))
+            elif message.command == NAV_LAND:
+                self.land_commands.append(
+                    {
+                        "observed_at": observed_at,
+                        "system": system,
+                        "component": component,
+                        "target_system": int(message.target_system),
+                        "target_component": int(message.target_component),
+                        "parameters": [float(getattr(message, f"param{index}")) for index in range(1, 8)],
+                    }
+                )
+
+    def record_observations(self, messages: list[Any]) -> None:
+        for message in messages:
+            if message.get_srcSystem() != 1 or message.get_srcComponent() != 1:
+                continue
+            if message.get_type() == "COMMAND_ACK" and message.command == NAV_LAND:
+                self.land_acknowledgements.append((time.monotonic(), int(message.result)))
+            elif message.get_type() == "HEARTBEAT":
+                self.heartbeats.append((time.monotonic(), int(message.custom_mode)))
 
     def pause(self) -> None:
         self.paused = True

@@ -201,6 +201,7 @@ void MavsdkMavlinkConnection::observe_heartbeat(const mavlink_message_t &message
     heartbeat_ = Heartbeat{message.sysid, message.compid, decoded.custom_mode, decoded.type, decoded.autopilot,
                            decoded.base_mode};
     last_heartbeat_ = ObservationClock::now();
+    state_.heartbeat_updated_at = last_heartbeat_;
 }
 
 void MavsdkMavlinkConnection::observe_position(const mavsdk::Telemetry::Position &position) {
@@ -295,6 +296,29 @@ std::optional<telemetry::VehicleState> MavsdkMavlinkConnection::wait_for_state(s
     return std::nullopt;
 }
 
+TransmissionAdmission MavsdkMavlinkConnection::get_command_admission(
+    const Command &command, const TransmissionAdmission &admission) const {
+    if (!command.state_admission) {
+        return admission;
+    }
+    const auto callbacks = resources_->callbacks;
+    return [callbacks, admission, validate = command.state_admission](const auto &send) {
+        std::lock_guard callback_lock(callbacks->mutex);
+        if (!callbacks->owner || !send) {
+            return false;
+        }
+        std::lock_guard observation_lock(callbacks->owner->observation_mutex_);
+        if (!validate(callbacks->owner->state_locked())) {
+            return false;
+        }
+        if (admission) {
+            return admission(send);
+        }
+        send();
+        return true;
+    };
+}
+
 mavsdk::MavlinkPassthrough::Result MavsdkMavlinkConnection::send_long(
     const Command &command, std::chrono::milliseconds timeout, const TransmissionAdmission &admission) {
     mavsdk::MavlinkPassthrough::CommandLong wire{};
@@ -312,7 +336,7 @@ mavsdk::MavlinkPassthrough::Result MavsdkMavlinkConnection::send_long(
         return mavsdk::MavlinkPassthrough::Result::CommandAdmissionCancelled;
     }
     mavsdk::OperationOptions options{timeout};
-    options.transmission_admission = admission;
+    options.transmission_admission = get_command_admission(command, admission);
     return resources_->passthrough->send_command_long(wire, options);
 }
 

@@ -11,6 +11,7 @@ constexpr CliCommand kCommands[] = {
     {"admit", ""},
     {"revoke", ""},
     {"handback", ""},
+    {"land", ""},
     {"servo", "<channel> <pwm_us>"},
     {"relay", "<number> <0|1>"},
     {"motor-test", "<instance> <pwm_us> <timeout_s>"},

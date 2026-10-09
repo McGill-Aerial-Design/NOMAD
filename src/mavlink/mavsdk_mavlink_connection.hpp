@@ -90,6 +90,7 @@ class MavsdkMavlinkConnection final : public MavlinkConnection {
   private:
     bool is_connected_unlocked() const;
     telemetry::VehicleState state_locked() const;
+    TransmissionAdmission get_command_admission(const Command &command, const TransmissionAdmission &admission) const;
 
     friend struct MavsdkConnectionTestAccess;
     struct CallbackGate {
