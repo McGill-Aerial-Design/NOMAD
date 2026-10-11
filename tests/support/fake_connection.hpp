@@ -280,6 +280,11 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
         state->heartbeat_fresh = value;
     }
 
+    void set_state(const nomad::telemetry::VehicleState &value) {
+        std::lock_guard lock(state_mutex);
+        *state = value;
+    }
+
     void advance_session_before_monitor() {
         std::lock_guard lock(state_mutex);
         worker_session_override_ = state->session_id;

@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cerrno>
@@ -136,6 +137,7 @@ void wait_until(const std::function<bool()> &predicate) {
 #include "runtime_actuator_cases.hpp"
 #include "runtime_actuator_pending_cases.hpp"
 #include "runtime_land_cases.hpp"
+#include "runtime_status_cases.hpp"
 void test_protocol_and_status(std::uint16_t port, FakeConnection &connection) {
     Client client(port);
     const auto hello = client.request(base_request("1", "hello"));
@@ -274,6 +276,7 @@ void test_runtime_owns_one_connection_and_releases_port() {
     CHECK(runtime.start(error));
     wait_until([&runtime] { return runtime.ready(); });
     test_protocol_and_status(port, *observed);
+    test_flight_status_observations(port, *observed);
     test_protocol_errors(port, *observed);
     { Client startup(port); read_authority(startup); }
     CHECK(Client(port).request(servo_request("startup-denied", 1500))["error"]["code"] ==
