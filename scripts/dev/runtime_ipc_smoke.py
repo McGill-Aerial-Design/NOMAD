@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -83,11 +84,27 @@ def verify_hello_and_status(ipc_port: int) -> None:
     status = request(ipc_port, "status-1", "status")["status"]
     require(status["runtime_ready"] is True, "STATUS reports runtime IPC readiness")
     deadline = time.monotonic() + 10.0
-    while time.monotonic() < deadline and not status["identity_resolved"]:
+    while time.monotonic() < deadline and (
+        not status["identity_resolved"] or not status["telemetry"]["landed_state_valid"]
+    ):
         time.sleep(0.1)
         status = request(ipc_port, "status-wait", "status")["status"]
     require(status["vehicle_connected"] is True, "STATUS reports the fake vehicle session")
     require(status["identity_resolved"] is True, "STATUS reports resolved Copter identity")
+
+
+def verify_cli_flight_status(binary: Path, environment: dict[str, str]) -> None:
+    """Observe real MAVSDK flight-state samples through installed CLI JSON."""
+    result = run_cli(binary, environment, "status")
+    require(result.returncode == 0, "CLI STATUS succeeds against the persistent runtime")
+    telemetry = json.loads(result.stdout)["status"]["telemetry"]
+    require(telemetry["heartbeat_fresh"] is True, "CLI reports the streaming peer's fresh heartbeat")
+    require(telemetry["vtol_state"] == "undefined", "Copter peer has no VTOL state")
+    require(telemetry["vtol_state_valid"] is False, "undefined VTOL telemetry remains invalid")
+    require(telemetry["landed_state"] == "on_ground", "CLI reports the peer's observed on-ground state")
+    require(telemetry["landed_state_valid"] is True, "observed on-ground sample is valid")
+    for field in ("heartbeat_age_ms", "vtol_state_age_ms", "landed_state_age_ms"):
+        require(type(telemetry[field]) is int and 0 <= telemetry[field] < 5000, f"CLI {field} is a recent observed age")
 
 
 def verify_cli_servo(binary: Path, peer: VehiclePeer, ipc_port: int) -> dict[str, str]:
@@ -180,6 +197,7 @@ def verify_runtime(binary: Path, peer: AuthorityPeer, udp_port: int, ipc_port: i
         wait_for_listener(ipc_port)
         verify_hello_and_status(ipc_port)
         cli_environment = verify_cli_servo(find_cli(), peer, ipc_port)
+        verify_cli_flight_status(find_cli(), cli_environment)
         verify_navigation_rejected(find_cli(), peer, cli_environment)
         verify_runtime_reconnect(ipc_port, peer, find_cli(), cli_environment)
         verify_gimbal_target(ipc_port, peer)

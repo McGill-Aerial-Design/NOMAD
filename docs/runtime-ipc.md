@@ -78,6 +78,18 @@ transport connected, vehicle heartbeat/session, identity resolution and
 telemetry validity/age separately. It reports the autopilot's numeric custom
 mode; the IPC layer does not infer a safety state or flight-mode name.
 
+`status.telemetry` includes `heartbeat_age_ms`, `vtol_state`, `vtol_state_valid`,
+`vtol_state_age_ms`, `landed_state`, `landed_state_valid` and `landed_state_age_ms`.
+The installed `nomad status` CLI prints these fields in its JSON response.
+VTOL values are `undefined`, `transition_to_fixed_wing`, `transition_to_multicopter`,
+`multicopter` and `fixed_wing`; landed values are `unknown`, `on_ground`, `in_air`,
+`taking_off` and `landing`. Validity describes the last sample, not its freshness.
+Ages are monotonic elapsed milliseconds since observation, or null when no sample
+has been observed. Invalid observed samples still have an age. Old values remain
+visible with their ages; clients must consider age and heartbeat/session state before
+using them. Reported landed state is autopilot telemetry, not independent physical
+touchdown verification, and does not change the Copter LAND success criterion.
+
 Mutating requests use a try-lock command policy: one mutating `Vehicle` call at
 a time. A concurrent mutation receives `busy`; it is not queued. Read-only
 requests use independent client workers and do not wait on the command lock.
