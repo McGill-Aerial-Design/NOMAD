@@ -357,6 +357,9 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     target_compile_definitions(nomad_mavsdk_connection_tests PRIVATE NOMAD_TESTS)
     add_test(NAME nomad_mavsdk_connection_tests COMMAND nomad_mavsdk_connection_tests)
 
+    add_executable(nomad_mavsdk_heartbeat_startup_probe tests/mavsdk_heartbeat_startup_probe.cpp)
+    target_link_libraries(nomad_mavsdk_heartbeat_startup_probe PRIVATE mavsdk)
+
     if(PROJECT_IS_TOP_LEVEL)
         add_executable(nomad_mavsdk_authority_wire_probe EXCLUDE_FROM_ALL tests/mavsdk_authority_wire_probe.cpp)
         target_link_libraries(nomad_mavsdk_authority_wire_probe PRIVATE nomad_mavsdk_connection nomad_core)
