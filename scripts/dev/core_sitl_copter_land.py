@@ -36,7 +36,7 @@ def send_setup_command(observer: CopterLandObserver, command: int, parameters: l
 def prepare_airborne_simulator(observer: CopterLandObserver, runtime: RuntimeProcess) -> None:
     if runtime.process is not None:
         raise ProbeError("runtime_present_during_external_setup")
-    observer.wait_for(observer.is_ready_for_setup, "fresh_disarmed_simulator_gps_missing", 60.0)
+    observer.wait_for(observer.is_ready_for_setup, "fresh_disarmed_simulator_readiness_missing", 60.0)
     send_setup_command(
         observer,
         mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
