@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -324,17 +325,21 @@ internal static partial class DualLinkStressTests
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         int requests = 0;
+        var startup = new Stopwatch();
+        long firstRequestTicks = -1;
         using (var serverStarted = new ManualResetEventSlim())
         {
             var server = StartTimingStatusServer(
-                listener, () => Interlocked.Increment(ref requests), serverStarted);
+                listener, () =>
+                {
+                    Interlocked.CompareExchange(ref firstRequestTicks, startup.ElapsedTicks, -1);
+                    Interlocked.Increment(ref requests);
+                }, serverStarted);
             bool serverReady = serverStarted.Wait(2000);
             Check(serverReady, "blocking status server worker starts before client polling");
             if (!serverReady)
             {
-                listener.Stop();
-                try { await server; }
-                catch (SocketException) { }
+                await StopTimingStatusServer(listener, server);
                 return;
             }
 
@@ -342,30 +347,67 @@ internal static partial class DualLinkStressTests
                 { ManagementPort = ((IPEndPoint)listener.LocalEndpoint).Port };
             using (var client = new StandaloneRouterClient(config, clock.Source))
             {
-                client.Start();
-                Check(await WaitUntil(() => Volatile.Read(ref requests) == 1, 2000),
-                    "initial status poll is immediate");
-                clock.Jump(48);
-                Check(!await WaitUntil(() => Volatile.Read(ref requests) > 1, 1100),
-                    "forward UTC jump and real-time waits do not advance injected polling clock");
-                clock.Seconds = .999;
-                Check(!await WaitUntil(() => Volatile.Read(ref requests) > 1, 350),
-                    "polling waits below 1000ms");
-                clock.Seconds = 1;
-                Check(await WaitUntil(() => Volatile.Read(ref requests) == 2, 1000),
-                    "poll occurs at exactly 1000ms");
-                clock.Jump(-96);
-                Check(!await WaitUntil(() => Volatile.Read(ref requests) > 2, 350),
-                    "backward UTC jump does not repoll");
-                clock.Seconds = 2;
-                Check(await WaitUntil(() => Volatile.Read(ref requests) == 3, 1000),
-                    "polling continues after backward jump");
-                client.Stop();
+                try
+                {
+                    startup.Start();
+                    client.Start();
+                    // Cold connect/HELLO has its own bound; the injected polling clock stays at zero.
+                    bool clientReady = await WaitUntil(() => client.IsMonitoring, 3000);
+                    double helloObservedMs = startup.Elapsed.TotalMilliseconds;
+                    Console.WriteLine($"    Cold management HELLO observed at {helloObservedMs:F1} ms; " +
+                        $"ready={clientReady}, requests={Volatile.Read(ref requests)}");
+                    Check(clientReady, "cold management client validates HELLO within 3000ms");
+                    if (!clientReady)
+                    {
+                        return;
+                    }
+                    bool initialPoll = await WaitUntil(() => Volatile.Read(ref requests) == 1, 2000);
+                    long observedTicks = Volatile.Read(ref firstRequestTicks);
+                    string firstRequestMs = observedTicks < 0 ? "not observed"
+                        : (observedTicks * 1000.0 / Stopwatch.Frequency).ToString("F1") + " ms since Start";
+                    Console.WriteLine($"    First peer status request: {firstRequestMs}; " +
+                        $"requests={Volatile.Read(ref requests)}, monitoring={client.IsMonitoring}");
+                    Check(initialPoll, "initial status poll is immediate after validated HELLO");
+                    if (!initialPoll)
+                    {
+                        return;
+                    }
+                    clock.Jump(48);
+                    Check(!await WaitUntil(() => Volatile.Read(ref requests) > 1, 1100),
+                        "forward UTC jump and real-time waits do not advance injected polling clock");
+                    clock.Seconds = .999;
+                    Check(!await WaitUntil(() => Volatile.Read(ref requests) > 1, 350),
+                        "polling waits below 1000ms");
+                    clock.Seconds = 1;
+                    Check(await WaitUntil(() => Volatile.Read(ref requests) == 2, 1000),
+                        "poll occurs at exactly 1000ms");
+                    clock.Jump(-96);
+                    Check(!await WaitUntil(() => Volatile.Read(ref requests) > 2, 350),
+                        "backward UTC jump does not repoll");
+                    clock.Seconds = 2;
+                    Check(await WaitUntil(() => Volatile.Read(ref requests) == 3, 1000),
+                        "polling continues after backward jump");
+                }
+                finally
+                {
+                    client.Stop();
+                    await StopTimingStatusServer(listener, server);
+                }
             }
-            listener.Stop();
-            Check(await WaitUntil(() => server.IsCompleted, 2000), "timing status server closes with client");
-            await server;
         }
+    }
+
+    private static async Task StopTimingStatusServer(TcpListener listener, Task server)
+    {
+        listener.Stop();
+        bool serverClosed = await WaitUntil(() => server.IsCompleted, 2000);
+        Check(serverClosed, "timing status server closes with client");
+        if (!serverClosed)
+        {
+            return;
+        }
+        try { await server; }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.Interrupted) { }
     }
 
     private static Task StartTimingStatusServer(
@@ -389,6 +431,8 @@ internal static partial class DualLinkStressTests
         using (var peer = listener.AcceptTcpClient())
         using (var stream = peer.GetStream())
         {
+            // A failing client cannot leave the fixture blocked indefinitely while reading its peer.
+            stream.ReadTimeout = 5000;
             try
             {
                 string line;
