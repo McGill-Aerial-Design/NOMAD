@@ -138,7 +138,8 @@ namespace NOMAD.MissionPlanner
                     int available = _tcp != null ? _tcp.Available : _serial.BytesToRead;
                     if (available == 0)
                     {
-                        if (_tcp != null && _tcp.Client.Poll(0, SelectMode.SelectRead))
+                        // Data can arrive after the earlier snapshot; readability alone does not mean EOF.
+                        if (_tcp != null && _tcp.Client.Poll(0, SelectMode.SelectRead) && _tcp.Available == 0)
                         {
                             throw new System.IO.IOException("TCP peer closed");
                         }

@@ -2,6 +2,7 @@
 // Copyright 2026 The NOMAD Authors
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -457,6 +458,7 @@ internal static partial class DualLinkStressTests
         config.Links[0].RemoteHost = "127.0.0.1";
         config.Links[0].ReconnectSeconds = .1;
         var listener = new TcpListener(IPAddress.Loopback, port + 1);
+        var messages = new ConcurrentQueue<string>();
         listener.Start();
         try
         {
@@ -465,24 +467,111 @@ internal static partial class DualLinkStressTests
             using (var mp = UdpSink.ConnectedTo(port))
             using (var pump = new Pump(wifi.Send, 10))
             {
+                router.LogMessage += (sender, message) => messages.Enqueue(message);
                 router.Start();
-                using (var peer = await listener.AcceptTcpClientAsync())
+                using (var peer = await AcceptTcpPeer(listener))
                 {
-                    router.SetManualOverride("cell");
+                    Check(router.SetManualOverride("cell"), "TCP link selected for split-frame exchanges");
                     mp.Send(Frames.Heartbeat(255, 190, 0));
                     Check(await WaitUntil(() => peer.Available > 0, 2000),
                         "TCP server receives GCS announcement before sending telemetry");
-                    var heartbeat = Frames.Heartbeat(1, 1, 1);
-                    await peer.GetStream().WriteAsync(heartbeat, 0, 4);
-                    await peer.GetStream().WriteAsync(heartbeat, 4, heartbeat.Length - 4);
-                    Check(await WaitUntil(() => router.Links[0].FramesReceived > 0, 2000), "TCP split frame parsed");
+                    await VerifyTcpSplitFrames(router, peer, messages);
+                    if (TestFailedSoFar)
+                    {
+                        return;
+                    }
                     router.SetManualOverride("");
+                    peer.Client.Shutdown(SocketShutdown.Send);
+                    Check(await WaitUntil(() => messages.Contains("cell: TCP peer closed"), 2000),
+                        "TCP EOF is observed after the live split-frame exchanges");
                 }
-                Check(await WaitUntil(() => router.ActiveLink == "wifi", 3000), "TCP close leaves UDP routing live");
-                using (var reconnected = await listener.AcceptTcpClientAsync())
-                { Check(reconnected.Connected, "TCP reconnect opens a fresh connection"); }
+                await VerifyTcpReconnect(router, listener, wifi, mp);
             }
         }
+        catch
+        {
+            Console.WriteLine("    TCP router messages: " + string.Join("; ", messages));
+            throw;
+        }
         finally { listener.Stop(); }
+    }
+
+    private static async Task<TcpClient> AcceptTcpPeer(TcpListener listener)
+    {
+        if (!await WaitUntil(listener.Pending, 2000))
+        {
+            throw new TimeoutException("TCP peer did not connect within two seconds");
+        }
+        return listener.AcceptTcpClient();
+    }
+
+    private static async Task VerifyTcpSplitFrames(GroundLinkRouter router, TcpClient peer,
+        ConcurrentQueue<string> messages)
+    {
+        const int count = 64;
+        long framesBefore = router.Links[0].FramesReceived;
+        // Repeated arrivals cover idle polling, without forcing the Available/Poll instruction window.
+        for (int i = 0; i < count; i++)
+        {
+            var heartbeat = Frames.Heartbeat(1, 1, (byte)(i + 1));
+            long bytesBefore = router.Links[0].BytesReceived;
+            await peer.GetStream().WriteAsync(heartbeat, 0, 4);
+            Check(await WaitUntil(() => router.Links[0].BytesReceived >= bytesBefore + 4, 2000),
+                "TCP prefix received for exchange " + (i + 1) + "; router messages: " + string.Join("; ", messages));
+            CheckEq(router.Links[0].FramesReceived, framesBefore + i, "TCP prefix does not emit a partial frame");
+            if (TestFailedSoFar)
+            {
+                return;
+            }
+            await peer.GetStream().WriteAsync(heartbeat, 4, heartbeat.Length - 4);
+            Check(await WaitUntil(() => router.Links[0].FramesReceived >= framesBefore + i + 1, 2000),
+                "TCP split frame parsed for exchange " + (i + 1));
+            if (TestFailedSoFar)
+            {
+                return;
+            }
+        }
+        CheckEq(router.Links[0].FramesReceived, framesBefore + count, "each TCP split frame is parsed exactly once");
+        Check(router.Links[0].IsOpen, "live TCP peer remains open across repeated split-frame exchanges");
+        Check(!messages.Any(message => message.StartsWith("cell:", StringComparison.Ordinal)),
+            "live TCP peer has no premature close; router messages: " + string.Join("; ", messages));
+    }
+
+    private static async Task VerifyTcpReconnect(GroundLinkRouter router, TcpListener listener,
+        UdpSink wifi, UdpSink mp)
+    {
+        Check(await WaitUntil(() => router.ActiveLink == "wifi", 3000), "TCP close leaves UDP routing live");
+        mp.Drain();
+        wifi.Send(Frames.Marker(92001, 90));
+        var received = new List<uint>();
+        Check(await WaitUntil(() =>
+        {
+            DrainMarkers(mp, received);
+            return received.Contains(92001);
+        }, 2000), "UDP telemetry reaches the consumer after TCP closes");
+        using (var reconnected = await AcceptTcpPeer(listener))
+        {
+            Check(router.SetManualOverride("cell"), "reconnected TCP link selected for fresh telemetry");
+            long framesBefore = router.Links[0].FramesReceived;
+            var marker = Frames.Marker(92002, 91);
+            await reconnected.GetStream().WriteAsync(marker, 0, marker.Length);
+            Check(await WaitUntil(() => router.Links[0].FramesReceived > framesBefore, 2000),
+                "reconnected TCP peer supplies a fresh complete frame");
+            CheckEq(router.Links[0].FramesReceived, framesBefore + 1, "reconnected TCP frame is parsed exactly once");
+            Check(await WaitUntil(() =>
+            {
+                DrainMarkers(mp, received);
+                return received.Contains(92002);
+            }, 2000), "reconnected TCP telemetry reaches the consumer");
+            router.SetManualOverride("");
+            reconnected.Client.LingerState = new LingerOption(true, 0);
+        }
+        Check(await WaitUntil(() => router.ActiveLink == "wifi", 3000), "TCP reset leaves UDP routing live");
+        wifi.Send(Frames.Marker(92003, 92));
+        Check(await WaitUntil(() =>
+        {
+            DrainMarkers(mp, received);
+            return received.Contains(92003);
+        }, 2000), "UDP telemetry reaches the consumer after TCP resets");
     }
 }
