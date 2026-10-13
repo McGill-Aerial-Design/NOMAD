@@ -13,7 +13,13 @@ import time
 from pathlib import Path
 
 from mavsdk_authority_peer import AuthorityPeer
-from mavsdk_peer import COMMAND_DO_MOUNT_CONTROL, COMMAND_DO_SET_SERVO, VehiclePeer
+from mavsdk_peer import (
+    COMMAND_DO_MOUNT_CONTROL,
+    COMMAND_DO_SET_SERVO,
+    HOME_LATITUDE_DEG,
+    HOME_LONGITUDE_DEG,
+    VehiclePeer,
+)
 from runtime_fixture_support import (
     FIXTURE_CREDENTIALS,
     authority_fields,
@@ -85,7 +91,9 @@ def verify_hello_and_status(ipc_port: int) -> None:
     require(status["runtime_ready"] is True, "STATUS reports runtime IPC readiness")
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline and (
-        not status["identity_resolved"] or not status["telemetry"]["landed_state_valid"]
+        not status["identity_resolved"]
+        or not status["telemetry"]["landed_state_valid"]
+        or not status["telemetry"]["position_valid"]
     ):
         time.sleep(0.1)
         status = request(ipc_port, "status-wait", "status")["status"]
@@ -107,7 +115,16 @@ def verify_cli_flight_status(binary: Path, environment: dict[str, str]) -> None:
     require(telemetry["vtol_state_valid"] is False, "undefined VTOL telemetry remains invalid")
     require(telemetry["landed_state"] == "on_ground", "CLI reports the peer's observed on-ground state")
     require(telemetry["landed_state_valid"] is True, "observed on-ground sample is valid")
-    for field in ("heartbeat_age_ms", "vtol_state_age_ms", "landed_state_age_ms"):
+    position = telemetry["position"]
+    require(abs(position["latitude_deg"] - HOME_LATITUDE_DEG) < 1e-7, "CLI reports the peer's observed latitude")
+    require(abs(position["longitude_deg"] - HOME_LONGITUDE_DEG) < 1e-7, "CLI reports the peer's observed longitude")
+    require(
+        abs(position["absolute_altitude_m"] - 25.0) < 0.001,
+        f"CLI preserves the peer's 25 m absolute altitude within wire precision: {position['absolute_altitude_m']}",
+    )
+    require(position["relative_altitude_m"] == 0.0, "CLI preserves the peer's distinct home-relative altitude")
+    require(telemetry["position_valid"] is True, "CLI reports the position sample's validity flag")
+    for field in ("heartbeat_age_ms", "vtol_state_age_ms", "landed_state_age_ms", "position_age_ms"):
         require(type(telemetry[field]) is int and 0 <= telemetry[field] < 5000, f"CLI {field} is a recent observed age")
 
 
