@@ -1,5 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
+void test_supported_flight_operations(Client &client, FakeConnection &connection) {
+    using nomad::telemetry::AircraftClass;
+    using nomad::telemetry::identify_vehicle;
+    const std::array identities{
+        nomad::telemetry::VehicleIdentity{}, identify_vehicle(3, 2), identify_vehicle(3, 1),
+        identify_vehicle(3, 21),
+        // A Plane heartbeat can resolve as QuadPlane through Q_ENABLE.
+        nomad::telemetry::VehicleIdentity{3, 1, AircraftClass::QuadPlane}, identify_vehicle(12, 2),
+    };
+    const std::array expected_operations{
+        Json(nullptr), Json::array({"land"}), Json::array(), Json::array(), Json::array(), Json(nullptr),
+    };
+    const auto commands_before = connection.command_count();
+    for (std::size_t index = 0; index < identities.size(); ++index) {
+        auto state = connection.get_state();
+        state.identity = identities[index];
+        connection.set_state(state);
+
+        const auto status = client.request(base_request("flight-operation-support", "status"))["status"];
+
+        CHECK(status["supported_flight_operations"] == expected_operations[index]);
+        CHECK(status["authority_owner"].is_null());
+    }
+    const auto hello = client.request(base_request("flight-operation-verbs", "hello"));
+    CHECK(std::find(hello["capabilities"].begin(), hello["capabilities"].end(), "land") !=
+          hello["capabilities"].end());
+    CHECK(connection.command_count() == commands_before);
+}
+
 void check_flight_sample_age(const Json &age, std::chrono::steady_clock::time_point sampled_at,
                             std::int64_t minimum_age_ms) {
     const auto maximum_age = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -49,6 +78,8 @@ void test_observed_flight_status(Client &client, FakeConnection &connection) {
         auto state = connection.get_state();
         const auto age = index == 0 ? std::chrono::seconds(0) : std::chrono::seconds(30);
         const auto sampled_at = std::chrono::steady_clock::now() - age;
+        state.identity = nomad::telemetry::identify_vehicle(3, 2);
+        state.connected = index == 0;
         state.heartbeat_updated_at = sampled_at;
         state.heartbeat_fresh = index == 0;
         state.vtol_state = samples[index].first;
@@ -58,7 +89,9 @@ void test_observed_flight_status(Client &client, FakeConnection &connection) {
         state.landed_state_valid = true;
         state.landed_state_updated_at = sampled_at - std::chrono::seconds(4);
         connection.set_state(state);
-        const auto telemetry = client.request(base_request("observed-flight-state", "status"))["status"]["telemetry"];
+        const auto status = client.request(base_request("observed-flight-state", "status"))["status"];
+        const auto &telemetry = status["telemetry"];
+        CHECK(status["supported_flight_operations"] == Json::array({"land"}));
         CHECK(telemetry["vtol_state"] == samples[index].second);
         CHECK(telemetry["landed_state"] == landed_samples[index].second);
         CHECK(telemetry["vtol_state_valid"] == true);
@@ -93,6 +126,8 @@ void test_invalid_flight_status(Client &client, FakeConnection &connection) {
 void test_flight_status_observations(std::uint16_t port, FakeConnection &connection) {
     const auto original = connection.get_state();
     Client client(port);
+    test_supported_flight_operations(client, connection);
+    connection.set_state(original);
     test_missing_flight_status(client, connection);
     test_observed_flight_status(client, connection);
     test_invalid_flight_status(client, connection);
