@@ -91,13 +91,17 @@ def verify_hello_and_status(ipc_port: int) -> None:
         status = request(ipc_port, "status-wait", "status")["status"]
     require(status["vehicle_connected"] is True, "STATUS reports the fake vehicle session")
     require(status["identity_resolved"] is True, "STATUS reports resolved Copter identity")
+    require(status["supported_flight_operations"] == ["land"], "STATUS reports installed Copter flight support")
+    require(status["authority_owner"] is None, "observing supported flight operations does not admit authority")
 
 
 def verify_cli_flight_status(binary: Path, environment: dict[str, str]) -> None:
     """Observe real MAVSDK flight-state samples through installed CLI JSON."""
     result = run_cli(binary, environment, "status")
     require(result.returncode == 0, "CLI STATUS succeeds against the persistent runtime")
-    telemetry = json.loads(result.stdout)["status"]["telemetry"]
+    status = json.loads(result.stdout)["status"]
+    require(status["supported_flight_operations"] == ["land"], "CLI reports installed Copter flight support")
+    telemetry = status["telemetry"]
     require(telemetry["heartbeat_fresh"] is True, "CLI reports the streaming peer's fresh heartbeat")
     require(telemetry["vtol_state"] == "undefined", "Copter peer has no VTOL state")
     require(telemetry["vtol_state_valid"] is False, "undefined VTOL telemetry remains invalid")

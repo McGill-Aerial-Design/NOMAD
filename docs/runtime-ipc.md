@@ -90,6 +90,20 @@ visible with their ages; clients must consider age and heartbeat/session state b
 using them. Reported landed state is autopilot telemetry, not independent physical
 touchdown verification, and does not change the Copter LAND success criterion.
 
+HELLO's `capabilities` lists protocol request verbs, regardless of the selected
+aircraft. `status.supported_flight_operations` separately lists the installed
+flight operations NOMAD supports for the resolved aircraft class: `["land"]`
+for Copter, `[]` for Plane and QuadPlane, and null for unresolved identity.
+The installed `nomad status` CLI includes this field in its JSON response.
+Clients treat a missing field from an older runtime as unknown support.
+This is NOMAD's class-based support, not autopilot-advertised capability bits or
+the qualification driver's broader operation set. A stale heartbeat retains
+the reported class and its support list; clients must separately inspect
+heartbeat age/freshness, connection/session state, actuation enablement, audit
+health and authority. The list grants no authority and does not predict command
+admission or successful execution. The runtime rechecks those conditions when
+handling each mutation.
+
 Mutating requests use a try-lock command policy: one mutating `Vehicle` call at
 a time. A concurrent mutation receives `busy`; it is not queued. Read-only
 requests use independent client workers and do not wait on the command lock.

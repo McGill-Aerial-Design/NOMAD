@@ -1,9 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "runtime_implementation.hpp"
 
+#include "nomad/vehicle/operation.hpp"
+
 namespace nomad::runtime {
 
 using namespace detail;
+
+namespace {
+
+Json supported_flight_operations(telemetry::AircraftClass aircraft_class) {
+    if (aircraft_class == telemetry::AircraftClass::Unknown) {
+        return nullptr;
+    }
+    if (vehicle::supports_operation(aircraft_class, vehicle::VehicleOperation::Land)) {
+        return Json::array({"land"});
+    }
+    return Json::array();
+}
+
+} // namespace
 
 Json Runtime::Implementation::handle_read_request(const Request &request) {
     if (request.type == "hello" || request.type == "status") {
@@ -81,6 +97,7 @@ Json Runtime::Implementation::status_snapshot() const {
             {"vehicle_connected", state.connected},
             {"identity_resolved", identity != telemetry::AircraftClass::Unknown},
             {"aircraft_class", telemetry::aircraft_class_name(identity)},
+            {"supported_flight_operations", supported_flight_operations(identity)},
             {"armed", state.armed},
             {"custom_mode", state.custom_mode},
             {"telemetry",
