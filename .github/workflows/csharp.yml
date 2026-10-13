@@ -70,9 +70,6 @@ jobs:
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v3
 
-      - name: Geofence geometry tests
-        run: pwsh -File scripts/build/test_plugin_geometry.ps1
-
       - name: Mission Planner direct-command architectural guard
         run: pixi run python -m pytest tests/test_mission_planner_command_boundary.py -q
 
@@ -169,6 +166,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $env:MP_DIR | Out-Null
           Copy-Item -Path (Join-Path $exe.Directory.FullName '*') -Destination $env:MP_DIR -Recurse -Force
           Write-Host "Staged Mission Planner $env:MP_VERSION at $env:MP_DIR"
+
+      - name: Advisory geometry and received-position tests
+        run: pwsh -File scripts/build/test_plugin_geometry.ps1
 
       - name: Build plugin (Release)
         run: |
