@@ -14,9 +14,10 @@ from pymavlink.dialects.v20 import ardupilotmega as mavlink
 
 
 class ArduPilotPeer:
-    def __init__(self, port: int, system_id: int) -> None:
-        self._address = ("127.0.0.1", port)
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    def __init__(self, port: int, system_id: int, host: str = "127.0.0.1") -> None:
+        self._address = (host, port)
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET
+        self._socket = socket.socket(family, socket.SOCK_DGRAM)
         self._mavlink = mavlink.MAVLink(None, srcSystem=system_id, srcComponent=1)
         self._position_boot_ms = 1000
         self._gps_time_usec = 1_000_000
@@ -100,16 +101,18 @@ class ArduPilotPeer:
         )
 
 
-def find_free_udp_port() -> int:
-    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    probe.bind(("127.0.0.1", 0))
-    port = probe.getsockname()[1]
-    probe.close()
-    return port
+def find_free_udp_port(host: str = "127.0.0.1") -> int:
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_DGRAM) as probe:
+        probe.bind((host, 0))
+        return probe.getsockname()[1]
 
 
-def run_binary(binary: Path, command: str, port: int, system_id: int, timeout: int = 15) -> subprocess.CompletedProcess:
-    endpoint = f"udpin:127.0.0.1:{port}"
+def run_binary(
+    binary: Path, command: str, port: int, system_id: int, timeout: int = 15, host: str = "127.0.0.1"
+) -> subprocess.CompletedProcess:
+    endpoint_host = f"[{host}]" if ":" in host else host
+    endpoint = f"udpin:{endpoint_host}:{port}"
     return subprocess.run(
         [str(binary), command, endpoint, str(system_id)],
         capture_output=True,
@@ -119,12 +122,19 @@ def run_binary(binary: Path, command: str, port: int, system_id: int, timeout: i
     )
 
 
-def run_peer_case(binary: Path, peer_id: int, expected_id: int, command: str) -> subprocess.CompletedProcess:
-    port = find_free_udp_port()
-    peer = ArduPilotPeer(port, peer_id)
+def run_peer_case(
+    binary: Path,
+    peer_id: int,
+    expected_id: int,
+    command: str,
+    peer_host: str = "127.0.0.1",
+    bind_host: str = "127.0.0.1",
+) -> subprocess.CompletedProcess:
+    port = find_free_udp_port(peer_host)
+    peer = ArduPilotPeer(port, peer_id, peer_host)
     peer.start()
     try:
-        return run_binary(binary, command, port, expected_id)
+        return run_binary(binary, command, port, expected_id, host=bind_host)
     finally:
         peer.stop()
 
@@ -142,14 +152,29 @@ def main() -> int:
         print("MAVSDK connectivity smoke binary is missing")
         return 2
 
-    valid = run_peer_case(binary, peer_id=1, expected_id=1, command="status")
-    require_case(valid.returncode == 0 and has_required_output("status", valid.stdout, "1"), "valid peer", valid)
+    for peer_host, bind_host in (
+        ("127.0.0.1", "127.0.0.1"),
+        ("127.0.0.1", "0.0.0.0"),
+        ("::1", "::1"),
+        ("::1", "::"),
+    ):
+        valid = run_peer_case(binary, 1, 1, "status", peer_host, bind_host)
+        require_case(
+            valid.returncode == 0 and has_required_output("status", valid.stdout, "1"),
+            f"valid peer on {bind_host}",
+            valid,
+        )
 
     wrong = run_peer_case(binary, peer_id=2, expected_id=1, command="connect")
     require_case(wrong.returncode != 0 and "different system ID" in wrong.stderr, "wrong peer", wrong)
 
     no_peer = run_binary(binary, "connect", find_free_udp_port(), system_id=1)
     require_case(no_peer.returncode != 0 and "timed out" in no_peer.stderr, "no peer", no_peer)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        busy = run_binary(binary, "connect", occupied.getsockname()[1], system_id=1)
+        require_case(busy.returncode != 0 and "could not bind" in busy.stderr, "occupied bind port", busy)
     return 0
 
 

@@ -123,9 +123,9 @@ NativeSocket create_udp_input_socket(const UdpBindAddress &address) {
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_protocol = IPPROTO_UDP;
     hints.ai_flags = AI_PASSIVE;
-    const char *host = address.host == "0.0.0.0" || address.host == "::" ? nullptr : address.host.c_str();
     addrinfo *candidates = nullptr;
-    if (getaddrinfo(host, address.port.c_str(), &hints, &candidates) != 0) {
+    // A null host would discard the address family of a literal wildcard.
+    if (getaddrinfo(address.host.c_str(), address.port.c_str(), &hints, &candidates) != 0) {
         return kInvalidSocket;
     }
 
