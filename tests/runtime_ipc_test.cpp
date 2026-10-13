@@ -22,6 +22,7 @@
 #include <functional>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <random>
 #include <source_location>

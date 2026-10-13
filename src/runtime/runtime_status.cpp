@@ -3,11 +3,28 @@
 
 #include "nomad/vehicle/operation.hpp"
 
+#include <cmath>
+
 namespace nomad::runtime {
 
 using namespace detail;
 
 namespace {
+
+Json finite_number(double value) {
+    return std::isfinite(value) ? Json(value) : Json(nullptr);
+}
+
+Json observed_position(const telemetry::VehicleState &state) {
+    if (state.position_updated_at == Clock::time_point{}) {
+        return nullptr;
+    }
+    const auto &position = state.position;
+    return {{"latitude_deg", finite_number(position.latitude_deg)},
+            {"longitude_deg", finite_number(position.longitude_deg)},
+            {"absolute_altitude_m", finite_number(position.altitude_m)},
+            {"relative_altitude_m", finite_number(position.relative_altitude_m)}};
+}
 
 Json supported_flight_operations(telemetry::AircraftClass aircraft_class) {
     if (aircraft_class == telemetry::AircraftClass::Unknown) {
@@ -109,6 +126,7 @@ Json Runtime::Implementation::status_snapshot() const {
               {"landed_state", telemetry::landed_state_name(state.landed_state)},
               {"landed_state_valid", state.landed_state_valid},
               {"landed_state_age_ms", optional_age(age_milliseconds(state.landed_state_updated_at))},
+              {"position", observed_position(state)},
               {"position_valid", state.position_valid},
               {"position_age_ms", optional_age(age_milliseconds(state.position_updated_at))},
               {"gps_valid", state.gps_valid},

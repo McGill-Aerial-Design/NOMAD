@@ -90,6 +90,18 @@ visible with their ages; clients must consider age and heartbeat/session state b
 using them. Reported landed state is autopilot telemetry, not independent physical
 touchdown verification, and does not change the Copter LAND success criterion.
 
+`status.telemetry.position` reports the last observed `latitude_deg`, `longitude_deg`,
+`absolute_altitude_m` (MSL) and `relative_altitude_m` (above home) in runtime STATUS
+and the installed CLI JSON. Neither altitude is height above terrain (AGL).
+The object is null when no position sample has been observed; zero coordinates or
+altitudes in an observed sample remain numeric zero. Each non-finite value is null.
+Finite values remain visible even when `position_valid` is false or the sample is
+old. The existing `position_valid` flag and monotonic `position_age_ms` are reported
+separately; the transport's sample flag alone does not guarantee numeric validity,
+freshness, navigation readiness or command admission. Clients must consider the
+values, sample metadata and heartbeat/session state together. A missing position
+object from an older runtime means unavailable data.
+
 HELLO's `capabilities` lists protocol request verbs, regardless of the selected
 aircraft. `status.supported_flight_operations` separately lists the installed
 flight operations NOMAD supports for the resolved aircraft class: `["land"]`
