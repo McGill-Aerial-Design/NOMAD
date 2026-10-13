@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// NOMAD Boundary View - Mission Planner fence exchange
+// NOMAD Boundary View - Mission Planner fence import
 // ============================================================
 
 using System;
@@ -90,89 +90,6 @@ namespace NOMAD.MissionPlanner
             catch (Exception ex)
             {
                 CustomMessageBox.Show($"Error getting fence: {ex.Message}", "Error");
-            }
-        }
-
-        private List<GpsPoint> GetSelectedBoundaryVertices(out string boundaryName)
-        {
-            var soft = ReadGridVertices(_dgvSoftBoundary);
-            var hard = ReadGridVertices(_dgvHardBoundary);
-            bool hasSoft = soft != null && soft.Count > 0;
-            bool hasHard = hard != null && hard.Count > 0;
-
-            if (!hasSoft && !hasHard)
-            {
-                boundaryName = null;
-                return null;
-            }
-
-            if (hasSoft && hasHard)
-            {
-                var result = CustomMessageBox.Show(
-                    "Export inner advisory outline (Yes) or outer advisory outline (No)?",
-                    "Select Outline",
-                    CustomMessageBox.MessageBoxButtons.YesNo);
-                if (result == CustomMessageBox.DialogResult.Yes)
-                {
-                    boundaryName = "Inner advisory";
-                    return soft;
-                }
-                boundaryName = "Outer advisory";
-                return hard;
-            }
-
-            if (hasSoft) { boundaryName = "Inner advisory"; return soft; }
-            boundaryName = "Outer advisory";
-            return hard;
-        }
-
-        private void BtnExportToMPPlan_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                var hardVerts = _missionConfig.HardBoundary?.Vertices;
-                if (hardVerts == null || hardVerts.Count < 3)
-                {
-                    CustomMessageBox.Show(
-                        "Outer advisory outline needs at least 3 points before exporting to the Plan map.",
-                        "Warning");
-                    return;
-                }
-                var vertices = hardVerts;
-                var strokeColor = Color.Red;
-                var fillColor = Color.Transparent;
-                string polyName = "NOMAD_Advisory_Outer_Outline";
-
-                // 1) Refresh the saved-config zone masks on both maps.
-                try
-                {
-                    MapOverlayManager.DrawBoundaries(_missionConfig);
-                }
-                catch (Exception ex) { Log.Error($"Boundary zone draw failed - {ex.Message}"); }
-
-                // 2) Keep Mission Planner's native Plan fence as an outline.
-                bool planInjected = false;
-                try
-                {
-                    planInjected = MapOverlayManager.ExportToMPGeoFence(
-                        vertices,
-                        polyName,
-                        strokeColor,
-                        fillColor,
-                        3);
-                }
-                catch (Exception ex) { Log.Error($"Plan map inject failed - {ex.Message}"); }
-
-                CustomMessageBox.Show(
-                    planInjected
-                        ? "Outer advisory outline exported to the Plan map. " +
-                            "No runtime or aircraft fence was changed."
-                        : "Plan map export unavailable. No runtime or aircraft fence was changed.",
-                    "Plan Map Export");
-            }
-            catch (Exception ex)
-            {
-                CustomMessageBox.Show($"Error exporting fence outline: {ex.Message}", "Error");
             }
         }
 

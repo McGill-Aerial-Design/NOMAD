@@ -61,8 +61,9 @@ mechanism. The plugin's LAND-as-termination dispatch and descent-parameter
 recipes have been removed. Its termination button reports termination
 unavailable and sends no aircraft command. The plugin's direct vehicle-fence
 upload/clear writer is deleted because it could disable the fence without
-qualified maintenance ownership or failure restoration. Visual Plan map export
-remains; it sends no aircraft request. Mission Planner's saved inner/outer
+qualified maintenance ownership or failure restoration. NOMAD draws its own
+advisory outlines on the Data and Plan maps without replacing native Plan fence
+state or sending an aircraft request. Mission Planner's saved inner/outer
 outlines and configurable altitude color threshold are local advisory display
 data only. Protocol v1 has no boundary configuration, evaluation or status API;
 the outlines are not installed on the runtime or aircraft and cannot satisfy a

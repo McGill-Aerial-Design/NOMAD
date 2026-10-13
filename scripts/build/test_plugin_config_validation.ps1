@@ -212,7 +212,148 @@ try {
             throw 'An empty preset list did not retain the placeholder.'
         }
     } finally { $presetCombo.Dispose() }
-    Write-Host 'Mission Planner current configuration, HID and preset selection validation passed.'
+    # Use isolated maps and a constructor-skipped planner; never load a real MP screen or saved outlines.
+    $renderer = $plugin.GetType('NOMAD.MissionPlanner.MapOverlayManager', $true)
+    $staticFlags = [Reflection.BindingFlags]'Static,Public,NonPublic'
+    $plannerType = [MissionPlanner.GCSViews.FlightPlanner]
+    $plannerInstance = $plannerType.GetProperty('instance', $staticFlags)
+    $dataMapField = [MissionPlanner.GCSViews.FlightData].GetField('mymap', $staticFlags)
+    $oldPlanner = $plannerInstance.GetValue($null, $null)
+    $oldDataMap = $dataMapField.GetValue($null)
+    $planner = [Runtime.Serialization.FormatterServices]::GetUninitializedObject($plannerType)
+    $planMap = [Activator]::CreateInstance($plannerType.GetField('MainMap').FieldType)
+    $dataMap = [Activator]::CreateInstance($dataMapField.FieldType)
+    $nativeOverlay = [GMap.NET.WindowsForms.GMapOverlay]::new('native-plan-sentinel')
+    $nativePoints = [Collections.Generic.List[GMap.NET.PointLatLng]]::new()
+    foreach ($point in @(@(46.0, -76.0), @(46.01, -76.0), @(46.01, -76.01))) {
+        $nativePoints.Add([GMap.NET.PointLatLng]::new($point[0], $point[1]))
+    }
+    $nativePolygon = [GMap.NET.WindowsForms.GMapPolygon]::new($nativePoints, 'native-fence')
+    $nativePoints = $nativePolygon.Points
+    $otherPolygon = [GMap.NET.WindowsForms.GMapPolygon]::new(
+        [Collections.Generic.List[GMap.NET.PointLatLng]]::new($nativePoints), 'native-other-shape')
+    $otherPoints = $otherPolygon.Points
+    $nativeMarker = [GMap.NET.WindowsForms.Markers.GMarkerGoogle]::new(
+        [GMap.NET.PointLatLng]::new(46.005, -76.005),
+        [GMap.NET.WindowsForms.Markers.GMarkerGoogleType]::blue_small)
+    $nativeOverlay.Polygons.Add($nativePolygon)
+    $nativeOverlay.Polygons.Add($otherPolygon)
+    $nativeOverlay.Markers.Add($nativeMarker)
+    $planMap.Overlays.Add($nativeOverlay)
+    $plannerType.GetField('MainMap').SetValue($planner, $planMap)
+    $plannerType.GetField('geofencepolygon').SetValue($planner, $nativePolygon)
+    $plannerType.GetField('geofenceoverlay').SetValue($planner, $nativeOverlay)
+    $polygonCollection = $nativeOverlay.Polygons
+    $markerCollection = $nativeOverlay.Markers
+    $nativePointValues = [Newtonsoft.Json.JsonConvert]::SerializeObject($nativePoints)
+    $markerPosition = $nativeMarker.Position
+    $outlineJson = '{"SoftBoundary":{"Vertices":[' +
+        '{"Lat":44.998,"Lon":-75.003},{"Lat":45.002,"Lon":-75.003},' +
+        '{"Lat":45.002,"Lon":-74.997},{"Lat":44.998,"Lon":-74.997}]},' +
+        '"HardBoundary":{"Vertices":[' +
+        '{"Lat":44.996,"Lon":-75.006},{"Lat":45.004,"Lon":-75.006},' +
+        '{"Lat":45.004,"Lon":-74.994},{"Lat":44.996,"Lon":-74.994}]}}'
+    $outlines = $geofenceLoadMethod.Invoke($null, [object[]]@($outlineJson))
+    $outlineValues = [Newtonsoft.Json.JsonConvert]::SerializeObject($outlines)
+    $inner = $outlines.SoftBoundary.Vertices
+    $outer = $outlines.HardBoundary.Vertices
+    $innerPoints = $inner.ToArray()
+    $outerPoints = $outer.ToArray()
+    try {
+        $plannerInstance.SetValue($null, $planner, $null)
+        $dataMapField.SetValue($null, $dataMap)
+        foreach ($map in @($planMap, $dataMap)) {
+            # No handle or tiles are opened. Center the in-memory projection for the paint callback.
+            $map.Size = [Drawing.Size]::new(320, 240)
+            $map.MapProvider = [GMap.NET.MapProviders.EmptyProvider]::Instance
+            $map.MaxZoom = 18
+            $map.Zoom = 14
+            $map.Position = [GMap.NET.PointLatLng]::new(45.0, -75.0)
+            $coreProperty = [GMap.NET.WindowsForms.GMapControl].GetProperty(
+                'Core', [Reflection.BindingFlags]'Instance,Public,NonPublic')
+            $coreProperty.PropertyType.GetMethod('GoToCurrentPosition').Invoke(
+                $coreProperty.GetValue($map, $null), @()) | Out-Null
+        }
+        $renderer.GetMethod('DrawBoundaries').Invoke($null, [object[]]@($outlines)) | Out-Null
+        if ($renderer.GetMethod('EnsureBoundaryMaps').Invoke($null, @()) -ne 2) {
+            throw 'Saved advisory outlines did not bind both Data and Plan maps.'
+        }
+        $paint = $renderer.GetMethod('BoundaryMap_Paint', $staticFlags)
+        foreach ($map in @($planMap, $dataMap)) {
+            $canvas = [Drawing.Bitmap]::new(320, 240)
+            $graphics = [Drawing.Graphics]::FromImage($canvas)
+            try {
+                $graphics.Clear([Drawing.Color]::White)
+                $paintArgs = [Windows.Forms.PaintEventArgs]::new(
+                    $graphics, [Drawing.Rectangle]::new(0, 0, 320, 240))
+                $paint.Invoke($null, [object[]]@($map, $paintArgs)) | Out-Null
+                if ($canvas.GetPixel(0, 0).ToArgb() -eq [Drawing.Color]::White.ToArgb() -or
+                    $canvas.GetPixel(160, 120).ToArgb() -ne [Drawing.Color]::White.ToArgb()) {
+                    $center = $map.FromLatLngToLocal([GMap.NET.PointLatLng]::new(45.0, -75.0))
+                    $paintFailure = 'Advisory painting did not preserve exterior/interior colors: ' +
+                        'corner={0}, center={1}, projected center={2}, zoom={3}'
+                    throw ($paintFailure -f $canvas.GetPixel(0, 0), $canvas.GetPixel(160, 120), $center, $map.Zoom)
+                }
+            } finally { $graphics.Dispose(); $canvas.Dispose() }
+        }
+        if ($renderer.GetField('_paintErrorLogged', $staticFlags).GetValue($null)) {
+            throw 'Advisory rendering failed while painting the isolated maps.'
+        }
+        if (-not [object]::ReferenceEquals(
+                $plannerType.GetField('geofencepolygon').GetValue($planner), $nativePolygon) -or
+            -not [object]::ReferenceEquals(
+                $plannerType.GetField('geofenceoverlay').GetValue($planner), $nativeOverlay) -or
+            -not [object]::ReferenceEquals($nativePolygon.Points, $nativePoints) -or
+            -not [object]::ReferenceEquals($otherPolygon.Points, $otherPoints) -or
+            [Newtonsoft.Json.JsonConvert]::SerializeObject($nativePoints) -cne $nativePointValues -or
+            [Newtonsoft.Json.JsonConvert]::SerializeObject($otherPolygon.Points) -cne $nativePointValues) {
+            throw 'Advisory drawing replaced or changed native Plan fence geometry.'
+        }
+        if (-not [object]::ReferenceEquals($nativeOverlay.Polygons, $polygonCollection) -or
+            $nativeOverlay.Polygons.Count -ne 2 -or
+            -not [object]::ReferenceEquals($nativeOverlay.Polygons[0], $nativePolygon) -or
+            -not [object]::ReferenceEquals($nativeOverlay.Polygons[1], $otherPolygon) -or
+            -not [object]::ReferenceEquals($nativeOverlay.Markers, $markerCollection) -or
+            $nativeOverlay.Markers.Count -ne 1 -or
+            -not [object]::ReferenceEquals($nativeOverlay.Markers[0], $nativeMarker) -or
+            $nativeMarker.Position -ne $markerPosition -or $planMap.Overlays.Count -ne 1 -or
+            -not [object]::ReferenceEquals($planMap.Overlays[0], $nativeOverlay)) {
+            throw 'Advisory drawing changed native Plan overlay or marker state.'
+        }
+        if (-not [object]::ReferenceEquals($outlines.SoftBoundary.Vertices, $inner) -or
+            -not [object]::ReferenceEquals($outlines.HardBoundary.Vertices, $outer) -or
+            [Newtonsoft.Json.JsonConvert]::SerializeObject($outlines) -cne $outlineValues) {
+            throw 'Advisory drawing changed the imported or saved outline data.'
+        }
+        for ($index = 0; $index -lt $innerPoints.Length; $index++) {
+            if (-not [object]::ReferenceEquals($inner[$index], $innerPoints[$index]) -or
+                -not [object]::ReferenceEquals($outer[$index], $outerPoints[$index])) {
+                throw 'Advisory drawing replaced an input outline vertex.'
+            }
+        }
+        $card = $boundaryViewType.GetMethod('BuildImportCard', $privateFlags).Invoke($view, @())
+        try {
+            $controls = [Collections.Generic.Queue[Windows.Forms.Control]]::new()
+            $controls.Enqueue($card)
+            $texts = [Collections.Generic.List[string]]::new()
+            while ($controls.Count -gt 0) {
+                $control = $controls.Dequeue()
+                $texts.Add($control.Text)
+                foreach ($child in $control.Controls) { $controls.Enqueue($child) }
+            }
+            if ($texts.Contains('Export to Plan Map') -or -not $texts.Contains('KML') -or
+                -not $texts.Contains('Coords') -or -not $texts.Contains('MP Fence')) {
+                throw 'Advisory map controls still offer native Plan export or lost a read-only import.'
+            }
+        } finally { $card.Dispose() }
+    } finally {
+        $renderer.GetMethod('StopBoundaryRendering').Invoke($null, @()) | Out-Null
+        $plannerInstance.SetValue($null, $oldPlanner, $null)
+        $dataMapField.SetValue($null, $oldDataMap)
+        $planMap.Dispose()
+        $dataMap.Dispose()
+    }
+    Write-Host 'Mission Planner configuration, HID, presets and advisory map isolation validation passed.'
 } finally {
     [AppDomain]::CurrentDomain.remove_AssemblyResolve($dependencyResolver)
     Remove-Item -LiteralPath $temporary -Recurse -Force
