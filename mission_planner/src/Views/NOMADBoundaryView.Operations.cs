@@ -162,23 +162,6 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        /// <summary>Read an editable boundary grid into a vertex list (skips blank/invalid rows).</summary>
-        private static List<GpsPoint> ReadGridVertices(DataGridView dgv)
-        {
-            var points = new List<GpsPoint>();
-            if (dgv == null) return points;
-            foreach (DataGridViewRow row in dgv.Rows)
-            {
-                if (row.IsNewRow) continue;
-                if (double.TryParse(Convert.ToString(row.Cells["Lat"].Value), out var lat) &&
-                    double.TryParse(Convert.ToString(row.Cells["Lon"].Value), out var lon))
-                {
-                    points.Add(new GpsPoint(lat, lon));
-                }
-            }
-            return points;
-        }
-
         private void SaveBoundaryFromGrid(DataGridView dgv, FlightBoundary boundary)
         {
             // The derived-soft sync repopulates the soft grid itself; its

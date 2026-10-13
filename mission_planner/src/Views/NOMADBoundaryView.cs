@@ -371,15 +371,12 @@ namespace NOMAD.MissionPlanner
 
         private TableLayoutPanel BuildImportCard()
         {
-            var card = Card("IMPORT / EXPORT", out var body);
+            var card = Card("IMPORT", out var body);
 
             var btnImportKml = Btn("KML", ACCENT_COLOR, BtnImportKml_Click);
             var btnImportCSV = Btn("Coords", ACCENT_COLOR, BtnImportGoogleMaps_Click);
             var btnGetFromMP = Btn("MP Fence", ACCENT_COLOR, BtnGetFromMP_Click);
             AddRow(body, Row(Lbl("Import:", TEXT_SECONDARY, NOMADTheme.SIZE_SMALL, FontStyle.Bold), btnImportKml, btnImportCSV, btnGetFromMP));
-
-            var btnExportToMPPlan = Btn("Export to Plan Map", SUCCESS_COLOR, BtnExportToMPPlan_Click);
-            AddRow(body, Row(Lbl("Fence Outline:", TEXT_SECONDARY, NOMADTheme.SIZE_SMALL, FontStyle.Bold), btnExportToMPPlan));
 
             // Auto-draw toggle: when checked, AutoDrawBoundariesIfEnabled() pushes
             // imported/edited polygons to the map without a manual refresh. Named so

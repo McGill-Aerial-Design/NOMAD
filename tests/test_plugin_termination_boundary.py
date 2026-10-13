@@ -34,14 +34,17 @@ def test_boundary_preview_has_no_vehicle_action_path():
     assert "VISUAL ADVISORY ONLY" in view
 
 
-def test_plugin_fence_export_cannot_write_or_disable_aircraft_fence():
+def test_plugin_advisory_maps_cannot_write_or_disable_aircraft_fence():
     text = (ROOT / "Views/NOMADBoundaryView.MPFence.cs").read_text(encoding="utf-8")
     assert not (ROOT / "Geofence/MPFenceUploader.cs").exists(), "Direct fence writer must remain removed"
     assert "MPFenceUploader" not in text
     assert "BtnClearVehicleFence_Click" not in text
-    assert "No runtime or aircraft fence was changed." in text
-    assert "MapOverlayManager.ExportToMPGeoFence(" in text
     assert "MapFenceActionToParam" not in text
+    for source in ROOT.rglob("*.cs"):
+        content = source.read_text(encoding="utf-8")
+        assert "ExportToMPGeoFence" not in content, f"Native Plan fence writer returned in {source}"
+        assert "geofencepolygon" not in content, f"Native Plan polygon access returned in {source}"
+        assert "geofenceoverlay" not in content, f"Native Plan fence overlay access returned in {source}"
 
 
 def test_removed_speed_settings_have_no_compatibility_path():
