@@ -157,7 +157,62 @@ try {
         $positionId.Text = 'unknown-id'
         if ($positionEnable.Enabled) { throw 'Unknown axis eligibility did not fail closed.' }
     } finally { $form.Dispose() }
-    Write-Host 'Mission Planner current configuration and HID validation passed.'
+    # Exercise preset selection without constructing a view that reads the operator's saved outlines.
+    $boundaryViewType = $plugin.GetType('NOMAD.MissionPlanner.NOMADBoundaryView', $true)
+    $presetType = $plugin.GetType('NOMAD.MissionPlanner.BoundaryPreset', $true)
+    $view = [Runtime.Serialization.FormatterServices]::GetUninitializedObject($boundaryViewType)
+    $presets = [Activator]::CreateInstance([Collections.Generic.List``1].MakeGenericType($presetType))
+    $older = [Activator]::CreateInstance($presetType)
+    $newer = [Activator]::CreateInstance($presetType)
+    $sameTime = [Activator]::CreateInstance($presetType)
+    $older.Name = 'Repeated name'
+    $newer.Name = 'Repeated name'
+    $sameTime.Name = 'Equal timestamp'
+    $older.CreatedAt = [datetime]'2026-01-01'
+    $newer.CreatedAt = [datetime]'2026-01-02'
+    $sameTime.CreatedAt = $newer.CreatedAt
+    $presets.Add($older)
+    $presets.Add($newer)
+    $presets.Add($sameTime)
+    $privateFlags = [Reflection.BindingFlags]'Instance,NonPublic'
+    $boundaryViewType.GetField('_presets', $privateFlags).SetValue($view, $presets)
+    $presetCombo = New-Object Windows.Forms.ComboBox
+    $boundaryViewType.GetField('_cmbPresets', $privateFlags).SetValue($view, $presetCombo)
+    $refresh = $boundaryViewType.GetMethod('RefreshPresetCombo', $privateFlags)
+    try {
+        $refresh.Invoke($view, @()) | Out-Null
+        if ($presetCombo.Items.Count -ne 4 -or $presetCombo.SelectedIndex -ne 0 -or
+            $presetCombo.GetItemText($presetCombo.SelectedItem) -ne '-- Select Preset --') {
+            throw 'Preset refresh did not reset selection to the placeholder.'
+        }
+        $expected = @($newer, $sameTime, $older)
+        for ($index = 0; $index -lt $expected.Count; $index++) {
+            $presetCombo.SelectedIndex = $index + 1
+            if (-not [object]::ReferenceEquals($presetCombo.SelectedItem, $expected[$index]) -or
+                $presetCombo.GetItemText($presetCombo.SelectedItem) -ne $expected[$index].Name) {
+                throw 'Displayed preset selection lost its identity after sorting or duplicate names.'
+            }
+        }
+        # Changing storage order must not change an already displayed selection.
+        $presetCombo.SelectedIndex = 1
+        $presets.Reverse()
+        if (-not [object]::ReferenceEquals($presetCombo.SelectedItem, $newer)) {
+            throw 'Preset selection changed when the underlying list order changed.'
+        }
+        foreach ($selection in @(-1, 0)) {
+            $presetCombo.SelectedIndex = $selection
+            foreach ($handler in @('LoadSelectedPreset', 'DeleteSelectedPreset')) {
+                $boundaryViewType.GetMethod($handler, $privateFlags).Invoke(
+                    $view, [object[]]@($null, [EventArgs]::Empty)) | Out-Null
+            }
+        }
+        $presets.Clear()
+        $refresh.Invoke($view, @()) | Out-Null
+        if ($presetCombo.Items.Count -ne 1 -or $presetCombo.SelectedIndex -ne 0) {
+            throw 'An empty preset list did not retain the placeholder.'
+        }
+    } finally { $presetCombo.Dispose() }
+    Write-Host 'Mission Planner current configuration, HID and preset selection validation passed.'
 } finally {
     [AppDomain]::CurrentDomain.remove_AssemblyResolve($dependencyResolver)
     Remove-Item -LiteralPath $temporary -Recurse -Force
