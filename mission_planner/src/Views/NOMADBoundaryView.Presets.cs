@@ -63,21 +63,26 @@ namespace NOMAD.MissionPlanner
 
         private void RefreshPresetCombo()
         {
-            _cmbPresets?.Items.Clear();
-            _cmbPresets?.Items.Add("-- Select Preset --");
+            if (_cmbPresets == null)
+            {
+                return;
+            }
+            _cmbPresets.DisplayMember = nameof(BoundaryPreset.Name);
+            _cmbPresets.Items.Clear();
+            _cmbPresets.Items.Add("-- Select Preset --");
             foreach (var preset in _presets.OrderByDescending(p => p.CreatedAt))
             {
-                _cmbPresets?.Items.Add(preset.Name);
+                _cmbPresets.Items.Add(preset);
             }
-            if (_cmbPresets != null)
-                _cmbPresets.SelectedIndex = 0;
+            _cmbPresets.SelectedIndex = 0;
         }
 
         private void LoadSelectedPreset(object sender, EventArgs e)
         {
-            if (_cmbPresets.SelectedIndex <= 0) return;
-
-            var preset = _presets[_cmbPresets.SelectedIndex - 1];
+            if (!(_cmbPresets.SelectedItem is BoundaryPreset preset))
+            {
+                return;
+            }
 
             if (CustomMessageBox.Show($"Load preset '{preset.Name}'?\nThis will replace current boundaries.",
                 "Confirm", CustomMessageBox.MessageBoxButtons.YesNo) == CustomMessageBox.DialogResult.Yes)
@@ -193,9 +198,10 @@ namespace NOMAD.MissionPlanner
 
         private void DeleteSelectedPreset(object sender, EventArgs e)
         {
-            if (_cmbPresets.SelectedIndex <= 0) return;
-
-            var preset = _presets[_cmbPresets.SelectedIndex - 1];
+            if (!(_cmbPresets.SelectedItem is BoundaryPreset preset))
+            {
+                return;
+            }
 
             if (CustomMessageBox.Show($"Delete preset '{preset.Name}'?", "Confirm",
                 CustomMessageBox.MessageBoxButtons.YesNo) == CustomMessageBox.DialogResult.Yes)
