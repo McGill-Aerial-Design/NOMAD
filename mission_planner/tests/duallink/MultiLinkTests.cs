@@ -472,11 +472,18 @@ internal static partial class DualLinkStressTests
                 using (var peer = await AcceptTcpPeer(listener))
                 {
                     Check(router.SetManualOverride("cell"), "TCP link selected for split-frame exchanges");
+                    bool ready = await WaitUntil(() => router.Links[0].IsOpen, 2000);
+                    Check(ready, "TCP router publishes its open transport before the GCS send; " +
+                        DescribeTcpState(router, messages));
+                    if (!ready)
+                    {
+                        return;
+                    }
                     mp.Send(Frames.Heartbeat(255, 190, 0));
                     Check(await WaitUntil(() => peer.Available > 0, 2000),
-                        "TCP server receives GCS announcement before sending telemetry");
-                    await VerifyTcpSplitFrames(router, peer, messages);
-                    if (TestFailedSoFar)
+                        "TCP server receives GCS announcement before sending telemetry; " +
+                        DescribeTcpState(router, messages));
+                    if (!await VerifyTcpSplitFrames(router, peer, messages))
                     {
                         return;
                     }
@@ -505,7 +512,7 @@ internal static partial class DualLinkStressTests
         return listener.AcceptTcpClient();
     }
 
-    private static async Task VerifyTcpSplitFrames(GroundLinkRouter router, TcpClient peer,
+    private static async Task<bool> VerifyTcpSplitFrames(GroundLinkRouter router, TcpClient peer,
         ConcurrentQueue<string> messages)
     {
         const int count = 64;
@@ -516,25 +523,39 @@ internal static partial class DualLinkStressTests
             var heartbeat = Frames.Heartbeat(1, 1, (byte)(i + 1));
             long bytesBefore = router.Links[0].BytesReceived;
             await peer.GetStream().WriteAsync(heartbeat, 0, 4);
-            Check(await WaitUntil(() => router.Links[0].BytesReceived >= bytesBefore + 4, 2000),
-                "TCP prefix received for exchange " + (i + 1) + "; router messages: " + string.Join("; ", messages));
-            CheckEq(router.Links[0].FramesReceived, framesBefore + i, "TCP prefix does not emit a partial frame");
-            if (TestFailedSoFar)
+            bool prefixReceived = await WaitUntil(() => router.Links[0].BytesReceived >= bytesBefore + 4, 2000);
+            Check(prefixReceived, "TCP prefix received for exchange " + (i + 1) + "; " +
+                DescribeTcpState(router, messages));
+            long prefixFrames = router.Links[0].FramesReceived;
+            CheckEq(prefixFrames, framesBefore + i, "TCP prefix does not emit a partial frame");
+            if (!prefixReceived || prefixFrames != framesBefore + i)
             {
-                return;
+                return false;
             }
             await peer.GetStream().WriteAsync(heartbeat, 4, heartbeat.Length - 4);
-            Check(await WaitUntil(() => router.Links[0].FramesReceived >= framesBefore + i + 1, 2000),
-                "TCP split frame parsed for exchange " + (i + 1));
-            if (TestFailedSoFar)
+            bool parsed = await WaitUntil(() => router.Links[0].FramesReceived >= framesBefore + i + 1, 2000);
+            Check(parsed, "TCP split frame parsed for exchange " + (i + 1) + "; " +
+                DescribeTcpState(router, messages));
+            if (!parsed)
             {
-                return;
+                return false;
             }
         }
-        CheckEq(router.Links[0].FramesReceived, framesBefore + count, "each TCP split frame is parsed exactly once");
-        Check(router.Links[0].IsOpen, "live TCP peer remains open across repeated split-frame exchanges");
-        Check(!messages.Any(message => message.StartsWith("cell:", StringComparison.Ordinal)),
+        var stats = router.Links[0];
+        CheckEq(stats.FramesReceived, framesBefore + count, "each TCP split frame is parsed exactly once");
+        Check(stats.IsOpen, "live TCP peer remains open across repeated split-frame exchanges");
+        bool noPrematureClose = !messages.Any(message => message.StartsWith("cell:", StringComparison.Ordinal));
+        Check(noPrematureClose,
             "live TCP peer has no premature close; router messages: " + string.Join("; ", messages));
+        return stats.FramesReceived == framesBefore + count && stats.IsOpen && noPrematureClose;
+    }
+
+    private static string DescribeTcpState(GroundLinkRouter router, ConcurrentQueue<string> messages)
+    {
+        var stats = router.Links[0];
+        return $"cell open={stats.IsOpen}, connected={stats.IsConnected}, sent={stats.BytesSentOutbound}, " +
+            $"received={stats.BytesReceived}, frames={stats.FramesReceived}, active={router.ActiveLink}, " +
+            $"manual={router.ManualOverride}; router messages: {string.Join("; ", messages)}";
     }
 
     private static async Task VerifyTcpReconnect(GroundLinkRouter router, TcpListener listener,
