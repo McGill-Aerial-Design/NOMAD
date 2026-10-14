@@ -89,16 +89,43 @@ namespace NOMAD.MissionPlanner
 
         public bool Save()
         {
+            return SaveToFile(ConfigPath);
+        }
+
+        internal GeofenceConfig Clone()
+        {
+            return LoadFromJson(JsonConvert.SerializeObject(this));
+        }
+
+        // Explicit path keeps persistence qualification out of the operator's AppData.
+        internal bool SaveToFile(string path)
+        {
+            string temporary = path + ".tmp";
             try
             {
-                Directory.CreateDirectory(ConfigDir);
                 var json = JsonConvert.SerializeObject(this, Formatting.Indented);
-                File.WriteAllText(ConfigPath, json);
+                var directory = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+                File.WriteAllText(temporary, json);
+                if (File.Exists(path))
+                {
+                    File.Replace(temporary, path, path + ".bak", ignoreMetadataErrors: true);
+                }
+                else
+                {
+                    File.Move(temporary, path);
+                }
                 return true;
             }
             catch (Exception ex)
             {
                 Log.Error($"Failed to save advisory boundary config — {ex.Message}");
+                try { File.Delete(temporary); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
                 return false;
             }
         }

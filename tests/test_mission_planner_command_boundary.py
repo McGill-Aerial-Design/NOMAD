@@ -17,6 +17,11 @@ _STRING_OR_COMMENT = re.compile(
     re.DOTALL,
 )
 
+_VEHICLE_WRITE_PACKET_TYPE = (
+    r"(?:global\s*::\s*)?(?:[A-Za-z_]\w*\s*\.\s*)*"
+    r"mavlink_(?:set_position_target_[a-z0-9_]+|param_set|mission_(?:item(?:_int)?|count|clear_all|set_current|write_partial_list))_t"
+)
+
 _FORBIDDEN_WRITES = (
     ("MAVLink command helper", re.compile(r"\bdoCommand(?:Async|Int|Long)?\s*\(", re.IGNORECASE)),
     ("MAVLink packet writer", re.compile(r"\bsendPacket(?:Async)?\s*\(", re.IGNORECASE)),
@@ -54,7 +59,9 @@ _FORBIDDEN_WRITES = (
     (
         "MAVLink vehicle-write packet construction",
         re.compile(
-            r"\bmavlink_(?:set_position_target_[a-z0-9_]+|param_set|mission_(?:item(?:_int)?|count|clear_all|set_current|write_partial_list))_t\b",
+            rf"\bnew\s+{_VEHICLE_WRITE_PACKET_TYPE}\b|"
+            rf"\b{_VEHICLE_WRITE_PACKET_TYPE}\s+\w+\s*=\s*(?:new\s*\(|default\b)|"
+            rf"\bdefault\s*\(\s*{_VEHICLE_WRITE_PACKET_TYPE}\s*\)",
             re.IGNORECASE,
         ),
     ),
@@ -113,6 +120,17 @@ def test_all_production_mission_planner_sources_use_runtime_for_vehicle_writes()
         ("var command = new MAVLink.mavlink_command_long_t();", "MAVLink command packet construction"),
         ("MavlinkPassthrough.SendMessage(message);", "MAVLink passthrough API"),
         ("new MAVLink.mavlink_mission_item_int_t();", "MAVLink vehicle-write packet construction"),
+        ("new mavlink_mission_item_int_t();", "MAVLink vehicle-write packet construction"),
+        ("new MAVLink . mavlink_mission_item_int_t ();", "MAVLink vehicle-write packet construction"),
+        ("new MAVLink.mavlink_mission_item_int_t { command = 5001 };", "MAVLink vehicle-write packet construction"),
+        ("new global::MAVLink.mavlink_mission_item_int_t();", "MAVLink vehicle-write packet construction"),
+        ("MAVLink.mavlink_mission_item_int_t packet = new();", "MAVLink vehicle-write packet construction"),
+        (
+            "MAVLink.mavlink_mission_item_int_t packet = new() { command = 5001 };",
+            "MAVLink vehicle-write packet construction",
+        ),
+        ("var packet = default(MAVLink.mavlink_mission_item_int_t);", "MAVLink vehicle-write packet construction"),
+        ("MAVLink.mavlink_mission_item_int_t packet = default;", "MAVLink vehicle-write packet construction"),
         ("new MAVLink.mavlink_set_mode_t();", "MAVLink command packet construction"),
     ],
 )
@@ -125,6 +143,10 @@ def test_read_only_telemetry_and_runtime_requests_remain_allowed() -> None:
     var heartbeat = MainV2.comPort.MAV.cs.heartbeat;
     var capacity = MainV2.comPort.MAV.param[\"BATT_CAPACITY\"];
     client.RequestGimbalTarget(pitch, roll, yaw);
+    bool ReadCachedFence(KeyValuePair<int, MAVLink.mavlink_mission_item_int_t>[] snapshot) {
+        MAVLink.mavlink_mission_item_int_t cached = snapshot[0].Value;
+        return cached.x == 0 && cached.command == 5001;
+    }
     """
 
     assert _find_direct_writes(source) == []

@@ -74,6 +74,21 @@ response and flight qualification remain blocked. Preserve ArduPilot failsafes
 and qualify their interaction with an approved termination mechanism; no
 substitute emergency recipe is approved.
 
+The plugin can copy one complete cached Mission Planner inclusion polygon into a
+local advisory outline. It validates ordered integer coordinates, vertex counts,
+groups and simple geometry before offering a cancellable destination choice;
+unsupported shapes or changed host/cache context preserve the original outlines.
+Modern return points and legacy return/closing points are kept out of the outline.
+Wrapped polygons crossing the antimeridian are rejected because the current local
+planar display does not unwrap longitude.
+The supported 255-vertex limit follows the reviewed ArduPilot encoding, not aircraft
+storage capacity. Cached polygon completeness proves neither a completed/current
+aircraft transfer nor an enabled or qualified fence. Import sends no aircraft request
+and changes no native Plan state. Geometry is staged and saved atomically before it
+replaces the shared local outlines; cancellation and failed saves keep live outlines
+unchanged. Save errors are reported; the temporary/replace pattern retains a backup
+when replacing an existing file, without claiming recovery from every filesystem error.
+
 The local outline preview uses live Mission Planner received-position packets,
 not cached display coordinates or log playback. It prefers the newest received
 GLOBAL_POSITION_INT/HIGH_LATENCY/HIGH_LATENCY2 estimate; GPS_RAW_INT is used only

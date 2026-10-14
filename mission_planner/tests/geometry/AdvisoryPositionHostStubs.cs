@@ -3,6 +3,8 @@
 // Host spies only: the production monitor and real MAVLink packet decoder are compiled unchanged.
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.Linq;
 
 namespace MissionPlanner
 {
@@ -33,6 +35,8 @@ namespace MissionPlanner
 
     internal sealed class MAVState
     {
+        internal ConcurrentDictionary<int, MAVLink.mavlink_mission_item_int_t> fencepoints =
+            new ConcurrentDictionary<int, MAVLink.mavlink_mission_item_int_t>();
         internal byte sysid = 1, compid = 1;
         internal DateTime lastvalidpacket;
         private readonly CurrentState _state = new CurrentState();
@@ -66,6 +70,27 @@ namespace NOMAD.MissionPlanner
         internal FlightBoundary SoftBoundary = new FlightBoundary();
         internal FlightBoundary HardBoundary = new FlightBoundary();
         internal bool AdvisoryAudioAlertsEnabled = true;
+        internal bool SoftBoundaryFromHard;
+        internal double SoftBoundaryInsetMeters = 5;
+        internal static bool SaveResult = true;
+        internal static int Writes;
+        internal static Action BeforeSave;
+        internal int Saves => Writes;
+        internal bool Save() { BeforeSave?.Invoke(); Writes++; return SaveResult; }
+        internal bool SaveToFile(string path) { return Save(); }
+        internal GeofenceConfig Clone()
+        {
+            return new GeofenceConfig { SoftBoundary = new FlightBoundary { Vertices = SoftBoundary.Vertices.ToList() },
+                HardBoundary = new FlightBoundary { Vertices = HardBoundary.Vertices.ToList() },
+                SoftBoundaryFromHard = SoftBoundaryFromHard, SoftBoundaryInsetMeters = SoftBoundaryInsetMeters,
+                AdvisoryAudioAlertsEnabled = AdvisoryAudioAlertsEnabled };
+        }
+        internal bool RegenerateSoftFromHard()
+        {
+            if (!SoftBoundaryFromHard) { return false; }
+            SoftBoundary.Vertices = GeoMath.InsetPolygon(HardBoundary.Vertices, SoftBoundaryInsetMeters);
+            return true;
+        }
     }
 
     internal static class AudioAlerts

@@ -243,6 +243,114 @@ try {
     if ($point.Lat -ne 1.5 -or $point.Lon -ne 1.5 -or -not [object]::ReferenceEquals($queued, $packet)) {
         throw 'Received-position decoding changed coordinates or consumed the native host packet queue.'
     }
+    # Real MP field and real float->Locationwp->int conversion, without a MainV2 connection.
+    $fenceField = $nativeMavType.GetField('fencepoints')
+    $fenceCache = [Activator]::CreateInstance($fenceField.FieldType)
+    $fenceField.SetValue($nativeMav, $fenceCache)
+    $locationType = [MissionPlanner.Utilities.Locationwp]
+    $toLocation = $locationType.GetMethods() | Where-Object {
+        $_.Name -eq 'op_Implicit' -and $_.ReturnType -eq $locationType -and
+        $_.GetParameters()[0].ParameterType -eq [MAVLink+mavlink_mission_item_t]
+    }
+    $toInteger = $locationType.GetMethods() | Where-Object {
+        $_.Name -eq 'op_Implicit' -and $_.ReturnType -eq [MAVLink+mavlink_mission_item_int_t]
+    }
+    $expectedFence = @(@(0,0), @(0,2), @(1,1), @(2,2), @(2,0))
+    foreach ($index in @(4,2,0,3,1)) {
+        $floating = [Activator]::CreateInstance([MAVLink+mavlink_mission_item_t])
+        $floating.seq = $index; $floating.command = 5001; $floating.param1 = 5
+        $floating.frame = 0; $floating.mission_type = 1
+        $floating.x = $expectedFence[$index][0]; $floating.y = $expectedFence[$index][1]
+        $location = $toLocation.Invoke($null, [object[]]@($floating))
+        $integer = $toInteger.Invoke($null, [object[]]@($location))
+        if ($integer.mission_type -ne 0 -or $integer.x -ne $floating.x * 1e7 -or
+            $integer.y -ne $floating.y * 1e7 -or -not $fenceCache.TryAdd($index, $integer)) {
+            throw 'Native float cache conversion/payload differs from the reviewed MP target.'
+        }
+    }
+    $pairType = [Collections.Generic.KeyValuePair``2].MakeGenericType([int], [MAVLink+mavlink_mission_item_int_t])
+    $nativeSnapshot = [Array]::CreateInstance($pairType, $fenceCache.Count)
+    $index = 0
+    foreach ($entry in $fenceCache.ToArray()) { $nativeSnapshot.SetValue($entry, $index++ ) }
+    $fenceBefore = [Newtonsoft.Json.JsonConvert]::SerializeObject($nativeSnapshot)
+    $decoder = $plugin.GetType('NOMAD.MissionPlanner.NativeFenceImport', $true)
+    $decodeArgs = New-Object object[] 3
+    $decodeArgs[0] = $nativeSnapshot
+    if (-not $decoder.GetMethod('TryDecode', [Reflection.BindingFlags]'Static,NonPublic').Invoke($null, $decodeArgs)) {
+        throw ('Real native float cache was rejected: ' + $decodeArgs[2])
+    }
+    $fencePoints = $decodeArgs[1]
+    if ($fencePoints.Count -ne 5) { throw 'Native polygon count changed.' }
+    for ($index = 0; $index -lt 5; $index++) {
+        if ($fencePoints[$index].Lat -ne $expectedFence[$index][0] -or
+            $fencePoints[$index].Lon -ne $expectedFence[$index][1]) { throw 'Native polygon order/E7 coordinates changed.' }
+    }
+    $fractionalSnapshot = [Array]::CreateInstance($pairType, $nativeSnapshot.Length)
+    for ($index = 0; $index -lt $nativeSnapshot.Length; $index++) {
+        $entry = $nativeSnapshot.GetValue($index)
+        $item = $entry.Value; $item.x += 12345678; $item.y -= 23456789
+        $fractionalSnapshot.SetValue([Activator]::CreateInstance($pairType, [object[]]@([int]$entry.Key, $item)), $index)
+    }
+    $fractionalArgs = New-Object object[] 3
+    $fractionalArgs[0] = $fractionalSnapshot
+    if (-not $decoder.GetMethod('TryDecode', [Reflection.BindingFlags]'Static,NonPublic').Invoke($null, $fractionalArgs) -or
+        $fractionalArgs[1][0].Lat -ne 1.2345678 -or $fractionalArgs[1][0].Lon -ne -2.3456789 -or
+        $fractionalArgs[1][4].Lat -ne 3.2345678 -or $fractionalArgs[1][4].Lon -ne -2.3456789) {
+        throw 'Fractional signed typed-cache E7 coordinates changed.'
+    }
+    if (-not [object]::ReferenceEquals($fenceField.GetValue($nativeMav), $fenceCache) -or
+        [Newtonsoft.Json.JsonConvert]::SerializeObject($fenceCache.ToArray()) -cne $fenceBefore) {
+        throw 'Native import changed field identity, keys or payloads.'
+    }
+    # Persist the staged import only to an explicit temporary path. No operator AppData is touched.
+    $applyFence = $boundaryViewType.GetMethod('ApplyImportedFence', $privateFlags)
+    $originalJson = '{"SoftBoundary":{"Name":"Saved inner","Vertices":[{"Lat":1,"Lon":1,"Alt":11},{"Lat":1,"Lon":2,"Alt":12},{"Lat":2,"Lon":1,"Alt":13}]},"HardBoundary":{"Name":"Saved outer","Vertices":[{"Lat":3,"Lon":3,"Alt":21},{"Lat":3,"Lon":4,"Alt":22},{"Lat":4,"Lon":3,"Alt":23}]},"SoftBoundaryFromHard":true,"SoftBoundaryInsetMeters":12,"AdvisoryPreviewEnabled":true,"AdvisoryAudioAlertsEnabled":false,"AdvisoryAltitudeDisplayThresholdMeters":100}'
+    foreach ($fault in @('cancel','derived-inner','blocked-temp','blocked-backup','locked-primary','success','new-file',
+            'inner-success','outer-undervived')) {
+        $importConfig = $geofenceLoadMethod.Invoke($null, [object[]]@($originalJson))
+        if ($fault -in @('inner-success','outer-undervived')) { $importConfig.SoftBoundaryFromHard = $false }
+        $boundaryViewType.GetField('_missionConfig', $privateFlags).SetValue($view, $importConfig)
+        $innerBefore = $importConfig.SoftBoundary.Vertices; $outerBefore = $importConfig.HardBoundary.Vertices
+        $geometryBefore = [Newtonsoft.Json.JsonConvert]::SerializeObject($importConfig)
+        $initialDisk = $geometryBefore
+        $importPath = Join-Path $temporary ($fault + '.json')
+        if ($fault -ne 'new-file') { [IO.File]::WriteAllText($importPath, $initialDisk) }
+        if ($fault -eq 'blocked-temp') { New-Item -ItemType Directory -Path ($importPath + '.tmp') | Out-Null }
+        if ($fault -eq 'blocked-backup') { New-Item -ItemType Directory -Path ($importPath + '.bak') | Out-Null }
+        $locked = $null
+        if ($fault -eq 'locked-primary') { $locked = [IO.File]::Open($importPath, 'Open', 'Read', 'Read') }
+        $choice = if ($fault -eq 'cancel') { [Windows.Forms.DialogResult]::Cancel }
+            elseif ($fault -in @('derived-inner','inner-success')) { [Windows.Forms.DialogResult]::Yes }
+            else { [Windows.Forms.DialogResult]::No }
+        $applyArgs = [object[]]@($fencePoints, $choice, $null, $importPath)
+        $applyArgs[3] = [string]$importPath
+        try { $saved = $applyFence.Invoke($view, $applyArgs) } finally { if ($locked) { $locked.Dispose() } }
+        if ($fault -in @('success','new-file','inner-success','outer-undervived')) {
+            $target = if ($fault -eq 'inner-success') { $importConfig.SoftBoundary } else { $importConfig.HardBoundary }
+            if (-not $saved -or $target.Vertices.Count -ne 5 -or $importConfig.AdvisoryAudioAlertsEnabled -or
+                -not $importConfig.AdvisoryPreviewEnabled -or $importConfig.SoftBoundaryInsetMeters -ne 12 -or
+                $importConfig.SoftBoundary.Name -ne 'Saved inner' -or $importConfig.HardBoundary.Name -ne 'Saved outer' -or
+                $importConfig.AdvisoryAltitudeDisplayThresholdMeters -ne 100) { throw 'Committed import lost geometry/settings.' }
+            if ($fault -eq 'inner-success' -and (-not [object]::ReferenceEquals($outerBefore, $importConfig.HardBoundary.Vertices) -or
+                $importConfig.HardBoundary.Vertices[0].Alt -ne 21)) { throw 'Inner import changed the other outline.' }
+            if ($fault -eq 'outer-undervived' -and (-not [object]::ReferenceEquals($innerBefore, $importConfig.SoftBoundary.Vertices) -or
+                $importConfig.SoftBoundary.Vertices[0].Alt -ne 11)) { throw 'Outer import changed the other outline.' }
+            $persisted = $geofenceLoadMethod.Invoke($null, [object[]]@([IO.File]::ReadAllText($importPath)))
+            if ([Newtonsoft.Json.JsonConvert]::SerializeObject($persisted) -cne
+                [Newtonsoft.Json.JsonConvert]::SerializeObject($importConfig)) { throw 'Persisted import differs from published geometry.' }
+            if ($fault -eq 'success' -and [IO.File]::ReadAllText($importPath + '.bak') -cne $initialDisk) {
+                throw 'Atomic import lost the previous primary bytes.'
+            }
+        } else {
+            if ($saved -or -not [object]::ReferenceEquals($innerBefore, $importConfig.SoftBoundary.Vertices) -or
+                -not [object]::ReferenceEquals($outerBefore, $importConfig.HardBoundary.Vertices) -or
+                [Newtonsoft.Json.JsonConvert]::SerializeObject($importConfig) -cne $geometryBefore -or
+                [IO.File]::ReadAllText($importPath) -cne $initialDisk) { throw ('Failed/cancelled import mutated originals: ' + $fault) }
+            if ($fault -eq 'blocked-backup' -and (Test-Path -LiteralPath ($importPath + '.tmp'))) {
+                throw 'Failed staged replacement left temporary import bytes.'
+            }
+        }
+    }
     # The same current observation must drive both the position label and advisory state, including queued old events.
     $displayConfig = $geofenceLoadMethod.Invoke($null, [object[]]@(
         '{"HardBoundary":{"Vertices":[{"Lat":1,"Lon":1},{"Lat":1,"Lon":2},{"Lat":2,"Lon":2},{"Lat":2,"Lon":1}]}}'))
@@ -335,6 +443,17 @@ try {
                 'Core', [Reflection.BindingFlags]'Instance,Public,NonPublic')
             $coreProperty.PropertyType.GetMethod('GoToCurrentPosition').Invoke(
                 $coreProperty.GetValue($map, $null), @()) | Out-Null
+        }
+        # Import while native Plan sentinels are bound; the existing checks below cover every reference/collection.
+        $planImport = $geofenceLoadMethod.Invoke($null, [object[]]@($originalJson))
+        $boundaryViewType.GetField('_missionConfig', $privateFlags).SetValue($view, $planImport)
+        $planImportArgs = [object[]]@($fencePoints, [Windows.Forms.DialogResult]::No, $null,
+            [string](Join-Path $temporary 'plan-import.json'))
+        if (-not $applyFence.Invoke($view, $planImportArgs)) { throw 'Native Plan isolation import failed.' }
+        $renderer.GetMethod('DrawBoundaries').Invoke($null, [object[]]@($planImport)) | Out-Null
+        if (-not [object]::ReferenceEquals($fenceField.GetValue($nativeMav), $fenceCache) -or
+            [Newtonsoft.Json.JsonConvert]::SerializeObject($fenceCache.ToArray()) -cne $fenceBefore) {
+            throw 'Import/draw changed native cache keys or payloads.'
         }
         $renderer.GetMethod('DrawBoundaries').Invoke($null, [object[]]@($outlines)) | Out-Null
         if ($renderer.GetMethod('EnsureBoundaryMaps').Invoke($null, @()) -ne 2) {

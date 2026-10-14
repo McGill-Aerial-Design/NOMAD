@@ -1,16 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
-// ============================================================
-// NOMAD Boundary View - Mission Planner fence import
-// ============================================================
-
 using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.IO;
-using System.IO.Compression;
 using System.Linq;
-using System.Reflection;
 using System.Windows.Forms;
 using MissionPlanner;
 
@@ -22,76 +14,112 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var mav = MainV2.comPort?.MAV;
-                if (mav == null)
+                var port = MainV2.comPort;
+                var mav = port?.MAV;
+                var cache = mav?.fencepoints;
+                if (cache == null || cache.Count > NativeFenceImport.MaximumVertices + 1)
                 {
-                    CustomMessageBox.Show("Not connected to vehicle.", "Warning");
+                    CustomMessageBox.Show("No supported cached fence polygon. Use native MP tools to read the fence.",
+                        "Cached Advisory Import");
                     return;
                 }
-
-                var points = new List<GpsPoint>();
-
-                // Try to access fencepoints via reflection (type varies by MP version)
-                var fencepointsField = mav.GetType().GetProperty("fencepoints");
-                if (fencepointsField != null)
+                var snapshot = cache.ToArray();
+                if (!NativeFenceImport.TryDecode(snapshot, out var points, out var error))
                 {
-                    var fenceData = fencepointsField.GetValue(mav);
-                    if (fenceData != null)
-                    {
-                        var valuesProperty = fenceData.GetType().GetProperty("Values");
-                        if (valuesProperty != null)
-                        {
-                            var values = valuesProperty.GetValue(fenceData) as System.Collections.IEnumerable;
-                            if (values != null)
-                            {
-                                foreach (var item in values)
-                                {
-                                    var latProp = item.GetType().GetField("lat");
-                                    var lngProp = item.GetType().GetField("lng");
-                                    if (latProp != null && lngProp != null)
-                                    {
-                                        var lat = Convert.ToDouble(latProp.GetValue(item));
-                                        var lng = Convert.ToDouble(lngProp.GetValue(item));
-                                        if (lat != 0 || lng != 0)
-                                            points.Add(new GpsPoint(lat, lng));
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    CustomMessageBox.Show(error, "Cached Advisory Import");
+                    return;
                 }
-
-                if (points.Count > 0)
+                byte system = mav.sysid, component = mav.compid;
+                var stream = port.BaseStream;
+                bool wasOpen = stream?.IsOpen ?? false;
+                if (IsDisposed || Disposing)
                 {
-                    var result = CustomMessageBox.Show(
-                        $"Import {points.Count} Mission Planner fence points as inner advisory (Yes) " +
-                        "or outer advisory (No) outline?",
-                        "Select Advisory Outline",
-                        CustomMessageBox.MessageBoxButtons.YesNo);
-
-                    if (result == CustomMessageBox.DialogResult.Yes)
-                    {
-                        _missionConfig.SoftBoundary.Vertices = points;
-                    }
-                    else
-                    {
-                        _missionConfig.HardBoundary.Vertices = points;
-                    }
-                    _missionConfig.Save();
-                    LoadBoundaries();
-                    AutoDrawBoundariesIfEnabled();
-                    CustomMessageBox.Show($"Imported {points.Count} fence points.", "Success");
+                    return;
                 }
-                else
+                var ownerHandle = Handle;
+                var choice = MessageBox.Show(this,
+                    $"Copy {points.Count} cached polygon vertices into the INNER (Yes) or OUTER (No) advisory outline?\n" +
+                    "Cancel preserves both outlines. This replaces local geometry only; cached data does not verify " +
+                    "a complete/current aircraft fence or containment.", "Cached Advisory Import",
+                    MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button3);
+                if (choice != DialogResult.Yes && choice != DialogResult.No)
                 {
-                    CustomMessageBox.Show("No fence points found in Mission Planner.", "Warning");
+                    return;
                 }
+                if (IsDisposed || Disposing || !IsHandleCreated || Handle != ownerHandle ||
+                    !ReferenceEquals(MainV2.comPort, port) || !ReferenceEquals(port.MAV, mav) ||
+                    mav.sysid != system || mav.compid != component || !ReferenceEquals(mav.fencepoints, cache) ||
+                    !ReferenceEquals(port.BaseStream, stream) || (stream?.IsOpen ?? false) != wasOpen ||
+                    !snapshot.OrderBy(entry => entry.Key).SequenceEqual(cache.ToArray().OrderBy(entry => entry.Key)))
+                {
+                    CustomMessageBox.Show("Mission Planner context/cache changed; import cancelled.", "Cached Advisory Import");
+                    return;
+                }
+                if (!ApplyImportedFence(points, choice, out error))
+                {
+                    CustomMessageBox.Show(error, "Cached Advisory Import");
+                    return;
+                }
+                LoadBoundaries(regenerateSoft: false);
+                AutoDrawBoundariesIfEnabled();
+                CustomMessageBox.Show($"Copied {points.Count} vertices into a local advisory outline.", "Cached Advisory Import");
             }
             catch (Exception ex)
             {
-                CustomMessageBox.Show($"Error getting fence: {ex.Message}", "Error");
+                CustomMessageBox.Show($"Cached fence import failed: {ex.Message}", "Cached Advisory Import");
             }
         }
 
+        // The only qualification seam is a file path, never a dialog or persistence provider.
+        private bool ApplyImportedFence(List<GpsPoint> points, DialogResult choice, out string error,
+            string savePath = null)
+        {
+            error = "Import cancelled.";
+            if (choice != DialogResult.Yes && choice != DialogResult.No)
+            {
+                return false;
+            }
+            if (choice == DialogResult.Yes && _missionConfig.SoftBoundaryFromHard)
+            {
+                error = "The inner outline is derived from the outer outline. Import outer, or disable auto derivation first.";
+                return false;
+            }
+            var candidate = _missionConfig.Clone();
+            if (choice == DialogResult.Yes)
+            {
+                candidate.SoftBoundary.Vertices = points;
+            }
+            else
+            {
+                candidate.HardBoundary.Vertices = points;
+                candidate.RegenerateSoftFromHard();
+                if (candidate.SoftBoundaryFromHard && candidate.SoftBoundary.Vertices.Any(point => point == null ||
+                    !GeoMath.IsValidCoordinate(point.Lat, point.Lon)))
+                {
+                    error = "The derived inner outline is invalid; original outlines preserved.";
+                    return false;
+                }
+            }
+            bool saved = savePath == null ? candidate.Save() : candidate.SaveToFile(savePath);
+            if (!saved)
+            {
+                error = "Could not save the import; live outlines are unchanged. Check the primary and backup files.";
+                return false;
+            }
+            if (choice == DialogResult.Yes)
+            {
+                _missionConfig.SoftBoundary.Vertices = candidate.SoftBoundary.Vertices;
+            }
+            else
+            {
+                _missionConfig.HardBoundary.Vertices = candidate.HardBoundary.Vertices;
+                if (candidate.SoftBoundaryFromHard)
+                {
+                    _missionConfig.SoftBoundary.Vertices = candidate.SoftBoundary.Vertices;
+                }
+            }
+            error = null;
+            return true;
+        }
     }
 }

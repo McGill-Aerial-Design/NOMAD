@@ -18,23 +18,35 @@ namespace NOMAD.MissionPlanner
 {
     public partial class NOMADBoundaryView
     {
-        private void LoadBoundaries()
+        private bool _loadingBoundaries;
+
+        private void LoadBoundaries(bool regenerateSoft = true)
         {
-            // Load soft boundary
-            _dgvSoftBoundary.Rows.Clear();
-            foreach (var point in _missionConfig.SoftBoundary.Vertices)
+            try
             {
-                _dgvSoftBoundary.Rows.Add(point.Lat.ToString("F8"), point.Lon.ToString("F8"));
-            }
+                // Rows.Clear commits a pending edit before removing rows. Do not let that old grid
+                // overwrite the newly imported lists (verified with the actual .NET Framework grid).
+                _loadingBoundaries = true;
+                // Load soft boundary
+                _dgvSoftBoundary.Rows.Clear();
+                foreach (var point in _missionConfig.SoftBoundary.Vertices)
+                {
+                    _dgvSoftBoundary.Rows.Add(point.Lat.ToString("F8"), point.Lon.ToString("F8"));
+                }
 
-            // Load hard boundary
-            _dgvHardBoundary.Rows.Clear();
-            foreach (var point in _missionConfig.HardBoundary.Vertices)
+                // Load hard boundary
+                _dgvHardBoundary.Rows.Clear();
+                foreach (var point in _missionConfig.HardBoundary.Vertices)
+                {
+                    _dgvHardBoundary.Rows.Add(point.Lat.ToString("F8"), point.Lon.ToString("F8"));
+                }
+
+            }
+            finally
             {
-                _dgvHardBoundary.Rows.Add(point.Lat.ToString("F8"), point.Lon.ToString("F8"));
+                _loadingBoundaries = false;
             }
-
-            UpdatePointCounts();
+            UpdatePointCounts(regenerateSoft);
         }
 
         private bool _syncingSoftFromHard;
@@ -68,9 +80,12 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private void UpdatePointCounts()
+        private void UpdatePointCounts(bool regenerateSoft = true)
         {
-            SyncSoftFromHard();
+            if (regenerateSoft)
+            {
+                SyncSoftFromHard();
+            }
 
             var softLabel = this.Controls.Find("lblSoftCount", true).FirstOrDefault() as Label;
             var hardLabel = this.Controls.Find("lblHardCount", true).FirstOrDefault() as Label;
@@ -166,7 +181,7 @@ namespace NOMAD.MissionPlanner
         {
             // The derived-soft sync repopulates the soft grid itself; its
             // CellValueChanged storm must not write partial rows back.
-            if (_syncingSoftFromHard && dgv == _dgvSoftBoundary) return;
+            if (_loadingBoundaries || (_syncingSoftFromHard && dgv == _dgvSoftBoundary)) return;
             try
             {
                 boundary.Vertices.Clear();
