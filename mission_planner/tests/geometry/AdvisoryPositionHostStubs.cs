@@ -67,11 +67,11 @@ namespace NOMAD.MissionPlanner
 {
     public sealed class GeofenceConfig
     {
-        internal FlightBoundary SoftBoundary = new FlightBoundary();
-        internal FlightBoundary HardBoundary = new FlightBoundary();
-        internal bool AdvisoryAudioAlertsEnabled = true;
-        internal bool SoftBoundaryFromHard;
-        internal double SoftBoundaryInsetMeters = 5;
+        public FlightBoundary SoftBoundary = new FlightBoundary();
+        public FlightBoundary HardBoundary = new FlightBoundary();
+        public bool AdvisoryAudioAlertsEnabled = true;
+        public bool SoftBoundaryFromHard;
+        public double SoftBoundaryInsetMeters = 5;
         internal static bool SaveResult = true;
         internal static int Writes;
         internal static Action BeforeSave;
@@ -88,6 +88,11 @@ namespace NOMAD.MissionPlanner
         internal bool RegenerateSoftFromHard()
         {
             if (!SoftBoundaryFromHard) { return false; }
+            if (HardBoundary.Vertices.Count < 3)
+            {
+                SoftBoundary.Vertices.Clear();
+                return true;
+            }
             SoftBoundary.Vertices = GeoMath.InsetPolygon(HardBoundary.Vertices, SoftBoundaryInsetMeters);
             return true;
         }

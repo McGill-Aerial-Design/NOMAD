@@ -7,182 +7,147 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Windows.Forms;
 using MissionPlanner;
+using Newtonsoft.Json;
 
 namespace NOMAD.MissionPlanner
 {
     public partial class NOMADBoundaryView
     {
-        private void PasteCoordinates(DataGridView dgv, FlightBoundary boundary, string boundaryType)
+        private void PasteCoordinates(bool inner)
         {
-            using (var inputForm = new Form())
+            if (IsDisposed || Disposing)
             {
-                inputForm.Width = 550;
-                inputForm.Height = 400;
-                inputForm.Text = $"Paste {boundaryType.ToUpper()} Boundary Coordinates";
-                inputForm.StartPosition = FormStartPosition.CenterParent;
-                inputForm.BackColor = Color.FromArgb(40, 40, 45);
-                inputForm.FormBorderStyle = FormBorderStyle.FixedDialog;
-                inputForm.MaximizeBox = false;
-
-                var instructions = new Label
-                {
-                    Text = "Paste coordinates (one per line). Supported formats:\n" +
-                           "- lon, lat (e.g., -75.7554276757985, 45.32367641417768)\n" +
-                           "- lat, lon (e.g., 45.32367641417768, -75.7554276757985)\n" +
-                           "Auto-detects format based on value ranges.",
-                    Location = new Point(20, 20),
-                    Size = new Size(500, 60),
-                    ForeColor = Color.White,
-                };
-                inputForm.Controls.Add(instructions);
-
-                var textBox = new TextBox
-                {
-                    Location = new Point(20, 90),
-                    Size = new Size(500, 200),
-                    Multiline = true,
-                    ScrollBars = ScrollBars.Vertical,
-                    BackColor = Color.FromArgb(30, 30, 33),
-                    ForeColor = Color.White,
-                    Font = new Font("Consolas", 10),
-                };
-                inputForm.Controls.Add(textBox);
-
-                var chkReplace = new CheckBox
-                {
-                    Text = "Replace existing points (unchecked = append)",
-                    Location = new Point(20, 300),
-                    ForeColor = Color.White,
-                    AutoSize = true,
-                    Checked = true,
-                };
-                inputForm.Controls.Add(chkReplace);
-
-                var btnOk = new Button
-                {
-                    Text = "Import",
-                    Location = new Point(330, 330),
-                    Size = new Size(90, 30),
-                    DialogResult = DialogResult.OK,
-                    BackColor = NOMADTheme.ACCENT,
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                };
-                inputForm.Controls.Add(btnOk);
-
-                var btnCancel = new Button
-                {
-                    Text = "Cancel",
-                    Location = new Point(430, 330),
-                    Size = new Size(90, 30),
-                    DialogResult = DialogResult.Cancel,
-                    FlatStyle = FlatStyle.Flat,
-                    ForeColor = Color.White,
-                };
-                inputForm.Controls.Add(btnCancel);
-
-                inputForm.AcceptButton = btnOk;
-                inputForm.CancelButton = btnCancel;
-
-                if (inputForm.ShowDialog() == DialogResult.OK)
-                {
-                    var points = ParseCoordinates(textBox.Text);
-                    if (points.Count > 0)
-                    {
-                        if (chkReplace.Checked)
-                        {
-                            boundary.Vertices.Clear();
-                            dgv.Rows.Clear();
-                        }
-
-                        foreach (var point in points)
-                        {
-                            boundary.Vertices.Add(point);
-                            dgv.Rows.Add(point.Lat.ToString("F8"), point.Lon.ToString("F8"));
-                        }
-
-                        _missionConfig.Save();
-                        UpdatePointCounts();
-                        AutoDrawBoundariesIfEnabled();
-                        CustomMessageBox.Show($"Imported {points.Count} points to {boundaryType} boundary.", "Success");
-                    }
-                    else
-                    {
-                        CustomMessageBox.Show("No valid coordinates found.", "Warning");
-                    }
-                }
+                return;
+            }
+            using (var dialog = CreateCoordinateDialog(inner))
+            {
+                dialog.ShowDialog(this);
             }
         }
 
-        private List<GpsPoint> ParseCoordinates(string input)
+        private Form CreateCoordinateDialog(bool inner, string savePath = null)
         {
-            var points = new List<GpsPoint>();
-            var lines = input.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-
-            foreach (var line in lines)
+            var config = _missionConfig;
+            var original = JsonConvert.SerializeObject(config);
+            var innerOutline = config.SoftBoundary;
+            var outerOutline = config.HardBoundary;
+            var innerPoints = innerOutline.Vertices;
+            var outerPoints = outerOutline.Vertices;
+            var ownerHandle = Handle;
+            var dialog = new Form
             {
-                var cleanLine = line.Trim();
-                if (string.IsNullOrEmpty(cleanLine)) continue;
-
-                // Try to parse various formats
-                var parts = cleanLine.Split(new[] { ',', '\t', ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length >= 2)
-                {
-                    if (double.TryParse(parts[0].Trim(), out double val1) &&
-                        double.TryParse(parts[1].Trim(), out double val2))
-                    {
-                        double lat, lon;
-
-                        // Auto-detect format:
-                        // Longitude typically ranges -180 to 180 (but for Ottawa area ~-75)
-                        // Latitude for North America is typically 24 to 70
-                        // If abs(val1) > 90, it's likely longitude
-                        if (Math.Abs(val1) > 90)
-                        {
-                            // lon, lat format
-                            lon = val1;
-                            lat = val2;
-                        }
-                        else if (Math.Abs(val2) > 90)
-                        {
-                            // lat, lon format
-                            lat = val1;
-                            lon = val2;
-                        }
-                        else
-                        {
-                            // Both could be valid lat or lon
-                            // For Ottawa area (lat ~45, lon ~-75), check for negative values
-                            if (val1 < 0)
-                            {
-                                lon = val1;
-                                lat = val2;
-                            }
-                            else if (val2 < 0)
-                            {
-                                lat = val1;
-                                lon = val2;
-                            }
-                            else
-                            {
-                                // Default to lat, lon
-                                lat = val1;
-                                lon = val2;
-                            }
-                        }
-
-                        points.Add(new GpsPoint(lat, lon));
-                    }
-                }
+                Text = "Paste " + (inner ? "inner" : "outer") + " advisory coordinates",
+                ClientSize = new Size(520, 420), MinimumSize = new Size(360, 380),
+                StartPosition = FormStartPosition.CenterParent, MaximizeBox = false, MinimizeBox = false,
+                BackColor = Color.FromArgb(40, 40, 45), ForeColor = Color.White,
+            };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6,
+                Padding = new Padding(16) };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            foreach (var size in new[] { SizeType.AutoSize, SizeType.AutoSize, SizeType.Percent,
+                SizeType.AutoSize, SizeType.AutoSize, SizeType.AutoSize })
+            {
+                layout.RowStyles.Add(new RowStyle(size, size == SizeType.Percent ? 100 : 0));
             }
+            var order = new ComboBox { Name = "coordinateOrder", DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = 230, Dock = DockStyle.Left };
+            order.Items.AddRange(new object[] { "Latitude, longitude", "Longitude, latitude" });
+            order.SelectedIndex = 0;
+            var hint = new Label { Name = "coordinateHint", AutoSize = true, Dock = DockStyle.Fill };
+            Action updateHint = () => hint.Text = "One pair per line; comma, space or tab. Use . for decimals.\nExample: " +
+                (order.SelectedIndex == 1 ? "-75.5, 45.5" : "45.5, -75.5");
+            order.SelectedIndexChanged += (s, e) => updateHint();
+            updateHint();
+            var text = new TextBox { Name = "coordinateText", Multiline = true, AcceptsReturn = true,
+                ScrollBars = ScrollBars.Vertical,
+                Dock = DockStyle.Fill, Font = new Font("Consolas", 10), BackColor = Color.FromArgb(30, 30, 33),
+                ForeColor = Color.White };
+            var replace = new CheckBox { Name = "replaceCoordinates", Text = "Replace points (uncheck to append)",
+                AutoSize = true, Checked = true };
+            var error = new Label { Name = "coordinateError", AutoSize = true,
+                Dock = DockStyle.Fill, ForeColor = Color.Gold };
+            var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
+            var cancel = new Button { Text = "Cancel", Name = "cancelCoordinates", Size = new Size(90, 30),
+                DialogResult = DialogResult.Cancel, FlatStyle = FlatStyle.Flat };
+            var import = new Button { Text = "Import", Name = "importCoordinates", Size = new Size(90, 30),
+                FlatStyle = FlatStyle.Flat, BackColor = NOMADTheme.ACCENT };
+            import.Click += (s, e) =>
+            {
+                if (IsDisposed || Disposing || !IsHandleCreated || Handle != ownerHandle ||
+                    !ReferenceEquals(config, _missionConfig) || !ReferenceEquals(innerOutline, config.SoftBoundary) ||
+                    !ReferenceEquals(outerOutline, config.HardBoundary) || !ReferenceEquals(innerPoints, innerOutline.Vertices) ||
+                    !ReferenceEquals(outerPoints, outerOutline.Vertices) || JsonConvert.SerializeObject(config) != original)
+                {
+                    error.Text = "Outline editor changed; cancel and reopen Paste coordinates.";
+                    return;
+                }
+                if (!TryParseCoordinates(text.Text, order.SelectedIndex == 1, out var points, out var message) ||
+                    !ApplyOutlinePoints(points, inner ? DialogResult.Yes : DialogResult.No, out message,
+                        savePath, append: !replace.Checked))
+                {
+                    error.Text = message;
+                    return;
+                }
+                LoadBoundaries(regenerateSoft: false);
+                AutoDrawBoundariesIfEnabled();
+                dialog.DialogResult = DialogResult.OK;
+            };
+            buttons.Controls.Add(cancel); buttons.Controls.Add(import);
+            layout.Controls.Add(order, 0, 0); layout.Controls.Add(hint, 0, 1); layout.Controls.Add(text, 0, 2);
+            layout.Controls.Add(replace, 0, 3); layout.Controls.Add(error, 0, 4); layout.Controls.Add(buttons, 0, 5);
+            dialog.Controls.Add(layout);
+            dialog.AcceptButton = import; dialog.CancelButton = cancel;
+            return dialog;
+        }
 
-            return points;
+        private static bool TryParseCoordinates(string input, bool longitudeFirst,
+            out List<GpsPoint> points, out string error)
+        {
+            points = null;
+            error = "Enter at least one coordinate pair.";
+            var parsed = new List<GpsPoint>();
+            var lines = (input ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            for (int index = 0; index < lines.Length; index++)
+            {
+                var line = lines[index].Trim();
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+                var parts = line.Contains(",") ? line.Split(',') :
+                    line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                error = $"Line {index + 1}: enter exactly two numbers using . for decimals.";
+                if (parts.Length != 2 ||
+                    !double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var first) ||
+                    !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var second))
+                {
+                    return false;
+                }
+                double latitude = longitudeFirst ? second : first;
+                double longitude = longitudeFirst ? first : second;
+                error = $"Line {index + 1}: latitude must be -90 to 90 and longitude -180 to 180, both finite.";
+                if (!GeoMath.IsValidCoordinate(latitude, longitude))
+                {
+                    return false;
+                }
+                parsed.Add(new GpsPoint(latitude, longitude));
+            }
+            if (parsed.Count == 0)
+            {
+                error = "Enter at least one coordinate pair.";
+                return false;
+            }
+            points = parsed;
+            error = null;
+            return true;
         }
 
         private void BtnImportKml_Click(object sender, EventArgs e)
@@ -288,116 +253,5 @@ namespace NOMAD.MissionPlanner
             return points;
         }
 
-        private void BtnImportGoogleMaps_Click(object sender, EventArgs e)
-        {
-            using (var inputForm = new Form())
-            {
-                inputForm.Width = 500;
-                inputForm.Height = 300;
-                inputForm.Text = "Import Coordinates";
-                inputForm.StartPosition = FormStartPosition.CenterParent;
-                inputForm.BackColor = Color.FromArgb(40, 40, 45);
-                inputForm.FormBorderStyle = FormBorderStyle.FixedDialog;
-                inputForm.MaximizeBox = false;
-                inputForm.MinimizeBox = false;
-
-                var label = new Label
-                {
-                    Left = 20, Top = 20, Width = 440,
-                    Text = "Paste coordinates (one per line, format: lat,lon or lon,lat):",
-                    ForeColor = Color.White,
-                };
-                inputForm.Controls.Add(label);
-
-                var textBox = new TextBox
-                {
-                    Left = 20, Top = 50, Width = 440, Height = 120,
-                    Multiline = true, ScrollBars = ScrollBars.Vertical,
-                    BackColor = Color.FromArgb(30, 30, 33),
-                    ForeColor = Color.White,
-                    Font = new Font("Consolas", 10),
-                };
-                inputForm.Controls.Add(textBox);
-
-                var chkReplace = new CheckBox
-                {
-                    Text = "Replace existing points (unchecked = append)",
-                    Location = new Point(20, 180),
-                    ForeColor = Color.White,
-                    AutoSize = true,
-                    Checked = true,
-                };
-                inputForm.Controls.Add(chkReplace);
-
-                var cmbTarget = new ComboBox
-                {
-                    Location = new Point(20, 210),
-                    Size = new Size(200, 25),
-                    DropDownStyle = ComboBoxStyle.DropDownList,
-                    BackColor = Color.FromArgb(50, 50, 53),
-                    ForeColor = Color.White,
-                };
-                cmbTarget.Items.AddRange(new object[] { "Inner advisory outline", "Outer advisory outline" });
-                cmbTarget.SelectedIndex = 0;
-                inputForm.Controls.Add(cmbTarget);
-
-                var btnOk = new Button
-                {
-                    Text = "Import", Left = 300, Width = 80, Top = 240,
-                    DialogResult = DialogResult.OK,
-                    BackColor = NOMADTheme.ACCENT,
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                };
-                inputForm.Controls.Add(btnOk);
-
-                var btnCancel = new Button
-                {
-                    Text = "Cancel", Left = 390, Width = 80, Top = 240,
-                    DialogResult = DialogResult.Cancel,
-                    FlatStyle = FlatStyle.Flat,
-                    ForeColor = Color.White,
-                };
-                inputForm.Controls.Add(btnCancel);
-
-                inputForm.AcceptButton = btnOk;
-                inputForm.CancelButton = btnCancel;
-
-                if (inputForm.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(textBox.Text))
-                {
-                    var points = ParseCoordinates(textBox.Text);
-                    if (points.Count > 0)
-                    {
-                        var boundary = cmbTarget.SelectedIndex == 0
-                            ? _missionConfig.SoftBoundary
-                            : _missionConfig.HardBoundary;
-                        var dgv = cmbTarget.SelectedIndex == 0
-                            ? _dgvSoftBoundary
-                            : _dgvHardBoundary;
-
-                        if (chkReplace.Checked)
-                        {
-                            boundary.Vertices.Clear();
-                            dgv.Rows.Clear();
-                        }
-
-                        foreach (var point in points)
-                        {
-                            boundary.Vertices.Add(point);
-                            dgv.Rows.Add(point.Lat.ToString("F8"), point.Lon.ToString("F8"));
-                        }
-
-                        _missionConfig.Save();
-                        UpdatePointCounts();
-                        AutoDrawBoundariesIfEnabled();
-                        CustomMessageBox.Show($"Imported {points.Count} points.", "Success");
-                    }
-                    else
-                    {
-                        CustomMessageBox.Show("No valid coordinates found.", "Warning");
-                    }
-                }
-            }
-        }
     }
 }

@@ -55,7 +55,7 @@ namespace NOMAD.MissionPlanner
                     CustomMessageBox.Show("Mission Planner context/cache changed; import cancelled.", "Cached Advisory Import");
                     return;
                 }
-                if (!ApplyImportedFence(points, choice, out error))
+                if (!ApplyOutlinePoints(points, choice, out error))
                 {
                     CustomMessageBox.Show(error, "Cached Advisory Import");
                     return;
@@ -71,8 +71,8 @@ namespace NOMAD.MissionPlanner
         }
 
         // The only qualification seam is a file path, never a dialog or persistence provider.
-        private bool ApplyImportedFence(List<GpsPoint> points, DialogResult choice, out string error,
-            string savePath = null)
+        private bool ApplyOutlinePoints(List<GpsPoint> points, DialogResult choice, out string error,
+            string savePath = null, bool append = false)
         {
             error = "Import cancelled.";
             if (choice != DialogResult.Yes && choice != DialogResult.No)
@@ -84,14 +84,17 @@ namespace NOMAD.MissionPlanner
                 error = "The inner outline is derived from the outer outline. Import outer, or disable auto derivation first.";
                 return false;
             }
-            var candidate = _missionConfig.Clone();
-            if (choice == DialogResult.Yes)
+            if (points == null || points.Count == 0 || points.Any(point => point == null ||
+                !GeoMath.IsValidCoordinate(point.Lat, point.Lon)))
             {
-                candidate.SoftBoundary.Vertices = points;
+                error = "Coordinate points must be finite latitude/longitude pairs in range.";
+                return false;
             }
-            else
+            var candidate = _missionConfig.Clone();
+            var target = choice == DialogResult.Yes ? candidate.SoftBoundary : candidate.HardBoundary;
+            target.Vertices = append ? target.Vertices.Concat(points).ToList() : points.ToList();
+            if (choice == DialogResult.No)
             {
-                candidate.HardBoundary.Vertices = points;
                 candidate.RegenerateSoftFromHard();
                 if (candidate.SoftBoundaryFromHard && candidate.SoftBoundary.Vertices.Any(point => point == null ||
                     !GeoMath.IsValidCoordinate(point.Lat, point.Lon)))
