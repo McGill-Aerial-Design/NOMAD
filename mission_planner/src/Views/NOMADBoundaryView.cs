@@ -302,7 +302,7 @@ namespace NOMAD.MissionPlanner
             _dgvSoftBoundary.CellValueChanged += (s, e) => SaveBoundaryFromGrid(_dgvSoftBoundary, _missionConfig.SoftBoundary);
             AddRow(body, _dgvSoftBoundary, SizeType.Absolute, 120);
 
-            var btnPasteSoft = Btn("Paste", ACCENT_COLOR, (s, e) => PasteCoordinates(_dgvSoftBoundary, _missionConfig.SoftBoundary, "soft"));
+            var btnPasteSoft = Btn("Paste", ACCENT_COLOR, (s, e) => PasteCoordinates(inner: true));
             var btnAddSoft = Btn("+ Add", SUCCESS_COLOR, (s, e) => AddManualPoint(_dgvSoftBoundary, _missionConfig.SoftBoundary));
             var btnDelSoft = Btn("Del Pt", ACCENT_COLOR, (s, e) => DeleteSelectedPoint(_dgvSoftBoundary, _missionConfig.SoftBoundary));
             var btnClearSoft = Btn("Clear", ERROR_COLOR, (s, e) => ClearBoundary(_dgvSoftBoundary, _missionConfig.SoftBoundary));
@@ -363,7 +363,7 @@ namespace NOMAD.MissionPlanner
             _dgvHardBoundary.CellValueChanged += (s, e) => SaveBoundaryFromGrid(_dgvHardBoundary, _missionConfig.HardBoundary);
             AddRow(body, _dgvHardBoundary, SizeType.Absolute, 120);
 
-            var btnPasteHard = Btn("Paste", ACCENT_COLOR, (s, e) => PasteCoordinates(_dgvHardBoundary, _missionConfig.HardBoundary, "hard"));
+            var btnPasteHard = Btn("Paste", ACCENT_COLOR, (s, e) => PasteCoordinates(inner: false));
             var btnAddHard = Btn("+ Add", SUCCESS_COLOR, (s, e) => AddManualPoint(_dgvHardBoundary, _missionConfig.HardBoundary));
             var btnDelHard = Btn("Del Pt", ACCENT_COLOR, (s, e) => DeleteSelectedPoint(_dgvHardBoundary, _missionConfig.HardBoundary));
             var btnClearHard = Btn("Clear", ERROR_COLOR, (s, e) => ClearBoundary(_dgvHardBoundary, _missionConfig.HardBoundary));
@@ -381,9 +381,8 @@ namespace NOMAD.MissionPlanner
             var card = Card("IMPORT", out var body);
 
             var btnImportKml = Btn("KML", ACCENT_COLOR, BtnImportKml_Click);
-            var btnImportCSV = Btn("Coords", ACCENT_COLOR, BtnImportGoogleMaps_Click);
             var btnGetFromMP = Btn("MP Fence", ACCENT_COLOR, BtnGetFromMP_Click);
-            AddRow(body, Row(Lbl("Import:", TEXT_SECONDARY, NOMADTheme.SIZE_SMALL, FontStyle.Bold), btnImportKml, btnImportCSV, btnGetFromMP));
+            AddRow(body, Row(Lbl("Import:", TEXT_SECONDARY, NOMADTheme.SIZE_SMALL, FontStyle.Bold), btnImportKml, btnGetFromMP));
 
             // Auto-draw toggle: when checked, AutoDrawBoundariesIfEnabled() pushes
             // imported/edited polygons to the map without a manual refresh. Named so

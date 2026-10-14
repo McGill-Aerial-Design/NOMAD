@@ -48,7 +48,10 @@ saved settings exist; the backup is used only when the primary is missing. Prese
 unsupported files, review them and create current settings explicitly. Portable
 exports omit the client credential. Advisory map files/presets also reject old policy
 fields; outlines never enforce an aircraft boundary. Mission Planner's native tools
-own flight-log analysis.
+own flight-log analysis. Use each advisory outline's Paste control for coordinate input;
+select latitude/longitude or longitude/latitude order, enter one pair per line with a
+decimal dot, and choose replacement or append. Invalid lines preserve the whole input
+for correction; coordinates remain local display data.
 
 ## Copter LAND engagement
 

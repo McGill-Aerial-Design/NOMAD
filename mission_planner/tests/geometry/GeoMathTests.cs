@@ -21,6 +21,7 @@ internal static class GeoMathTests
     private static readonly double M_PER_DEG_LAT = 110540.0;
     private static readonly double M_PER_DEG_LON = 111320.0 * Math.Cos(LAT0 * Math.PI / 180.0);
 
+    [STAThread]
     private static int Main()
     {
         InsetSquareMovesEachVertexInward();
@@ -34,6 +35,7 @@ internal static class GeoMathTests
         _failures += AdvisoryPositionTests.Run();
         NativeFenceImportTests.Run();
         NativeFenceViewTests.Run();
+        CoordinatePasteTests.Run();
         NativeFenceDialogProbe.Run();
 
         Console.WriteLine(_failures == 0

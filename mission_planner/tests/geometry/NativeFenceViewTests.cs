@@ -65,6 +65,12 @@ namespace NOMAD.MissionPlanner
             grid.Columns.Add("Lat", "Lat"); grid.Columns.Add("Lon", "Lon"); return grid;
         }
         internal void Import() { BtnGetFromMP_Click(this, EventArgs.Empty); }
+        internal Form CoordinateDialog(bool inner) { return CreateCoordinateDialog(inner); }
+        internal static bool ParseCoordinatesForTest(string text, bool longitudeFirst,
+            out List<GpsPoint> points, out string error)
+        {
+            return TryParseCoordinates(text, longitudeFirst, out points, out error);
+        }
         internal void RecreateForTest() { RecreateHandle(); }
         internal void PendingEdit(bool inner)
         {
@@ -72,6 +78,10 @@ namespace NOMAD.MissionPlanner
             grid.CurrentCell = grid.Rows[0].Cells[0]; grid.CreateControl();
             if (!grid.BeginEdit(false)) { throw new Exception("Real framework grid did not begin editing."); }
             grid.EditingControl.Text = "7.25"; grid.NotifyCurrentCellDirty(true);
+        }
+        internal string EditingText(bool inner)
+        {
+            return (inner ? _dgvSoftBoundary : _dgvHardBoundary).EditingControl?.Text;
         }
         internal string GridValues()
         {

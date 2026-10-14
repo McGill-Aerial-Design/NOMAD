@@ -320,7 +320,7 @@ try {
         throw 'Native import changed field identity, keys or payloads.'
     }
     # Persist the staged import only to an explicit temporary path. No operator AppData is touched.
-    $applyFence = $boundaryViewType.GetMethod('ApplyImportedFence', $privateFlags)
+    $applyFence = $boundaryViewType.GetMethod('ApplyOutlinePoints', $privateFlags)
     $originalJson = '{"SoftBoundary":{"Name":"Saved inner","Vertices":[{"Lat":1,"Lon":1,"Alt":11},{"Lat":1,"Lon":2,"Alt":12},{"Lat":2,"Lon":1,"Alt":13}]},"HardBoundary":{"Name":"Saved outer","Vertices":[{"Lat":3,"Lon":3,"Alt":21},{"Lat":3,"Lon":4,"Alt":22},{"Lat":4,"Lon":3,"Alt":23}]},"SoftBoundaryFromHard":true,"SoftBoundaryInsetMeters":12,"AdvisoryPreviewEnabled":true,"AdvisoryAudioAlertsEnabled":false,"AdvisoryAltitudeDisplayThresholdMeters":100}'
     foreach ($fault in @('cancel','derived-inner','blocked-temp','blocked-backup','locked-primary','success','new-file',
             'inner-success','outer-undervived')) {
@@ -339,7 +339,7 @@ try {
         $choice = if ($fault -eq 'cancel') { [Windows.Forms.DialogResult]::Cancel }
             elseif ($fault -in @('derived-inner','inner-success')) { [Windows.Forms.DialogResult]::Yes }
             else { [Windows.Forms.DialogResult]::No }
-        $applyArgs = [object[]]@($fencePoints, $choice, $null, $importPath)
+        $applyArgs = [object[]]@($fencePoints, $choice, $null, $importPath, $false)
         $applyArgs[3] = [string]$importPath
         try { $saved = $applyFence.Invoke($view, $applyArgs) } finally { if ($locked) { $locked.Dispose() } }
         if ($fault -in @('success','new-file','inner-success','outer-undervived')) {
@@ -368,6 +368,88 @@ try {
             }
         }
     }
+    # Actual DLL coordinate parser: explicit order and all-or-nothing input under both cultures.
+    $parseCoordinates = $boundaryViewType.GetMethod('TryParseCoordinates', [Reflection.BindingFlags]'Static,NonPublic')
+    $originalCulture = [Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        foreach ($culture in @('en-CA', 'fr-CA')) {
+            [Threading.Thread]::CurrentThread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo($culture)
+            foreach ($longitudeFirst in @($false, $true)) {
+                $parseArguments = [object[]]@('-20,30', $longitudeFirst, $null, $null)
+                if (-not $parseCoordinates.Invoke($null, $parseArguments)) { throw 'Actual DLL rejected ordered coordinates.' }
+                $parsedPoint = $parseArguments[2][0]
+                $latitude = if ($longitudeFirst) { 30 } else { -20 }
+                $longitude = if ($longitudeFirst) { -20 } else { 30 }
+                if ($parsedPoint.Lat -ne $latitude -or $parsedPoint.Lon -ne $longitude) { throw 'Actual DLL guessed coordinate order.' }
+            }
+            $parseArguments = [object[]]@("`r`n1,2`r`nbad`r`n3,4", $false, $null, $null)
+            if ($parseCoordinates.Invoke($null, $parseArguments) -or $null -ne $parseArguments[2] -or
+                -not $parseArguments[3].StartsWith('Line 3:')) { throw 'Actual DLL partly accepted malformed input.' }
+        }
+    } finally { [Threading.Thread]::CurrentThread.CurrentCulture = $originalCulture }
+    # Replace and append use the same actual filesystem transaction; failure cannot publish to live outlines.
+    foreach ($append in @($false, $true)) {
+        foreach ($fault in @('blocked-temp','blocked-backup','locked-primary','success')) {
+            $pasteConfig = $geofenceLoadMethod.Invoke($null, [object[]]@($originalJson))
+            $pasteConfig.SoftBoundaryFromHard = $false
+            $boundaryViewType.GetField('_missionConfig', $privateFlags).SetValue($view, $pasteConfig)
+            $innerBefore = $pasteConfig.SoftBoundary.Vertices; $outerBefore = $pasteConfig.HardBoundary.Vertices
+            $beforePaste = [Newtonsoft.Json.JsonConvert]::SerializeObject($pasteConfig)
+            $pastePath = Join-Path $temporary ('paste-' + $append + '-' + $fault + '.json')
+            [IO.File]::WriteAllText($pastePath, $beforePaste)
+            if ($fault -eq 'blocked-temp') { New-Item -ItemType Directory -Path ($pastePath + '.tmp') | Out-Null }
+            if ($fault -eq 'blocked-backup') { New-Item -ItemType Directory -Path ($pastePath + '.bak') | Out-Null }
+            $locked = $null
+            if ($fault -eq 'locked-primary') { $locked = [IO.File]::Open($pastePath, 'Open', 'Read', 'Read') }
+            $parseArguments = [object[]]@('0,0', $false, $null, $null)
+            if (-not $parseCoordinates.Invoke($null, $parseArguments)) { throw 'Actual DLL rejected legal zero.' }
+            $pasteArguments = [object[]]@($parseArguments[2], [Windows.Forms.DialogResult]::No, $null, $pastePath, $append)
+            $pasteArguments[3] = [string]$pastePath
+            try { $saved = $applyFence.Invoke($view, $pasteArguments) } finally { if ($locked) { $locked.Dispose() } }
+            if ($fault -eq 'success') {
+                $expectedCount = if ($append) { 4 } else { 1 }
+                if (-not $saved -or $pasteConfig.HardBoundary.Vertices.Count -ne $expectedCount -or
+                    $pasteConfig.HardBoundary.Vertices[$expectedCount - 1].Lat -ne 0 -or
+                    -not [object]::ReferenceEquals($innerBefore, $pasteConfig.SoftBoundary.Vertices) -or
+                    $pasteConfig.AdvisoryAltitudeDisplayThresholdMeters -ne 100 -or
+                    ($append -and $pasteConfig.HardBoundary.Vertices[0].Alt -ne 21)) {
+                    throw 'Actual DLL paste lost append order, prior altitude, settings or other outline.'
+                }
+                $persistedPaste = $geofenceLoadMethod.Invoke($null, [object[]]@([IO.File]::ReadAllText($pastePath)))
+                if ([Newtonsoft.Json.JsonConvert]::SerializeObject($persistedPaste) -cne
+                    [Newtonsoft.Json.JsonConvert]::SerializeObject($pasteConfig)) { throw 'Actual DLL paste persistence differs.' }
+            } else {
+                if ($saved -or -not [object]::ReferenceEquals($innerBefore, $pasteConfig.SoftBoundary.Vertices) -or
+                    -not [object]::ReferenceEquals($outerBefore, $pasteConfig.HardBoundary.Vertices) -or
+                    [Newtonsoft.Json.JsonConvert]::SerializeObject($pasteConfig) -cne $beforePaste -or
+                    [IO.File]::ReadAllText($pastePath) -cne $beforePaste -or
+                    -not $pasteArguments[2].Contains('Check the primary and backup')) {
+                    throw ('Actual DLL failed paste changed originals or concealed persistence uncertainty: ' + $fault)
+                }
+            }
+        }
+    }
+    # Inspect the real contextual controls without calling the view constructor or loading saved outlines.
+    $pasteConfig = $geofenceLoadMethod.Invoke($null, [object[]]@($originalJson))
+    $boundaryViewType.GetField('_missionConfig', $privateFlags).SetValue($view, $pasteConfig)
+    $innerCard = $boundaryViewType.GetMethod('BuildSoftBoundaryCard', $privateFlags).Invoke($view, @())
+    $outerCard = $boundaryViewType.GetMethod('BuildHardBoundaryCard', $privateFlags).Invoke($view, @())
+    try {
+        foreach ($entry in @(@($innerCard, $false), @($outerCard, $true))) {
+            $pending = [Collections.Generic.Queue[Windows.Forms.Control]]::new()
+            $pending.Enqueue($entry[0])
+            $pasteButtons = @()
+            while ($pending.Count -gt 0) {
+                $control = $pending.Dequeue()
+                if ($control -is [Windows.Forms.Button] -and $control.Text -eq 'Paste') { $pasteButtons += $control }
+                foreach ($child in $control.Controls) { $pending.Enqueue($child) }
+            }
+            if ($pasteButtons.Count -ne 1 -or $pasteButtons[0].Enabled -ne $entry[1]) {
+                throw 'Contextual Paste controls lost target or derived-inner enablement.'
+            }
+        }
+    } finally { $innerCard.Dispose(); $outerCard.Dispose() }
+    Write-Host 'Actual DLL coordinate orders, whole-input rejection, paste transactions and contextual controls passed.'
     # The same current observation must drive both the position label and advisory state, including queued old events.
     $displayConfig = $geofenceLoadMethod.Invoke($null, [object[]]@(
         '{"HardBoundary":{"Vertices":[{"Lat":1,"Lon":1},{"Lat":1,"Lon":2},{"Lat":2,"Lon":2},{"Lat":2,"Lon":1}]}}'))
@@ -465,7 +547,7 @@ try {
         $planImport = $geofenceLoadMethod.Invoke($null, [object[]]@($originalJson))
         $boundaryViewType.GetField('_missionConfig', $privateFlags).SetValue($view, $planImport)
         $planImportArgs = [object[]]@($fencePoints, [Windows.Forms.DialogResult]::No, $null,
-            [string](Join-Path $temporary 'plan-import.json'))
+            [string](Join-Path $temporary 'plan-import.json'), $false)
         if (-not $applyFence.Invoke($view, $planImportArgs)) { throw 'Native Plan isolation import failed.' }
         $renderer.GetMethod('DrawBoundaries').Invoke($null, [object[]]@($planImport)) | Out-Null
         if (-not [object]::ReferenceEquals($fenceField.GetValue($nativeMav), $fenceCache) -or
@@ -540,7 +622,7 @@ try {
                 foreach ($child in $control.Controls) { $controls.Enqueue($child) }
             }
             if ($texts.Contains('Export to Plan Map') -or -not $texts.Contains('KML') -or
-                -not $texts.Contains('Coords') -or -not $texts.Contains('MP Fence')) {
+                $texts.Contains('Coords') -or -not $texts.Contains('MP Fence')) {
                 throw 'Advisory map controls still offer native Plan export or lost a read-only import.'
             }
         } finally { $card.Dispose() }
