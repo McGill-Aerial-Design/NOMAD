@@ -32,6 +32,9 @@ internal static class GeoMathTests
         AdvisoryOutlineStatusUsesVisualPolygonsOnly();
         AdvisoryAltitudeStatusUsesConfiguredThreshold();
         _failures += AdvisoryPositionTests.Run();
+        NativeFenceImportTests.Run();
+        NativeFenceViewTests.Run();
+        NativeFenceDialogProbe.Run();
 
         Console.WriteLine(_failures == 0
             ? "All geometry tests passed."

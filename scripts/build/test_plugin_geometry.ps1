@@ -38,11 +38,17 @@ if (-not (Test-Path $csc)) {
 $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Geofence\GeoMath.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Geofence\GeofenceTypes.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Geofence\NativeFenceImport.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Views\NOMADBoundaryView.MPFence.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Views\NOMADBoundaryView.Operations.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Geofence\AdvisoryPosition.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Geofence\BoundaryManager.cs'),
     (Join-Path $repoRoot 'infra\transport\ground_router\RouterClock.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\geometry\AdvisoryPositionHostStubs.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\geometry\AdvisoryPositionTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\geometry\NativeFenceImportTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\geometry\NativeFenceViewTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\geometry\NativeFenceDialogProbe.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\geometry\GeoMathTests.cs')
 )
 $mavlink = Join-Path ${env:ProgramFiles(x86)} 'Mission Planner\MAVLink.dll'
@@ -55,7 +61,9 @@ New-Item -ItemType Directory -Force $outDir | Out-Null
 $exe = Join-Path $outDir 'GeoMathTests.exe'
 
 Write-Host "Compiling geometry tests..." -ForegroundColor Yellow
-& $csc /nologo /target:exe /langversion:latest "/reference:$mavlink" "/reference:$netstandard" "/out:$exe" @sources
+& $csc /nologo /target:exe /langversion:latest /r:System.Windows.Forms.dll /r:System.Drawing.dll `
+    /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll `
+    "/reference:$mavlink" "/reference:$netstandard" "/out:$exe" @sources
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Compile FAILED." -ForegroundColor Red
     exit 1
