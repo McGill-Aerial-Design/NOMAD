@@ -111,6 +111,8 @@ class Client {
 
     void send_raw(std::string_view line, std::source_location location = std::source_location::current()) {
         record_request(line, location);
+        send_begin_ = std::chrono::steady_clock::now();
+        send_complete_ = read_begin_ = first_byte_ = read_complete_ = error_at_ = {};
         std::string framed(line);
         framed.push_back('\n');
         std::size_t offset = 0;
@@ -126,6 +128,7 @@ class Client {
             }
             offset += static_cast<std::size_t>(count);
         }
+        send_complete_ = std::chrono::steady_clock::now();
     }
 
     void send(const Json &request, std::source_location location = std::source_location::current()) {
@@ -141,6 +144,8 @@ class Client {
     }
 
     Json receive(std::source_location location = std::source_location::current()) {
+        read_begin_ = std::chrono::steady_clock::now();
+        first_byte_ = read_complete_ = error_at_ = {};
         std::string line;
         char character{};
         while (line.size() <= 65536) {
@@ -153,7 +158,11 @@ class Client {
             if (count != 1) {
                 throw_socket_failure("receive", count, error, line.size(), location);
             }
+            if (first_byte_ == std::chrono::steady_clock::time_point{}) {
+                first_byte_ = std::chrono::steady_clock::now();
+            }
             if (character == '\n') {
+                read_complete_ = std::chrono::steady_clock::now();
                 return Json::parse(line);
             }
             line.push_back(character);
@@ -166,8 +175,25 @@ class Client {
         return receive(location);
     }
 
+    Json timing(std::chrono::steady_clock::time_point origin) const {
+        const auto offset = [origin](std::chrono::steady_clock::time_point point) -> Json {
+            if (origin == std::chrono::steady_clock::time_point{} || point == std::chrono::steady_clock::time_point{}) {
+                return nullptr;
+            }
+            return std::chrono::duration_cast<std::chrono::microseconds>(point - origin).count();
+        };
+        return {{"send_begin_us", offset(send_begin_)}, {"send_complete_us", offset(send_complete_)},
+                {"read_begin_us", offset(read_begin_)}, {"first_byte_us", offset(first_byte_)},
+                {"read_complete_us", offset(read_complete_)}, {"error_us", offset(error_at_)},
+                {"error_code", error_at_ == std::chrono::steady_clock::time_point{} ? Json(nullptr) : Json(error_code_)},
+                {"failed_count", error_at_ == std::chrono::steady_clock::time_point{} ? Json(nullptr) : Json(failed_count_)},
+                {"partial_bytes", error_at_ == std::chrono::steady_clock::time_point{} ? Json(nullptr) : Json(partial_bytes_)}};
+    }
+
     void send_partial(std::string_view data, std::source_location location = std::source_location::current()) {
         record_request(data, location);
+        send_begin_ = std::chrono::steady_clock::now();
+        send_complete_ = read_begin_ = first_byte_ = read_complete_ = error_at_ = {};
 #ifdef _WIN32
         const auto count = ::send(socket_, data.data(), static_cast<int>(data.size()), 0);
 #else
@@ -177,6 +203,7 @@ class Client {
         if (count < 0 || static_cast<std::size_t>(count) != data.size()) {
             throw_socket_failure("send_partial", count, error, count > 0 ? count : 0, location);
         }
+        send_complete_ = std::chrono::steady_clock::now();
     }
 
     bool wait_for_peer_close(std::source_location location = std::source_location::current()) {
@@ -232,17 +259,26 @@ class Client {
     }
 
     [[noreturn]] void throw_socket_failure(std::string_view operation, std::int64_t count, int error,
-                                          std::size_t bytes, std::source_location location) const {
+                                          std::size_t bytes, std::source_location location) {
+        error_at_ = std::chrono::steady_clock::now();
+        error_code_ = error;
+        failed_count_ = count;
+        partial_bytes_ = bytes;
         throw std::runtime_error("test client " + std::string(operation) + ": " + socket_failure_reason(count, error) +
             "; code=" + std::to_string(error) + "; count=" + std::to_string(count) +
             "; partial_bytes=" + std::to_string(bytes) + "; id=" + request_id_ + "; type=" + request_type_ +
-            "; sent_at=" + format_location(request_location_) + "; observed_at=" + format_location(location));
+            "; sent_at=" + format_location(request_location_) + "; observed_at=" + format_location(location) +
+            "; timing_from_send=" + timing(send_begin_).dump());
     }
 
     Socket socket_{kInvalidSocket};
     std::string request_id_{"<unavailable>"};
     std::string request_type_{"<unavailable>"};
     std::source_location request_location_;
+    std::chrono::steady_clock::time_point send_begin_, send_complete_, read_begin_, first_byte_, read_complete_, error_at_;
+    int error_code_{};
+    std::int64_t failed_count_{};
+    std::size_t partial_bytes_{};
 };
 
 const std::map<std::string, std::string> test_credentials{

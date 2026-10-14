@@ -340,22 +340,51 @@ void test_backend_actuator_authorization_and_raw_boundary() {
     runtime.stop();
 }
 
-void test_backend_pulse_failure_and_explicit_recovery() {
-    auto config = test_config();
-    config.ipc_port = free_port();
-    config.actuation_enabled = true;
-    config.actuators = {runtime_actuator(nomad::runtime::ActuatorBehavior::RelayPulse)};
-    auto connection = std::make_unique<FakeConnection>();
-    auto *observed = connection.get();
-    nomad::runtime::Runtime runtime(std::move(connection), config);
-    start_ready(runtime, config.ipc_port);
-    admit_authority(config.ipc_port);
-    Client client(config.ipc_port);
+// Bounded facts from this synthetic case only. The guard marks entry before the native write,
+// not flush completion; it must not print, call Runtime or probe another socket under the journal lock.
+struct PulseAuditFacts {
+    std::chrono::steady_clock::time_point origin{std::chrono::steady_clock::now()};
+    std::mutex mutex;
+    std::vector<Json> entries;
+    std::optional<int> commands_before_blocked;
+
+    bool capture(const std::string &bytes) {
+        const auto record = Json::parse(bytes);
+        const auto id = record.value("request_id", "");
+        const auto event = record.value("event", "");
+        if ((id != "pulse-confirm-two" && id != "pulse-blocked") ||
+            (event != "mutation_intent" && event != "mutation_outcome" && event != "request_rejected")) {
+            return true;
+        }
+        std::lock_guard lock(mutex);
+        if (entries.size() < 12) {
+            entries.push_back({{"request", id}, {"audit_entry", event}, {"ordinal", record["ordinal"]},
+                {"result", record["result"]}, {"elapsed_us", std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - origin).count()}});
+        }
+        return true;
+    }
+
+    void emit(const char *phase, const Client &client) {
+        Json snapshot;
+        {
+            std::lock_guard lock(mutex);
+            snapshot = entries;
+        }
+        std::cerr << Json{{"event", "pulse_response_diagnostic"}, {"phase", phase},
+            {"client", client.timing(origin)}, {"commands_before_blocked", commands_before_blocked ?
+                Json(*commands_before_blocked) : Json(nullptr)}, {"audit_entries", snapshot},
+            {"audit_limit", "pre-native-write entries; final native write/flush/response stages are not observed"}}.dump()
+            << '\n';
+    }
+};
+
+void prepare_failed_pulse(Client &client, FakeConnection &observed) {
     CHECK(client.request(actuator_request("pulse-safe", "safe"))["command_result"]["success"] == true);
     CHECK(client.request(actuator_request("pulse-confirm-one", "activate"))["execution_attempted"] == false);
-    observed->before_command_send = [&] {
-        if (observed->command_count() == 2) {
-            observed->acknowledgement = nomad::mavlink::CommandAck{181, 1};
+    observed.before_command_send = [&] {
+        if (observed.command_count() == 2) {
+            observed.acknowledgement = nomad::mavlink::CommandAck{181, 1};
         }
     };
     const auto failed = client.request(actuator_request("pulse-confirm-two", "activate"));
@@ -364,20 +393,116 @@ void test_backend_pulse_failure_and_explicit_recovery() {
     CHECK(failed["actuator_state"]["safe_outcome"] == "failed");
     CHECK(failed["actuator_state"]["pulse_on_succeeded"] == true);
     CHECK(failed["actuator_state"]["recovery_required"] == true);
-    CHECK(observed->command_count() == 3);
-    CHECK(client.request(actuator_request("pulse-blocked", "activate"))["error"]["code"] == "actuator_action_blocked");
-    CHECK(observed->command_count() == 3);
-    CHECK(client.request(actuator_request("pulse-safe-fails", "safe"))["actuator_state"]["recovery_required"] == true);
-    observed->before_command_send = {};
-    observed->acknowledgement = nomad::mavlink::CommandAck{181, 0};
-    CHECK(client.request(actuator_request("pulse-safe-succeeds", "safe"))["actuator_state"]["recovery_required"] ==
-          false);
-    CHECK(observed->command_count() == 5);
-    CHECK(client.request(actuator_request("budget-confirm-one", "activate"))["execution_attempted"] == false);
-    auto short_budget = actuator_request("budget-confirm-two", "activate");
-    short_budget["expires_at_ms"] = nomad::runtime::detail::unix_milliseconds() + 3000;
-    CHECK(client.request(short_budget)["error"]["code"] == "insufficient_actuator_budget");
-    CHECK(observed->command_count() == 5);
+    CHECK(observed.command_count() == 3);
+}
+
+void test_backend_pulse_failure_and_explicit_recovery() {
+    PulseAuditFacts facts;
+    auto config = test_config();
+    config.ipc_port = free_port();
+    config.actuation_enabled = true;
+    config.actuators = {runtime_actuator(nomad::runtime::ActuatorBehavior::RelayPulse)};
+    config.audit_write_guard = [&](const std::string &record) { return facts.capture(record); };
+    auto connection = std::make_unique<FakeConnection>();
+    auto *observed = connection.get();
+    nomad::runtime::Runtime runtime(std::move(connection), config);
+    start_ready(runtime, config.ipc_port);
+    admit_authority(config.ipc_port);
+    Client client(config.ipc_port);
+    try {
+        prepare_failed_pulse(client, *observed);
+        facts.commands_before_blocked = 3; // The preceding helper independently asserted this known state.
+        const auto blocked = client.request(actuator_request("pulse-blocked", "activate"));
+        facts.emit("blocked_response", client);
+        CHECK(blocked["error"]["code"] == "actuator_action_blocked");
+        CHECK(observed->command_count() == 3);
+        CHECK(client.request(actuator_request("pulse-safe-fails", "safe"))["actuator_state"]["recovery_required"] == true);
+        observed->before_command_send = {};
+        observed->acknowledgement = nomad::mavlink::CommandAck{181, 0};
+        CHECK(client.request(actuator_request("pulse-safe-succeeds", "safe"))["actuator_state"]["recovery_required"] ==
+              false);
+        CHECK(observed->command_count() == 5);
+        CHECK(client.request(actuator_request("budget-confirm-one", "activate"))["execution_attempted"] == false);
+        auto short_budget = actuator_request("budget-confirm-two", "activate");
+        short_budget["expires_at_ms"] = nomad::runtime::detail::unix_milliseconds() + 3000;
+        CHECK(client.request(short_budget)["error"]["code"] == "insufficient_actuator_budget");
+        CHECK(observed->command_count() == 5);
+    } catch (...) {
+        facts.emit("case_failure_before_runtime_teardown", client);
+        throw;
+    }
+    runtime.stop();
+}
+
+void test_pulse_blocked_response_during_gated_audit() {
+    PulseAuditFacts facts;
+    std::promise<void> entered, released;
+    auto entry = entered.get_future();
+    auto release = released.get_future().share();
+    bool opened = false;
+    const auto open = [&] {
+        if (!opened) {
+            opened = true;
+            released.set_value();
+        }
+    };
+    auto config = test_config();
+    config.ipc_port = free_port();
+    config.actuation_enabled = true;
+    config.actuators = {runtime_actuator(nomad::runtime::ActuatorBehavior::RelayPulse)};
+    config.audit_write_guard = [&](const std::string &bytes) {
+        facts.capture(bytes);
+        const auto record = Json::parse(bytes);
+        if (record.value("request_id", "") == "pulse-blocked" && record.value("event", "") == "request_rejected") {
+            entered.set_value();
+            release.wait();
+        }
+        return true;
+    };
+    auto connection = std::make_unique<FakeConnection>();
+    auto *observed = connection.get();
+    nomad::runtime::Runtime runtime(std::move(connection), config);
+    start_ready(runtime, config.ipc_port);
+    admit_authority(config.ipc_port);
+    Client client(config.ipc_port);
+    try {
+        prepare_failed_pulse(client, *observed);
+        facts.commands_before_blocked = 3;
+        client.send(actuator_request("pulse-blocked", "activate"));
+        bool timed_out = false;
+        try {
+            client.receive();
+        } catch (const std::runtime_error &error) {
+            timed_out = std::string(error.what()).find("test client receive: timeout") != std::string::npos;
+            facts.emit("controlled_final_audit_entry_timeout", client);
+        }
+        CHECK(timed_out);
+        const auto missing_response = client.timing(facts.origin);
+        CHECK(missing_response["first_byte_us"].is_null());
+        CHECK(missing_response["failed_count"] == -1);
+        CHECK(missing_response["partial_bytes"] == 0);
+#ifdef _WIN32
+        CHECK(missing_response["error_code"] == WSAETIMEDOUT);
+#else
+        CHECK(missing_response["error_code"] == EAGAIN || missing_response["error_code"] == EWOULDBLOCK);
+#endif
+        CHECK(entry.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        CHECK(observed->command_count() == 3);
+        Client independent(config.ipc_port);
+        CHECK(independent.request(base_request("pulse-independent-ping", "ping"))["ok"] == true);
+        open();
+        // Read the original response after the gate opens: never resend the activation.
+        CHECK(client.receive()["error"]["code"] == "actuator_action_blocked");
+        facts.emit("controlled_original_response_received_without_resend", client);
+        CHECK(observed->command_count() == 3);
+        CHECK(client.request(base_request("pulse-recovery-still-required", "get_actuators"))["actuators"][0]
+            ["state"]["recovery_required"] == true);
+    } catch (...) {
+        open();
+        facts.emit("controlled_failure_before_runtime_teardown", client);
+        throw;
+    }
+    open();
     runtime.stop();
 }
 

@@ -22,6 +22,8 @@
 #include <functional>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <mutex>
 #include <limits>
 #include <map>
 #include <random>
@@ -411,6 +413,14 @@ void run_runtime_scenarios() {
     run_scenario("socket_failure_classification", test_socket_failure_classification);
     run_scenario("backend_actuator_authorization", test_backend_actuator_authorization_and_raw_boundary);
     run_scenario("backend_pulse_recovery", test_backend_pulse_failure_and_explicit_recovery);
+    run_scenario("pulse_response_cohort", [] {
+        for (int sample = 1; sample <= 20; ++sample) {
+            std::cerr << "pulse_response_sample=" << sample << '\n';
+            run_scenario("backend_pulse_recovery_sample_" + std::to_string(sample),
+                         test_backend_pulse_failure_and_explicit_recovery);
+        }
+    });
+    run_scenario("pulse_blocked_audit_gate", test_pulse_blocked_response_during_gated_audit);
     run_scenario("unknown_actuator_actions", test_unknown_actuator_actions_are_rejected_without_state_change);
     run_scenario("continuous_axis_eligibility", test_continuous_axis_eligibility_is_owned_by_backend);
     run_scenario("catalog_revision", test_catalog_revision_orders_persistence_and_empty_replacement);
@@ -469,6 +479,14 @@ int main(int argc, char **argv) {
                 nomad::test::run_scenario("gated_pending_neutral_" + std::to_string(iteration),
                     test_backend_pending_neutral_and_safe_interrupt);
             }
+            return;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--pulse-response-trace") {
+            nomad::test::run_scenario("backend_pulse_recovery", test_backend_pulse_failure_and_explicit_recovery);
+            return;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--pulse-audit-gate") {
+            nomad::test::run_scenario("controlled_pulse_audit_gate", test_pulse_blocked_response_during_gated_audit);
             return;
         }
         if (argc == 2 && std::string_view(argv[1]) == "--actuator-tests") {
