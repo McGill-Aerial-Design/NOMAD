@@ -31,6 +31,7 @@ internal static class GeoMathTests
         FewerThanThreeVerticesCountsAsInside();
         AdvisoryOutlineStatusUsesVisualPolygonsOnly();
         AdvisoryAltitudeStatusUsesConfiguredThreshold();
+        _failures += AdvisoryPositionTests.Run();
 
         Console.WriteLine(_failures == 0
             ? "All geometry tests passed."

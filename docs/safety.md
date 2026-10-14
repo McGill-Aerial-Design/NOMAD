@@ -74,6 +74,25 @@ response and flight qualification remain blocked. Preserve ArduPilot failsafes
 and qualify their interaction with an approved termination mechanism; no
 substitute emergency recipe is approved.
 
+The local outline preview uses live Mission Planner received-position packets,
+not cached display coordinates or log playback. It prefers the newest received
+GLOBAL_POSITION_INT/HIGH_LATENCY/HIGH_LATENCY2 estimate; GPS_RAW_INT is used only
+when that live context has no estimate packet, with a known horizontal fix.
+An unusable selected estimate does not fall back to an older estimate or raw GPS.
+Receipt times are frozen onto the monotonic clock at first observation for ordering;
+missing/non-UTC estimate timestamps or tied newest estimate receipts are unknown.
+Both coordinates come from one packet; legal zeros are accepted in received data,
+while no packet means unknown. This deliberately replaces the host's cached-zero
+sentinel and conditional raw-GPS fallback behavior. A packet has a 3500 ms host
+receipt display budget, counted once and then expired monotonically. Cache rereads
+do not renew it; invalid receipts, observed context changes, closed links and
+sampling failures show no position. Snapshot reads and each event/audio publication
+also revalidate the selected receipt and observed context without renewing them.
+The one-second poll can delay detection by one poll; blocked UI or subscribers can
+delay event delivery. Slow high-latency streams can show unknown between receipts.
+Recent receipt proves neither recent acquisition nor aircraft liveness, navigation
+readiness, containment or control authority. These changes affect display only.
+
 Q01 is resolved by project direction: the plugin may derive an inner outline
 from an outer outline for visual preview, but neither polygon is an authoritative
 safety boundary. Crossing an internal margin is not a termination trigger.

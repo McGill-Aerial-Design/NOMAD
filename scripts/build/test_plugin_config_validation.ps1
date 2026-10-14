@@ -161,6 +161,9 @@ try {
     $boundaryViewType = $plugin.GetType('NOMAD.MissionPlanner.NOMADBoundaryView', $true)
     $presetType = $plugin.GetType('NOMAD.MissionPlanner.BoundaryPreset', $true)
     $view = [Runtime.Serialization.FormatterServices]::GetUninitializedObject($boundaryViewType)
+    # Initialize only WinForms ownership on that object, never the NOMAD constructor that reads AppData.
+    [Windows.Forms.UserControl].GetConstructor([type[]]@()).Invoke(
+        $view, [Reflection.BindingFlags]::Default, $null, [object[]]@(), $null) | Out-Null
     $presets = [Activator]::CreateInstance([Collections.Generic.List``1].MakeGenericType($presetType))
     $older = [Activator]::CreateInstance($presetType)
     $newer = [Activator]::CreateInstance($presetType)
@@ -212,6 +215,65 @@ try {
             throw 'An empty preset list did not retain the placeholder.'
         }
     } finally { $presetCombo.Dispose() }
+    # Exercise the real host's nonconsuming packet cache without constructing MainV2 or a vehicle connection.
+    $nativeMavType = [MissionPlanner.MAVState]
+    $nativeMav = [Runtime.Serialization.FormatterServices]::GetUninitializedObject($nativeMavType)
+    foreach ($name in @('packets', 'packetsLast')) {
+        $property = $nativeMavType.GetProperty($name, $privateFlags)
+        $property.SetValue($nativeMav, [Activator]::CreateInstance($property.PropertyType), $null)
+    }
+    $nativeMavType.GetField('packetslock', $privateFlags).SetValue($nativeMav, [object]::new())
+    $payload = [Activator]::CreateInstance([MAVLink+mavlink_global_position_int_t])
+    $payload.lat = 15000000
+    $payload.lon = 15000000
+    $parser = [MAVLink+MavlinkParse]::new()
+    $bytes = $parser.GenerateMAVLinkPacket20([MAVLink+MAVLINK_MSG_ID]::GLOBAL_POSITION_INT, $payload, $false, 1, 1, 1)
+    $packet = [MAVLink+MAVLinkMessage]::new($bytes, [DateTime]::UtcNow)
+    $nativeMavType.GetMethod('addPacket').Invoke($nativeMav, [object[]]@($packet)) | Out-Null
+    $cached = $nativeMavType.GetMethod('getPacketLast').Invoke($nativeMav, [object[]]@([uint32]33))
+    $clockType = $plugin.GetType('NOMAD.MissionPlanner.RouterClock', $true)
+    $clock = $clockType.GetConstructors($privateFlags)[0].Invoke([object[]]@($null, $null))
+    $positionType = $plugin.GetType('NOMAD.MissionPlanner.AdvisoryPosition', $true)
+    $positionReader = $positionType.GetConstructors($privateFlags)[0].Invoke([object[]]@($clock))
+    $packetSlots = [Array]::CreateInstance([MAVLink+MAVLinkMessage], 4)
+    $packetSlots.SetValue($cached, 0)
+    $point = $positionType.GetMethod('Read', $privateFlags).Invoke(
+        $positionReader, [object[]]@($packetSlots, [byte]1, [byte]1))
+    $queued = $nativeMavType.GetMethod('getPacket').Invoke($nativeMav, [object[]]@([uint32]33))
+    if ($point.Lat -ne 1.5 -or $point.Lon -ne 1.5 -or -not [object]::ReferenceEquals($queued, $packet)) {
+        throw 'Received-position decoding changed coordinates or consumed the native host packet queue.'
+    }
+    # The same current observation must drive both the position label and advisory state, including queued old events.
+    $displayConfig = $geofenceLoadMethod.Invoke($null, [object[]]@(
+        '{"HardBoundary":{"Vertices":[{"Lat":1,"Lon":1},{"Lat":1,"Lon":2},{"Lat":2,"Lon":2},{"Lat":2,"Lon":1}]}}'))
+    $monitorType = $plugin.GetType('NOMAD.MissionPlanner.AdvisoryBoundaryMonitor', $true)
+    $monitor = [Activator]::CreateInstance($monitorType, [object[]]@($displayConfig))
+    $positionLabel = [Windows.Forms.Label]::new()
+    $statusLabel = [Windows.Forms.Label]::new()
+    $statusPanel = [Windows.Forms.Panel]::new()
+    $boundaryViewType.GetField('_monitor', $privateFlags).SetValue($view, $monitor)
+    $boundaryViewType.GetField('_lblPosition', $privateFlags).SetValue($view, $positionLabel)
+    $boundaryViewType.GetField('_lblStatus', $privateFlags).SetValue($view, $statusLabel)
+    $boundaryViewType.GetField('_statusPanel', $privateFlags).SetValue($view, $statusPanel)
+    $observationType = $plugin.GetType('NOMAD.MissionPlanner.AdvisoryBoundaryStatusEventArgs', $true)
+    $insideObservation = [Activator]::CreateInstance($observationType)
+    $insideObservation.Position = $point
+    $insideObservation.Status = [Enum]::Parse(
+        $plugin.GetType('NOMAD.MissionPlanner.AdvisoryOutlineStatus'), 'InsideOutlines')
+    $applyObservation = $boundaryViewType.GetMethod('ApplyAdvisoryObservation', $privateFlags)
+    $presentObservation = $boundaryViewType.GetMethod('Monitor_AdvisoryStatusChanged', $privateFlags)
+    try {
+        $applyObservation.Invoke($view, [object[]]@($insideObservation)) | Out-Null
+        if ($positionLabel.Text -ne ('Received position: {0:F6}, {1:F6}' -f 1.5, 1.5) -or
+            -not $statusLabel.Text.Contains('inside the saved outlines')) {
+            throw 'The boundary label and status did not use the same received observation.'
+        }
+        $presentObservation.Invoke($view, [object[]]@($monitor, $insideObservation)) | Out-Null
+        if ($positionLabel.Text -ne 'Received position: --' -or
+            -not $statusLabel.Text.Contains('No fresh live received position')) {
+            throw 'An old queued event restored inside state or mismatched position text.'
+        }
+    } finally { $monitor.Dispose(); $positionLabel.Dispose(); $statusLabel.Dispose(); $statusPanel.Dispose() }
     # Use isolated maps and a constructor-skipped planner; never load a real MP screen or saved outlines.
     $renderer = $plugin.GetType('NOMAD.MissionPlanner.MapOverlayManager', $true)
     $staticFlags = [Reflection.BindingFlags]'Static,Public,NonPublic'
@@ -353,7 +415,7 @@ try {
         $planMap.Dispose()
         $dataMap.Dispose()
     }
-    Write-Host 'Mission Planner configuration, HID, presets and advisory map isolation validation passed.'
+    Write-Host 'Mission Planner configuration, HID, presets and advisory map/position validation passed.'
 } finally {
     [AppDomain]::CurrentDomain.remove_AssemblyResolve($dependencyResolver)
     Remove-Item -LiteralPath $temporary -Recurse -Force

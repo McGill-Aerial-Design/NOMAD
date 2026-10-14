@@ -80,7 +80,7 @@ namespace NOMAD.MissionPlanner
             return AdvisoryOutlineStatus.InsideOutlines;
         }
 
-        private static bool IsValidCoordinate(double latitude, double longitude)
+        internal static bool IsValidCoordinate(double latitude, double longitude)
         {
             return !double.IsNaN(latitude) && !double.IsInfinity(latitude) &&
                 !double.IsNaN(longitude) && !double.IsInfinity(longitude) &&

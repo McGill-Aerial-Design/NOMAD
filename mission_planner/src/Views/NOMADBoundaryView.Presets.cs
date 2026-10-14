@@ -238,12 +238,25 @@ namespace NOMAD.MissionPlanner
 
         private void Monitor_AdvisoryStatusChanged(object sender, AdvisoryBoundaryStatusEventArgs e)
         {
-            if (InvokeRequired)
+            if (IsDisposed)
             {
-                Invoke(new Action(() => Monitor_AdvisoryStatusChanged(sender, e)));
                 return;
             }
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => Monitor_AdvisoryStatusChanged(sender, e)));
+                return;
+            }
+            // Read one current snapshot after UI dispatch; a queued event may belong to a stopped monitor.
+            e = _monitor?.CurrentObservation ?? new AdvisoryBoundaryStatusEventArgs
+                { Status = AdvisoryOutlineStatus.NoPosition };
+            ApplyAdvisoryObservation(e);
+        }
 
+        private void ApplyAdvisoryObservation(AdvisoryBoundaryStatusEventArgs e)
+        {
+            _lblPosition.Text = e.Position == null ? "Received position: --" :
+                $"Received position: {e.Position.Lat:F6}, {e.Position.Lon:F6}";
             switch (e.Status)
             {
                 case AdvisoryOutlineStatus.InsideOutlines:
@@ -268,7 +281,7 @@ namespace NOMAD.MissionPlanner
 
                 case AdvisoryOutlineStatus.NoPosition:
                     _statusPanel.BackColor = Color.FromArgb(80, 80, 90);
-                    _lblStatus.Text = "[visual advisory] Waiting for Mission Planner position";
+                    _lblStatus.Text = "[visual advisory] No fresh live received position";
                     break;
             }
         }
@@ -287,12 +300,8 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var cs = MainV2.comPort?.MAV?.cs;
-                if (cs != null)
-                {
-                    _lblPosition.Text = $"Position: {cs.lat:F6}, {cs.lng:F6}";
-                    UpdateAdvisoryAltitude(ReadCurrentAltitude());
-                }
+                Monitor_AdvisoryStatusChanged(_monitor, null);
+                UpdateAdvisoryAltitude(ReadCurrentAltitude());
             }
             catch { }
         }

@@ -247,7 +247,14 @@ namespace NOMAD.MissionPlanner
                 AutoSize = true,
                 Margin = new Padding(0, 2, NOMADTheme.PAD, 0),
             };
-            _lblPosition = new Label { Text = "Position: --", Font = NOMADTheme.Mono(NOMADTheme.SIZE_SMALL), ForeColor = Color.White, AutoSize = true, Margin = new Padding(0, 4, NOMADTheme.PAD, 0) };
+            _lblPosition = new Label
+            {
+                Text = "Received position: --",
+                Font = NOMADTheme.Mono(NOMADTheme.SIZE_SMALL),
+                ForeColor = Color.White,
+                AutoSize = true,
+                Margin = new Padding(0, 4, NOMADTheme.PAD, 0),
+            };
             _lblAltitude = new Label
             {
                 Text = FormatAltitudeUnavailable(),
@@ -262,7 +269,7 @@ namespace NOMAD.MissionPlanner
 
             _lblStatus = new Label
             {
-                Text = "[visual] Waiting for Mission Planner position",
+                Text = "[visual advisory] No fresh live received position",
                 Font = NOMADTheme.Font(NOMADTheme.SIZE_TITLE, FontStyle.Bold),
                 ForeColor = Color.White,
                 AutoSize = true,
