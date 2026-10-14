@@ -60,6 +60,23 @@ function Assert-ThrowsMessage {
 }
 
 try {
+    # Keep every subject and cleanup diagnostic in this fixture, including failure paths.
+    $fixtureLogType = $plugin.GetType('NOMAD.MissionPlanner.Log', $true)
+    $fixtureLogFlags = [Reflection.BindingFlags]'Static,NonPublic'
+    $fixtureLogPathField = $fixtureLogType.GetField('_logPath', $fixtureLogFlags)
+    $fixtureLogFailedField = $fixtureLogType.GetField('_fileFailed', $fixtureLogFlags)
+    if ($null -eq $fixtureLogPathField -or $null -eq $fixtureLogFailedField) {
+        throw 'Configuration fixture logger fields are unavailable.'
+    }
+    if ($null -ne $fixtureLogPathField.GetValue($null) -or $fixtureLogFailedField.GetValue($null)) {
+        throw 'Configuration fixture requires a fresh logger.'
+    }
+    $fixtureLogPath = Join-Path $temporary 'nomad.log'
+    $fixtureLogPathField.SetValue($null, [string]$fixtureLogPath)
+    if ($fixtureLogPathField.GetValue($null) -cne $fixtureLogPath) {
+        throw 'Configuration fixture log path was not installed.'
+    }
+
     $config = Load-Config '{"CoreRuntimePort":14631,"RouterLocalPort":14620,"ManagementPort":14621,"CoreClientCredential":"test-only-credential"}'
     if ($config.CoreRuntimePort -ne 14631) { throw 'Current runtime endpoint changed.' }
     $export = Join-Path $temporary 'export.json'
@@ -534,8 +551,20 @@ try {
         $planMap.Dispose()
         $dataMap.Dispose()
     }
+    if ($fixtureLogPathField.GetValue($null) -cne $fixtureLogPath -or $fixtureLogFailedField.GetValue($null) -or
+        -not (Test-Path -LiteralPath $fixtureLogPath -PathType Leaf) -or
+        (Get-Item -LiteralPath $fixtureLogPath).Length -eq 0) {
+        throw 'Configuration fixture did not retain a working temporary log.'
+    }
+    Write-Host 'Temporary fixture logging verified.'
     Write-Host 'Mission Planner configuration, HID, presets and advisory map/position validation passed.'
 } finally {
     [AppDomain]::CurrentDomain.remove_AssemblyResolve($dependencyResolver)
-    Remove-Item -LiteralPath $temporary -Recurse -Force
+    $cleanupPath = (Resolve-Path -LiteralPath $temporary).ProviderPath
+    $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+    if (-not $cleanupPath.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetFileName($cleanupPath) -notmatch '^nomad-config-test-[0-9a-f]{32}$') {
+        throw 'Configuration fixture cleanup target is outside its temporary directory.'
+    }
+    Remove-Item -LiteralPath $cleanupPath -Recurse -Force
 }
