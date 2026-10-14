@@ -46,13 +46,29 @@ jobs:
       # The transport is the pinned third_party/MAVSDK submodule, so the checkout
       # must be recursive for the core to configure at all.
       - uses: actions/checkout@v5
+        id: checkout
         with:
           submodules: recursive
       - uses: prefix-dev/setup-pixi@v0.9.6
+        id: pixi
         with:
           cache: true
       - name: Build and test C++ core
         run: pixi run test-core
+      - name: Export safe pulse response diagnostics
+        id: pulse-diagnostics
+        if: ${{ always() && steps.checkout.outcome == 'success' && steps.pixi.outcome == 'success' }}
+        run: >-
+          pixi run --frozen python scripts/ci/export_pulse_diagnostics.py
+          --input build/core/Testing/Temporary/LastTest.log
+          --output "${{ runner.temp }}/pulse-diagnostics-${{ matrix.os }}.json"
+      - name: Retain safe pulse response diagnostics
+        if: ${{ always() && steps.pulse-diagnostics.outcome == 'success' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: pulse-diagnostics-${{ matrix.os }}
+          path: ${{ runner.temp }}/pulse-diagnostics-${{ matrix.os }}.json
+          if-no-files-found: error
       - name: Qualify installed CLI parsing and LAND outcomes with built binaries
         run: pixi run python -m pytest tests/test_core_client_contract.py -q
       - name: Exercise authenticated runtime and installed CLI against a deterministic peer
