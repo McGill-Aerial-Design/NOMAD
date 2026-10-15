@@ -400,8 +400,11 @@ void test_competing_admission() {
 
 } // namespace
 
+#include "runtime_audit_timing_cases.hpp"
+
 void run_runtime_scenarios() {
     using nomad::test::run_scenario;
+    run_native_audit_timing_scenarios();
     run_scenario("land_engagement_and_replay", test_runtime_land_engagement_and_replay);
     run_scenario("land_outcomes", test_runtime_land_outcomes);
     run_scenario("land_validation", test_runtime_land_validation);
@@ -472,6 +475,14 @@ void run_runtime_scenarios() {
 
 int main(int argc, char **argv) {
     return nomad::test::run_tests([argc, argv] {
+        if (argc == 2 && std::string_view(argv[1]) == "--native-audit-timing") {
+            run_native_audit_timing_scenarios();
+            return;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--native-audit-environment") {
+            native_timing_environment_fixture();
+            return;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--actuator-pending-stress") {
             for (int iteration = 1; iteration <= 5; ++iteration) {
                 nomad::test::run_scenario("gated_direction_release_" + std::to_string(iteration),

@@ -235,13 +235,16 @@ def owned_case(monkeypatch, land, tmp_path, *, elapsed=3.0, failure=None):
         stop=lambda: events.append("peer_stop"),
     )
     storage = SimpleNamespace(name=str(tmp_path), cleanup=lambda: events.append("cleanup"))
-    process = SimpleNamespace(_nomad_test_storage=storage)
+    process = SimpleNamespace(_nomad_test_storage=storage, poll=lambda: 0, returncode=0)
     monkeypatch.setattr(land, "LandPeer", lambda *_a, **_kw: peer)
     monkeypatch.setattr(land, "free_port", lambda *_: 0)
     monkeypatch.setattr(land, "find_runtime", lambda: Path("synthetic"))
     monkeypatch.setattr(
-        land, "start_runtime", lambda *_: (process, io.BytesIO(b"PRIVATE_SENTINEL"), io.BytesIO(b"PRIVATE_SENTINEL"))
+        land,
+        "start_runtime",
+        lambda *_a, **_kw: (process, io.BytesIO(b"PRIVATE_SENTINEL"), io.BytesIO(b"PRIVATE_SENTINEL")),
     )
+    monkeypatch.setattr(land, "emit_native_timing", lambda *_: events.append("native_emit"))
     monkeypatch.setattr(land, "stop_runtime", lambda _: events.append("stop"))
     monkeypatch.setattr(land, "wait_for_listener", lambda _: None)
     monkeypatch.setattr(land, "wait_for_vehicle", lambda _: None)
@@ -278,7 +281,7 @@ def test_original_outer_deadline_and_preteardown_success_failure_facts(modules, 
     assert len(facts) == 1 and facts[0]["checks"] == ("passed" if elapsed <= 3.5 else "failed")
     assert all(value is None for value in facts[0]["client_us"].values())
     assert facts[0]["clock_correlation"] == "unavailable"
-    assert events[-4:] == ["emit", "stop", "cleanup", "peer_stop"]
+    assert events[-5:] == ["emit", "stop", "native_emit", "cleanup", "peer_stop"]
 
 
 @pytest.mark.parametrize("broken_emitter", [False, True])
@@ -292,7 +295,7 @@ def test_original_failure_survives_diagnostic_failure_and_all_owned_cleanup(
         monkeypatch.setattr(land, "emit_land_timing", lambda *_: (_ for _ in ()).throw(ValueError("PRIVATE_SENTINEL")))
     with pytest.raises(RuntimeError) as caught:
         land.run_case("accepted-without-mode", "unknown", True)
-    assert caught.value is original and events[-3:] == ["stop", "cleanup", "peer_stop"]
+    assert caught.value is original and events[-4:] == ["stop", "native_emit", "cleanup", "peer_stop"]
     captured = capsys.readouterr()
     assert "PRIVATE_SENTINEL" not in captured.out + captured.err
     if broken_emitter:
@@ -309,6 +312,42 @@ def test_wall_clock_correlation_reports_consistency_shift_and_absence(modules):
     end["unix_ms"] += 1000
     assert land.clock_correlation({"wall_start": start, "wall_end": end}) == "clock_shift_or_sampling_mismatch"
     assert land.clock_correlation({}) == "unavailable"
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_native_projection_error_cannot_replace_case_result_or_skip_cleanup(modules, monkeypatch, tmp_path, failure):
+    _, land = modules
+    original = RuntimeError("synthetic original failure") if failure else None
+    events = owned_case(monkeypatch, land, tmp_path, failure=original)
+
+    def broken(*_):
+        assert events[-1] == "stop" and "cleanup" not in events
+        raise ValueError("PRIVATE_SENTINEL")
+
+    monkeypatch.setattr(land, "emit_native_timing", broken)
+    if failure:
+        with pytest.raises(RuntimeError) as caught:
+            land.run_case("accepted-without-mode", "unknown", True)
+        assert caught.value is original
+    else:
+        assert land.run_case("accepted-without-mode", "unknown", True)["outcome"] == "unknown"
+    assert events[-3:] == ["stop", "cleanup", "peer_stop"]
+
+
+def test_stop_failure_preserves_original_error_and_retains_live_storage(modules, monkeypatch, tmp_path):
+    _, land = modules
+    original = RuntimeError("synthetic original failure")
+    events = owned_case(monkeypatch, land, tmp_path, failure=original)
+    process = SimpleNamespace(
+        poll=lambda: None,
+        returncode=None,
+        _nomad_test_storage=SimpleNamespace(name=str(tmp_path), cleanup=lambda: events.append("cleanup")),
+    )
+    monkeypatch.setattr(land, "start_runtime", lambda *_a, **_kw: (process, io.BytesIO(), io.BytesIO()))
+    monkeypatch.setattr(land, "stop_runtime", lambda _: (_ for _ in ()).throw(TimeoutError("synthetic shutdown")))
+    with pytest.raises(RuntimeError) as caught:
+        land.run_case("accepted-without-mode", "unknown", True)
+    assert caught.value is original and "cleanup" not in events and events[-1] == "peer_stop"
 
 
 @pytest.mark.parametrize("cli", [False, True])
@@ -365,7 +404,7 @@ def test_broken_diagnostic_writer_preserves_original_exception_and_cleanup(modul
     )
     with pytest.raises(RuntimeError) as caught:
         land.run_case("accepted-without-mode", "unknown", True)
-    assert caught.value is original and events[-3:] == ["stop", "cleanup", "peer_stop"]
+    assert caught.value is original and events[-4:] == ["stop", "native_emit", "cleanup", "peer_stop"]
 
 
 def test_cli_internal_boundaries_are_unavailable_and_peer_offsets_share_origin(modules, tmp_path, capsys):

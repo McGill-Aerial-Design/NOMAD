@@ -40,6 +40,133 @@ LAND_CASES = (
 )
 
 
+def project_native_timing(record: object) -> dict | None:
+    if not isinstance(record, dict) or set(record) != {"event", "capacity", "overflow", "records"}:
+        return None
+    if (
+        record["event"] != "runtime_land_native_timing"
+        or type(record["capacity"]) is not int
+        or record["capacity"] != 8
+    ):
+        return None
+    if type(record["overflow"]) is not bool or not isinstance(record["records"], list) or len(record["records"]) > 8:
+        return None
+    rows = []
+    keys = {
+        "journal_event",
+        "ordinal",
+        "lock_acquired_us",
+        "before_native_us",
+        "after_native_us",
+        "append_finish_us",
+        "native_success",
+        "append_success",
+    }
+    for row in record["records"]:
+        if not isinstance(row, dict) or set(row) != keys:
+            return None
+        if row["journal_event"] not in ("mutation_intent", "mutation_outcome", "request_rejected"):
+            return None
+        for key in ("ordinal", "lock_acquired_us", "before_native_us", "after_native_us", "append_finish_us"):
+            value = row[key]
+            if value is None and key in ("before_native_us", "after_native_us"):
+                continue
+            if type(value) is not int or not (1 if key == "ordinal" else 0) <= value <= 2**63 - 1:
+                return None
+        before, after = row["before_native_us"], row["after_native_us"]
+        if type(row["append_success"]) is not bool or (
+            row["native_success"] is not None and type(row["native_success"]) is not bool
+        ):
+            return None
+        if row["lock_acquired_us"] > row["append_finish_us"]:
+            return None
+        if before is not None and not row["lock_acquired_us"] <= before <= row["append_finish_us"]:
+            return None
+        if after is not None and (before is None or not before <= after <= row["append_finish_us"]):
+            return None
+        if (after is None) != (row["native_success"] is None):
+            return None
+        if row["append_success"] and row["native_success"] is not True:
+            return None
+        if rows and row["ordinal"] <= rows[-1]["ordinal"]:
+            return None
+        rows.append({key: row[key] for key in keys})
+    return {"capacity": 8, "overflow": record["overflow"], "records": rows}
+
+
+def unique_native_fields(pairs):
+    record = {}
+    for key, value in pairs:
+        if key in record:
+            raise ValueError("duplicate native diagnostic field")
+        record[key] = value
+    return record
+
+
+def read_native_timing(stderr, exit_code: int | None, expected: list[dict] | None = None) -> dict:
+    stderr.seek(0)
+    candidate, count, rejected = None, 0, 0
+    for line in stderr:
+        if not line.lstrip().startswith(b"{"):
+            continue
+        try:
+            record = json.loads(line, object_pairs_hook=unique_native_fields) if len(line) <= 8192 else None
+        except (ValueError, RecursionError):
+            record = None
+        if not isinstance(record, dict) or record.get("event") != "runtime_land_native_timing":
+            rejected += int(b'"runtime_land_native_timing"' in line)
+            continue
+        count += 1
+        candidate = project_native_timing(record)
+        rejected += int(candidate is None)
+    if count != 1 or candidate is None:
+        return {
+            "status": "partial" if count or rejected else "unavailable",
+            "records": [],
+            "overflow": None,
+            "candidate_count": count,
+            "rejected_candidates": rejected,
+        }
+    matches = expected is not None and [(row["ordinal"], row["journal_event"]) for row in candidate["records"]] == [
+        (row["ordinal"], row["event"]) for row in expected
+    ]
+    complete = (
+        type(exit_code) is int
+        and exit_code == 0
+        and rejected == 0
+        and not candidate["overflow"]
+        and [row["journal_event"] for row in candidate["records"]] == ["mutation_intent", "mutation_outcome"]
+        and all(row["append_success"] and row["after_native_us"] is not None for row in candidate["records"])
+        and matches
+    )
+    return {
+        "status": "complete" if complete else "partial",
+        **candidate,
+        "candidate_count": count,
+        "rejected_candidates": rejected,
+        "journal_match": matches,
+    }
+
+
+def emit_native_timing(name: str, stderr, exit_code: int | None, directory: Path) -> None:
+    audit = land_audit_timing(directory)
+    facts = read_native_timing(stderr, exit_code, audit["records"] if audit["read_status"] == "read" else None)
+    print(
+        json.dumps(
+            {
+                "event": "runtime_land_native_stage_timing",
+                "case": name if name in LAND_CASES else "unrecognized",
+                "runtime_exit_code": exit_code,
+                **facts,
+                "limits": "Steady offsets from append entry; native call includes write/flush and descheduling; append_finish is an in-function pre-unlock snapshot; no shared Python epoch",
+            },
+            sort_keys=True,
+            allow_nan=False,
+        ),
+        flush=True,
+    )
+
+
 def clock_anchor() -> dict:
     before = time.monotonic_ns()
     wall = time.time_ns() // 1_000_000
@@ -318,7 +445,7 @@ def run_case(name: str, expected: str, acknowledged: bool, *, cli: bool = False,
     udp, ipc = free_port(socket.SOCK_DGRAM), free_port(socket.SOCK_STREAM)
     peer = LandPeer(udp, **options)
     peer.start()
-    process, stdout, stderr = start_runtime(find_runtime(), udp, ipc)
+    process, stdout, stderr = start_runtime(find_runtime(), udp, ipc, audit_timing=True)
     timing, passed = {}, False
     try:
         wait_for_listener(ipc)
@@ -359,11 +486,35 @@ def run_case(name: str, expected: str, acknowledged: bool, *, cli: bool = False,
                 print('{"event":"runtime_land_stage_timing","measurement":"unavailable"}', file=sys.stderr, flush=True)
             except Exception:
                 pass
-        stop_runtime(process)
-        stdout.close()
-        stderr.close()
-        process._nomad_test_storage.cleanup()
-        peer.stop()
+        original_error = sys.exc_info()[1]
+        stop_error = None
+        try:
+            stop_runtime(process)
+        except Exception as error:
+            stop_error = error
+        exited = process.poll() is not None
+        try:
+            if exited:
+                emit_native_timing(name, stderr, process.returncode, Path(process._nomad_test_storage.name) / "audit")
+            else:
+                print(
+                    '{"event":"runtime_land_native_stage_timing","status":"unavailable"}', file=sys.stderr, flush=True
+                )
+        except Exception:
+            try:
+                print(
+                    '{"event":"runtime_land_native_stage_timing","status":"unavailable"}', file=sys.stderr, flush=True
+                )
+            except Exception:
+                pass
+        finally:
+            stdout.close()
+            stderr.close()
+            if exited:
+                process._nomad_test_storage.cleanup()
+            peer.stop()
+        if stop_error is not None and original_error is None:
+            raise stop_error
 
 
 def main() -> int:
@@ -383,6 +534,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except Exception as error:
-        print(f"runtime LAND qualification failed: {error}", file=sys.stderr)
+    except Exception:
+        print("runtime LAND qualification failed", file=sys.stderr)
         raise SystemExit(1)
