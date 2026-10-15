@@ -148,7 +148,7 @@ def read_native_timing(stderr, exit_code: int | None, expected: list[dict] | Non
     }
 
 
-def emit_native_timing(name: str, stderr, exit_code: int | None, directory: Path) -> None:
+def emit_native_timing(name: str, stderr, exit_code: int | None, directory: Path) -> tuple[dict, dict]:
     audit = land_audit_timing(directory)
     facts = read_native_timing(stderr, exit_code, audit["records"] if audit["read_status"] == "read" else None)
     print(
@@ -165,6 +165,63 @@ def emit_native_timing(name: str, stderr, exit_code: int | None, directory: Path
         ),
         flush=True,
     )
+    return facts, audit
+
+
+def land_budget_accounting(timing: dict, native: dict, audit: dict) -> dict:
+    """Remove only the matched synchronous native calls contained in the first response."""
+    started, returned = timing.get("started_ns"), timing.get("returned_ns")
+    require(
+        timing.get("first_response_complete") is True
+        and type(started) is int
+        and type(returned) is int
+        and 0 <= started <= returned,
+        "LAND budget has a completed first-response interval",
+    )
+    require(isinstance(native, dict) and isinstance(audit, dict), "LAND budget has native and durable facts")
+    projected = project_native_timing(
+        {
+            "event": "runtime_land_native_timing",
+            "capacity": native.get("capacity"),
+            "overflow": native.get("overflow"),
+            "records": native.get("records"),
+        }
+    )
+    require(
+        projected is not None
+        and native.get("status") == "complete"
+        and type(native.get("candidate_count")) is int
+        and native["candidate_count"] == 1
+        and type(native.get("rejected_candidates")) is int
+        and native["rejected_candidates"] == 0
+        and native.get("journal_match") is True
+        and projected["overflow"] is False
+        and audit.get("read_status") == "read",
+        "LAND budget requires complete native measurement and durable association",
+    )
+    rows, durable = projected["records"], audit["records"]
+    require(
+        [row["journal_event"] for row in rows] == ["mutation_intent", "mutation_outcome"]
+        and [(row["ordinal"], row["journal_event"]) for row in rows]
+        == [(row["ordinal"], row["event"]) for row in durable]
+        and all(
+            row["append_success"] is True
+            and row["native_success"] is True
+            and row["before_native_us"] is not None
+            and row["after_native_us"] is not None
+            for row in rows
+        ),
+        "LAND budget uses exactly the successful first-request intent and outcome",
+    )
+    # Intent precedes Vehicle's deadline; outcome is synchronous before the first response.
+    # Cached replay adds neither LAND entry, so no later request interval is subtracted.
+    wall_us = (returned - started) // 1000
+    native_us = sum(row["after_native_us"] - row["before_native_us"] for row in rows)
+    require(
+        native_us <= wall_us and sum(row["append_finish_us"] for row in rows) <= wall_us,
+        "LAND native intervals fit inside the first-response wall interval",
+    )
+    return {"native_audit_us": native_us, "non_native_elapsed_us": wall_us - native_us}
 
 
 def clock_anchor() -> dict:
@@ -236,7 +293,7 @@ def land_audit_timing(directory: Path) -> dict:
 
 
 def emit_land_timing(name: str, peer: LandPeer, directory: Path, timing: dict, passed: bool) -> None:
-    """Emit fixed synthetic facts before teardown without exporting requests or raw journals."""
+    """Emit final fixed facts before storage cleanup without exporting requests or raw journals."""
     origin = timing.get("started_ns")
 
     def offset(value):
@@ -273,6 +330,8 @@ def emit_land_timing(name: str, peer: LandPeer, directory: Path, timing: dict, p
                 "case": name if name in LAND_CASES else "unrecognized",
                 "checks": "passed" if passed else "failed",
                 "elapsed_us": offset(timing.get("returned_ns")),
+                "native_audit_us": timing.get("native_audit_us"),
+                "non_native_elapsed_us": timing.get("non_native_elapsed_us"),
                 "measurement": "observed_boundaries" if observed else "partial",
                 "client_us": client,
                 "clock_anchors": {key: anchor(timing.get(key)) for key in ("wall_start", "wall_end")},
@@ -414,6 +473,7 @@ def exercise_cli(port: int, peer: LandPeer, timing: dict) -> tuple[str, bool, fl
         "CLI distinguishes engagement from touchdown",
     )
     require(peer._armed and peer._relative_altitude_m == 5, "peer remains airborne after engagement success")
+    timing["first_response_complete"] = True
     return "success", True, elapsed
 
 
@@ -434,6 +494,7 @@ def exercise_request(
     elapsed = returned - started
     require(response["outcome"] == expected, f"{name}: truthful {expected} outcome")
     require(response["command_result"]["acknowledged"] == acknowledged, f"{name}: independent ACK evidence retained")
+    timing["first_response_complete"] = True
     count = peer.land_count()
     require(send_request(port, mutation) == response, f"{name}: cached result remains identical")
     time.sleep(0.3)
@@ -446,7 +507,8 @@ def run_case(name: str, expected: str, acknowledged: bool, *, cli: bool = False,
     peer = LandPeer(udp, **options)
     peer.start()
     process, stdout, stderr = start_runtime(find_runtime(), udp, ipc, audit_timing=True)
-    timing, passed = {}, False
+    directory = Path(process._nomad_test_storage.name) / "audit"
+    timing, passed, result, case_error = {}, False, None, None
     try:
         wait_for_listener(ipc)
         wait_for_vehicle(ipc)
@@ -455,21 +517,17 @@ def run_case(name: str, expected: str, acknowledged: bool, *, cli: bool = False,
             if cli
             else exercise_request(ipc, peer, name, expected, acknowledged, timing)
         )
-        record = audit_land(Path(process._nomad_test_storage.name) / "audit")
+        record = audit_land(directory)
         require(
             record["result"] == outcome and record["acknowledged"] == ack, f"{name}: durable evidence matches response"
         )
-        require(elapsed <= 3.5, f"{name}: three-second operation plus bounded IPC/process margin ({elapsed:.3f}s)")
-        if expected == "unknown" and ack:
-            require(elapsed >= 2.85, f"{name}: missing engagement consumes the single observation budget")
         if expected == "success":
             require(
                 peer.land_ack_at is not None
                 and any(at > peer.land_ack_at and mode == MODE_LAND for at, mode in peer.heartbeats),
                 f"{name}: real post-ACK LAND heartbeat required",
             )
-        passed = True
-        return {
+        result = {
             "case": name,
             "outcome": outcome,
             "acknowledged": ack,
@@ -477,44 +535,63 @@ def run_case(name: str, expected: str, acknowledged: bool, *, cli: bool = False,
             "wire_attempts": peer.land_count(),
             "heartbeat_period_seconds": 1,
         }
-    finally:
+    except BaseException as error:
+        case_error = error
+    try:
+        stop_runtime(process)
+    except Exception as error:
+        if case_error is None:
+            case_error = error
+    exited = process.poll() is not None
+    try:
+        if not exited:
+            raise AssertionError("LAND native measurement requires confirmed runtime exit")
+        native, audit = emit_native_timing(name, stderr, process.returncode, directory)
+    except Exception as error:
+        if case_error is None:
+            case_error = error
         try:
-            emit_land_timing(name, peer, Path(process._nomad_test_storage.name) / "audit", timing, passed)
+            print('{"event":"runtime_land_native_stage_timing","status":"unavailable"}', file=sys.stderr, flush=True)
         except Exception:
-            # A diagnostic failure must never replace the case result or prevent owned cleanup.
-            try:
-                print('{"event":"runtime_land_stage_timing","measurement":"unavailable"}', file=sys.stderr, flush=True)
-            except Exception:
-                pass
-        original_error = sys.exc_info()[1]
-        stop_error = None
+            pass
+    if case_error is None:
         try:
-            stop_runtime(process)
+            timing.update(land_budget_accounting(timing, native, audit))
+            residual_us = timing["non_native_elapsed_us"]
+            require(
+                residual_us <= 3_500_000,
+                f"{name}: three-second operation plus bounded IPC/process margin ({residual_us / 1_000_000:.3f}s non-native)",
+            )
+            if expected == "unknown" and result["acknowledged"]:
+                require(residual_us >= 2_850_000, f"{name}: missing engagement consumes the single observation budget")
+            result.update(native_audit_ms=timing["native_audit_us"] / 1000, non_native_elapsed_ms=residual_us / 1000)
+            passed = True
         except Exception as error:
-            stop_error = error
-        exited = process.poll() is not None
+            case_error = error
+    try:
+        emit_land_timing(name, peer, directory, timing, passed)
+    except Exception as error:
+        if case_error is None:
+            case_error = error
         try:
-            if exited:
-                emit_native_timing(name, stderr, process.returncode, Path(process._nomad_test_storage.name) / "audit")
-            else:
-                print(
-                    '{"event":"runtime_land_native_stage_timing","status":"unavailable"}', file=sys.stderr, flush=True
-                )
+            print(
+                '{"event":"runtime_land_stage_timing","checks":"failed","measurement":"unavailable"}',
+                file=sys.stderr,
+                flush=True,
+            )
         except Exception:
-            try:
-                print(
-                    '{"event":"runtime_land_native_stage_timing","status":"unavailable"}', file=sys.stderr, flush=True
-                )
-            except Exception:
-                pass
-        finally:
-            stdout.close()
-            stderr.close()
-            if exited:
-                process._nomad_test_storage.cleanup()
-            peer.stop()
-        if stop_error is not None and original_error is None:
-            raise stop_error
+            pass
+    for cleanup in (stdout.close, stderr.close, process._nomad_test_storage.cleanup if exited else None, peer.stop):
+        if cleanup is None:
+            continue
+        try:
+            cleanup()
+        except Exception as error:
+            if case_error is None:
+                case_error = error
+    if case_error is not None:
+        raise case_error
+    return result
 
 
 def main() -> int:

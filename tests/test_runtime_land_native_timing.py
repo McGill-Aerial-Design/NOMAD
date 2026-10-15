@@ -135,6 +135,77 @@ def test_guard_and_native_failures_retain_null_or_actual_return_facts(modules):
         assert result["records"][0]["native_success"] is (False if attempted else None)
 
 
+def budget_inputs(land, wall_us=5_790_197, durations=(4989, 2_752_769)):
+    record = native_record()
+    for row, duration in zip(record["records"], durations, strict=True):
+        row.update(before_native_us=0, after_native_us=duration, append_finish_us=duration, lock_acquired_us=0)
+    native = read(land, record)
+    return (
+        {"first_response_complete": True, "started_ns": 1_000_000, "returned_ns": 1_000_000 + wall_us * 1000},
+        native,
+        {"read_status": "read", "records": expected_rows()},
+    )
+
+
+def test_actual_sample_arithmetic_and_non_native_overhead_retention(modules):
+    land, _ = modules
+    timing, native, audit = budget_inputs(land)
+    assert land.land_budget_accounting(timing, native, audit) == {
+        "native_audit_us": 2_757_758,
+        "non_native_elapsed_us": 3_032_439,
+    }
+    for row in native["records"]:
+        row.update(
+            lock_acquired_us=100,
+            before_native_us=row["before_native_us"] + 200,
+            after_native_us=row["after_native_us"] + 200,
+            append_finish_us=row["append_finish_us"] + 300,
+        )
+    assert land.land_budget_accounting(timing, native, audit)["non_native_elapsed_us"] == 3_032_439
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda timing, native, audit: timing.update(first_response_complete=False),
+        lambda timing, native, audit: timing.update(started_ns=True),
+        lambda timing, native, audit: timing.update(returned_ns=-1),
+        lambda timing, native, audit: native.update(status="partial"),
+        lambda timing, native, audit: native.update(overflow=True),
+        lambda timing, native, audit: native.update(journal_match=False),
+        lambda timing, native, audit: native.update(candidate_count=2),
+        lambda timing, native, audit: native.update(candidate_count=True),
+        lambda timing, native, audit: native.update(rejected_candidates=1),
+        lambda timing, native, audit: native.update(records=[]),
+        lambda timing, native, audit: native["records"][1].update(ordinal=6),
+        lambda timing, native, audit: native["records"][1].update(native_success=False, append_success=False),
+        lambda timing, native, audit: native["records"][1].update(
+            after_native_us=None, native_success=None, append_success=False
+        ),
+        lambda timing, native, audit: native["records"][1].update(
+            after_native_us=9_000_000, append_finish_us=9_000_000
+        ),
+        lambda timing, native, audit: audit.update(read_status="partial"),
+        lambda timing, native, audit: audit["records"][1].update(ordinal=8),
+    ],
+)
+def test_invalid_or_missing_budget_measurement_never_falls_back_to_wall_only(modules, mutate):
+    land, _ = modules
+    timing, native, audit = budget_inputs(land)
+    mutate(timing, native, audit)
+    with pytest.raises(AssertionError):
+        land.land_budget_accounting(timing, native, audit)
+
+
+def test_negative_residual_rejected_and_zero_residual_stays_explicit(modules):
+    land, _ = modules
+    timing, native, audit = budget_inputs(land, wall_us=2_757_757)
+    with pytest.raises(AssertionError, match="fit inside"):
+        land.land_budget_accounting(timing, native, audit)
+    timing["returned_ns"] += 1000
+    assert land.land_budget_accounting(timing, native, audit)["non_native_elapsed_us"] == 0
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 def test_child_environment_clears_inherited_probe_and_only_explicitly_opts_in(modules, monkeypatch, tmp_path, enabled):
     _, support = modules

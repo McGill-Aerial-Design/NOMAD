@@ -34,6 +34,13 @@ migration/conversion and optional adapters are not release gates. Resource basel
 are removed; release acceptance still requires measured load/deadline behavior on its
 actual target, including memory pressure, disk/audit failure and competing workloads.
 
+The LAND fixture retains raw first-response wall time. Its 2.85 s lower check for
+unknown engagement with ACK and its 3.5 s upper check use that interval minus only the successful native
+intent/outcome append calls matched to the first request's durable rows. Missing
+or invalid measurements fail qualification. Lock waits, serialization, SDK and
+IPC overhead remain counted. This accounting does not shorten the actual response
+or change the Vehicle's three-second budget or the separate SITL CLI wall-time gate.
+
 ## SITL qualification
 
 [sitl.yml](../.github/workflows/sitl.yml) requires full Copter and QuadPlane jobs on

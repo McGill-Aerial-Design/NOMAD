@@ -222,7 +222,7 @@ def test_missing_truncated_or_unreadable_journal_never_claims_observed_records(m
     assert land.land_audit_timing(tmp_path) == {"read_status": "unavailable", "records": []}
 
 
-def owned_case(monkeypatch, land, tmp_path, *, elapsed=3.0, failure=None):
+def owned_case(monkeypatch, land, tmp_path, *, elapsed=3.0, failure=None, native_us=0):
     events = []
     peer = SimpleNamespace(
         first_land_at=None,
@@ -244,14 +244,49 @@ def owned_case(monkeypatch, land, tmp_path, *, elapsed=3.0, failure=None):
         "start_runtime",
         lambda *_a, **_kw: (process, io.BytesIO(b"PRIVATE_SENTINEL"), io.BytesIO(b"PRIVATE_SENTINEL")),
     )
-    monkeypatch.setattr(land, "emit_native_timing", lambda *_: events.append("native_emit"))
+
+    def emit_native(*_):
+        assert events[-1] == "stop" and "cleanup" not in events
+        events.append("native_emit")
+        rows = [
+            {
+                "journal_event": event,
+                "ordinal": ordinal,
+                "lock_acquired_us": 0,
+                "before_native_us": 0,
+                "after_native_us": native_us if ordinal == 7 else 0,
+                "append_finish_us": native_us if ordinal == 7 else 0,
+                "native_success": True,
+                "append_success": True,
+            }
+            for ordinal, event in ((6, "mutation_intent"), (7, "mutation_outcome"))
+        ]
+        return (
+            {
+                "status": "complete",
+                "capacity": 8,
+                "overflow": False,
+                "candidate_count": 1,
+                "rejected_candidates": 0,
+                "journal_match": True,
+                "records": rows,
+            },
+            {
+                "read_status": "read",
+                "records": [{"ordinal": row["ordinal"], "event": row["journal_event"]} for row in rows],
+            },
+        )
+
+    monkeypatch.setattr(land, "emit_native_timing", emit_native)
     monkeypatch.setattr(land, "stop_runtime", lambda _: events.append("stop"))
     monkeypatch.setattr(land, "wait_for_listener", lambda _: None)
     monkeypatch.setattr(land, "wait_for_vehicle", lambda _: None)
     monkeypatch.setattr(land, "audit_land", lambda _: {"result": "unknown", "acknowledged": True})
 
     def exercise(_port, _peer, _name, _expected, _ack, timing):
-        timing.update(started_ns=1_000_000, returned_ns=1_000_000 + int(elapsed * 1_000_000_000))
+        timing.update(
+            started_ns=1_000_000, returned_ns=1_000_000 + round(elapsed * 1_000_000_000), first_response_complete=True
+        )
         if failure is not None:
             raise failure
         return "unknown", True, elapsed
@@ -260,7 +295,7 @@ def owned_case(monkeypatch, land, tmp_path, *, elapsed=3.0, failure=None):
     original = land.emit_land_timing
 
     def emit(*args):
-        assert "cleanup" not in events and "stop" not in events
+        assert "cleanup" not in events and "stop" in events
         events.append("emit")
         original(*args)
 
@@ -269,7 +304,7 @@ def owned_case(monkeypatch, land, tmp_path, *, elapsed=3.0, failure=None):
 
 
 @pytest.mark.parametrize("elapsed", [3.0, 3.501])
-def test_original_outer_deadline_and_preteardown_success_failure_facts(modules, monkeypatch, tmp_path, capsys, elapsed):
+def test_residual_deadline_and_final_success_failure_facts(modules, monkeypatch, tmp_path, capsys, elapsed):
     _, land = modules
     events = owned_case(monkeypatch, land, tmp_path, elapsed=elapsed)
     if elapsed <= 3.5:
@@ -281,7 +316,7 @@ def test_original_outer_deadline_and_preteardown_success_failure_facts(modules, 
     assert len(facts) == 1 and facts[0]["checks"] == ("passed" if elapsed <= 3.5 else "failed")
     assert all(value is None for value in facts[0]["client_us"].values())
     assert facts[0]["clock_correlation"] == "unavailable"
-    assert events[-5:] == ["emit", "stop", "native_emit", "cleanup", "peer_stop"]
+    assert events[-5:] == ["stop", "native_emit", "emit", "cleanup", "peer_stop"]
 
 
 @pytest.mark.parametrize("broken_emitter", [False, True])
@@ -295,7 +330,11 @@ def test_original_failure_survives_diagnostic_failure_and_all_owned_cleanup(
         monkeypatch.setattr(land, "emit_land_timing", lambda *_: (_ for _ in ()).throw(ValueError("PRIVATE_SENTINEL")))
     with pytest.raises(RuntimeError) as caught:
         land.run_case("accepted-without-mode", "unknown", True)
-    assert caught.value is original and events[-4:] == ["stop", "native_emit", "cleanup", "peer_stop"]
+    assert caught.value is original
+    if broken_emitter:
+        assert events[-4:] == ["stop", "native_emit", "cleanup", "peer_stop"]
+    else:
+        assert events[-5:] == ["stop", "native_emit", "emit", "cleanup", "peer_stop"]
     captured = capsys.readouterr()
     assert "PRIVATE_SENTINEL" not in captured.out + captured.err
     if broken_emitter:
@@ -314,8 +353,41 @@ def test_wall_clock_correlation_reports_consistency_shift_and_absence(modules):
     assert land.clock_correlation({}) == "unavailable"
 
 
+@pytest.mark.parametrize(
+    "residual_us,passes", [(2_850_000, True), (3_500_000, True), (2_849_999, False), (3_500_001, False)]
+)
+def test_both_budget_boundaries_apply_to_same_validated_residual(
+    modules, monkeypatch, tmp_path, capsys, residual_us, passes
+):
+    _, land = modules
+    native_us = 2_757_758
+    events = owned_case(monkeypatch, land, tmp_path, elapsed=(native_us + residual_us) / 1_000_000, native_us=native_us)
+    if passes:
+        result = land.run_case("accepted-without-mode", "unknown", True)
+        assert result["non_native_elapsed_ms"] == residual_us / 1000
+    else:
+        with pytest.raises(AssertionError):
+            land.run_case("accepted-without-mode", "unknown", True)
+    facts = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+    assert len(facts) == 1 and facts[0]["checks"] == ("passed" if passes else "failed")
+    assert facts[0]["native_audit_us"] == native_us and facts[0]["non_native_elapsed_us"] == residual_us
+    assert events[-5:] == ["stop", "native_emit", "emit", "cleanup", "peer_stop"]
+
+
+def test_measured_wall_miss_is_accounted_without_shortening_reported_wall(modules, monkeypatch, tmp_path, capsys):
+    _, land = modules
+    owned_case(monkeypatch, land, tmp_path, elapsed=5.790197, native_us=2_757_758)
+    result = land.run_case("accepted-without-mode", "unknown", True)
+    assert result["elapsed_ms"] == 5790.197
+    assert result["native_audit_ms"] == 2757.758 and result["non_native_elapsed_ms"] == 3032.439
+    facts = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+    assert len(facts) == 1 and facts[0]["elapsed_us"] == 5_790_197 and facts[0]["checks"] == "passed"
+
+
 @pytest.mark.parametrize("failure", [False, True])
-def test_native_projection_error_cannot_replace_case_result_or_skip_cleanup(modules, monkeypatch, tmp_path, failure):
+def test_native_projection_error_fails_qualification_and_preserves_original_failure(
+    modules, monkeypatch, tmp_path, failure
+):
     _, land = modules
     original = RuntimeError("synthetic original failure") if failure else None
     events = owned_case(monkeypatch, land, tmp_path, failure=original)
@@ -330,8 +402,9 @@ def test_native_projection_error_cannot_replace_case_result_or_skip_cleanup(modu
             land.run_case("accepted-without-mode", "unknown", True)
         assert caught.value is original
     else:
-        assert land.run_case("accepted-without-mode", "unknown", True)["outcome"] == "unknown"
-    assert events[-3:] == ["stop", "cleanup", "peer_stop"]
+        with pytest.raises(ValueError, match="PRIVATE_SENTINEL"):
+            land.run_case("accepted-without-mode", "unknown", True)
+    assert events[-4:] == ["stop", "emit", "cleanup", "peer_stop"]
 
 
 def test_stop_failure_preserves_original_error_and_retains_live_storage(modules, monkeypatch, tmp_path):
@@ -344,7 +417,12 @@ def test_stop_failure_preserves_original_error_and_retains_live_storage(modules,
         _nomad_test_storage=SimpleNamespace(name=str(tmp_path), cleanup=lambda: events.append("cleanup")),
     )
     monkeypatch.setattr(land, "start_runtime", lambda *_a, **_kw: (process, io.BytesIO(), io.BytesIO()))
-    monkeypatch.setattr(land, "stop_runtime", lambda _: (_ for _ in ()).throw(TimeoutError("synthetic shutdown")))
+
+    def stop(_):
+        events.append("stop")
+        raise TimeoutError("synthetic shutdown")
+
+    monkeypatch.setattr(land, "stop_runtime", stop)
     with pytest.raises(RuntimeError) as caught:
         land.run_case("accepted-without-mode", "unknown", True)
     assert caught.value is original and "cleanup" not in events and events[-1] == "peer_stop"
@@ -404,7 +482,7 @@ def test_broken_diagnostic_writer_preserves_original_exception_and_cleanup(modul
     )
     with pytest.raises(RuntimeError) as caught:
         land.run_case("accepted-without-mode", "unknown", True)
-    assert caught.value is original and events[-4:] == ["stop", "native_emit", "cleanup", "peer_stop"]
+    assert caught.value is original and events[-5:] == ["stop", "native_emit", "emit", "cleanup", "peer_stop"]
 
 
 def test_cli_internal_boundaries_are_unavailable_and_peer_offsets_share_origin(modules, tmp_path, capsys):
