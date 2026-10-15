@@ -75,6 +75,8 @@ jobs:
         run: pixi run python scripts/dev/runtime_ipc_smoke.py
       - name: Qualify bounded Copter LAND at a one-hertz MAVLink peer
         run: pixi run python scripts/dev/runtime_land_fixture.py
+      - name: Observe twenty fresh accepted-without-mode LAND cases
+        run: pixi run python scripts/dev/runtime_land_timing_cohort.py
       - name: Qualify clean/crash restart and persistent audit history without hardware
         run: pixi run python scripts/dev/runtime_lifecycle_qualification.py
 
