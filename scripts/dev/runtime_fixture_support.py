@@ -27,6 +27,20 @@ FIXTURE_CREDENTIALS = {
         "operator",
     )
 }
+REQUEST_TIMING_FIELDS = (
+    "prepare_begin_ns",
+    "prepare_complete_ns",
+    "connect_begin_ns",
+    "connect_complete_ns",
+    "send_begin_ns",
+    "send_complete_ns",
+    "read_begin_ns",
+    "first_byte_ns",
+    "read_complete_ns",
+    "response_ready_ns",
+    "error_ns",
+    "finished_ns",
+)
 
 
 def find_runtime() -> Path:
@@ -78,34 +92,59 @@ def wait_for_listener(port: int, deadline_seconds: float = 10.0) -> None:
     raise TimeoutError(f"runtime did not listen on 127.0.0.1:{port}")
 
 
-def send_request(port: int, message: dict[str, Any]) -> dict[str, Any]:
+def send_request(port: int, message: dict[str, Any], *, timing: dict[str, int | None] | None = None) -> dict[str, Any]:
     """Send one bounded JSON Lines request and read its response."""
-    message = dict(message)
-    secret = message.pop("credential", "")
-    if secret:
-        unsigned = json.dumps(message, separators=(",", ":"))
-        message["auth_payload"] = unsigned
-        message["auth_proof"] = hmac.new(
-            secret.encode(), ("nomad-core:request:v1:" + unsigned).encode(), hashlib.sha256
-        ).hexdigest()
-    payload = json.dumps(message, separators=(",", ":")).encode("utf-8") + b"\n"
-    if len(payload) > 65537:
-        raise ValueError("smoke request exceeds protocol limit")
-    with socket.create_connection(("127.0.0.1", port), timeout=2.0) as client:
-        client.settimeout(8.0)
-        client.sendall(payload)
-        received = bytearray()
-        while len(received) <= 65536:
-            byte = client.recv(1)
-            if not byte:
-                raise ConnectionError("runtime closed before completing its response")
-            if byte == b"\n":
-                response = json.loads(received)
-                if not isinstance(response, dict):
-                    raise ValueError("runtime response must be a JSON object")
-                return response
-            received.extend(byte)
-    raise ValueError("runtime response exceeded the protocol limit")
+    if timing is not None:
+        timing.clear()
+        timing.update(dict.fromkeys(REQUEST_TIMING_FIELDS))
+
+    def mark(name: str) -> None:
+        if timing is not None:
+            timing[name] = time.monotonic_ns()
+
+    mark("prepare_begin_ns")
+    try:
+        message = dict(message)
+        secret = message.pop("credential", "")
+        if secret:
+            unsigned = json.dumps(message, separators=(",", ":"))
+            message["auth_payload"] = unsigned
+            message["auth_proof"] = hmac.new(
+                secret.encode(), ("nomad-core:request:v1:" + unsigned).encode(), hashlib.sha256
+            ).hexdigest()
+        payload = json.dumps(message, separators=(",", ":")).encode("utf-8") + b"\n"
+        mark("prepare_complete_ns")
+        if len(payload) > 65537:
+            raise ValueError("smoke request exceeds protocol limit")
+        mark("connect_begin_ns")
+        with socket.create_connection(("127.0.0.1", port), timeout=2.0) as client:
+            mark("connect_complete_ns")
+            client.settimeout(8.0)
+            mark("send_begin_ns")
+            client.sendall(payload)
+            mark("send_complete_ns")
+            received = bytearray()
+            mark("read_begin_ns")
+            while len(received) <= 65536:
+                byte = client.recv(1)
+                if not byte:
+                    raise ConnectionError("runtime closed before completing its response")
+                if not received:
+                    mark("first_byte_ns")
+                if byte == b"\n":
+                    mark("read_complete_ns")
+                    response = json.loads(received)
+                    if not isinstance(response, dict):
+                        raise ValueError("runtime response must be a JSON object")
+                    mark("response_ready_ns")
+                    return response
+                received.extend(byte)
+        raise ValueError("runtime response exceeded the protocol limit")
+    except Exception:
+        mark("error_ns")
+        raise
+    finally:
+        mark("finished_ns")
 
 
 def request(
