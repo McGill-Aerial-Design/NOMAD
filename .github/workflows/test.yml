@@ -95,7 +95,7 @@ jobs:
         with:
           cache: true
       - name: Verify service provisioning without privileged installation
-        run: pixi run test-runtime-service-artifacts
+        run: pixi run test-runtime-service-artifacts -s
       - name: Verify native release transactions and failure paths without privileges
         run: pixi run test-release-lifecycle
       - name: Build distinguishable release A and B runtime fixtures

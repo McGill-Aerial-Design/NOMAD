@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -14,6 +16,75 @@ import pytest
 from infra.runtime import install_systemd
 
 ROOT = Path(__file__).resolve().parents[1]
+PLAN_PHASES = ("entry", "before_helper", "after_helper", "after_json", "done")
+
+
+def plan_phase_facts(output: str | bytes | None) -> dict:
+    """Project only fixed child milestones; never export captured process output."""
+    text = output.decode("ascii", errors="replace") if isinstance(output, bytes) else output or ""
+    phases, rejected = [], 0
+    for line in text.splitlines():
+        if not line.startswith("nomad_plan_phase:"):
+            continue
+        match = re.fullmatch(r"nomad_plan_phase:([a-z_]+):([0-9]{1,5})", line)
+        expected = PLAN_PHASES[len(phases)] if len(phases) < len(PLAN_PHASES) else None
+        if (
+            match is None
+            or match[1] != expected
+            or int(match[2]) > 60000
+            or (phases and int(match[2]) < phases[-1]["elapsed_ms"])
+        ):
+            rejected += 1
+            continue
+        phases.append({"phase": match[1], "elapsed_ms": int(match[2])})
+    status = "complete" if len(phases) == len(PLAN_PHASES) else "partial" if phases else "missing"
+    return {"phase_status": "invalid" if rejected else status, "phases": phases, "rejected_candidates": rejected}
+
+
+def run_windows_plan(script: Path) -> subprocess.CompletedProcess:
+    expression = """
+$ErrorActionPreference = 'Stop'
+$nomadPlanClock = [Diagnostics.Stopwatch]::StartNew()
+function Write-NomadPlanPhase([string]$phase) {
+    [Console]::Error.WriteLine(('nomad_plan_phase:{0}:{1}' -f $phase, $nomadPlanClock.ElapsedMilliseconds))
+}
+try {
+    Write-NomadPlanPhase 'entry'
+    Write-NomadPlanPhase 'before_helper'
+"""
+    expression += f"$nomadPlan = & '{script}' -Action Plan -Executable 'C:\\NOMAD release\\bin\\nomad-runtime.exe' "
+    expression += "-Config 'C:\\ProgramData\\NOMAD\\runtime.json'\n"
+    expression += """
+    Write-NomadPlanPhase 'after_helper'
+    $nomadPlanJson = $nomadPlan | ConvertTo-Json -Compress
+    Write-NomadPlanPhase 'after_json'
+    [Console]::Out.WriteLine($nomadPlanJson)
+    Write-NomadPlanPhase 'done'
+} catch { exit 1 }
+"""
+    started = time.monotonic_ns()
+    timed_out = False
+    result = None
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", expression], capture_output=True, text=True, timeout=10
+        )
+        captured_error = result.stderr
+    except subprocess.TimeoutExpired as error:
+        captured_error = error.stderr
+        timed_out = True
+    facts = {
+        "event": "runtime_service_plan_timing",
+        "result": "timeout" if timed_out else "returned",
+        "exit_code": result.returncode if result is not None else None,
+        "parent_elapsed_ms": (time.monotonic_ns() - started) // 1_000_000,
+        **plan_phase_facts(captured_error),
+    }
+    print(json.dumps(facts, sort_keys=True), flush=True)
+    # Report outside the handler so pytest cannot print TimeoutExpired's private argv/buffers.
+    if timed_out:
+        pytest.fail("Windows service Plan exceeded its unchanged 10-second limit", pytrace=False)
+    return result
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX systemd paths")
@@ -61,12 +132,8 @@ def test_render_escapes_systemd_specifiers() -> None:
 @pytest.mark.skipif(os.name != "nt", reason="Windows provisioning command generation")
 def test_windows_plan_quotes_paths_and_bounds_recovery() -> None:
     script = ROOT / "infra/runtime/Manage-NomadRuntime.ps1"
-    expression = f"& '{script}' -Action Plan -Executable 'C:\\NOMAD release\\bin\\nomad-runtime.exe' "
-    expression += "-Config 'C:\\ProgramData\\NOMAD\\runtime.json' | ConvertTo-Json -Compress"
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", expression], capture_output=True, text=True, timeout=10
-    )
-    assert result.returncode == 0, result.stderr
+    result = run_windows_plan(script)
+    assert result.returncode == 0, "Windows service Plan failed; see fixed phase facts"
     plan = json.loads(result.stdout)
     assert (
         plan["BinaryPath"]
@@ -76,6 +143,101 @@ def test_windows_plan_quotes_paths_and_bounds_recovery() -> None:
     assert plan["Start"] == "demand"
     assert plan["Recovery"] == "restart/5000/restart/30000/none/0"
     assert plan["NonCrashRecovery"] is False
+
+
+@pytest.mark.parametrize("as_bytes", [False, True])
+def test_plan_phase_projection_complete_and_partial(as_bytes):
+    lines = [f"nomad_plan_phase:{phase}:{index}" for index, phase in enumerate(PLAN_PHASES)]
+    for count in range(6):
+        output = "PRIVATE_SENTINEL\n" + "\n".join(lines[:count])
+        facts = plan_phase_facts(output.encode() if as_bytes else output)
+        assert len(facts["phases"]) == count and facts["rejected_candidates"] == 0
+        assert facts["phase_status"] == ("complete" if count == 5 else "partial" if count else "missing")
+        assert "PRIVATE_SENTINEL" not in json.dumps(facts)
+    assert plan_phase_facts(None)["phase_status"] == "missing"
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "nomad_plan_phase:PRIVATE_SENTINEL:0",
+        "nomad_plan_phase:entry:PRIVATE_SENTINEL",
+        "nomad_plan_phase:entry:-1",
+        "nomad_plan_phase:entry:60001",
+        "nomad_plan_phase:entry:0\nnomad_plan_phase:entry:0",
+        "nomad_plan_phase:entry:2\nnomad_plan_phase:before_helper:1",
+        "nomad_plan_phase:before_helper:0",
+    ],
+)
+def test_plan_phase_projection_rejects_invalid_order_values_and_duplicates(output):
+    facts = plan_phase_facts(output)
+    assert facts["phase_status"] == "invalid" and facts["rejected_candidates"] > 0
+    assert "PRIVATE_SENTINEL" not in json.dumps(facts)
+
+
+def test_plan_timeout_preserves_limit_and_projects_without_exception_chain(monkeypatch, capsys):
+    calls = []
+
+    def timeout(command, **options):
+        calls.append((command, options))
+        raise subprocess.TimeoutExpired(
+            ["PRIVATE_SENTINEL"], 10, output=b"PRIVATE_SENTINEL", stderr=b"nomad_plan_phase:entry:0\nPRIVATE_SENTINEL"
+        )
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    with pytest.raises(pytest.fail.Exception) as failure:
+        run_windows_plan(Path("PRIVATE_SENTINEL"))
+    assert len(calls) == 1 and calls[0][0][:3] == ["powershell", "-NoProfile", "-Command"]
+    assert calls[0][1] == {"capture_output": True, "text": True, "timeout": 10}
+    assert failure.value.__context__ is None
+    captured = capsys.readouterr()
+    facts = json.loads(captured.out)
+    assert facts["result"] == "timeout" and facts["phase_status"] == "partial"
+    assert facts["phases"] == [{"phase": "entry", "elapsed_ms": 0}]
+    assert "PRIVATE_SENTINEL" not in captured.out + captured.err + str(failure.value)
+
+
+@pytest.mark.parametrize(
+    "invalid", [None, "returncode", "BinaryPath", "Account", "Start", "Recovery", "NonCrashRecovery"]
+)
+def test_plan_instrumentation_retains_each_original_assertion(monkeypatch, capsys, invalid):
+    plan = {
+        "BinaryPath": (
+            '"C:\\NOMAD release\\bin\\nomad-runtime.exe" --service --config "C:\\ProgramData\\NOMAD\\runtime.json"'
+        ),
+        "Account": "NT AUTHORITY\\LocalService",
+        "Start": "demand",
+        "Recovery": "restart/5000/restart/30000/none/0",
+        "NonCrashRecovery": False,
+    }
+    if invalid not in (None, "returncode"):
+        plan[invalid] = None
+    stderr = "\n".join(f"nomad_plan_phase:{phase}:{index}" for index, phase in enumerate(PLAN_PHASES))
+
+    def completed(command, **options):
+        assert command[:3] == ["powershell", "-NoProfile", "-Command"] and options["timeout"] == 10
+        return subprocess.CompletedProcess(command, 1 if invalid == "returncode" else 0, json.dumps(plan), stderr)
+
+    monkeypatch.setattr(subprocess, "run", completed)
+    if invalid is None:
+        test_windows_plan_quotes_paths_and_bounds_recovery()
+    else:
+        with pytest.raises(AssertionError):
+            test_windows_plan_quotes_paths_and_bounds_recovery()
+    facts = json.loads(capsys.readouterr().out)
+    assert facts["result"] == "returned" and facts["phase_status"] == "complete"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows child failure status")
+def test_plan_phase_commands_cannot_hide_helper_failure(tmp_path, capsys):
+    script = tmp_path / "synthetic-plan.ps1"
+    script.write_text("throw 'PRIVATE_SENTINEL'\n", encoding="utf-8")
+    result = run_windows_plan(script)
+    assert result.returncode != 0
+    facts = json.loads(capsys.readouterr().out)
+    assert facts["result"] == "returned" and facts["phase_status"] == "partial"
+    assert [item["phase"] for item in facts["phases"]] == ["entry", "before_helper"]
+    assert "PRIVATE_SENTINEL" not in json.dumps(facts) + result.stdout + result.stderr
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows path qualification")
