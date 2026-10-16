@@ -253,3 +253,44 @@ void test_definite_rejection_outcomes() {
     CHECK(records.back()["result"] == denied["outcome"]);
     CHECK(runtime.stop());
 }
+
+void test_cached_rejection(const std::string &failed_event) {
+    auto config = test_config();
+    config.ipc_port = free_port();
+    config.actuation_enabled = true;
+    nomad::runtime::ActuatorDefinition actuator;
+    actuator.id = "reserved-servo";
+    actuator.name = "Reserved servo";
+    actuator.channel = 8;
+    config.actuators = {actuator};
+    config.audit_write_guard = [failed_event](const std::string &line) {
+        return Json::parse(line)["event"] != failed_event;
+    };
+    auto connection = std::make_unique<FakeConnection>();
+    auto *observed = connection.get();
+    nomad::runtime::Runtime runtime(std::move(connection), config);
+    start_ready(runtime, config.ipc_port);
+    admit_authority(config.ipc_port);
+    Client client(config.ipc_port);
+    const auto request = servo_request("cached-rejection", 1500);
+    const auto response = client.request(request);
+    CHECK(response["error"]["code"] ==
+          (failed_event == "request_rejected" ? "audit_failure" : "configured_output"));
+    CHECK(response["outcome"] == "rejected");
+    CHECK(observed->command_count() == 0);
+    if (failed_event == "mutation_intent") {
+        auto fault = servo_request("independent-audit-fault", 1500);
+        fault["channel"] = 9;
+        CHECK(client.request(fault)["error"]["code"] == "audit_failure");
+    }
+    const auto status = client.request(base_request("cached-health", "status"))["status"];
+    CHECK(status["audit_healthy"] == failed_event.empty());
+    CHECK(status["authority_generation"] == authority.generation);
+    CHECK(status["authority_owner"] == "test-client");
+    const auto records = read_journal(config.audit_directory);
+    CHECK(count_event(records, "request_rejected") == (failed_event == "request_rejected" ? 0U : 1U));
+    CHECK(client.request(request) == response);
+    CHECK(read_journal(config.audit_directory) == records);
+    CHECK(observed->command_count() == 0);
+    CHECK(runtime.stop() == failed_event.empty());
+}

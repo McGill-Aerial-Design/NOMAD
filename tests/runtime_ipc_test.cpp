@@ -461,10 +461,17 @@ void run_runtime_scenarios() {
     run_scenario("execution_exception_after_send", [] { test_execution_exception(true); });
     run_scenario("admission_cancellation_without_send", test_admission_cancellation_without_send);
     run_scenario("definite_rejection_outcomes", test_definite_rejection_outcomes);
+    run_scenario("cached_rejection_is_read_only", [] { test_cached_rejection(""); });
+    run_scenario("cached_rejection_after_audit_failure", [] { test_cached_rejection("mutation_intent"); });
+    run_scenario("cached_rejection_write_failure", [] { test_cached_rejection("request_rejected"); });
 }
 
 int main(int argc, char **argv) {
     return nomad::test::run_tests([argc, argv] {
+        if (argc == 3 && std::string_view(argv[1]) == "--cached-rejection") {
+            test_cached_rejection(std::string_view(argv[2]) == "healthy" ? "" : argv[2]);
+            return;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--actuator-pending-stress") {
             for (int iteration = 1; iteration <= 5; ++iteration) {
                 nomad::test::run_scenario("gated_direction_release_" + std::to_string(iteration),

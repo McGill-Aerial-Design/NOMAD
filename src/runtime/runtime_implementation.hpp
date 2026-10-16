@@ -63,7 +63,7 @@ struct Runtime::Implementation {
 
     // Mutation execution and response cache.
     Json handle_mutating_request(const Request &request);
-    Json process_mutating_request(const Request &request);
+    Json finish_mutating_response(const Request &request, Json response);
     Json execute_mutating_request(const Request &request);
     vehicle::CommandResult invoke_vehicle(const Request &request);
     Json execute_actuator_request(const Request &request);
