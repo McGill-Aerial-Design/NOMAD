@@ -151,9 +151,14 @@ def write_fixture_credentials(directory: str) -> Path:
     return credential_file
 
 
-def start_runtime(binary: Path, udp_port: int, ipc_port: int) -> tuple[subprocess.Popen[bytes], Any, Any]:
+def start_runtime(
+    binary: Path, udp_port: int, ipc_port: int, *, audit_timing: bool = False
+) -> tuple[subprocess.Popen[bytes], Any, Any]:
     """Start a runtime attached to the local fake vehicle."""
     environment = os.environ.copy()
+    environment.pop("NOMAD_QUALIFICATION_AUDIT_TIMING", None)
+    if audit_timing:
+        environment["NOMAD_QUALIFICATION_AUDIT_TIMING"] = "1"
     environment["NOMAD_API_KEY"] = "runtime-smoke-key"
     storage = tempfile.TemporaryDirectory(prefix="nomad-runtime-test-")
     credential_file = write_fixture_credentials(storage.name)

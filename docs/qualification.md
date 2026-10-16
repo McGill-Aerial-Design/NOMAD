@@ -63,3 +63,11 @@ remain open. No firmware/board/sensor/compute placement is hardware-qualified.
 Release signing/trusted publisher distribution and privileged systemd/SCM registration
 require separate deployment acceptance. SHA-256 integrity alone does not authenticate
 a publisher. Validate mixed component versions against both IPC and router contracts.
+
+The one-hertz LAND fixture retains raw response latency. Its 3.5-second upper bound
+and unknown-with-ACK 2.85-second lower bound use the same elapsed interval after
+subtracting only the two successful synchronous native audit appends, validated
+after clean runtime exit against the first request's durable intent/outcome ordinals.
+Missing or invalid measurement fails qualification. Lock wait and other overhead
+remain counted; Vehicle's three-second deadline, audit durability and the separate
+SITL CLI wall-time gate remain unchanged. This does not shorten actual response time.
