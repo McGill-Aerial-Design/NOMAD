@@ -27,8 +27,7 @@ std::string command_outcome(const vehicle::CommandResult &result, bool admission
 
 } // namespace
 
-Json Runtime::Implementation::handle_mutating_request(const Request &request) {
-    auto response = process_mutating_request(request);
+Json Runtime::Implementation::finish_mutating_response(const Request &request, Json response) {
     if (!response.contains("outcome")) {
         response["outcome"] = "rejected";
     }
@@ -41,39 +40,47 @@ Json Runtime::Implementation::handle_mutating_request(const Request &request) {
     return response;
 }
 
-Json Runtime::Implementation::process_mutating_request(const Request &request) {
+Json Runtime::Implementation::handle_mutating_request(const Request &request) {
     if (!config_.actuation_enabled) {
-        return error_response(request.id, "missing_api_key", "NOMAD_API_KEY is not set for the runtime");
+        return finish_mutating_response(request,
+            error_response(request.id, "missing_api_key", "NOMAD_API_KEY is not set for the runtime"));
     }
     const auto admission = check_request_authority(request, false);
     if (admission.has_value()) {
-        return *admission;
+        return finish_mutating_response(request, *admission);
     }
     const auto key = cache_key(request);
     const auto fingerprint = request.original.dump();
     {
-        std::lock_guard lock(cache_mutex_);
+        std::unique_lock lock(cache_mutex_);
         const auto cached = response_cache_.find(key);
         if (cached != response_cache_.end()) {
             if (cached->second.fingerprint != fingerprint) {
-                return error_response(request.id, "request_id_conflict", "request ID was used with different data");
+                lock.unlock();
+                return finish_mutating_response(request,
+                    error_response(request.id, "request_id_conflict", "request ID was used with different data"));
             }
+            // An exact retry reads the completed response even when audit health has since failed.
             return cached->second.response;
         }
         if (in_flight_.contains(key)) {
             auto response = error_response(request.id, "request_in_progress",
                                            "request with this ID is still running");
             response["outcome"] = "unknown";
-            return response;
+            lock.unlock();
+            return finish_mutating_response(request, std::move(response));
         }
         if (!journal_->healthy()) {
             return audit_error(request);
         }
         if (const auto expired = check_request_authority(request); expired.has_value()) {
-            return *expired;
+            lock.unlock();
+            return finish_mutating_response(request, *expired);
         }
         if (!reserve_sequence(request)) {
-            return error_response(request.id, "stale_request", "request sequence was already consumed");
+            lock.unlock();
+            return finish_mutating_response(request,
+                error_response(request.id, "stale_request", "request sequence was already consumed"));
         }
         in_flight_.insert(key);
     }
@@ -87,6 +94,7 @@ Json Runtime::Implementation::process_mutating_request(const Request &request) {
                              "unknown" : "rejected";
         response = finish_operation(request, response, outcome);
     }
+    response = finish_mutating_response(request, std::move(response));
     remember_response(key, fingerprint, response);
     return response;
 }
