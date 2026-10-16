@@ -11,7 +11,7 @@ reviewed fork gitlink.
 
 | Component | Reviewed source | License found in fetched source |
 |---|---|---|
-| MAVSDK | NOMAD gitlink `60ec4f2975c6d207c3ed1c6ff35d9295a5689340` | BSD-3-Clause |
+| MAVSDK | NOMAD gitlink `8629bd145b2ee187726dd385f781d38be62a7c30` | BSD-3-Clause |
 | MAVSDK proto | nested gitlink `5c81ecfeb6110cf74ba75ae50b78a1b265c05670` | Unknown: no separate license declaration found; server disabled |
 | Asio | tag `asio-1-30-2` | Boost-1.0 |
 | fmt | tag `12.1.0` | MIT |
