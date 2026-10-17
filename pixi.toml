@@ -135,6 +135,7 @@ test-plugin-video = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts
 # fail-closed validation and authority controls,
 # protocol negotiation and unknown-outcome no-replay behavior.
 test-plugin-core-client = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_core_client.ps1"
+test-plugin-runtime-status = { cmd = "python scripts/dev/mission_planner_status_fixture.py", depends-on = ["build-core", "test-plugin-core-client"] }
 
 # Unit tests for the Airbus-style altitude callouts (Windows only) — compiles the
 # Mission Planner-free AltitudeCallout with VS's csc and asserts the threshold-

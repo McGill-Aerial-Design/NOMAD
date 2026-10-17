@@ -42,7 +42,17 @@ namespace NOMAD.MissionPlanner
 
             mainLayout.Controls.Add(CreateStatusCard("Local outline advisory", "--", out _lblGeofence, NOMADTheme.TEXT_SECONDARY), 0, 1);
             mainLayout.Controls.Add(CreateStatusCard("Links", "--", out _lblLinks, NOMADTheme.TEXT_SECONDARY, fontSize: 10), 1, 1);
-            mainLayout.Controls.Add(CreateStatusCard("Core", "--", out _lblCore, NOMADTheme.TEXT_SECONDARY, fontSize: 10), 2, 1);
+            var core = CreateStatusCard("Core", "--", out _lblCore, NOMADTheme.TEXT_SECONDARY, fontSize: 10);
+            var readStatus = new Button
+            {
+                Name = "ReadRuntimeStatus", Text = "Read status", Size = new Size(80, 20),
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Location = new Point(core.ClientSize.Width - core.Padding.Right - 80, core.Padding.Top),
+            };
+            readStatus.Click += (sender, args) => ShowRuntimeStatus();
+            core.Controls.Add(readStatus);
+            readStatus.BringToFront();
+            mainLayout.Controls.Add(core, 2, 1);
 
             _notificationPanel = new NotificationPanel(_notificationService)
             {
@@ -55,6 +65,20 @@ namespace NOMAD.MissionPlanner
             _videoPreviewPanel = CreateVideoPreviewPanel();
             mainLayout.Controls.Add(_videoPreviewPanel, 2, 2);
             Controls.Add(mainLayout);
+        }
+
+        private void ShowRuntimeStatus()
+        {
+            using var dialog = new Form
+            {
+                Text = "NOMAD runtime snapshot", Size = new Size(780, 690), StartPosition = FormStartPosition.CenterParent,
+                BackColor = NOMADTheme.BG_DARK, ForeColor = NOMADTheme.TEXT_PRIMARY,
+                MinimizeBox = false, ShowInTaskbar = false,
+            };
+            var status = new RuntimeStatusPanel { Dock = DockStyle.Fill };
+            dialog.Controls.Add(status);
+            dialog.Shown += (sender, args) => UiAsync.Run(status, () => status.RefreshStatusAsync(), "RuntimeStatus");
+            dialog.ShowDialog(this);
         }
 
         private Panel CreateStatusCard(string title, string initialValue, out Label valueLabel, Color statusColor, float fontSize = 12f)
