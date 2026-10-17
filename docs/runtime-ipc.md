@@ -242,8 +242,6 @@ Mission Planner's asynchronous request API returns an immutable
 `NomadCoreRequestResult` containing `Outcome`, `ErrorCode`, `Message` and nullable
 `Acknowledged`; `Succeeded` means only software success. Production callers use
 the result of their own request, including when responses finish out of order.
-The synchronous bool API and mutable `Last*` properties remain compatibility
-wrappers only; asynchronous requests do not update those properties.
 
 Runtime networking uses .NET Framework 4.8 asynchronous TCP connect, stream
 write and stream read operations. Cancellation closes the request's socket.
