@@ -117,6 +117,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'plugin core client tests failed' }
           pwsh -File scripts/build/test_plugin_config_validation.ps1
           if ($LASTEXITCODE -ne 0) { throw 'plugin configuration tests failed' }
+          pwsh -File scripts/build/test_plugin_router_ui.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'router status UI tests failed' }
           pwsh -File scripts/build/test_ground_router.ps1
           if ($LASTEXITCODE -ne 0) { throw 'router tests failed' }
           pixi run python scripts/dev/ground_router_smoke.py

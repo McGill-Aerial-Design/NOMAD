@@ -24,7 +24,8 @@ namespace NOMAD.MissionPlanner
 
         private void InitializeUI()
         {
-            if (_connectionManager != null)
+            bool disabled = _config != null && !_config.RouterClientEnabled;
+            if (!disabled && _connectionManager != null)
             {
                 try
                 {
@@ -36,7 +37,7 @@ namespace NOMAD.MissionPlanner
                 catch (System.Exception ex)
                 {
                     System.Diagnostics.Debug.WriteLine($"NOMAD: LinkHealthPanel failed to initialize - {ex}");
-                    /* fall through to disabled view */
+                    /* fall through to unavailable guidance */
                 }
             }
 
@@ -62,14 +63,15 @@ namespace NOMAD.MissionPlanner
 
             layout.Controls.Add(new Label
             {
-                Text =
-                    "Multi-Link is disabled in settings.\n\n" +
+                Text = (disabled ? "Router status client is disabled in settings.\n\n"
+                                 : "Router status is unavailable.\n\n") +
                     "When enabled, Mission Planner connects to the separately supervised ground router.\n" +
                     "The router selects one physical link, supplies telemetry, and reports link health.\n" +
                     "Mission Planner does not start, stop, or configure the router host.\n\n" +
-                    "Enable the router status client in NOMAD → Settings → Multi-Link.",
+                    (disabled ? "Enable the router status client in NOMAD → Settings → Multi-Link."
+                              : "Check the router process and management endpoint in NOMAD → Settings → Multi-Link."),
                 Font = new Font("Segoe UI", 10),
-                ForeColor = NOMADTheme.TEXT_SECONDARY,
+                ForeColor = disabled ? NOMADTheme.TEXT_SECONDARY : NOMADTheme.WARNING,
                 AutoSize = true,
                 MaximumSize = new Size(720, 0),
             });
