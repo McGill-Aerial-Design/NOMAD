@@ -16,6 +16,7 @@
 # Exits non-zero on compile error or test failure.
 # ============================================================
 
+param([switch]$StatusOnly)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 
@@ -27,6 +28,8 @@ $csc = Find-RoslynCompiler
 $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadCoreClient.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadCoreRequestResult.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeStatus.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Status.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Network.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.Requests.cs'),
@@ -36,6 +39,9 @@ $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Control\GimbalController.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\TerminationRequestTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientStatusTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\StatusRuntimeFixture.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\RuntimeStatusPanelTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientRuntimeTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientLandTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\LandControlPanelTests.cs'),
@@ -51,6 +57,7 @@ $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Input\NomadJoystickService.Axis.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Control\OutputController.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Control\LandControlPanel.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Control\RuntimeStatusPanel.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Config\NOMADConfig.Input.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadActuatorModels.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadCoreClient.Actuators.cs'),
@@ -76,7 +83,11 @@ if ($LASTEXITCODE -ne 0) {
 
 # ---- Run ----
 Write-Host "Running core-client tests..." -ForegroundColor Yellow
-& $exe
+if ($StatusOnly) {
+    & $exe --status-only
+} else {
+    & $exe
+}
 $result = $LASTEXITCODE
 if ($result -ne 0) {
     Write-Host "Core-client tests FAILED." -ForegroundColor Red

@@ -242,8 +242,6 @@ Mission Planner's asynchronous request API returns an immutable
 `NomadCoreRequestResult` containing `Outcome`, `ErrorCode`, `Message` and nullable
 `Acknowledged`; `Succeeded` means only software success. Production callers use
 the result of their own request, including when responses finish out of order.
-The synchronous bool API and mutable `Last*` properties remain compatibility
-wrappers only; asynchronous requests do not update those properties.
 
 Runtime networking uses .NET Framework 4.8 asynchronous TCP connect, stream
 write and stream read operations. Cancellation closes the request's socket.
@@ -258,6 +256,23 @@ requests; the backend owns concurrency, authorization, output values, sequencing
 and recovery. Physical HID input validity is checked before transmission; a stale
 unsent observation is `NotAttempted`. Input changes do not cancel an already-started
 mutation. Presentation uses backend revisions and retires old runtime incarnations.
+
+Mission Planner's read-only STATUS request uses authenticated HELLO and matches
+the response protocol, ID, type and nested runtime incarnation. It acquires no
+authority and consumes no mutation sequence. Its five-second overall cancellation
+deadline covers connect, HELLO, write and response reads, including slow-drip data;
+the mutation deadlines above remain unchanged. Invalid configured ports fail
+locally for all client requests instead of selecting the default endpoint.
+
+The dashboard's explicit runtime-status view reports dated snapshots separately
+from native Mission Planner telemetry. Protocol verbs, aircraft operation support,
+IPC readiness, audit health, actuation enablement and authority are separate facts.
+Missing or invalid fields remain unknown. A three-second presentation window counts
+the entire request duration and local monotonic age; sample ages are added before
+displaying vehicle observations. Expired values become unknown on UI refresh.
+This display window grants no aircraft command permission or physical qualification.
+View/configuration changes and disposal cancel or retire pending reads; stale queued
+results cannot replace a newer client/incarnation/session observation.
 
 ## Semantic actuator requests
 
