@@ -79,9 +79,6 @@ class MavsdkMavlinkConnection final : public MavlinkConnection {
         std::chrono::milliseconds timeout) override;
     bool send_velocity(const VelocitySetpoint &setpoint) override;
     bool is_velocity_active() const override;
-    bool send_fence_point(const FencePoint &point, std::uint8_t index, std::uint8_t total) override;
-    bool request_fence_point(std::uint8_t index) override;
-    std::optional<FencePoint> wait_for_fence_point(std::chrono::milliseconds timeout) override;
     bool upload_fence_plan(const std::vector<FencePlanItem> &items) override;
     std::optional<std::vector<FencePlanItem>> download_fence_plan(std::chrono::milliseconds timeout) override;
     std::optional<float> read_param(const std::string &param_id, std::chrono::milliseconds timeout) override;

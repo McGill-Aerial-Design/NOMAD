@@ -53,13 +53,6 @@ struct FencePoint {
     float longitude_deg{};
 };
 
-struct FenceStatus {
-    std::uint8_t breach_status{};
-    std::uint16_t breach_count{};
-    std::uint8_t breach_type{};
-    std::uint32_t breach_time{};
-};
-
 struct FencePlanItem {
     FencePoint point{};
     std::uint16_t sequence{};
@@ -74,11 +67,6 @@ struct FixedWingWaypointCommand {
     double longitude_deg{};
     float relative_altitude_m{};
     float loiter_radius_m{};
-};
-
-struct ParamValue {
-    std::string param_id;
-    float value{};
 };
 
 struct AutopilotVersion {
@@ -146,9 +134,6 @@ class MavlinkConnection {
         std::chrono::milliseconds timeout) = 0;
     virtual bool send_velocity(const VelocitySetpoint &setpoint) = 0;
     virtual bool is_velocity_active() const = 0;
-    virtual bool send_fence_point(const FencePoint &point, std::uint8_t index, std::uint8_t total) = 0;
-    virtual bool request_fence_point(std::uint8_t index) = 0;
-    virtual std::optional<FencePoint> wait_for_fence_point(std::chrono::milliseconds timeout) = 0;
     virtual bool upload_fence_plan(const std::vector<FencePlanItem> &items) = 0;
     virtual std::optional<std::vector<FencePlanItem>> download_fence_plan(std::chrono::milliseconds timeout) = 0;
     // Reads a named parameter back from the autopilot. The returned value is

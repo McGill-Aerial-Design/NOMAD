@@ -5,10 +5,8 @@
 //
 // MAVSDK's Geofence plugin transfers the fence as MAV_MISSION_TYPE_FENCE items
 // and owns that handshake, so the plan upload and the readback that verifies it
-// are implemented here. The removed transport also exposed single-vertex transfer
-// (request one fence item, patch one fence item); MAVSDK moves whole polygons
-// and the core only ever uploads a plan and then reads the autopilot's own copy
-// back, so those stay fail-closed rather than inventing a partial transfer.
+// are implemented here. MAVSDK transfers whole polygons; the core uploads a plan
+// and reads the autopilot's own copy back.
 //
 // A fence plan is not an enforced fence: ArduPilot only acts on it once
 // FENCE_ENABLE is set, which Vehicle::verify_fence_uploaded reads back through
@@ -100,19 +98,6 @@ MavsdkMavlinkConnection::download_fence_plan(std::chrono::milliseconds timeout) 
         return std::nullopt;
     }
     return to_plan_items(data);
-}
-
-bool MavsdkMavlinkConnection::send_fence_point(const FencePoint & /*point*/, std::uint8_t /*index*/,
-                                               std::uint8_t /*total*/) {
-    return false;
-}
-
-bool MavsdkMavlinkConnection::request_fence_point(std::uint8_t /*index*/) {
-    return false;
-}
-
-std::optional<FencePoint> MavsdkMavlinkConnection::wait_for_fence_point(std::chrono::milliseconds /*timeout*/) {
-    return std::nullopt;
 }
 
 } // namespace nomad::mavlink

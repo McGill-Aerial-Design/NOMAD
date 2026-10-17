@@ -30,7 +30,6 @@ namespace {
 
 using nomad::mavlink::Command;
 using nomad::mavlink::FencePlanItem;
-using nomad::mavlink::FencePoint;
 using nomad::mavlink::MavlinkConnection;
 using nomad::mavlink::VelocitySetpoint;
 using nomad::safety::GlobalPoint;
@@ -87,9 +86,6 @@ void test_absent_peer_fails_closed() {
 
     const auto fence = connection->upload_fence_plan({FencePlanItem{}});
     CHECK(!fence);
-    CHECK(!connection->send_fence_point(FencePoint{}, 0, 1));
-    CHECK(!connection->request_fence_point(0));
-    CHECK(!connection->wait_for_fence_point(std::chrono::milliseconds(10)).has_value());
     CHECK(!connection->download_fence_plan(std::chrono::milliseconds(10)).has_value());
     CHECK(!connection->read_param("FENCE_ENABLE", std::chrono::milliseconds(10)).has_value());
 }
