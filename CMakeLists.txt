@@ -241,7 +241,7 @@ set_target_properties(nomad_mavsdk_fmt PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${NOMAD_MAVSDK_INSTALL_DIR}/include")
 
 # Receive-only telemetry parser for the explicit connectivity qualification.
-add_library(nomad_mavlink_observation src/mavlink/mavlink_observation.cpp)
+add_library(nomad_mavlink_observation EXCLUDE_FROM_ALL src/mavlink/mavlink_observation.cpp)
 target_include_directories(nomad_mavlink_observation PUBLIC include)
 target_include_directories(nomad_mavlink_observation SYSTEM PRIVATE
     "${NOMAD_MAVSDK_INSTALL_DIR}/include")
