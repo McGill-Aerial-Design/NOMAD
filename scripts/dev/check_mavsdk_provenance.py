@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 EXPECTED_REVISIONS = {
-    "third_party/MAVSDK": "8629bd145b2ee187726dd385f781d38be62a7c30",
+    "third_party/MAVSDK": "7bb70c46b3a8eda2a45d54ad91c30f667977042a",
     "third_party/ardupilot-mavlink": "288b907c384a892c8519bfe271682424b1e1a3a0",
 }
 EXPECTED_DEPENDENCIES = {

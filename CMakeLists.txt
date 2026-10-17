@@ -279,6 +279,8 @@ target_include_directories(nomad_mavsdk_connection PUBLIC include PRIVATE
     "${NOMAD_MAVSDK_SOURCE_DIR}/cpp/src/mavsdk/plugins/mavlink_passthrough/include"
 )
 target_compile_features(nomad_mavsdk_connection PUBLIC cxx_std_20)
+# The transport uses the SDK passthrough API for its typed MAVLink operations.
+target_compile_definitions(nomad_mavsdk_connection PRIVATE MAVSDK_ENABLE_MAVLINK_C_API)
 add_dependencies(nomad_mavsdk_connection mavsdk)
 target_link_libraries(
     nomad_mavsdk_connection PUBLIC nomad_mavsdk_validation
@@ -349,6 +351,7 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     get_target_property(NOMAD_CONNECTION_INCLUDES nomad_mavsdk_connection INCLUDE_DIRECTORIES)
     target_include_directories(nomad_mavsdk_lifetime_tests PRIVATE src ${NOMAD_CONNECTION_INCLUDES})
     target_link_libraries(nomad_mavsdk_lifetime_tests PRIVATE nomad_mavsdk_connection nomad_core mavsdk nomad_mavsdk_fmt)
+    target_compile_definitions(nomad_mavsdk_lifetime_tests PRIVATE MAVSDK_ENABLE_MAVLINK_C_API)
     target_compile_definitions(nomad_mavsdk_lifetime_tests PRIVATE NOMAD_TESTS)
     add_test(NAME nomad_mavsdk_lifetime_tests COMMAND nomad_mavsdk_lifetime_tests)
 
@@ -359,6 +362,7 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
 
     add_executable(nomad_mavsdk_heartbeat_startup_probe tests/mavsdk_heartbeat_startup_probe.cpp)
     target_link_libraries(nomad_mavsdk_heartbeat_startup_probe PRIVATE mavsdk)
+    target_compile_definitions(nomad_mavsdk_heartbeat_startup_probe PRIVATE MAVSDK_ENABLE_MAVLINK_C_API)
 
     if(PROJECT_IS_TOP_LEVEL)
         add_executable(nomad_mavsdk_authority_wire_probe EXCLUDE_FROM_ALL tests/mavsdk_authority_wire_probe.cpp)

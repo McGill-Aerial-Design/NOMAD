@@ -139,8 +139,8 @@ void MavsdkMavlinkConnection::close() {
     {
         std::unique_lock lifetime_lock(plugin_lifetime_mutex_);
         if (resources_) {
-            // Unsubscribe does not drain MAVSDK's copied user callbacks. Revoking
-            // the gate waits for entered callbacks; queued copies never touch this.
+            // Revoke ownership before detaching the bundle. Entered callbacks finish
+            // under this gate; any retained callback copies can no longer touch this.
             std::lock_guard callback_lock(resources_->callbacks->mutex);
             resources_->callbacks->owner = nullptr;
         }
