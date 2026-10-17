@@ -178,50 +178,7 @@ if(PROJECT_IS_TOP_LEVEL)
 endif()
 
 if(PROJECT_IS_TOP_LEVEL)
-    include(GNUInstallDirs)
-    if(NOMAD_FIXTURE_VERSION OR NOMAD_SOURCE_ARCHIVE)
-        install(CODE "message(FATAL_ERROR \"Fixture/source-archive runtimes cannot be installed or packaged\")"
-                COMPONENT nomad_runtime)
-    endif()
-
-    # The core release is an executable package. Static MAVSDK internals are linked
-    # into the runtime, so the staged binaries do not depend on the build tree. Headers,
-    # configuration templates and the reviewed dependency notices travel with the
-    # executable for clean install and rollback review.
-    install(TARGETS nomad nomad-runtime RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT nomad_runtime)
-    install(FILES LICENSE NOTICE DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad COMPONENT nomad_runtime)
-    install(FILES config/nomad.env.example config/actuators.example.json
-            DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad/config COMPONENT nomad_runtime)
-    install(FILES infra/runtime/nomad-runtime.service.in infra/runtime/runtime.example.json
-            infra/runtime/install_systemd.py infra/runtime/Manage-NomadRuntime.ps1
-            DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad/lifecycle COMPONENT nomad_runtime)
-    install(FILES docs/operations.md DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad COMPONENT nomad_runtime)
-    install(DIRECTORY licenses/mavsdk-phase-a/
-            DESTINATION ${CMAKE_INSTALL_DATADIR}/nomad/licenses/mavsdk-phase-a COMPONENT nomad_runtime)
-
-    if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|x64)$")
-        message(FATAL_ERROR "Reviewed NOMAD release packages require x86-64")
-    endif()
-    if(WIN32)
-        set(NOMAD_PACKAGE_PLATFORM windows)
-        set(NOMAD_PACKAGE_REQUIRED "\"bin/nomad.exe\", \"bin/nomad-runtime.exe\"")
-    else()
-        set(NOMAD_PACKAGE_PLATFORM linux)
-        set(NOMAD_PACKAGE_REQUIRED "\"bin/nomad\", \"bin/nomad-runtime\"")
-    endif()
-    configure_file(cmake/package-identity.json.in package-identity.json @ONLY)
-    install(FILES "${CMAKE_BINARY_DIR}/package-identity.json" DESTINATION . COMPONENT nomad_runtime)
-    set(CPACK_PACKAGE_FILE_NAME "nomad-core-${NOMAD_RELEASE_VERSION}-${NOMAD_PACKAGE_PLATFORM}-x86_64")
-    set(CPACK_PACKAGE_NAME "nomad-core")
-    set(CPACK_PACKAGE_VENDOR "The NOMAD Authors")
-    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "NOMAD C++ vehicle core, runtime and CLI")
-    set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
-    set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}")
-    set(CPACK_COMPONENTS_ALL nomad_runtime)
-    set(CPACK_COMPONENTS_GROUPING ALL_COMPONENTS_IN_ONE)
-    set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
-    set(CPACK_GENERATOR "ZIP;TGZ")
-    include(CPack)
+    include(cmake/CorePackage.cmake)
 endif()
 
 # MAVSDK's embedded fmt target is directory-scoped and is not a reliable
