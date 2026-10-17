@@ -9,8 +9,28 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(NOMAD_PACKAGE_PLATFORM linux)
 endif()
 
-if(NOT NOMAD_PACKAGE_PLATFORM OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8
-   OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|x64)$")
+# CMAKE_SYSTEM_PROCESSOR can describe the host, including for MSVC cross targets.
+# Recheck compiler flags on reconfiguration instead of reusing a stale target result.
+unset(NOMAD_PACKAGE_TARGET_X86_64 CACHE)
+unset(NOMAD_PACKAGE_TARGET_X86_64)
+if(NOMAD_PACKAGE_PLATFORM AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    include(CheckCXXSourceCompiles)
+    include(CMakePushCheckState)
+    cmake_push_check_state(RESET)
+    check_cxx_source_compiles([[
+        #if defined(_M_ARM64) || defined(_M_ARM64EC) || defined(__aarch64__)
+        #error Unsupported ARM target
+        #endif
+        #if !defined(_M_X64) && !defined(__x86_64__)
+        #error An x86-64 compiler target is required
+        #endif
+        static_assert(sizeof(void*) == 8, "An x86-64 ABI is required");
+        int main() { return 0; }
+    ]] NOMAD_PACKAGE_TARGET_X86_64)
+    cmake_pop_check_state()
+endif()
+
+if(NOT NOMAD_PACKAGE_TARGET_X86_64)
     set(rejection "Reviewed NOMAD release packages require Windows or Linux x86-64")
     install(CODE "message(FATAL_ERROR \"${rejection}\")" COMPONENT nomad_runtime)
     # Replace earlier generated metadata too, so reconfiguration cannot reuse a Linux label.
