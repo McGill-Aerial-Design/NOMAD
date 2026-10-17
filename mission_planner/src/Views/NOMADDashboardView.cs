@@ -229,9 +229,8 @@ namespace NOMAD.MissionPlanner
 
         private void UpdateCoreCard()
         {
-            bool configured = _config.CoreRuntimePort >= 1 && _config.CoreRuntimePort <= 65535
-                && !string.IsNullOrWhiteSpace(_config.CoreClientCredential);
-            _lblCore.Text = configured ? "IPC configured; readiness unverified" : "Not configured";
+            bool configured = OutputController.CreateCoreClient()?.IsConfigured == true;
+            _lblCore.Text = configured ? "IPC configured (unverified)" : "Not configured";
             _lblCore.ForeColor = configured ? NOMADTheme.TEXT_SECONDARY : NOMADTheme.WARNING;
         }
 

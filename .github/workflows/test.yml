@@ -61,6 +61,11 @@ jobs:
         run: pixi run python scripts/dev/runtime_land_fixture.py
       - name: Qualify clean/crash restart and persistent audit history without hardware
         run: pixi run python scripts/dev/runtime_lifecycle_qualification.py
+      - name: Qualify Mission Planner STATUS against the actual runtime
+        if: runner.os == 'Windows'
+        run: |
+          pixi run test-plugin-core-client
+          pixi run --skip-deps test-plugin-runtime-status
 
   core-release:
     name: Core release qualification (${{ matrix.os }})
