@@ -137,6 +137,8 @@ function New-TestFixture {
         New-Item -ItemType Directory -Path $fixture.InstallPlugins -Force | Out-Null
         New-Item -ItemType Directory -Path (Split-Path $fixture.LegacyPlugin) -Force | Out-Null
         Copy-Item -LiteralPath $SourceBuildScript -Destination $fixture.Script
+        Copy-Item -LiteralPath (Join-Path (Split-Path $SourceBuildScript) 'windows_build_tools.ps1') `
+            -Destination (Split-Path $fixture.Script)
         [IO.File]::WriteAllText((Join-Path $fixture.Project 'NOMADPlugin.csproj'), '<Project />')
         New-ReleaseIdentityFixture -Fixture $fixture -SourceBuildScript $SourceBuildScript
         [IO.File]::WriteAllText((Join-Path $fixture.Install 'MissionPlanner.exe'), 'installation sentinel')
@@ -197,6 +199,14 @@ internal static class MockMsbuild
 {
     private static int Main(string[] args)
     {
+        if (String.Equals(Path.GetFileNameWithoutExtension(Environment.GetCommandLineArgs()[0]),
+            "vswhere", StringComparison.OrdinalIgnoreCase))
+        {
+            string installation = Environment.GetEnvironmentVariable("MOCK_VS_PATH");
+            if (installation != null) Console.WriteLine(installation);
+            return GetExitCode("MOCK_VS_EXIT");
+        }
+
         string logPath = Environment.GetEnvironmentVariable("MOCK_MSBUILD_LOG");
         File.AppendAllText(logPath, "cwd=" + Environment.CurrentDirectory + Environment.NewLine);
         File.AppendAllText(logPath, String.Join(" ", args) + Environment.NewLine);
@@ -249,6 +259,63 @@ internal static class MockMsbuild
     & $Fixture.Compiler /nologo /target:exe "/out:$($Fixture.MockMsbuild)" $Fixture.MockSource
     if ($LASTEXITCODE -ne 0) {
         throw "Could not compile native MSBuild test double (exit $LASTEXITCODE)."
+    }
+}
+
+function New-DiscoveryTools {
+    param([pscustomobject]$Fixture)
+
+    $installation = Join-Path $Fixture.Root 'Visual Studio With Spaces'
+    $msbuild = Join-Path $installation 'MSBuild\Current\Bin\MSBuild.exe'
+    $vswhere = Join-Path $Fixture.ProgramFilesRoot 'Microsoft Visual Studio\Installer\vswhere.exe'
+    $compiler = Join-Path $Fixture.Tools 'Roslyn\csc.exe'
+    $emptyPath = Join-Path $Fixture.Root 'Empty Tool Path'
+    foreach ($path in @((Split-Path $msbuild), (Split-Path $vswhere), (Split-Path $compiler), $emptyPath)) {
+        New-Item -ItemType Directory -Path $path -Force | Out-Null
+    }
+    Copy-Item -LiteralPath $Fixture.MockMsbuild -Destination $msbuild
+    Copy-Item -LiteralPath $Fixture.MockMsbuild -Destination $vswhere
+    [IO.File]::WriteAllText($compiler, 'compiler lookup sentinel')
+    return [pscustomobject]@{
+        Installation = $installation
+        Msbuild = $msbuild
+        Vswhere = $vswhere
+        Compiler = $compiler
+        EmptyPath = $emptyPath
+    }
+}
+
+function Test-ToolDiscovery {
+    param([pscustomobject]$Fixture)
+
+    . (Join-Path (Split-Path $Fixture.Script) 'windows_build_tools.ps1')
+    $tools = New-DiscoveryTools -Fixture $Fixture
+    $originalPath = $env:PATH
+    try {
+        $env:MOCK_VS_PATH = $tools.Installation
+        $env:MOCK_VS_EXIT = '0'
+        Assert-Equal (Find-MSBuild) $Fixture.MockMsbuild 'PATH must win over Visual Studio discovery'
+        Assert-Equal (Find-RoslynCompiler) $tools.Compiler 'Roslyn must come from the selected MSBuild'
+        Remove-Item -LiteralPath $tools.Compiler
+        $missingCompiler = $false
+        try { Find-RoslynCompiler | Out-Null } catch {
+            $missingCompiler = $_.Exception.Message -like '*no Roslyn csc.exe*'
+        }
+        Assert-Equal $missingCompiler $true 'Missing Roslyn must fail before compilation'
+        $env:PATH = $tools.EmptyPath
+        Assert-Equal (Find-MSBuild) $tools.Msbuild 'Native vswhere must resolve installation paths with spaces'
+        foreach ($invalid in @('', (Join-Path $Fixture.Root 'Missing Studio'), ($tools.Installation + "`nother"))) {
+            $env:MOCK_VS_PATH = $invalid
+            Assert-Equal (Find-MSBuild) $null 'Empty, missing or ambiguous Visual Studio output must fail'
+        }
+        $env:MOCK_VS_PATH = $tools.Installation
+        $env:MOCK_VS_EXIT = '17'
+        Assert-Equal (Find-MSBuild) $null 'A failed native discovery command must not supply MSBuild'
+        $env:MOCK_VS_EXIT = '0'
+        Remove-Item -LiteralPath $tools.Vswhere
+        Assert-Equal (Find-MSBuild) $null 'Missing PATH and vswhere must report no MSBuild'
+    } finally {
+        $env:PATH = $originalPath
     }
 }
 
@@ -430,6 +497,8 @@ function Save-ProcessEnvironment {
         CleanExit = [Environment]::GetEnvironmentVariable('MOCK_CLEAN_EXIT', 'Process')
         BuildExit = [Environment]::GetEnvironmentVariable('MOCK_BUILD_EXIT', 'Process')
         SkipArtifact = [Environment]::GetEnvironmentVariable('MOCK_SKIP_ARTIFACT', 'Process')
+        VsPath = [Environment]::GetEnvironmentVariable('MOCK_VS_PATH', 'Process')
+        VsExit = [Environment]::GetEnvironmentVariable('MOCK_VS_EXIT', 'Process')
     }
 }
 
@@ -444,6 +513,8 @@ function Restore-ProcessEnvironment {
     [Environment]::SetEnvironmentVariable('MOCK_CLEAN_EXIT', $Original.CleanExit, 'Process')
     [Environment]::SetEnvironmentVariable('MOCK_BUILD_EXIT', $Original.BuildExit, 'Process')
     [Environment]::SetEnvironmentVariable('MOCK_SKIP_ARTIFACT', $Original.SkipArtifact, 'Process')
+    [Environment]::SetEnvironmentVariable('MOCK_VS_PATH', $Original.VsPath, 'Process')
+    [Environment]::SetEnvironmentVariable('MOCK_VS_EXIT', $Original.VsExit, 'Process')
 }
 
 function Remove-TestFixture {
@@ -479,6 +550,7 @@ try {
     $script:OriginalPath = $originalEnvironment.Path
     Set-TestEnvironment -Fixture $fixture
 
+    Test-ToolDiscovery -Fixture $fixture
     Test-BuildOnlySuccess -Fixture $fixture
     Test-ChangedReviewedTarget -Fixture $fixture
     Test-BuildFailure -Fixture $fixture
@@ -486,7 +558,7 @@ try {
     Test-MissingArtifact -Fixture $fixture
     Test-InstallationUnchanged -Fixture $fixture
 
-    $summary = 'Build-only dispatch tests passed: artifact, paths with spaces, '
+    $summary = 'Tool discovery and build-only dispatch tests passed: artifact, paths with spaces, '
     $summary += 'exact failures, and unchanged installation.'
     Write-Host $summary -ForegroundColor Green
 } finally {

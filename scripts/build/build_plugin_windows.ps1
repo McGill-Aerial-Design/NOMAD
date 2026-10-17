@@ -17,27 +17,11 @@ $Configuration = "Release"
 # Step 1: Find MSBuild
 Write-Host "[1/4] Locating MSBuild..." -ForegroundColor Yellow
 
-$msbuild = (Get-Command msbuild -ErrorAction SilentlyContinue).Source
-
+. (Join-Path $PSScriptRoot 'windows_build_tools.ps1')
+$msbuild = Find-MSBuild
 if (-not $msbuild) {
-    Write-Host "  MSBuild not in PATH, checking Visual Studio..." -ForegroundColor Gray
-    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-
-    if (Test-Path $vswhere) {
-        $vsPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
-        if ($vsPath) {
-            $msbuild = Join-Path $vsPath 'MSBuild\Current\Bin\MSBuild.exe'
-            if (-not (Test-Path $msbuild)) {
-                Write-Host "ERROR: MSBuild not found!" -ForegroundColor Red
-                Write-Host "Please install Visual Studio 2022 or Visual Studio Build Tools" -ForegroundColor Red
-                exit 1
-            }
-        }
-    } else {
-        Write-Host "ERROR: Visual Studio not found!" -ForegroundColor Red
-        Write-Host "Please install Visual Studio 2022 or Visual Studio Build Tools" -ForegroundColor Red
-        exit 1
-    }
+    Write-Host 'ERROR: MSBuild not found. Install Visual Studio or Visual Studio Build Tools.' -ForegroundColor Red
+    exit 1
 }
 
 Write-Host "  Found: $msbuild" -ForegroundColor Green

@@ -2,13 +2,8 @@
 # Qualification-only binaries; this script never installs or publishes them.
 $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '../..')
-$msbuild = (Get-Command msbuild -ErrorAction SilentlyContinue).Source
-if (-not $msbuild) {
-    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    $vsPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
-    $msbuild = Join-Path $vsPath 'MSBuild\Current\Bin\MSBuild.exe'
-}
-$csc = Join-Path (Split-Path $msbuild) 'Roslyn/csc.exe'
+. (Join-Path $PSScriptRoot 'windows_build_tools.ps1')
+$csc = Find-RoslynCompiler
 $sources = Get-ChildItem (Join-Path $repoRoot 'infra/transport/ground_router/*.cs') | ForEach-Object FullName
 foreach ($label in @('A', 'B')) {
     $outDir = Join-Path $repoRoot "build/release-fixtures/router-$label"

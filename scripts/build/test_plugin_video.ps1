@@ -12,26 +12,8 @@ if (-not (Test-Path -LiteralPath $plugin -PathType Leaf)) {
     exit 1
 }
 
-$msbuild = (Get-Command msbuild -ErrorAction SilentlyContinue).Source
-if (-not $msbuild) {
-    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    if (Test-Path $vswhere) {
-        $vsPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
-        if ($vsPath) {
-            $msbuild = Join-Path $vsPath 'MSBuild\Current\Bin\MSBuild.exe'
-        }
-    }
-}
-if (-not $msbuild -or -not (Test-Path $msbuild)) {
-    Write-Host 'ERROR: MSBuild not found. Install Visual Studio 2022 with .NET desktop.' -ForegroundColor Red
-    exit 1
-}
-
-$csc = Join-Path (Split-Path $msbuild) 'Roslyn\csc.exe'
-if (-not (Test-Path $csc)) {
-    Write-Host "ERROR: csc.exe not found at $csc" -ForegroundColor Red
-    exit 1
-}
+. (Join-Path $PSScriptRoot 'windows_build_tools.ps1')
+$csc = Find-RoslynCompiler
 
 $mpDir = 'C:\Program Files (x86)\Mission Planner'
 $sources = Get-ChildItem (Join-Path $repoRoot 'mission_planner\tests\video') -Filter '*.cs' | ForEach-Object FullName

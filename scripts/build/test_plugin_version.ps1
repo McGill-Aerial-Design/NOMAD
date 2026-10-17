@@ -2,13 +2,8 @@
 # Copyright 2026 The NOMAD Authors
 $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '../..')
-$msbuild = (Get-Command msbuild -ErrorAction SilentlyContinue).Source
-if (-not $msbuild) {
-    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    $vsPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
-    $msbuild = Join-Path $vsPath 'MSBuild\Current\Bin\MSBuild.exe'
-}
-$csc = Join-Path (Split-Path $msbuild) 'Roslyn/csc.exe'
+. (Join-Path $PSScriptRoot 'windows_build_tools.ps1')
+$csc = Find-RoslynCompiler
 $outDir = Join-Path $repoRoot 'mission_planner/tests/version/bin'
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $exe = Join-Path $outDir 'MissionPlannerVersionTests.exe'
