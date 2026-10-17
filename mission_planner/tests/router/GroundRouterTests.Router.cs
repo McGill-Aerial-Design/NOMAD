@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// Dual-link router stress tests — router/manager integration half
+// Ground-router integration tests — router/manager integration half
 // ============================================================
-// Companion to DualLinkStressTests.cs (harness, frame builders,
+// Companion to GroundRouterTests.cs (harness, frame builders,
 // parser and health tests live there). These tests drive a real
 // GroundLinkRouter over loopback UDP sockets.
 // ============================================================
@@ -16,7 +16,7 @@ using System.Net.Sockets;
 using System.Threading.Tasks;
 using NOMAD.MissionPlanner;
 
-internal static partial class DualLinkStressTests
+internal static partial class GroundRouterTests
 {
 
     // ============================================================

@@ -11,7 +11,7 @@
 # param-transaction pinning, watchdog reopen, and high-rate
 # mirrored stress with strict no-loss/no-duplication checks.
 #
-# Usage: pixi run test-plugin-duallink
+# Usage: pixi run test-ground-router-logic
 # Exits non-zero on compile error or test failure.
 # ============================================================
 
@@ -29,22 +29,22 @@ $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\StandaloneRouterClient.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\StandaloneRouterClient.Mapping.cs'),
     (Join-Path $repoRoot 'mission_planner\src\UI\Log.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\duallink\DualLinkStressTests.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\duallink\DualLinkStressTests.Harness.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\duallink\DualLinkStressTests.Router.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\duallink\DualLinkStressTests.Stress.cs')
+    (Join-Path $repoRoot 'mission_planner\tests\router\GroundRouterTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\router\GroundRouterTests.Harness.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\router\GroundRouterTests.Router.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\router\GroundRouterTests.Stress.cs')
 )
 $sources += Get-ChildItem (Join-Path $repoRoot 'infra\transport\ground_router\*.cs') | ForEach-Object FullName
-$sources += Join-Path $repoRoot 'mission_planner/tests/duallink/MultiLinkTests.cs'
-$sources += Join-Path $repoRoot 'mission_planner/tests/duallink/RouterReviewTests.cs'
-$sources += Join-Path $repoRoot 'mission_planner/tests/duallink/RouterTimingTests.cs'
-$sources += Join-Path $repoRoot 'mission_planner/tests/duallink/RouterManagementTests.cs'
+$sources += Join-Path $repoRoot 'mission_planner/tests/router/MultiLinkTests.cs'
+$sources += Join-Path $repoRoot 'mission_planner/tests/router/RouterReviewTests.cs'
+$sources += Join-Path $repoRoot 'mission_planner/tests/router/RouterTimingTests.cs'
+$sources += Join-Path $repoRoot 'mission_planner/tests/router/RouterManagementTests.cs'
 $sources += Join-Path $repoRoot 'mission_planner/src/Panels/LinkStatusDisplay.cs'
-$outDir = Join-Path $repoRoot 'mission_planner\tests\duallink\bin'
+$outDir = Join-Path $repoRoot 'mission_planner\tests\router\bin'
 New-Item -ItemType Directory -Force $outDir | Out-Null
-$exe = Join-Path $outDir 'DualLinkStressTests.exe'
+$exe = Join-Path $outDir 'GroundRouterTests.exe'
 
-Write-Host "Compiling dual-link tests..." -ForegroundColor Yellow
+Write-Host "Compiling ground-router tests..." -ForegroundColor Yellow
 & $csc /nologo /target:exe /langversion:latest /r:System.Web.Extensions.dll "/out:$exe" @sources
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Compile FAILED." -ForegroundColor Red
@@ -52,10 +52,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ---- Run ----
-Write-Host "Running dual-link tests (uses loopback UDP ports 28600+)..." -ForegroundColor Yellow
+Write-Host "Running ground-router tests (uses loopback UDP ports 28600+)..." -ForegroundColor Yellow
 & $exe
 $result = $LASTEXITCODE
 if ($result -ne 0) {
-    Write-Host "Dual-link tests FAILED." -ForegroundColor Red
+    Write-Host "Ground-router tests FAILED." -ForegroundColor Red
 }
 exit $result

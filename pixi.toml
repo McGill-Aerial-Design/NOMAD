@@ -147,12 +147,12 @@ test-plugin-audio = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts
 # failover + preferred-link recovery, manual override, outbound single-link
 # routing, param-transaction pinning, watchdog socket reopen, and high-rate
 # mirrored stress with strict no-loss/no-duplication assertions.
-test-plugin-duallink = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_duallink.ps1"
+test-ground-router-logic = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_ground_router.ps1"
 
 # Standalone ground-router build writes its artifacts to build/ground-router.
 # Release packaging runs in release.yml; test-ground-router runs process checks.
 build-ground-router = "powershell -NoProfile -File scripts/build/build_ground_router.ps1"
-test-ground-router = "pixi run build-ground-router && pixi run test-plugin-duallink && python scripts/dev/ground_router_smoke.py"
+test-ground-router = "pixi run build-ground-router && pixi run test-ground-router-logic && python scripts/dev/ground_router_smoke.py"
 
 # C++ SITL runners use only the non-installed qualification driver. It refuses actuation verbs without NOMAD_API_KEY
 # (SR-SEC-02/03); the key below is the documented development-simulation key

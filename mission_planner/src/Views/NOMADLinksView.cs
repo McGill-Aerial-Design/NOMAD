@@ -40,7 +40,7 @@ namespace NOMAD.MissionPlanner
                 }
             }
 
-            // Fallback: dual link not initialised
+            // Show guidance when the router status panel is unavailable.
             var layout = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,

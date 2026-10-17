@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// Dual-link stress tests — high-rate stress half
+// Ground-router stress tests — high-rate stress half
 // ============================================================
 // Companion partial: mirrored and bidirectional high-rate stress
 // with strict no-loss / no-duplicate checks. Split from
-// DualLinkStressTests.Router.cs to keep files under the
+// GroundRouterTests.Router.cs to keep files under the
 // source-size policy.
 // ============================================================
 
@@ -15,7 +15,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using NOMAD.MissionPlanner;
 
-internal static partial class DualLinkStressTests
+internal static partial class GroundRouterTests
 {
     private static async Task StressMirrored()
     {
