@@ -28,17 +28,10 @@ $RepoRoot  = Split-Path -Parent (Split-Path -Parent $ScriptDir)
 $Project   = Join-Path $RepoRoot 'mission_planner\src\NOMADPlugin.csproj'
 
 # ---- Locate MSBuild (PATH, then Visual Studio via vswhere) ----
-$msbuild = (Get-Command msbuild -ErrorAction SilentlyContinue).Source
+. (Join-Path $PSScriptRoot 'windows_build_tools.ps1')
+$msbuild = Find-MSBuild
 if (-not $msbuild) {
-    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    if (Test-Path $vswhere) {
-        $vsPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
-        if ($vsPath) { $msbuild = Join-Path $vsPath 'MSBuild\Current\Bin\MSBuild.exe' }
-    }
-}
-if (-not $msbuild -or -not (Test-Path $msbuild)) {
-    Write-Host "ERROR: MSBuild not found. Install Visual Studio 2022 (with .NET desktop)." -ForegroundColor Red
-    exit 1
+    throw 'MSBuild not found. Install Visual Studio with .NET desktop build tools.'
 }
 
 $deadCodeWarnings = 'CS0162;CS0168;CS0169;CS0219;CS0414;CS0649;CS1717'

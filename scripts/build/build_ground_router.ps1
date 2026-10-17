@@ -2,16 +2,8 @@
 # Copyright 2026 The NOMAD Authors
 $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '../..')
-$msbuild = (Get-Command msbuild -ErrorAction SilentlyContinue).Source
-if (-not $msbuild) {
-    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    if (Test-Path $vswhere) {
-        $vsPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
-        if ($vsPath) { $msbuild = Join-Path $vsPath 'MSBuild\Current\Bin\MSBuild.exe' }
-    }
-}
-if (-not $msbuild) { throw 'MSBuild with Roslyn is required' }
-$csc = Join-Path (Split-Path $msbuild) 'Roslyn/csc.exe'
+. (Join-Path $PSScriptRoot 'windows_build_tools.ps1')
+$csc = Find-RoslynCompiler
 $outDir = Join-Path $repoRoot 'build/ground-router'
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $identity = Join-Path $outDir 'package-identity.json'
