@@ -141,4 +141,3 @@ def test_cmake_keeps_direct_driver_outside_the_installed_cli() -> None:
     assert "nomad_mavsdk_connection" in qualification_target
     assert "add_executable(nomad_mavsdk_connectivity_smoke EXCLUDE_FROM_ALL" in cmake
     assert "add_executable(nomad_mavsdk_authority_wire_probe EXCLUDE_FROM_ALL" in cmake
-    assert "install(TARGETS nomad nomad-runtime " in cmake

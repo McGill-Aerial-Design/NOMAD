@@ -4,6 +4,9 @@ Install Git, Pixi, CMake >=3.22.1 and a C++20 compiler. Linux requires OpenSSL C
 development files; Windows uses BCrypt. Mission Planner/router builds require Windows,
 Visual Studio/MSBuild, .NET Framework 4.8 and the reviewed Mission Planner assemblies.
 
+macOS development targets remain available. Core runtime installation and release
+packages are restricted to Windows/Linux x86-64; other targets reject those operations.
+
 ```sh
 git submodule update --init --recursive
 pixi install
