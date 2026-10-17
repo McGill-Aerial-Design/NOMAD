@@ -4,9 +4,9 @@
 // Standalone ground-router stress and management-client tests
 // ============================================================
 // Compiled with infra/transport/ground_router, the management client, and src/UI/Log.cs
-// by scripts/build/test_plugin_duallink.ps1 (plain csc, no test
+// by scripts/build/test_ground_router.ps1 (plain csc, no test
 // framework — exits non-zero on failure).
-// Run via `pixi run test-plugin-duallink`.
+// Run via `pixi run test-ground-router-logic`.
 //
 // Exercises the router over real loopback UDP sockets:
 //   - MAVLink v1/v2 frame parsing (splits, batching, garbage)
@@ -35,15 +35,15 @@ using System.Threading;
 using System.Threading.Tasks;
 using NOMAD.MissionPlanner;
 
-internal static partial class DualLinkStressTests
+internal static partial class GroundRouterTests
 {
 
     private static int Main()
     {
         RunAll().GetAwaiter().GetResult();
         Console.WriteLine(_failures == 0
-            ? "All dual-link tests passed."
-            : $"{_failures} dual-link assertion(s) FAILED.");
+            ? "All ground-router tests passed."
+            : $"{_failures} ground-router assertion(s) FAILED.");
         return _failures == 0 ? 0 : 1;
     }
 

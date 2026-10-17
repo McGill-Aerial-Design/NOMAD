@@ -12,7 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using NOMAD.MissionPlanner;
 
-internal static partial class DualLinkStressTests
+internal static partial class GroundRouterTests
 {
     private sealed class TimingClock
     {

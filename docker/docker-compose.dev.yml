@@ -39,11 +39,10 @@ services:
       LON: "-71.1476"
       ALT: "14"
       DIR: "270"
-      # The first --out feeds the NOMAD dual-link LTE leg on the host: 14560 is
-      # the plugin's default LTE MAVLink port (leave LTE remote host empty). The
-      # router
-      # then serves the merged stream to Mission Planner on UDP 14600
-      # (RouterLocalPort) — no TCP bridge involved.
+      # The first --out feeds the standalone ground router's LTE link on host
+      # UDP 14560. Configure physical links in the router JSON; leave this link's
+      # RemoteHost empty to learn the simulator peer. The router forwards the
+      # selected stream to Mission Planner on UDP 14600 (RouterLocalPort).
       # 14570 feeds the C++ core smoke tests; the always-on 14572 copy feeds
       # the link-recovery scenario's UDP relay (it binds 14572 as its
       # upstream, so the stack must forward there regardless of

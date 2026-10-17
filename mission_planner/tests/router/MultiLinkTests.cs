@@ -10,7 +10,7 @@ using System.Net.Sockets;
 using System.Threading.Tasks;
 using NOMAD.MissionPlanner;
 
-internal static partial class DualLinkStressTests
+internal static partial class GroundRouterTests
 {
     private static async Task LinkCollectionSizes()
     {

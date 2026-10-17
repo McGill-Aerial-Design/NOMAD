@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using NOMAD.MissionPlanner;
 
-internal static partial class DualLinkStressTests
+internal static partial class GroundRouterTests
 {
     private static void MissionPlannerOutboundConfigRejection()
     {

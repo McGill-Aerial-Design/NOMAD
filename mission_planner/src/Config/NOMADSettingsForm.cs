@@ -32,7 +32,7 @@ namespace NOMAD.MissionPlanner
         private TextBox _txtVideoUrl;
         private CheckBox _chkAutoStartHudVideo;
 
-        // Dual Link Tab
+        // Multi-Link Tab
         private CheckBox _chkRouterClientEnabled;
         private NumericUpDown _numRouterLocalPort;
         private NumericUpDown _numManagementPort;
@@ -113,7 +113,7 @@ namespace NOMAD.MissionPlanner
             // Add all tab pages
             _tabControl.TabPages.Add(CreateConnectionTab());
             _tabControl.TabPages.Add(CreateVideoTab());
-            _tabControl.TabPages.Add(CreateDualLinkTab());
+            _tabControl.TabPages.Add(CreateMultiLinkTab());
             _tabControl.TabPages.Add(CreateUiTab());
             _tabControl.TabPages.Add(CreateAlertsTab());
             _tabControl.TabPages.Add(CreateActuatorsTab());

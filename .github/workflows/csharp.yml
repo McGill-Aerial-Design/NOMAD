@@ -104,7 +104,7 @@ jobs:
         run: pwsh -File scripts/build/build_ground_router.ps1
 
       - name: Standalone router and management-client tests
-        run: pwsh -File scripts/build/test_plugin_duallink.ps1
+        run: pwsh -File scripts/build/test_ground_router.ps1
 
       - name: Standalone router smoke
         run: python scripts/dev/ground_router_smoke.py

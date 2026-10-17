@@ -90,7 +90,7 @@ namespace NOMAD.MissionPlanner
                             result.Succeeded ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
 
-        private TabPage CreateDualLinkTab()
+        private TabPage CreateMultiLinkTab()
         {
             var tab = CreateTabPage("Multi-Link");
             int y = 15;

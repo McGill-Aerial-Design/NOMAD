@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// Dual-link stress tests — shared harness
+// Ground-router stress tests — shared harness
 // ============================================================
 // Companion partial: failure counters, assertion helpers, MAVLink
 // frame builders, the UDP sink/pump/bed fixtures, and the marker
-// drain helper. Split from DualLinkStressTests.cs to keep files
+// drain helper. Split from GroundRouterTests.cs to keep files
 // under the source-size policy.
 // ============================================================
 
@@ -20,7 +20,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using NOMAD.MissionPlanner;
 
-internal static partial class DualLinkStressTests
+internal static partial class GroundRouterTests
 {
     private static int _failures;
     private static int _failuresAtTestStart;
