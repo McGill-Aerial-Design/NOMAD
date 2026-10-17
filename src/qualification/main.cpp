@@ -149,6 +149,13 @@ int run_command(nomad::mavlink::MavlinkConnection &connection, const DirectArgum
     vehicle_config.fence = fence_policy;
     vehicle_config.velocity = velocity_limits;
     nomad::vehicle::Vehicle vehicle(connection, vehicle_config);
+    if (common.command == "transition-to-fixed-wing" || common.command == "transition-to-vtol") {
+        // Heartbeat discovery can precede the first EXTENDED_SYS_STATE callback.
+        // Preparation only waits for data; Vehicle retains every admission/freshness check.
+        vehicle.wait_for_telemetry(std::chrono::seconds(3), [](const auto &state) {
+            return state.vtol_state_valid;
+        });
+    }
     if (common.command == "arm") {
         return print_result(vehicle.arm());
     }

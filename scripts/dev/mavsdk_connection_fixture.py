@@ -68,6 +68,7 @@ from mavsdk_recovery_fixture import (
     case_quadplane_fixed_wing_recovery_uses_reposition_command_int,
 )
 from mavsdk_route_fixture import case_quadplane_fixed_wing_route_uses_reposition_command_int
+from mavsdk_vtol_readiness_fixture import case_transitions_wait_for_initial_vtol_state
 from mavsdk_vtol_transition_fixture import (
     case_quadplane_transition_to_vtol_is_verified,
     case_transition_directions_use_the_same_targeted_command_transport,
@@ -415,6 +416,7 @@ def case_quadplane_navigation(cli: Path) -> None:
 
 
 def case_quadplane_transitions(cli: Path) -> None:
+    case_transitions_wait_for_initial_vtol_state(cli)
     case_quadplane_transition_is_verified(cli)
     case_quadplane_transition_to_vtol_is_verified(cli)
     case_transition_directions_use_the_same_targeted_command_transport(cli)
