@@ -11,7 +11,7 @@ reviewed fork gitlink.
 
 | Component | Reviewed source | License found in fetched source |
 |---|---|---|
-| MAVSDK | NOMAD gitlink `8629bd145b2ee187726dd385f781d38be62a7c30` | BSD-3-Clause |
+| MAVSDK | NOMAD gitlink `7bb70c46b3a8eda2a45d54ad91c30f667977042a` | BSD-3-Clause |
 | MAVSDK proto | nested gitlink `5c81ecfeb6110cf74ba75ae50b78a1b265c05670` | Unknown: no separate license declaration found; server disabled |
 | Asio | tag `asio-1-30-2` | Boost-1.0 |
 | fmt | tag `12.1.0` | MIT |
@@ -45,9 +45,12 @@ path and keeps the existing archive hash and MAVSDK pin unchanged.
 
 ## Fork contract and licensing
 
-The reviewed fork must retain ArduPilot semantics, command-admission fencing and
-subscription/connection lifetime guarantees. Any pin or enabled-plugin change requires
-provenance verification plus deterministic and full aircraft qualification.
+The reviewed fork is rebased on upstream main `28f37e1aee019a382868f3d871cdef348232dd7b`
+and retains ArduPilot semantics, command-admission fencing and
+subscription/connection lifetime guarantees. The transport, lifetime test and
+heartbeat-startup probe explicitly opt into the SDK MAVLink C APIs they use.
+Any pin or enabled-plugin change requires provenance verification plus
+deterministic and full aircraft qualification.
 
 Windows uses system BCrypt; Linux links OpenSSL Crypto, whose deployment dependency
 must be available on the target. Redistributors must retain NOMAD's LICENSE/NOTICE
