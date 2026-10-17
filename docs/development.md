@@ -50,6 +50,7 @@ pixi run test-plugin-core-client
 pixi run test-plugin-geometry
 pixi run test-plugin-gimbal
 pixi run test-plugin-gimbal-ui
+pixi run test-plugin-router-ui
 pixi run test-plugin-audio
 pixi run test-plugin-video
 pixi run test-plugin-version

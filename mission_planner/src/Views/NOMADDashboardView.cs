@@ -222,11 +222,9 @@ namespace NOMAD.MissionPlanner
                 return;
             }
 
-            var status = _connectionManager.GetLinkStatus();
             _lblLinks.Text = _connectionManager.GetStatusSummary();
-            _lblLinks.ForeColor = status.ActiveLink == LinkType.None.ToString()
-                ? NOMADTheme.ERROR
-                : NOMADTheme.SUCCESS;
+            // Retained active IDs can outlive fresh management data; keep this summary neutral.
+            _lblLinks.ForeColor = NOMADTheme.TEXT_PRIMARY;
         }
 
         private void UpdateCoreCard()

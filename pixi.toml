@@ -125,6 +125,7 @@ test-plugin-gimbal = "powershell -NoProfile -ExecutionPolicy Bypass -File script
 
 # STA WinForms interaction/render smoke for the isolated gimbal joystick pad.
 test-plugin-gimbal-ui = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal_ui.ps1"
+test-plugin-router-ui = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_router_ui.ps1"
 
 # Hardware-free video lifecycle and isolated WinForms ownership checks (requires plugin build).
 test-plugin-video = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_video.ps1"

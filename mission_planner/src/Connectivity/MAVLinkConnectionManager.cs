@@ -9,7 +9,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace NOMAD.MissionPlanner
 {
@@ -63,17 +62,6 @@ namespace NOMAD.MissionPlanner
         public bool IsActive { get; set; }
     }
 
-    public class LinkStatusSnapshot
-    {
-        public bool LTEConnected { get; set; }
-        public double LTELatencyMs { get; set; }
-        public double LTEPacketLoss { get; set; }
-        public bool RadioConnected { get; set; }
-        public double RadioLatencyMs { get; set; }
-        public double RadioPacketLoss { get; set; }
-        public string ActiveLink { get; set; }
-    }
-
     /// <summary>
     /// Status and safe link-selection surface for the standalone router.
     /// </summary>
@@ -119,19 +107,6 @@ namespace NOMAD.MissionPlanner
         private readonly object _lock = new object();
         private bool _disposed;
 
-        private readonly LinkStatistics _lteStats = new LinkStatistics
-        {
-            Type = LinkType.LTE,
-            Name = "LTE / Tailscale",
-            Health = LinkHealth.Disconnected,
-        };
-        private readonly LinkStatistics _radioStats = new LinkStatistics
-        {
-            Type = LinkType.RadioMaster,
-            Name = "RadioMaster",
-            Health = LinkHealth.Disconnected,
-        };
-
         // ============================================================
         // Events
         // ============================================================
@@ -150,8 +125,6 @@ namespace NOMAD.MissionPlanner
         public string ManualOverride => _standalone?.ManualOverride ?? LinkType.None;
         public IReadOnlyList<LinkStatistics> LinkStatistics =>
             _standalone?.LinkStatistics ?? Array.Empty<LinkStatistics>();
-        public LinkStatistics LteStatistics => FindLink(LinkType.LTE) ?? _lteStats;
-        public LinkStatistics RadioMasterStatistics => FindLink(LinkType.RadioMaster) ?? _radioStats;
         public bool IsMonitoring => _standalone?.IsMonitoring == true;
         public bool IsRouterAvailable => _standalone?.IsRouterAvailable == true;
         public bool IsStatusStale => _standalone?.IsStatusStale == true;
@@ -160,34 +133,6 @@ namespace NOMAD.MissionPlanner
         public IReadOnlyCollection<FailoverEventArgs> FailoverLog =>
             _standalone?.FailoverLog ??
             (IReadOnlyCollection<FailoverEventArgs>)Array.Empty<FailoverEventArgs>();
-
-        public bool IsLteHealthy => IsHealthy(LteStatistics);
-
-        public bool IsRadioMasterHealthy => IsHealthy(RadioMasterStatistics);
-
-        private static bool IsHealthy(LinkStatistics stats) => stats.IsConnected &&
-            stats.Health != LinkHealth.Disconnected && stats.Health != LinkHealth.Critical;
-
-        public LinkStatusSnapshot GetLinkStatus()
-        {
-            lock (_lock)
-            {
-                var links = LinkStatistics;
-                var lte = FindLink(links, LinkType.LTE);
-                var radio = FindLink(links, LinkType.RadioMaster);
-
-                return new LinkStatusSnapshot
-                {
-                    LTEConnected = lte?.IsConnected == true && !lte.IsStale,
-                    LTELatencyMs = lte?.LatencyMs ?? 0,
-                    LTEPacketLoss = lte?.PacketLossPercent ?? 0,
-                    RadioConnected = radio?.IsConnected == true && !radio.IsStale,
-                    RadioLatencyMs = radio?.LatencyMs ?? 0,
-                    RadioPacketLoss = radio?.PacketLossPercent ?? 0,
-                    ActiveLink = ActiveLink
-                };
-            }
-        }
 
         // ============================================================
         // Construction
@@ -248,11 +193,6 @@ namespace NOMAD.MissionPlanner
 
         public string GetStatusSummary() => _standalone?.GetStatusSummary()
             ?? "Standalone router management unavailable";
-
-        private LinkStatistics FindLink(string id) => FindLink(LinkStatistics, id);
-
-        private static LinkStatistics FindLink(IEnumerable<LinkStatistics> links, string id) =>
-            links.FirstOrDefault(link => string.Equals(link.Type, id, StringComparison.OrdinalIgnoreCase));
 
         // ============================================================
         // IDisposable
