@@ -168,18 +168,6 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
                last_velocity.yaw_rate != 0.0F;
     }
 
-    bool send_fence_point(const nomad::mavlink::FencePoint &point, std::uint8_t index, std::uint8_t total) override {
-        fence_points.push_back(point);
-        fence_indices.push_back(index);
-        fence_total = total;
-        return fence_send_results.empty() || take_fence_send_result();
-    }
-
-    bool request_fence_point(std::uint8_t index) override {
-        requested_fence_indices.push_back(index);
-        return true;
-    }
-
     bool upload_fence_plan(const std::vector<nomad::mavlink::FencePlanItem> &items) override {
         fence_plan_upload_count += 1;
         uploaded_fence_plan = items;
@@ -192,13 +180,6 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
             return std::nullopt;
         }
         return uploaded_fence_plan;
-    }
-
-    std::optional<nomad::mavlink::FencePoint> wait_for_fence_point(std::chrono::milliseconds) override {
-        if (readback_index >= fence_points.size()) {
-            return std::nullopt;
-        }
-        return fence_points[readback_index++];
     }
 
     std::optional<float> read_param(const std::string &param_id, std::chrono::milliseconds) override {
@@ -258,12 +239,6 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
     bool transition_stays_intermediate{false};
     bool transition_state_unavailable_on_command{false};
     bool transition_loses_link_on_command{false};
-    std::vector<nomad::mavlink::FencePoint> fence_points;
-    std::vector<std::uint8_t> fence_indices;
-    std::uint8_t fence_total{0};
-    std::vector<std::uint8_t> requested_fence_indices;
-    std::size_t readback_index{0};
-    std::vector<bool> fence_send_results;
     std::vector<nomad::mavlink::FencePlanItem> uploaded_fence_plan;
     bool fence_plan_upload_result{true};
     bool fence_plan_download_result{true};
@@ -355,12 +330,6 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
     }
 
   private:
-    bool take_fence_send_result() {
-        const bool result = fence_send_results.front();
-        fence_send_results.erase(fence_send_results.begin());
-        return result;
-    }
-
     void update_state_for_command(const nomad::mavlink::Command &command) {
         if (command.id == 400) {
             state->armed = command.parameters[0] > 0.0F;
