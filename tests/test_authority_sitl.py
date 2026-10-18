@@ -67,7 +67,7 @@ def test_authority_probe_is_bounded_isolated_and_ordered_within_copter_job() -> 
     assert step["timeout-minutes"] == 6
     script = step["run"]
     assert "set -euo pipefail" in script
-    assert "-p nomad-authority" in script and "--rm --name nomad-authority-sitl" in script
+    assert "-p nomad-authority" in script and "--name nomad-authority-sitl" in script
     assert 'SITL_UDP_OUTPUT_ADDRESS="udp:host.docker.internal:14690' in script
     assert "--out udp:host.docker.internal:14691" in script
     assert "pixi run --frozen python scripts/dev/core_sitl_authority.py" in script

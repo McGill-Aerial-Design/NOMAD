@@ -100,16 +100,20 @@ jobs:
           stop_authority() {
             if [[ -n "$authority_container" ]]; then
               docker stop "$authority_container" >/dev/null 2>&1 || true
+              docker rm --volumes "$authority_container" >/dev/null 2>&1 || true
             fi
           }
           trap stop_authority EXIT
           authority_container=$(docker compose -p nomad-authority -f docker/docker-compose.dev.yml run \
-            --rm --name nomad-authority-sitl -d --no-deps \
+            --name nomad-authority-sitl -d --no-deps \
             -e SITL_UDP_OUTPUT_ADDRESS="udp:host.docker.internal:14690 --out udp:host.docker.internal:14691" \
             sitl)
           sleep 25
           pixi run --frozen python scripts/dev/core_sitl_authority.py \
             2>&1 | tee "$RUNNER_TEMP/runtime-authority-sitl.json"
+          docker stop "$authority_container" >/dev/null
+          docker rm --volumes "$authority_container" >/dev/null
+          authority_container=""
 
       - name: Retain runtime authority SITL evidence
         if: always()
@@ -128,18 +132,20 @@ jobs:
           stop_land() {
             if [[ -n "$land_container" ]]; then
               docker stop "$land_container" >/dev/null 2>&1 || true
+              docker rm --volumes "$land_container" >/dev/null 2>&1 || true
             fi
           }
           trap stop_land EXIT
           for attempt in 1 2 3; do
             land_container=$(docker compose -p nomad-authority -f docker/docker-compose.dev.yml run \
-              --rm --name nomad-authority-sitl -d --no-deps \
+              --name nomad-authority-sitl -d --no-deps \
               -e SITL_UDP_OUTPUT_ADDRESS="udp:host.docker.internal:14690 --out udp:host.docker.internal:14691" \
               sitl)
             sleep 25
             pixi run --frozen python scripts/dev/core_sitl_copter_land.py \
               2>&1 | tee "$RUNNER_TEMP/runtime-copter-land-$attempt.json"
             docker stop "$land_container" >/dev/null
+            docker rm --volumes "$land_container" >/dev/null
             land_container=""
           done
 
@@ -257,12 +263,13 @@ jobs:
           stop_probe() {
             if [[ -n "$probe_container" ]]; then
               docker stop "$probe_container" >/dev/null 2>&1 || true
+              docker rm --volumes "$probe_container" >/dev/null 2>&1 || true
             fi
           }
           trap stop_probe EXIT
           for attempt in 1 2; do
             probe_container=$(docker compose -p nomad-quadplane-probe -f docker/docker-compose.quadplane.yml run \
-              --rm --name nomad-quadplane-rc-probe -d --no-deps \
+              --name nomad-quadplane-rc-probe -d --no-deps \
               -e SITL_UDP_OUTPUT_ADDRESS=udp:host.docker.internal:14680 \
               -e SITL_UDP_OBSERVER_ADDRESS=udp:host.docker.internal:14681 \
               quadplane_sitl)
@@ -270,6 +277,7 @@ jobs:
             pixi run --frozen --quiet core-sitl-quadplane-rc-loss-probe 2>&1 \
               | tee "$RUNNER_TEMP/quadplane-rc-probe-$attempt.json"
             docker stop "$probe_container" >/dev/null
+            docker rm --volumes "$probe_container" >/dev/null
             probe_container=""
           done
 
