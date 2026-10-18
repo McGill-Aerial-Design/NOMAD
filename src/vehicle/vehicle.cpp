@@ -199,17 +199,32 @@ CommandResult Vehicle::set_guided_mode() {
 
 CommandResult Vehicle::takeoff(float altitude_m) {
     if (!std::isfinite(altitude_m) || altitude_m <= 0.0F) {
-        return {false, "takeoff altitude must be finite and greater than zero"};
+        return {false, "takeoff altitude must be finite and greater than zero", false, CommandOutcome::Rejected};
     }
-    const auto admission = require_operation(VehicleOperation::Takeoff);
-    if (!admission.success) {
-        return admission;
-    }
-    const auto result = send_command(make_command(kTakeoffCommand, {0, 0, 0, 0, 0, 0, altitude_m}), "takeoff");
+    const auto initial = connection_.get_state();
+    auto result = require_operation(VehicleOperation::Takeoff, initial);
     if (!result.success) {
+        result.outcome = CommandOutcome::Rejected;
         return result;
     }
-    return wait_for_altitude(altitude_m * 0.8F, "takeoff");
+    if (!connection_.is_connected() || !detail::identified_copter_session(initial, initial) ||
+        !detail::heartbeat_is_fresh(initial, kCommandTimeout, std::chrono::steady_clock::now())) {
+        return {false, "takeoff requires a fresh qualified Copter session", false, CommandOutcome::Rejected};
+    }
+    auto command = make_command(kTakeoffCommand, {0, 0, 0, 0, 0, 0, altitude_m});
+    const auto send_deadline = std::chrono::steady_clock::now() + kCommandTimeout;
+    command.state_admission = [initial, send_deadline](const telemetry::VehicleState &state) {
+        return std::chrono::steady_clock::now() < send_deadline && detail::identified_copter_session(state, initial) &&
+               detail::heartbeat_is_fresh(state, kCommandTimeout, std::chrono::steady_clock::now());
+    };
+    const auto ack = connection_.send_command(command, initial.session_id, kCommandTimeout);
+    const auto ack_boundary = std::chrono::steady_clock::now();
+    result = validate_command_acknowledgement(command, "takeoff", ack);
+    if (!result.success) {
+        result.outcome = failed_acknowledgement_outcome(ack, result.acknowledged);
+        return result;
+    }
+    return wait_for_takeoff(altitude_m * 0.8F, initial, ack_boundary);
 }
 
 CommandResult Vehicle::goto_location(const Location &location) {
@@ -458,25 +473,38 @@ CommandResult Vehicle::require_operation(VehicleOperation operation, const telem
                        std::string(telemetry::aircraft_class_name(aircraft_class))};
 }
 
-CommandResult Vehicle::wait_for_altitude(float minimum_altitude_m, const char *name) {
-    const auto verdict = [this, minimum_altitude_m, name](const telemetry::VehicleState &state)
+CommandResult Vehicle::wait_for_takeoff(float minimum_altitude_m, const telemetry::VehicleState &initial,
+                                       std::chrono::steady_clock::time_point ack_boundary) {
+    const auto verdict = [this, minimum_altitude_m, initial, ack_boundary](const telemetry::VehicleState &state)
         -> std::optional<CommandResult> {
+        if (!connection_.is_connected() || !state.connected || !detail::identified_copter_session(state, initial)) {
+            return CommandResult{false, "takeoff session or identity changed", true, CommandOutcome::Interrupted};
+        }
         if (!state.position_valid) {
             return std::nullopt;
         }
         // Altitude is derived from the same position feed, so a stale sample
         // must fail closed even when it happens to sit above the target.
         if (position_is_stale(state)) {
-            return CommandResult{false, std::string(name) + " verification failed: position feed is stale"};
+            return CommandResult{false, "takeoff verification failed: position feed is stale",
+                                 true, CommandOutcome::Failed};
         }
-        if (state.position.relative_altitude_m < minimum_altitude_m) {
-            return std::nullopt;
+        const auto now = std::chrono::steady_clock::now();
+        if (std::isfinite(state.position.relative_altitude_m) &&
+            state.position.relative_altitude_m >= minimum_altitude_m && state.position_updated_at > ack_boundary &&
+            detail::timestamp_is_fresh(state.position_updated_at, position_freshness_timeout_, now) &&
+            state.heartbeat_updated_at > ack_boundary && detail::heartbeat_is_fresh(state, kCommandTimeout, now)) {
+            return CommandResult{true, "takeoff verified", true, CommandOutcome::Success};
         }
-        return CommandResult{true, std::string(name) + " verified"};
+        return std::nullopt;
     };
-    return wait_for_state_until(
-        kTakeoffStateTimeout, std::string(name) + " acknowledgement received but altitude verification timed out",
-        verdict);
+    auto result = wait_for_state_until(kTakeoffStateTimeout,
+        "takeoff acknowledgement received but altitude verification timed out", verdict);
+    result.acknowledged = true;
+    if (!result.success && result.outcome == CommandOutcome::Unspecified) {
+        result.outcome = CommandOutcome::Unknown;
+    }
+    return result;
 }
 
 CommandResult Vehicle::wait_for_location(const Location &location) {
@@ -492,8 +520,7 @@ CommandResult Vehicle::wait_for_location(const Location &location) {
         const auto latitude_error = std::abs(state.position.latitude_deg - location.latitude_deg);
         const auto longitude_error = std::abs(state.position.longitude_deg - location.longitude_deg);
         // Location altitude is above home (the REPOSITION frame is
-        // GLOBAL_RELATIVE_ALT_INT), so verify against relative altitude, as
-        // wait_for_altitude does for takeoff.
+        // GLOBAL_RELATIVE_ALT_INT), so verify against relative altitude.
         const auto altitude_error = std::abs(state.position.relative_altitude_m - location.altitude_m);
         const bool arrived = latitude_error <= kLocationToleranceDegrees &&
                              longitude_error <= kLocationToleranceDegrees &&

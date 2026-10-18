@@ -130,7 +130,8 @@ class Vehicle {
     CommandResult wait_for_mode(const std::function<bool(std::uint32_t)> &matches, const char *name);
     CommandResult send_mode_and_verify(std::uint32_t custom_mode, const char *name,
                                        const telemetry::VehicleState &initial);
-    CommandResult wait_for_altitude(float minimum_altitude_m, const char *name);
+    CommandResult wait_for_takeoff(float minimum_altitude_m, const telemetry::VehicleState &initial,
+                                    std::chrono::steady_clock::time_point ack_boundary);
     CommandResult wait_for_vtol_takeoff(float target_altitude_m, const telemetry::VehicleState &expected_state,
                                         std::chrono::steady_clock::time_point ack_boundary);
     std::optional<std::string> vtol_takeoff_identity_error(const telemetry::VehicleState &state,
