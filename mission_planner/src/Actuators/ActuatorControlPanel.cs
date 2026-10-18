@@ -46,8 +46,7 @@ namespace NOMAD.MissionPlanner
 
         public ActuatorControlPanel(NOMADConfig config)
         {
-            var client = OutputController.CreateCoreClient();
-            _client = config == null || client?.RuntimePort == config.CoreRuntimePort ? client : null;
+            _client = OutputController.CreateCoreClientFor(config);
             BackColor = Color.FromArgb(35, 35, 38);
             Dock = DockStyle.Fill;
             Controls.Add(_rows);

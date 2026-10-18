@@ -174,11 +174,13 @@ namespace NOMAD.MissionPlanner
 
         private async Task SendHidEventsAsync(List<(string Id, string Operation, int Slot, bool Release)> events, long generation, long pairGeneration, int pair)
         {
+            var client = OutputController.CreateCoreClientFor(_config);
             foreach (var input in events)
             {
-                Func<bool> stillCurrent = input.Release ? (Func<bool>)null : () =>
-                    generation == Interlocked.Read(ref _inputGeneration) && pairGeneration == Interlocked.Read(ref _pairGeneration[pair]);
-                if (stillCurrent != null && !stillCurrent())
+                Func<bool> stillCurrent = () => client != null && client == OutputController.CreateCoreClient() &&
+                    (input.Release || (generation == Interlocked.Read(ref _inputGeneration) &&
+                        pairGeneration == Interlocked.Read(ref _pairGeneration[pair])));
+                if (!stillCurrent())
                 {
                     continue;
                 }

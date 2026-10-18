@@ -37,6 +37,10 @@ namespace NOMAD.MissionPlanner
 
         public static void ShowSingleton(NOMADConfig config, IWin32Window owner = null)
         {
+            if (OutputController.CreateCoreClientFor(config) == null)
+            {
+                return;
+            }
             if (s_instance != null && !s_instance.IsDisposed)
             {
                 if (s_instance.WindowState == FormWindowState.Minimized)

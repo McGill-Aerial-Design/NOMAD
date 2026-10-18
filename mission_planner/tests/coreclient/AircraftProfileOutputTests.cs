@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using NOMAD.MissionPlanner;
@@ -8,6 +9,49 @@ using NOMAD.MissionPlanner.Connectivity;
 
 internal static partial class NomadCoreClientTests
 {
+    private static void Profile_SamePortRetiredConfigCannotCreateControls()
+    {
+        using var runtime = new MockRuntime(1, semanticResponse: request => SemanticResponse(request));
+        var retired = new NOMADConfig { CoreRuntimePort = runtime.Port };
+        OutputController.Initialize(retired);
+        OutputController.Initialize(new NOMADConfig { CoreRuntimePort = runtime.Port });
+        using var panel = new ActuatorControlPanel(retired);
+        WaitForPanel(panel.SendActionAsync("release", "activate"));
+        Expect(runtime.CommandCount == 0,
+            "a newly opened stale view cannot control another profile sharing the same runtime port");
+    }
+
+    private static void Profile_PendingHidReleaseCannotRetarget()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var released = new ManualResetEventSlim();
+        using var oldRuntime = new MockRuntime(1, semanticResponse: request =>
+        {
+            entered.Set();
+            if (!released.Wait(5000))
+            {
+                throw new TimeoutException("Old HID release was not released.");
+            }
+            return SemanticResponse(request);
+        });
+        using var nextRuntime = new MockRuntime(1, semanticResponse: request => SemanticResponse(request));
+        var config = HidConfig(oldRuntime.Port);
+        config.JoystickSw1UpAction = "first:positive";
+        config.JoystickSw1DownAction = "second:negative";
+        OutputController.Initialize(config);
+        var service = new NomadJoystickService(config);
+        var contradictory = HidButtons(4);
+        contradictory[5] = true;
+        var pending = service.TestButtons(contradictory);
+        Expect(entered.Wait(5000), "first old-aircraft safe request is pending before profile change");
+        OutputController.Initialize(new NOMADConfig { CoreRuntimePort = nextRuntime.Port });
+        released.Set();
+        Expect(pending.Wait(5000), "old HID batch finishes without waiting on the new aircraft");
+        oldRuntime.Wait();
+        Expect(oldRuntime.CommandCount == 1 && nextRuntime.CommandCount == 0,
+            "a queued HID release retains its original aircraft context instead of retargeting");
+    }
+
     private static void Profile_DefinitionsRequireRuntimeReadback()
     {
         using var runtime = new MockRuntime(4, semanticResponse: request => SemanticResponse(request));

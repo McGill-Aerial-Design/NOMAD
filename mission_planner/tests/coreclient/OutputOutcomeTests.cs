@@ -113,6 +113,8 @@ internal static partial class NomadCoreClientTests
         Profile_SettingsMutationsRejectChangedInput();
         Profile_LandConfirmationCannotRetarget();
         Profile_FirstGimbalInputConfiguresItsTarget();
+        Profile_SamePortRetiredConfigCannotCreateControls();
+        Profile_PendingHidReleaseCannotRetarget();
     }
 
     private static void Projection_EmptyRuntimeRetiresPriorDisplay()

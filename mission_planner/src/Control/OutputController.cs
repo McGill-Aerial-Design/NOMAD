@@ -13,6 +13,7 @@ namespace NOMAD.MissionPlanner
     internal static class OutputController
     {
         private static volatile NomadCoreClient _coreClient;
+        private static NOMADConfig _currentConfig;
         private static readonly SemaphoreSlim GimbalRequests = new SemaphoreSlim(1, 1);
         private static readonly object GimbalFailureLock = new object();
         private static string _lastGimbalFailure = "";
@@ -31,12 +32,22 @@ namespace NOMAD.MissionPlanner
                 RetiredIncarnations.Clear();
                 _profileDefinitions = (JArray)config?.ActuatorDefinitions?.DeepClone();
                 _profileDefinitionsMatched = _profileDefinitions == null;
+                _currentConfig = config;
                 _coreClient = config == null ? null :
                     new NomadCoreClient(config.CoreClientCredential, config.CoreRuntimePort);
             }
         }
 
         internal static NomadCoreClient CreateCoreClient() => _coreClient;
+        internal static NomadCoreClient CreateCoreClientFor(NOMADConfig config)
+        {
+            lock (ProjectionGate)
+            {
+                // Different saved aircraft may share an endpoint; the active configuration owns its controls.
+                return ReferenceEquals(config, _currentConfig) ? _coreClient : null;
+            }
+        }
+
         internal static bool ProfileActuatorsCompatible
         {
             get
