@@ -33,16 +33,16 @@ namespace NOMAD.MissionPlanner.Connectivity
         public Task<NomadStatusResult> GetStatusAsync(CancellationToken cancellationToken = default) =>
             _runtimeClient.GetStatusAsync(cancellationToken);
 
-        public Task<NomadCoreRequestResult> AdmitAuthorityAsync(CancellationToken cancellationToken = default) =>
-            RunCoreAsync("admit", cancellationToken);
-        public Task<NomadCoreRequestResult> RevokeAuthorityAsync(CancellationToken cancellationToken = default) =>
-            RunCoreAsync("revoke", cancellationToken);
-        public Task<NomadCoreRequestResult> HandbackAuthorityAsync(CancellationToken cancellationToken = default) =>
-            RunCoreAsync("handback", cancellationToken);
+        public Task<NomadCoreRequestResult> AdmitAuthorityAsync(CancellationToken cancellationToken = default,
+            Func<bool> inputStillCurrent = null) => RunCoreAsync("admit", cancellationToken, inputStillCurrent);
+        public Task<NomadCoreRequestResult> RevokeAuthorityAsync(CancellationToken cancellationToken = default,
+            Func<bool> inputStillCurrent = null) => RunCoreAsync("revoke", cancellationToken, inputStillCurrent);
+        public Task<NomadCoreRequestResult> HandbackAuthorityAsync(CancellationToken cancellationToken = default,
+            Func<bool> inputStillCurrent = null) => RunCoreAsync("handback", cancellationToken, inputStillCurrent);
 
         /// <summary>Request Copter LAND mode engagement. Success does not verify touchdown.</summary>
-        public Task<NomadCoreRequestResult> LandAsync(CancellationToken cancellationToken = default) =>
-            RunCoreAsync("land", cancellationToken);
+        public Task<NomadCoreRequestResult> LandAsync(CancellationToken cancellationToken = default,
+            Func<bool> inputStillCurrent = null) => RunCoreAsync("land", cancellationToken, inputStillCurrent);
 
         /// <summary>
         /// Drive an ArduPilot servo channel through the runtime.

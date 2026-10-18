@@ -33,6 +33,7 @@ internal static class RouterStatusUiTests
         Run("dashboard router summary", DashboardSummary);
         Run("dashboard runtime status entry", DashboardRuntimeStatusEntry);
         Run("Links view availability", LinksViewAvailability);
+        Run("aircraft profile retires cached views", AircraftProfileRetiresCachedViews);
         Console.WriteLine($"Router status UI checks: {_checks}; failures: {_failures}");
         return _failures == 0 ? 0 : 1;
     }
@@ -214,5 +215,50 @@ internal static class RouterStatusUiTests
         var text = new List<string> { parent.Text };
         foreach (Control child in parent.Controls) { text.Add(ReadControlText(child)); }
         return string.Join("\n", text);
+    }
+
+    private static void AircraftProfileRetiresCachedViews()
+    {
+        var previousService = NotificationService.Shared;
+        using var service = new NotificationService();
+        NotificationService.Shared = service;
+        var outlines = new GeofenceConfig();
+        using var monitor = new AdvisoryBoundaryMonitor(outlines);
+        var alpha = new NOMADConfig { AircraftName = "Alpha UI", RouterClientEnabled = false };
+        var beta = new NOMADConfig
+        {
+            AircraftName = "Beta UI", RouterClientEnabled = false, CoreRuntimePort = 14652,
+            VideoUrl = "rtsp://profile-beta.invalid/stream",
+        };
+        NOMADMainScreen.SetStaticConfig(alpha, null, outlines, monitor);
+        try
+        {
+            using var screen = new NOMADMainScreen(alpha);
+            var type = typeof(NOMADMainScreen);
+            var show = type.GetMethod("ShowView", PrivateInstance);
+            show.Invoke(screen, new object[] { "Video" });
+            var oldVideo = (Control)type.GetField("_videoView", PrivateInstance).GetValue(screen);
+            show.Invoke(screen, new object[] { "Links" });
+            var oldLinks = (Control)type.GetField("_linksView", PrivateInstance).GetValue(screen);
+            NOMADMainScreen.SetStaticConfig(beta, null, outlines, monitor);
+            type.GetMethod("RefreshConfiguration", PrivateInstance).Invoke(screen, null);
+            Check(oldVideo.IsDisposed && oldLinks.IsDisposed,
+                "changing aircraft disposes cached video and router controls");
+            var label = screen.Controls.Find("ActiveAircraft", true);
+            var dashboard = type.GetField("_dashboardView", PrivateInstance).GetValue(screen);
+            Check(label.Length == 1 && label[0].Text == "Aircraft: Beta UI" &&
+                ReferenceEquals(typeof(NOMADDashboardView).GetField("_config", PrivateInstance)
+                    .GetValue(dashboard), beta),
+                "the active aircraft label and recreated dashboard use the newly saved configuration");
+            show.Invoke(screen, new object[] { "Links" });
+            var links = type.GetField("_linksView", PrivateInstance).GetValue(screen);
+            Check(ReferenceEquals(typeof(NOMADLinksView).GetField("_config", PrivateInstance).GetValue(links), beta),
+                "reopening a cached section uses the newly selected aircraft endpoints");
+        }
+        finally
+        {
+            NOMADMainScreen.SetStaticConfig(null);
+            NotificationService.Shared = previousService;
+        }
     }
 }

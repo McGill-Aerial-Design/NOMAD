@@ -28,6 +28,9 @@ namespace NOMAD.MissionPlanner
     {
         public string CoreClientCredential = "test-key";
         public int CoreRuntimePort;
+        public int GimbalMountMode = 2;
+        public float JoystickGimbalMaxRateDegSec = 60;
+        public Newtonsoft.Json.Linq.JArray ActuatorDefinitions;
         public int[] JoystickButtonIndices = new[] { 0, 1, 2, 3, 4, 5 };
         public string JoystickPositionActuatorId = "";
         public string JoystickSw1UpAction = "None";

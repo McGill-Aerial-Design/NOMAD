@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The NOMAD Authors
+using System.Linq;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+
+namespace NOMAD.MissionPlanner
+{
+    public partial class NOMADConfig
+    {
+        public string AircraftName { get; set; } = "";
+        public string FlightControllerModel { get; set; } = "";
+        public string ReceiverType { get; set; } = "";
+        public string AircraftFirmware { get; set; } = "";
+        public string Airframe { get; set; } = "";
+        public int? RcArmingChannel { get; set; }
+        public int? RcFlightModeChannel { get; set; }
+        public int GimbalMountMode { get; set; } = (int)MountMode.MavlinkTargeting;
+
+        // Desired definitions travel with the profile; only the runtime can validate and apply them.
+        public JArray ActuatorDefinitions { get; set; }
+
+        private static void ValidateAircraftDocument(JObject document)
+        {
+            foreach (var name in new[] { nameof(AircraftName), nameof(FlightControllerModel),
+                nameof(ReceiverType), nameof(AircraftFirmware), nameof(Airframe) })
+            {
+                var value = document[name];
+                if (value != null && value.Type != JTokenType.String && value.Type != JTokenType.Null)
+                {
+                    throw new JsonSerializationException(name + " must be text.");
+                }
+            }
+            foreach (var name in new[]
+                { nameof(RcArmingChannel), nameof(RcFlightModeChannel), nameof(GimbalMountMode) })
+            {
+                var value = document[name];
+                if (value != null && value.Type != JTokenType.Integer &&
+                    !(name != nameof(GimbalMountMode) && value.Type == JTokenType.Null))
+                {
+                    throw new JsonSerializationException(name + " must be an integer or an unconfigured RC channel.");
+                }
+            }
+            ValidateActuatorDefinitions(document[nameof(ActuatorDefinitions)]);
+        }
+
+        private static void ValidateActuatorDefinitions(JToken definitions)
+        {
+            if (definitions == null || definitions.Type == JTokenType.Null)
+            {
+                return;
+            }
+            if (!(definitions is JArray items))
+            {
+                throw new JsonSerializationException("Actuator definitions must be an array.");
+            }
+            foreach (var item in items)
+            {
+                if (!(item is JObject))
+                {
+                    throw new JsonSerializationException("Each actuator definition must be an object.");
+                }
+            }
+        }
+
+        private void ValidateAircraftSettings()
+        {
+            ValidateActuatorDefinitions(ActuatorDefinitions);
+            var axes = new[] { "X", "Y", "Z", "Rx", "Ry", "Rz", "Slider1", "Slider2" };
+            if (!axes.Contains(JoystickGimbalPitchAxis) || !axes.Contains(JoystickGimbalRollAxis) ||
+                !axes.Contains(JoystickPositionAxis))
+            {
+                throw new JsonSerializationException("Joystick axes must be supported DirectInput axes.");
+            }
+            if (float.IsNaN(JoystickGimbalMaxRateDegSec) || float.IsInfinity(JoystickGimbalMaxRateDegSec) ||
+                JoystickGimbalMaxRateDegSec < GimbalCommand.MIN_MAX_RATE_DEG_SEC ||
+                JoystickGimbalMaxRateDegSec > GimbalCommand.MAX_MAX_RATE_DEG_SEC)
+            {
+                throw new JsonSerializationException("Gimbal rate is outside the supported input range.");
+            }
+            foreach (float deadzone in new[] { JoystickGimbalDeadzone, JoystickPositionDeadzone })
+            {
+                if (float.IsNaN(deadzone) || float.IsInfinity(deadzone) || deadzone < 0 || deadzone > 0.5F)
+                {
+                    throw new JsonSerializationException("Joystick deadzones must be between 0 and 0.5.");
+                }
+            }
+            foreach (var channel in new[] { RcArmingChannel, RcFlightModeChannel })
+            {
+                // RC_CHANNELS represents inputs 1 through 18; zero is not a channel.
+                if (channel.HasValue && (channel.Value < 1 || channel.Value > 18))
+                {
+                    throw new JsonSerializationException("RC channels must be between 1 and 18, or unconfigured.");
+                }
+            }
+            if (GimbalMountMode < (int)MountMode.Retract || GimbalMountMode > (int)MountMode.RcTargeting)
+            {
+                throw new JsonSerializationException("Gimbal mount mode must be between 0 and 3.");
+            }
+        }
+    }
+}

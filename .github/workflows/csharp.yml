@@ -81,9 +81,6 @@ jobs:
         run: pwsh -File scripts/build/test_plugin_audio.ps1
 
 
-      - name: Semantic client, actuator UI and USB HID mapping tests
-        run: pwsh -File scripts/build/test_plugin_core_client.ps1
-
       - name: Mission Planner reviewed-target warning tests
         run: pwsh -File scripts/build/test_plugin_version.ps1
 
@@ -182,6 +179,9 @@ jobs:
 
       - name: Current configuration validation and settings UI tests
         run: pwsh -File scripts/build/test_plugin_config_validation.ps1
+
+      - name: Semantic client, actuator UI and USB HID mapping tests
+        run: pwsh -File scripts/build/test_plugin_core_client.ps1
 
       - name: Gimbal joystick UI smoke
         run: pwsh -File scripts/build/test_plugin_gimbal_ui.ps1

@@ -54,6 +54,8 @@ namespace NOMAD.MissionPlanner
 
         private MAVLinkConnectionManager _connectionManager;
         private NOMADConfig _config;
+        private NOMADConfig _observedStaticConfig;
+        private MAVLinkConnectionManager _observedStaticConnectionManager;
         private GeofenceConfig _geofenceConfig;
         private AdvisoryBoundaryMonitor _advisoryBoundaryMonitor;
         private bool _ownsAdvisoryBoundaryMonitor;
@@ -68,6 +70,7 @@ namespace NOMAD.MissionPlanner
         private Button _btnBoundaries;
         private Button _btnVideo;
         private Button _btnLinks;
+        private Label _aircraftLabel;
 
         // Content views
         private UserControl _currentView;
@@ -124,8 +127,10 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public NOMADMainScreen(NOMADConfig config, MAVLinkConnectionManager connectionManager = null)
         {
-            _config = config ?? NOMADConfig.Load(); // Fallback to loading config if null
+            _config = config ?? NOMADProfiles.Load().Selected.Config;
             _connectionManager = connectionManager;
+            _observedStaticConfig = _staticConfig;
+            _observedStaticConnectionManager = _staticConnectionManager;
 
             // Advisory outline config + preview shared by the boundary view and
             // the dashboard's notification service. Prefer the plugin-owned
@@ -153,6 +158,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public void Activate()
         {
+            RefreshConfiguration();
             // Mission Planner's ThemeManager restyles this screen around
             // MainSwitcher.ShowScreen (recursively overwriting Back/ForeColor),
             // so the NOMAD palette only survived until MP's pass ran. Re-assert
@@ -366,11 +372,41 @@ namespace NOMAD.MissionPlanner
 
         private void UpdateTimer_Tick(object sender, EventArgs e)
         {
+            RefreshConfiguration();
             // Update the current view if it supports updates
             if (_currentView is IUpdatableView updatable)
             {
                 updatable.UpdateData();
             }
+        }
+
+        private void RefreshConfiguration()
+        {
+            if (_staticConfig == null || (ReferenceEquals(_observedStaticConfig, _staticConfig) &&
+                ReferenceEquals(_observedStaticConnectionManager, _staticConnectionManager)))
+            {
+                return;
+            }
+            _observedStaticConfig = _staticConfig;
+            _observedStaticConnectionManager = _staticConnectionManager;
+            _config = _staticConfig;
+            _aircraftLabel.Text = "Aircraft: " + _config.AircraftName;
+            _connectionManager = _staticConnectionManager;
+            _viewContainer.Controls.Clear();
+            _dashboardView?.Dispose();
+            _boundaryView?.Dispose();
+            _videoView?.Dispose();
+            _linksView?.Dispose();
+            _dashboardView = null;
+            _boundaryView = null;
+            _videoView = null;
+            _linksView = null;
+            _currentView = null;
+            if (_updateTimer != null)
+            {
+                _updateTimer.Interval = Math.Max(100, _config.LinkMonitorInterval);
+            }
+            ShowView("Dashboard");
         }
 
         // ============================================================

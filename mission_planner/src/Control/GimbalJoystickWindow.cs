@@ -30,6 +30,11 @@ namespace NOMAD.MissionPlanner
     {
         private static GimbalJoystickWindow s_instance;
 
+        internal static void CloseSingleton()
+        {
+            s_instance?.Close();
+        }
+
         public static void ShowSingleton(NOMADConfig config, IWin32Window owner = null)
         {
             if (s_instance != null && !s_instance.IsDisposed)
@@ -53,8 +58,6 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // State
         // ============================================================
-        private readonly NOMADConfig _config;
-
         // Stick: normalized [-1,1] x = roll rate, y = pitch rate (up = +pitch).
         private float _stickX, _stickY;
         // Local mirror of GimbalController target so display label code can read
@@ -75,8 +78,8 @@ namespace NOMAD.MissionPlanner
 
         private GimbalJoystickWindow(NOMADConfig config)
         {
-            _config = config;
-            Text = "Gimbal Joystick";
+            Text = "Gimbal Joystick - " + config.AircraftName;
+            _mountMode = GimbalController.SelectedMode;
             StartPosition = FormStartPosition.Manual;
             FormBorderStyle = FormBorderStyle.SizableToolWindow;
             BackColor = NOMADTheme.BG_DARK;
@@ -114,9 +117,6 @@ namespace NOMAD.MissionPlanner
             GimbalController.ModeChanged += OnExternalModeChanged;
             GimbalArrowKeyFilter.EnabledChanged += OnArrowKeysEnabledChanged;
 
-            // Default to MAVLink targeting so the first joystick or keyboard input
-            // immediately drives the mount.
-            GimbalController.SetMode(_mountMode);
             UpdateModeLabel();
 
             FormClosed += (s, e) =>

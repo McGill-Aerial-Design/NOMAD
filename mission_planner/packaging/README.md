@@ -48,7 +48,8 @@ Rollback restores the retained exact previous DLL and checks its digest before
 reporting success. Cleanup refuses the active and rollback releases.
 
 The installer preserves Mission Planner settings, other plugins and AppData
-`nomad_config.json`, including `CoreClientCredential`. It does not remove the
+`nomad_aircraft_profiles.json` and the older `nomad_config.json`, including each
+local `CoreClientCredential`. It does not remove the
 legacy AppData DLL; an operator must resolve duplicate discovery separately.
 AppData is neither a package payload nor rollback storage. Unsupported saved schemas fail explicitly when the plugin loads;
 deployment never rewrites or rolls back configuration files.

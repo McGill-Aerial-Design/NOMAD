@@ -13,8 +13,24 @@ namespace NOMAD.MissionPlanner
     {
         private void LoadSettings()
         {
+            _loadingAircraft = true;
+            _profileEditRevision++;
+            try
+            {
+                LoadProfileSettings();
+            }
+            finally
+            {
+                _loadingAircraft = false;
+            }
+        }
+
+        private void LoadProfileSettings()
+        {
+            LoadAircraftSettings();
             _numCoreRuntimePort.Value = ClampValue(_numCoreRuntimePort, Config.CoreRuntimePort);
             _txtCoreClientCredential.Text = Config.CoreClientCredential ?? "";
+            RuntimeConnectionEdited();
 
             _txtVideoUrl.Text = Config.VideoUrl;
             _chkAutoStartHudVideo.Checked = Config.AutoStartHudVideo;
@@ -72,6 +88,7 @@ namespace NOMAD.MissionPlanner
 
         private void SaveSettings()
         {
+            SaveAircraftSettings();
             Config.CoreRuntimePort = (int)_numCoreRuntimePort.Value;
             Config.CoreClientCredential = _txtCoreClientCredential.Text.Trim();
 
@@ -85,12 +102,12 @@ namespace NOMAD.MissionPlanner
             Config.DebugMode = _chkDebugMode.Checked;
             Config.AudioAlerts = _chkAudioAlerts.Checked;
             Config.AltitudeCallouts = _chkAltitudeCallouts.Checked;
-            AudioAlerts.ApplyConfig(Config);
 
 
 
 
             SaveJoystickSettings();
+            Profiles.Validate();
         }
 
         private void SaveJoystickSettings()
@@ -103,7 +120,6 @@ namespace NOMAD.MissionPlanner
             Config.JoystickGimbalRollInvert = _chkJoyGimbalRollInvert.Checked;
             Config.JoystickGimbalDeadzone = (float)_numJoyGimbalDeadzone.Value;
             Config.JoystickGimbalMaxRateDegSec = (float)_numJoyGimbalMaxRate.Value;
-            GimbalController.MaxRateDegSec = Config.JoystickGimbalMaxRateDegSec;
             Config.JoystickPositionEnabled = _chkJoyPositionEnabled.Checked;
             Config.JoystickPositionDevice = NormalizeDevice(_cmbJoyPositionDevice.SelectedItem?.ToString());
             Config.JoystickPositionAxis = _cmbJoyPositionAxis.SelectedItem?.ToString() ?? "Y";

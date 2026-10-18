@@ -346,11 +346,15 @@ and [serial configuration](https://github.com/ArduPilot/ardupilot/blob/dbe792162
 
 ## Required production RC / ELRS inputs
 
-No approved production channel map or controller input-priority profile is
-recorded. The [PRD](prd.md) mentions "CH5 currently arms" but requires verifying
-actual mode/aux mapping; this is an unverified project assumption, not approval.
-SITL defaults and deployment transport labels are not approval.
-Keep this table unresolved until the aircraft owner supplies a reviewed record.
+The owner reports Cube Orange Plus, ELRS arming on RC input CH5 and flight modes
+on CH6 for one aircraft. These are editable per-aircraft settings, not a global
+channel map or a qualified controller input-priority profile. The [PRD](prd.md)
+records the intended setup; [operations](operations.md#saved-aircraft-profiles)
+describes persistence. Firmware/airframe, switch positions/ranges, calibration,
+FC parameter readbacks, wiring and takeover/handback remain unverified. A profile
+selection does not establish runtime eligibility or physical readiness.
+SITL defaults and deployment transport labels are not approval. Keep the remaining
+table entries unresolved until the aircraft owner supplies a reviewed record.
 
 | Required decision | Required retained value and measurement | Current status |
 |---|---|---|

@@ -73,15 +73,24 @@ namespace NOMAD.MissionPlanner
         private Button _btnLoadConfig;
         private Button _btnExportConfig;
 
-        public NOMADConfig Config { get; private set; }
+        public NOMADProfiles Profiles { get; private set; }
+        public NOMADConfig Config
+        {
+            get => Profiles.Selected.Config;
+            private set => Profiles.Selected.Config = value;
+        }
 
         // ============================================================
         // Constructor
         // ============================================================
 
-        public NOMADSettingsForm(NOMADConfig config)
+        public NOMADSettingsForm(NOMADProfiles profiles)
         {
-            Config = (config ?? new NOMADConfig()).Clone();
+            Profiles = (profiles ?? new NOMADProfiles(null)).Clone();
+            _initialProfileId = Profiles.SelectedId;
+            _initialRuntimePort = Config.CoreRuntimePort;
+            _initialCredential = Config.CoreClientCredential;
+            _initialCoreClient = OutputController.CreateCoreClient();
             InitializeComponents();
             LoadSettings();
         }
@@ -111,6 +120,7 @@ namespace NOMAD.MissionPlanner
             this.Controls.Add(_tabControl);
 
             // Add all tab pages
+            _tabControl.TabPages.Add(CreateAircraftTab());
             _tabControl.TabPages.Add(CreateConnectionTab());
             _tabControl.TabPages.Add(CreateVideoTab());
             _tabControl.TabPages.Add(CreateMultiLinkTab());
@@ -140,7 +150,7 @@ namespace NOMAD.MissionPlanner
 
             _btnReset = new Button
             {
-                Text = "Reset Defaults",
+                Text = "Reset Profile",
                 Location = new Point(140, buttonY),
                 Size = new Size(110, 35),
                 FlatStyle = FlatStyle.Flat,
@@ -339,7 +349,7 @@ namespace NOMAD.MissionPlanner
         private void BtnReset_Click(object sender, EventArgs e)
         {
             var result = MessageBox.Show(
-                "Reset all settings to defaults?\n\nThis cannot be undone.",
+                "Reset the selected aircraft's settings? Other profiles will stay available.",
                 "Reset Settings",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning
@@ -347,7 +357,11 @@ namespace NOMAD.MissionPlanner
 
             if (result == DialogResult.Yes)
             {
-                Config = new NOMADConfig();
+                Config = new NOMADConfig
+                {
+                    AircraftName = Config.AircraftName,
+                    ActuatorDefinitions = new Newtonsoft.Json.Linq.JArray(),
+                };
                 LoadSettings();
             }
         }

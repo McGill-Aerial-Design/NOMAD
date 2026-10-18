@@ -86,8 +86,10 @@ the proposed Task 1; Copter evidence cannot establish it.
 D09 is substantially resolved at the topology/interface level:
 
 - ELRS is primary C2, carrying normal RC pilot controls and MAVLink telemetry/data.
-  The conventional transmitter is the primary manual interface. CH5 currently
-  arms; verify actual flight-mode and auxiliary-channel mappings before use.
+  The conventional transmitter is the primary manual interface. The owner reports
+  Cube Orange Plus, ELRS arming on RC input CH5 and flight modes on CH6 for one
+  aircraft. Store these values in that aircraft's profile; they are not defaults
+  for other aircraft. Firmware, airframe, calibration and FC readbacks remain open.
 - LTE/MAVLink is secondary/redundant C2 and data. The intended alternate pilot
   path is ground-station joystick → Mission Planner/NOMAD → LTE → aircraft.
   This is not an independent RC radio or a qualified takeover implementation.

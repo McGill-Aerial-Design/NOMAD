@@ -2,15 +2,17 @@
 // Copyright 2026 The NOMAD Authors
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using NOMAD.MissionPlanner.Connectivity;
+using Newtonsoft.Json.Linq;
 
 namespace NOMAD.MissionPlanner
 {
     internal static class OutputController
     {
-        private static NomadCoreClient _coreClient;
+        private static volatile NomadCoreClient _coreClient;
         private static readonly SemaphoreSlim GimbalRequests = new SemaphoreSlim(1, 1);
         private static readonly object GimbalFailureLock = new object();
         private static string _lastGimbalFailure = "";
@@ -27,12 +29,24 @@ namespace NOMAD.MissionPlanner
                 _displayIncarnation = "";
                 _displaySequence = 0;
                 RetiredIncarnations.Clear();
+                _profileDefinitions = (JArray)config?.ActuatorDefinitions?.DeepClone();
+                _profileDefinitionsMatched = _profileDefinitions == null;
+                _coreClient = config == null ? null :
+                    new NomadCoreClient(config.CoreClientCredential, config.CoreRuntimePort);
             }
-            _coreClient = config == null ? null :
-                new NomadCoreClient(config.CoreClientCredential, config.CoreRuntimePort);
         }
 
         internal static NomadCoreClient CreateCoreClient() => _coreClient;
+        internal static bool ProfileActuatorsCompatible
+        {
+            get
+            {
+                lock (ProjectionGate)
+                {
+                    return _profileDefinitionsMatched;
+                }
+            }
+        }
 
         // Nonwaiting gates reject overlapping input instead of collecting stale commands.
         private static NomadCoreRequestResult NotSent(string code, string message)
@@ -41,6 +55,8 @@ namespace NOMAD.MissionPlanner
         }
 
         private static readonly object ProjectionGate = new object();
+        private static JArray _profileDefinitions;
+        private static bool _profileDefinitionsMatched = true;
         private static readonly Dictionary<string, NomadActuatorState> DisplayStates = new Dictionary<string, NomadActuatorState>();
         private static readonly Dictionary<string, string> ReleaseOperations = new Dictionary<string, string>();
         private static readonly Dictionary<string, NomadActuatorAction> ContinuousAxisActions = new Dictionary<string, NomadActuatorAction>();
@@ -52,36 +68,53 @@ namespace NOMAD.MissionPlanner
 
         internal static Task<NomadCoreRequestResult> GetActuatorsAsync() =>
             SendSemanticAsync(client => client.GetActuatorsAsync());
-        internal static Task<NomadCoreRequestResult> ConfigureActuatorsAsync(string json) =>
-            SendSemanticAsync(client => client.ConfigureActuatorsAsync(json), configuration: true);
+        internal static Task<NomadCoreRequestResult> ConfigureActuatorsAsync(string json,
+            Func<bool> inputStillCurrent = null) =>
+            SendSemanticAsync(client => client.ConfigureActuatorsAsync(json,
+                inputStillCurrent: () => client == CreateCoreClient() &&
+                    (inputStillCurrent == null || inputStillCurrent())), configuration: true);
         internal static Task<NomadCoreRequestResult> ActuatorActionAsync(string id, string operation,
             string source = "ui", int? slot = null, double? value = null, Func<bool> inputStillCurrent = null) =>
             SendSemanticAsync(client => client.ActuatorActionAsync(id, operation, source, slot, value,
-                inputStillCurrent: inputStillCurrent));
+                inputStillCurrent: () => client == CreateCoreClient() &&
+                    (inputStillCurrent == null || inputStillCurrent())),
+                operation: operation);
 
         private static async Task<NomadCoreRequestResult> SendSemanticAsync(
-            Func<NomadCoreClient, Task<NomadCoreRequestResult>> send, bool configuration = false)
+            Func<NomadCoreClient, Task<NomadCoreRequestResult>> send,
+            bool configuration = false, string operation = null)
         {
-            var client = CreateCoreClient();
+            NomadCoreClient client;
+            lock (ProjectionGate)
+            {
+                client = _coreClient;
+                if (operation != null && !_profileDefinitionsMatched && operation != "safe" && operation != "stop" &&
+                    operation != "release_input" && operation != "neutral")
+                {
+                    return NotSent("aircraft_profile_unverified",
+                        "Actuator mappings are unverified. Review Settings > Actuators, then save this profile.");
+                }
+            }
             var result = client == null ? NotSent("runtime_not_configured", "NOMAD runtime is not configured.") :
                 await send(client).ConfigureAwait(false);
             if (client != CreateCoreClient())
             {
                 result.PresentationCurrent = false; return result;
             }
-            if (result.RuntimeIncarnation != "" && !ObserveIncarnation(result.RuntimeIncarnation, result.RequestSequence))
+            if (result.RuntimeIncarnation != "" &&
+                !ObserveIncarnation(result.RuntimeIncarnation, result.RequestSequence, client))
             { result.PresentationCurrent = false; return result; }
-            if (!AcceptCatalog(result)) { result.PresentationCurrent = false; return result; }
+            if (!AcceptCatalog(result, client)) { result.PresentationCurrent = false; return result; }
             foreach (var actuator in result.Actuators)
             {
-                if (!PublishState(result.RuntimeIncarnation, actuator.State, result.RequestSequence))
+                if (!PublishState(result.RuntimeIncarnation, actuator.State, result.RequestSequence, client))
                 {
                     continue;
                 }
             }
             if (result.ActuatorState != null)
             {
-                PublishState(result.RuntimeIncarnation, result.ActuatorState, result.RequestSequence);
+                PublishState(result.RuntimeIncarnation, result.ActuatorState, result.RequestSequence, client);
             }
             if (!result.Succeeded)
             {
@@ -90,16 +123,23 @@ namespace NOMAD.MissionPlanner
             return result;
         }
 
-        private static bool AcceptCatalog(NomadCoreRequestResult result)
+        private static bool AcceptCatalog(NomadCoreRequestResult result, NomadCoreClient client)
         {
             if (!result.HasActuatorDefinitions) { return true; }
             lock (ProjectionGate)
             {
+                if (client != _coreClient) { return false; }
                 if (!result.ActuatorConfigurationRevision.HasValue)
-                { ContinuousAxisActions.Clear(); return false; }
+                {
+                    ContinuousAxisActions.Clear();
+                    _profileDefinitionsMatched = false;
+                    return false;
+                }
                 ulong revision = result.ActuatorConfigurationRevision.Value;
                 if (_catalogRevision.HasValue && revision < _catalogRevision.Value) { return false; }
                 _catalogRevision = revision;
+                _profileDefinitionsMatched = _profileDefinitions == null || JToken.DeepEquals(_profileDefinitions,
+                    JArray.FromObject(result.Actuators.Select(actuator => actuator.Config)));
                 ReleaseOperations.Clear();
                 ContinuousAxisActions.Clear();
                 foreach (var actuator in result.Actuators)
@@ -116,7 +156,14 @@ namespace NOMAD.MissionPlanner
         internal static NomadActuatorAction GetContinuousAxisMetadata(string id)
         {
             if (string.IsNullOrWhiteSpace(id)) { return null; }
-            lock (ProjectionGate) { return ContinuousAxisActions.TryGetValue(id, out var action) ? action : null; }
+            lock (ProjectionGate)
+            {
+                if (!_profileDefinitionsMatched)
+                {
+                    return null;
+                }
+                return ContinuousAxisActions.TryGetValue(id, out var action) ? action : null;
+            }
         }
 
         internal static string GetReleaseOperation(string binding)
@@ -133,10 +180,15 @@ namespace NOMAD.MissionPlanner
                 return DisplayStates.TryGetValue(id, out var state) ? state : null;
             }
         }
-        internal static bool ObserveIncarnation(string incarnation, ulong sequence)
+        internal static bool ObserveIncarnation(string incarnation, ulong sequence,
+            NomadCoreClient expectedClient = null)
         {
             lock (ProjectionGate)
             {
+                if (expectedClient != null && expectedClient != _coreClient)
+                {
+                    return false;
+                }
                 if (_displayIncarnation != incarnation)
                 {
                     if (sequence < _displaySequence || RetiredIncarnations.Contains(incarnation))
@@ -151,17 +203,19 @@ namespace NOMAD.MissionPlanner
                     ReleaseOperations.Clear();
                     ContinuousAxisActions.Clear();
                     _catalogRevision = null;
+                    _profileDefinitionsMatched = _profileDefinitions == null;
                     _displayIncarnation = incarnation;
                 }
                 _displaySequence = Math.Max(_displaySequence, sequence);
                 return true;
             }
         }
-        internal static bool PublishState(string incarnation, NomadActuatorState state, ulong sequence = 0)
+        internal static bool PublishState(string incarnation, NomadActuatorState state, ulong sequence = 0,
+            NomadCoreClient expectedClient = null)
         {
             lock (ProjectionGate)
             {
-                if (!ObserveIncarnation(incarnation, sequence))
+                if (!ObserveIncarnation(incarnation, sequence, expectedClient))
                 {
                     return false;
                 }
@@ -194,7 +248,9 @@ namespace NOMAD.MissionPlanner
             double pitchDeg, double rollDeg, Func<bool> inputStillCurrent = null)
         {
             var result = await SendGimbalAsync(client =>
-                client.GimbalTargetAsync(pitchDeg, rollDeg, inputStillCurrent: inputStillCurrent))
+                client.GimbalTargetAsync(pitchDeg, rollDeg,
+                    inputStillCurrent: () => client == CreateCoreClient() &&
+                        (inputStillCurrent == null || inputStillCurrent())))
                 .ConfigureAwait(false);
             if (result.Succeeded)
             {
@@ -212,7 +268,8 @@ namespace NOMAD.MissionPlanner
         {
             var result = await SendGimbalAsync(client =>
                 client.GimbalConfigureAndTargetAsync(mountMode, pitchDeg, rollDeg,
-                    inputStillCurrent: inputStillCurrent)).ConfigureAwait(false);
+                    inputStillCurrent: () => client == CreateCoreClient() &&
+                        (inputStillCurrent == null || inputStillCurrent()))).ConfigureAwait(false);
             if (result.Succeeded)
             {
                 ClearGimbalFailure();
@@ -228,7 +285,8 @@ namespace NOMAD.MissionPlanner
             int mountMode, Func<bool> inputStillCurrent = null)
         {
             var result = await SendGimbalAsync(client => client.GimbalConfigureAsync(mountMode,
-                inputStillCurrent: inputStillCurrent)).ConfigureAwait(false);
+                inputStillCurrent: () => client == CreateCoreClient() &&
+                    (inputStillCurrent == null || inputStillCurrent()))).ConfigureAwait(false);
             if (!result.Succeeded)
             {
                 Log.Warn(DescribeFailure("Gimbal configure", result));

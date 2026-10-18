@@ -13,8 +13,8 @@ namespace NOMAD.MissionPlanner.Connectivity
             RunCoreAsync("get-actuators", cancellationToken);
 
         public Task<NomadCoreRequestResult> ConfigureActuatorsAsync(string configurationJson,
-            CancellationToken cancellationToken = default) =>
-            RunCoreAsync("configure-actuators", cancellationToken, configurationJson);
+            CancellationToken cancellationToken = default, Func<bool> inputStillCurrent = null) =>
+            RunCoreAsync("configure-actuators", cancellationToken, inputStillCurrent, configurationJson);
 
         public Task<NomadCoreRequestResult> ActuatorActionAsync(string actuatorId, string operation,
             string inputSource = "ui", int? inputSlot = null, double? value = null,

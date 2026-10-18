@@ -106,6 +106,13 @@ internal static partial class NomadCoreClientTests
         Configuration_ErrorPreservesReturnedFacts();
         Panel_RendersBackendLabelsAndState();
         Panel_HeldKeyboardDoesNotMultiplyInput();
+        Profile_DefinitionsRequireRuntimeReadback();
+        Profile_LateCatalogCannotReplaceNewAircraft();
+        Profile_GimbalRequestsKeepTheirOriginalClient();
+        Profile_GimbalPresetRetiresPendingMode();
+        Profile_SettingsMutationsRejectChangedInput();
+        Profile_LandConfirmationCannotRetarget();
+        Profile_FirstGimbalInputConfiguresItsTarget();
     }
 
     private static void Projection_EmptyRuntimeRetiresPriorDisplay()
@@ -145,8 +152,9 @@ internal static partial class NomadCoreClientTests
     private static void Panel_RendersBackendLabelsAndState()
     {
         using var runtime = new MockRuntime(2, semanticResponse: request => SemanticResponse(request));
-        OutputController.Initialize(new NOMADConfig { CoreRuntimePort = runtime.Port });
-        using var panel = new ActuatorControlPanel(new NOMADConfig());
+        var config = new NOMADConfig { CoreRuntimePort = runtime.Port };
+        OutputController.Initialize(config);
+        using var panel = new ActuatorControlPanel(config);
         WaitForPanel(panel.RefreshActuatorsAsync());
         Expect(panel.Controls.Find("release:activate", true)[0].Text == "Open", "dynamic configured action label rendered");
         Expect(panel.Controls.Find("release:safe", true)[0].Text == "Close", "dynamic configured safe label rendered");

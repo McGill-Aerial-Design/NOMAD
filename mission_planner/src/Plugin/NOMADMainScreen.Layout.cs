@@ -70,6 +70,14 @@ namespace NOMAD.MissionPlanner
                 WrapContents = false,
             };
 
+            _aircraftLabel = new Label
+            {
+                Name = "ActiveAircraft", Text = "Aircraft: " + _config.AircraftName,
+                AutoSize = true, MaximumSize = new Size(SIDEBAR_WIDTH - 20, 0),
+                ForeColor = TEXT_PRIMARY, Margin = new Padding(5, 8, 5, 8),
+            };
+            navPanel.Controls.Add(_aircraftLabel);
+
             // Dashboard button (primary)
             _btnDashboard = CreateSidebarButton("Dashboard");
             _btnDashboard.Click += (s, e) => ShowView("Dashboard");

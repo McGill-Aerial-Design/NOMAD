@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using NOMAD.MissionPlanner.Connectivity;
 
 namespace NOMAD.MissionPlanner
 {
@@ -15,6 +16,8 @@ namespace NOMAD.MissionPlanner
             "Success means LAND mode was observed after acknowledgement; touchdown is not verified. " +
             "LAND is not termination. Runtime authority must already be explicitly admitted.";
         private readonly Func<bool> _confirmLand;
+        private readonly Func<bool> _inputStillCurrent;
+        private readonly NomadCoreClient _client;
         private readonly CancellationTokenSource _shutdown = new CancellationTokenSource();
         private readonly Button _request = new Button
         {
@@ -32,11 +35,13 @@ namespace NOMAD.MissionPlanner
         internal string OperatorStatus => _status.Text;
         internal Task ActiveRequest { get; private set; } = Task.CompletedTask;
 
-        public LandControlPanel() : this(ConfirmLand) { }
+        public LandControlPanel() : this(ConfirmLand, null) { }
 
-        internal LandControlPanel(Func<bool> confirmLand)
+        internal LandControlPanel(Func<bool> confirmLand, Func<bool> inputStillCurrent = null)
         {
-            _confirmLand = confirmLand;
+            _confirmLand = confirmLand ?? ConfirmLand;
+            _inputStillCurrent = inputStillCurrent;
+            _client = OutputController.CreateCoreClient();
             Size = new Size(560, 155);
             _request.Click += (sender, args) => ActiveRequest = RequestLandAsync();
             Controls.Add(_request);
@@ -53,19 +58,23 @@ namespace NOMAD.MissionPlanner
             _request.Enabled = false;
             try
             {
-                if (!_confirmLand() || _disposed)
+                if (!InputIsCurrent())
+                {
+                    _status.Text = "Aircraft profile changed. Reopen its controls before requesting LAND.";
+                    return;
+                }
+                if (!_confirmLand() || !InputIsCurrent())
                 {
                     return;
                 }
-                var client = OutputController.CreateCoreClient();
-                if (client == null)
+                if (_client == null)
                 {
                     _status.Text = "Save core settings before requesting LAND. No mutation request was sent.";
                     return;
                 }
                 _status.Text = "Awaiting runtime LAND engagement result; touchdown is not verified.";
-                var result = await client.LandAsync(_shutdown.Token);
-                if (!_disposed)
+                var result = await _client.LandAsync(_shutdown.Token, InputIsCurrent);
+                if (!_disposed && InputIsCurrent())
                 {
                     _status.Text = result.Succeeded ? "LAND mode observed; touchdown not verified." :
                         OutputController.DescribeFailure("LAND engagement", result);
@@ -80,6 +89,9 @@ namespace NOMAD.MissionPlanner
                 }
             }
         }
+
+        private bool InputIsCurrent() => !_disposed && _client == OutputController.CreateCoreClient() &&
+            (_inputStillCurrent == null || _inputStillCurrent());
 
         private static bool ConfirmLand() => MessageBox.Show(ConfirmationMessage, "NOMAD LAND engagement",
             MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.OK;
