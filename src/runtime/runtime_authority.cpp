@@ -124,6 +124,10 @@ Json Runtime::Implementation::handle_authority_request(const Request &request) {
     if (!journal_->append(request_record(request, "authority_intent", "pending"))) {
         return audit_error(request);
     }
+    if (!valid_expiry(request)) {
+        return error_response(request.id, "stale_authority",
+                              "authority request validity is stale after durable intent");
+    }
     ++authority_gate_->generation;
     authority_gate_->owner = request.source;
     authority_gate_->owner_session = state.session_id;

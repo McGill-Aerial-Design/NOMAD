@@ -114,6 +114,62 @@ void test_authenticated_authority_events() {
     }
 }
 
+void test_authority_expiry_after_durable_intent(bool handback) {
+    auto config = test_config();
+    config.ipc_port = free_port();
+    config.actuation_enabled = true;
+    std::atomic<bool> delay_intent{false}, intent_observed{false}, expired_after_wait{false};
+    std::atomic<std::int64_t> expires_at{0};
+    config.audit_write_guard = [&](const std::string &line) {
+        if (Json::parse(line)["event"] == "authority_intent" && delay_intent.exchange(false)) {
+            intent_observed = true;
+            const auto remaining = expires_at.load() - nomad::runtime::detail::unix_milliseconds();
+            std::this_thread::sleep_for(std::chrono::milliseconds((std::max<std::int64_t>)(0, remaining) + 20));
+            expired_after_wait = nomad::runtime::detail::unix_milliseconds() > expires_at.load();
+        }
+        return true;
+    };
+    auto connection = std::make_unique<FakeConnection>();
+    auto *observed = connection.get();
+    nomad::runtime::Runtime runtime(std::move(connection), config);
+    start_ready(runtime, config.ipc_port);
+    // This fault deliberately spans request validity; observe its terminal rejection.
+    Client client(config.ipc_port, std::chrono::seconds(8));
+    if (handback) {
+        admit_authority(config.ipc_port);
+        const auto revoked = client.request(authority_request("expiry-prepare-revoke", "revoke_authority", "operator"));
+        CHECK(revoked["ok"] == true);
+    }
+    read_authority(client);
+    const auto generation_before = authority.generation;
+    auto request = authority_request("expires-in-intent", handback ? "handback_authority" : "admit_authority");
+    expires_at = request["expires_at_ms"].get<std::int64_t>();
+    delay_intent = true;
+    const auto response = client.request(request);
+    CHECK(intent_observed && expired_after_wait);
+    CHECK(response["ok"] == false);
+    CHECK(response["error"]["code"] == "stale_authority");
+    const auto status = client.request(base_request("after-expired-intent", "status"))["status"];
+    CHECK(status["authority_owner"].is_null());
+    CHECK(status["authority_generation"] == generation_before);
+    CHECK(status["audit_healthy"] == true);
+    CHECK(observed->command_count() == 0);
+    const auto records = read_journal(config.audit_directory);
+    CHECK(count_event(records, "authority_intent") == (handback ? 2U : 1U));
+    CHECK(count_event(records, handback ? "authority_handback" : "authority_admission") == 0);
+    CHECK(count_event(records, "request_rejected") == 1);
+    CHECK(runtime.stop());
+}
+
+void run_authority_expiry_scenarios() {
+    nomad::test::run_scenario("admission_expiry_after_intent", [] {
+        test_authority_expiry_after_durable_intent(false);
+    });
+    nomad::test::run_scenario("handback_expiry_after_intent", [] {
+        test_authority_expiry_after_durable_intent(true);
+    });
+}
+
 void test_rejection_audit_failure(bool authentication) {
     auto config = test_config();
     config.ipc_port = free_port();

@@ -37,6 +37,26 @@ def main() -> int:
         require(not relay_commands, "retired command never reaches wire", str(relay_commands))
 
     with_peer(port, 1, ACCEPTED, action)
+
+    port = find_free_udp_port()
+
+    def callback_budget(peer: VehiclePeer) -> None:
+        result = subprocess.run(
+            [str(binary), "--callback-budget", f"udpin:127.0.0.1:{port}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        require(result.returncode == 0, "command budget includes callback delivery", result.stderr)
+        relay_commands = [command for command in peer.commands() if command[1] == COMMAND_DO_SET_RELAY]
+        require(
+            [command[0] for command in relay_commands] == ["COMMAND_LONG", "COMMAND_INT"],
+            "both callback-budget commands reach the peer with no late third command",
+            str(relay_commands),
+        )
+
+    with_peer(port, 1, ACCEPTED, callback_budget)
     return 0
 
 
