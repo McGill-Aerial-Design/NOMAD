@@ -41,6 +41,18 @@ struct MavsdkConnectionTestAccess {
         connection.sdk_.set_callback_executor(std::move(executor));
     }
 
+    static std::optional<CommandAck> send_int(Connection &connection, std::chrono::milliseconds timeout) {
+        std::shared_lock lock(connection.plugin_lifetime_mutex_);
+        mavsdk::MavlinkPassthrough::CommandInt command{};
+        command.target_sysid = 1;
+        command.target_compid = 1;
+        command.command = MAV_CMD_DO_SET_RELAY;
+        const auto result = connection.resources_->passthrough->send_command_int(
+            command, mavsdk::OperationOptions{timeout});
+        const auto code = mavsdk_command_result_code(result);
+        return code ? std::optional{CommandAck{command.command, *code}} : std::nullopt;
+    }
+
     static std::unique_ptr<Resources> prepare(Connection &connection, std::shared_ptr<mavsdk::System> selected) {
         auto candidate = std::make_unique<Resources>(std::move(selected));
         connection.subscribe(*candidate);
@@ -290,7 +302,7 @@ void test_in_flight_callback_retirement(Connection &connection, Readers &readers
     readers.observe_phase();
 }
 
-void test_command_budget_includes_callback_delivery(const std::string &endpoint) {
+void test_command_budget_includes_callback_delivery(const std::string &endpoint, bool integer) {
     std::mutex mutex;
     std::vector<std::function<void()>> queued;
     Connection connection(endpoint, 1, 3s);
@@ -301,7 +313,8 @@ void test_command_budget_includes_callback_delivery(const std::string &endpoint)
         queued.push_back(std::move(callback));
     });
     auto command = std::async(std::launch::async, [&] {
-        return connection.send_command({MAV_CMD_DO_SET_RELAY, {}}, 100ms);
+        return integer ? Access::send_int(connection, 100ms) :
+                         connection.send_command({MAV_CMD_DO_SET_RELAY, {}}, 100ms);
     });
     const bool bounded = command.wait_for(750ms) == std::future_status::ready;
     Access::callback_executor(connection, {});
@@ -409,7 +422,8 @@ int main(int argc, char **argv) {
             return;
         }
         if (argc == 3 && std::string(argv[1]) == "--callback-budget") {
-            test_command_budget_includes_callback_delivery(argv[2]);
+            test_command_budget_includes_callback_delivery(argv[2], false);
+            test_command_budget_includes_callback_delivery(argv[2], true);
             test_expired_command_cannot_send_after_admission_returns(argv[2]);
             return;
         }

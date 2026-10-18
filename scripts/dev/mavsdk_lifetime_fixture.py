@@ -50,7 +50,11 @@ def main() -> int:
         )
         require(result.returncode == 0, "command budget includes callback delivery", result.stderr)
         relay_commands = [command for command in peer.commands() if command[1] == COMMAND_DO_SET_RELAY]
-        require(len(relay_commands) == 1, "one callback-budget command reaches the peer", str(relay_commands))
+        require(
+            [command[0] for command in relay_commands] == ["COMMAND_LONG", "COMMAND_INT"],
+            "both callback-budget commands reach the peer with no late third command",
+            str(relay_commands),
+        )
 
     with_peer(port, 1, ACCEPTED, callback_budget)
     return 0
