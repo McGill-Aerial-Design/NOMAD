@@ -18,14 +18,20 @@ namespace NOMAD.MissionPlanner.Connectivity
         public const int DefaultRuntimePort = 14611;
 
         public int RuntimePort { get; }
+        /// <summary>Reports local endpoint/credential configuration only.</summary>
+        public bool IsConfigured => _runtimeClient.IsConfigured;
 
         private readonly NomadRuntimeClient _runtimeClient;
 
         public NomadCoreClient(string credential, int runtimePort = DefaultRuntimePort)
         {
-            RuntimePort = runtimePort >= 1 && runtimePort <= 65535 ? runtimePort : DefaultRuntimePort;
+            RuntimePort = runtimePort;
             _runtimeClient = new NomadRuntimeClient(RuntimePort, credential ?? "", ProcessSource);
         }
+
+        /// <summary>Read an authenticated snapshot without acquiring aircraft authority.</summary>
+        public Task<NomadStatusResult> GetStatusAsync(CancellationToken cancellationToken = default) =>
+            _runtimeClient.GetStatusAsync(cancellationToken);
 
         public Task<NomadCoreRequestResult> AdmitAuthorityAsync(CancellationToken cancellationToken = default) =>
             RunCoreAsync("admit", cancellationToken);

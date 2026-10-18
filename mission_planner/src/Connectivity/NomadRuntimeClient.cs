@@ -29,6 +29,8 @@ namespace NOMAD.MissionPlanner.Connectivity
         private readonly string _credential;
         private readonly string _clientId;
         private readonly int _responseTimeoutMilliseconds;
+        private bool ValidRuntimePort => _runtimePort >= 1 && _runtimePort <= 65535;
+        internal bool IsConfigured => ValidRuntimePort && !string.IsNullOrWhiteSpace(_credential);
 
         internal NomadRuntimeClient(int runtimePort, string credential, string clientId,
             int responseTimeoutMilliseconds = 120000)
@@ -42,6 +44,11 @@ namespace NOMAD.MissionPlanner.Connectivity
         internal async Task<NomadCoreRequestResult> RunAsync(string verb, string[] values,
                                                              CancellationToken cancellationToken, Func<bool> inputStillCurrent = null)
         {
+            if (!ValidRuntimePort)
+            {
+                return new NomadCoreRequestResult(NomadCoreRequestOutcome.NotAttempted,
+                    "invalid_configuration", "The runtime IPC port is invalid.");
+            }
             var command = BuildRuntimeRequest(verb, values);
             if (command == null)
             {

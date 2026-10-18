@@ -52,6 +52,8 @@ jobs:
         with:
           cache: true
       - name: Build and test C++ core
+        env:
+          NOMAD_QUALIFICATION_AUDIT_TIMING: ${{ runner.os == 'Windows' && '1' || '' }}
         run: pixi run test-core
       - name: Qualify installed CLI parsing and LAND outcomes with built binaries
         run: pixi run python -m pytest tests/test_core_client_contract.py tests/test_runtime_land_native_timing.py -q
@@ -61,6 +63,11 @@ jobs:
         run: pixi run python scripts/dev/runtime_land_fixture.py
       - name: Qualify clean/crash restart and persistent audit history without hardware
         run: pixi run python scripts/dev/runtime_lifecycle_qualification.py
+      - name: Qualify Mission Planner STATUS against the actual runtime
+        if: runner.os == 'Windows'
+        run: |
+          pixi run test-plugin-core-client
+          pixi run --skip-deps test-plugin-runtime-status
 
   core-release:
     name: Core release qualification (${{ matrix.os }})
