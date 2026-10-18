@@ -73,6 +73,7 @@ class MavsdkMavlinkConnection final : public MavlinkConnection {
     std::optional<CommandAck> send_command(const Command &command, std::uint64_t expected_session_id,
                                            std::chrono::milliseconds timeout) override;
     bool goto_location_relative(double latitude_deg, double longitude_deg, float relative_altitude_m,
+                                const StateAdmission &state_admission,
                                 std::chrono::milliseconds timeout) override;
     std::optional<CommandAck> send_fixed_wing_waypoint(
         const FixedWingWaypointCommand &waypoint, std::uint64_t expected_session_id,
@@ -87,7 +88,8 @@ class MavsdkMavlinkConnection final : public MavlinkConnection {
   private:
     bool is_connected_unlocked() const;
     telemetry::VehicleState state_locked() const;
-    TransmissionAdmission get_command_admission(const Command &command, const TransmissionAdmission &admission) const;
+    TransmissionAdmission get_state_admission(const StateAdmission &validate,
+                                               const TransmissionAdmission &admission) const;
 
     friend struct MavsdkConnectionTestAccess;
     struct CallbackGate {

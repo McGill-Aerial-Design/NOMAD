@@ -21,6 +21,7 @@ struct Gate {
     std::mutex mutex;
     std::uint64_t generation{0};
     bool admitted{false};
+    bool context_valid{true};
 };
 
 void report(const std::string &line) {
@@ -29,7 +30,8 @@ void report(const std::string &line) {
     std::cout << line << std::endl;
 }
 
-void run_command(nomad::mavlink::MavlinkConnection &connection, const std::string &kind) {
+void run_command(nomad::mavlink::MavlinkConnection &connection, const std::string &kind,
+                 const std::shared_ptr<Gate> &gate) {
     bool accepted = false;
     if (kind == "int") {
         const nomad::mavlink::FixedWingWaypointCommand waypoint{45.5, -73.6, 10.0F, 20.0F};
@@ -37,6 +39,12 @@ void run_command(nomad::mavlink::MavlinkConnection &connection, const std::strin
         const auto result = connection.send_fixed_wing_waypoint(waypoint, session, 2500ms);
         accepted = result.has_value() && result->status == nomad::mavlink::CommandAck::Status::Acknowledged &&
                    result->result == 0;
+    } else if (kind == "goto") {
+        const auto context_valid = [gate](const nomad::telemetry::VehicleState &) {
+            std::lock_guard lock(gate->mutex);
+            return gate->context_valid;
+        };
+        accepted = connection.goto_location_relative(45.5, -73.6, 10.0F, context_valid, 2500ms);
     } else {
         const nomad::mavlink::Command command{183, {8.0F, 1500.0F, 0, 0, 0, 0, 0}};
         const auto result = connection.send_command(command, 2500ms);
@@ -77,8 +85,12 @@ int run(const std::string &endpoint) {
             ++gate->generation;
             gate->admitted = line != "revoke";
             report(line + "=ok");
-        } else if (line == "long" || line == "int") {
-            commands.emplace_back([&connection, kind = line] { run_command(*connection, kind); });
+        } else if (line == "context-on" || line == "context-off") {
+            std::lock_guard lock(gate->mutex);
+            gate->context_valid = line == "context-on";
+            report(line + "=ok");
+        } else if (line == "long" || line == "int" || line == "goto") {
+            commands.emplace_back([&connection, gate, kind = line] { run_command(*connection, kind, gate); });
             report(line + "=started");
         } else if (line == "stop") {
             {

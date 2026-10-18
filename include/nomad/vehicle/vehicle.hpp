@@ -185,7 +185,8 @@ class Vehicle {
     std::optional<std::string> vtol_transition_state_error(const telemetry::VehicleState &state,
                                                             const telemetry::VehicleState &expected_state,
                                                             bool require_precondition) const;
-    CommandResult wait_for_location(const Location &location);
+    CommandResult wait_for_location(const Location &location, const telemetry::VehicleState &initial,
+                                     std::chrono::steady_clock::time_point ack_boundary);
     CommandResult wait_for_copter_land(const telemetry::VehicleState &initial_state,
                                        std::chrono::steady_clock::time_point ack_boundary,
                                        std::chrono::steady_clock::time_point deadline,

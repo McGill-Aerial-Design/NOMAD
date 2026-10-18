@@ -133,7 +133,12 @@ int run_probe(int argc, char **argv) {
             std::fprintf(stderr, "the int probe only supports relative goto\n");
             return 2;
         }
-        const bool accepted = connection->goto_location_relative(45.5, -73.6, 10.0F, command_timeout);
+        const auto initial = connection->get_state();
+        const auto same_session = [initial](const nomad::telemetry::VehicleState &state) {
+            return state.connected && state.heartbeat_fresh && state.session_id == initial.session_id &&
+                   state.system_id == initial.system_id && state.component_id == initial.component_id;
+        };
+        const bool accepted = connection->goto_location_relative(45.5, -73.6, 10.0F, same_session, command_timeout);
         std::printf(accepted ? "ack=0\n" : "ack=none\n");
         return accepted ? 0 : 1;
     }

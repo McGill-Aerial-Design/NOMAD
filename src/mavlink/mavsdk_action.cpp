@@ -8,7 +8,12 @@
 namespace nomad::mavlink {
 
 bool MavsdkMavlinkConnection::goto_location_relative(double latitude_deg, double longitude_deg,
-                                                      float relative_altitude_m, std::chrono::milliseconds timeout) {
+                                                      float relative_altitude_m,
+                                                      const StateAdmission &state_admission,
+                                                      std::chrono::milliseconds timeout) {
+    if (!state_admission) {
+        return false;
+    }
     const auto admission = capture_transmission_admission();
     if (admission && !admission([] {})) {
         return false;
@@ -18,7 +23,8 @@ bool MavsdkMavlinkConnection::goto_location_relative(double latitude_deg, double
         return false;
     }
     mavsdk::OperationOptions options{timeout};
-    options.transmission_admission = admission;
+    // Action may first change mode; the same guard covers both commands and retries.
+    options.transmission_admission = get_state_admission(state_admission, admission);
     return resources_->action->goto_location_relative(latitude_deg, longitude_deg, relative_altitude_m, NAN, options) ==
            mavsdk::Action::Result::Success;
 }

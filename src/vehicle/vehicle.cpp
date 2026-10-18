@@ -229,31 +229,40 @@ CommandResult Vehicle::takeoff(float altitude_m) {
 
 CommandResult Vehicle::goto_location(const Location &location) {
     if (!std::isfinite(location.latitude_deg) || location.latitude_deg < -90.0 || location.latitude_deg > 90.0) {
-        return {false, "latitude must be finite and between -90 and 90 degrees"};
+        return {false, "latitude must be finite and between -90 and 90 degrees", false, CommandOutcome::Rejected};
     }
     if (!std::isfinite(location.longitude_deg) || location.longitude_deg < -180.0 || location.longitude_deg > 180.0) {
-        return {false, "longitude must be finite and between -180 and 180 degrees"};
+        return {false, "longitude must be finite and between -180 and 180 degrees", false, CommandOutcome::Rejected};
     }
     if (!std::isfinite(location.altitude_m)) {
-        return {false, "altitude must be finite"};
+        return {false, "altitude must be finite", false, CommandOutcome::Rejected};
     }
     const auto fence_decision =
         safety::evaluate_global_position(fence_policy_, {location.latitude_deg, location.longitude_deg});
     if (!fence_decision.allowed) {
-        return {false, fence_decision.message};
+        return {false, fence_decision.message, false, CommandOutcome::Rejected};
     }
-    const auto admission = require_operation(VehicleOperation::GotoLocation);
+    const auto initial = connection_.get_state();
+    auto admission = require_operation(VehicleOperation::GotoLocation, initial);
     if (!admission.success) {
+        admission.outcome = CommandOutcome::Rejected;
         return admission;
     }
-    if (!connection_.is_connected()) {
-        return {false, "not connected"};
+    if (!connection_.is_connected() || !detail::identified_copter_session(initial, initial) ||
+        !detail::heartbeat_is_fresh(initial, kCommandTimeout, std::chrono::steady_clock::now())) {
+        return {false, "goto location requires a fresh qualified Copter session", false, CommandOutcome::Rejected};
     }
+    const auto send_deadline = std::chrono::steady_clock::now() + kCommandTimeout;
+    const auto state_admission = [initial, send_deadline](const telemetry::VehicleState &state) {
+        return std::chrono::steady_clock::now() < send_deadline && detail::identified_copter_session(state, initial) &&
+               detail::heartbeat_is_fresh(state, kCommandTimeout, std::chrono::steady_clock::now());
+    };
     if (!connection_.goto_location_relative(location.latitude_deg, location.longitude_deg, location.altitude_m,
-                                            kCommandTimeout)) {
-        return {false, "goto location command not accepted"};
+                                            state_admission, kCommandTimeout)) {
+        // Action can fail at mode selection or reposition; its bool exposes no rejection ACK.
+        return {false, "goto location command not accepted", false, CommandOutcome::Unknown};
     }
-    return wait_for_location(location);
+    return wait_for_location(location, initial, std::chrono::steady_clock::now());
 }
 
 CommandResult Vehicle::land() {
@@ -507,15 +516,32 @@ CommandResult Vehicle::wait_for_takeoff(float minimum_altitude_m, const telemetr
     return result;
 }
 
-CommandResult Vehicle::wait_for_location(const Location &location) {
-    const auto verdict = [this, &location](const telemetry::VehicleState &state) -> std::optional<CommandResult> {
+CommandResult Vehicle::wait_for_location(const Location &location, const telemetry::VehicleState &initial,
+                                        std::chrono::steady_clock::time_point ack_boundary) {
+    const auto verdict = [this, &location, initial, ack_boundary](const telemetry::VehicleState &state)
+        -> std::optional<CommandResult> {
+        if (!connection_.is_connected() || !state.connected || !detail::identified_copter_session(state, initial)) {
+            return CommandResult{false, "goto location session or identity changed", true, CommandOutcome::Interrupted};
+        }
         if (!state.position_valid) {
             return std::nullopt;
         }
         // A fresh heartbeat does not imply a fresh position: fail closed if the
         // GLOBAL_POSITION_INT feed has gone quiet rather than trusting a stale fix.
         if (position_is_stale(state)) {
-            return CommandResult{false, "goto location verification failed: position feed is stale"};
+            return CommandResult{false, "goto location verification failed: position feed is stale",
+                                 true, CommandOutcome::Failed};
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (state.position_updated_at <= ack_boundary || state.heartbeat_updated_at <= ack_boundary ||
+            !detail::timestamp_is_fresh(state.position_updated_at, position_freshness_timeout_, now) ||
+            !detail::heartbeat_is_fresh(state, kCommandTimeout, now)) {
+            return std::nullopt;
+        }
+        if (!(state.position.latitude_deg >= -90.0 && state.position.latitude_deg <= 90.0 &&
+              state.position.longitude_deg >= -180.0 && state.position.longitude_deg <= 180.0 &&
+              std::isfinite(state.position.relative_altitude_m))) {
+            return std::nullopt;
         }
         const auto latitude_error = std::abs(state.position.latitude_deg - location.latitude_deg);
         const auto longitude_error = std::abs(state.position.longitude_deg - location.longitude_deg);
@@ -528,11 +554,15 @@ CommandResult Vehicle::wait_for_location(const Location &location) {
         if (!arrived) {
             return std::nullopt;
         }
-        return CommandResult{true, "goto location verified"};
+        return CommandResult{true, "goto location verified", true, CommandOutcome::Success};
     };
-    return wait_for_state_until(kNavigationStateTimeout,
-                                "goto location acknowledgement received but position verification timed out",
-                                verdict);
+    auto result = wait_for_state_until(kNavigationStateTimeout,
+        "goto location acknowledgement received but position verification timed out", verdict);
+    result.acknowledged = true;
+    if (!result.success && result.outcome == CommandOutcome::Unspecified) {
+        result.outcome = CommandOutcome::Unknown;
+    }
+    return result;
 }
 
 CommandResult Vehicle::send_command(const mavlink::Command &command, const char *name) {
