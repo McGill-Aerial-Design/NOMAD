@@ -5,9 +5,36 @@
 #include "support/test_harness.hpp"
 
 #include <chrono>
+#include <string_view>
 #include <thread>
 
 namespace {
+class LateVerdictConnection final : public FakeConnection {
+  public:
+    bool is_connected() const override {
+        if (verdict_pending_) {
+            verdict_pending_ = false;
+            verdict_entered = true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1700));
+        }
+        return FakeConnection::is_connected();
+    }
+
+    std::optional<nomad::telemetry::VehicleState> wait_for_state(std::chrono::milliseconds) override {
+        // Return before the ten-second observation deadline, then delay its verdict.
+        std::this_thread::sleep_for(std::chrono::milliseconds(8500));
+        std::lock_guard lock(state_mutex);
+        state->heartbeat_updated_at = std::chrono::steady_clock::now();
+        verdict_pending_ = true;
+        return *state;
+    }
+
+    mutable bool verdict_entered{false};
+
+  private:
+    mutable bool verdict_pending_{false};
+};
+
 enum class Fault { None, Session, System, Component, Class, VehicleType, Disconnected, OldSample };
 
 class RtlConnection final : public FakeConnection {
@@ -160,15 +187,37 @@ void test_rtl_preserves_negative_missing_and_wrong_acknowledgements() {
         CHECK(connection.command_history.size() == 1);
     }
 }
+
+void test_rtl_cannot_accept_a_verdict_after_the_observation_deadline() {
+    LateVerdictConnection connection;
+    CHECK(connection.connect());
+    connection.acknowledgement = nomad::mavlink::CommandAck{20, 0};
+    nomad::vehicle::Vehicle vehicle(connection);
+
+    const auto result = vehicle.return_to_launch();
+
+    CHECK(connection.verdict_entered);
+    CHECK(!result.success);
+    CHECK(result.acknowledged);
+    CHECK(result.outcome == nomad::vehicle::CommandOutcome::Unknown);
+    CHECK(connection.command_history.size() == 1);
+}
 }
 
-int main() {
-    return nomad::test::run_tests([] {
+int main(int argc, char **argv) {
+    return nomad::test::run_tests([argc, argv] {
+        if (argc == 2 && std::string_view(argv[1]) == "--wait-verdict") {
+            nomad::test::run_scenario("rtl_verdict_after_deadline",
+                test_rtl_cannot_accept_a_verdict_after_the_observation_deadline);
+            return;
+        }
         test_rtl_cannot_verify_a_replaced_aircraft();
         test_rtl_requires_a_post_acknowledgement_sample();
         test_rtl_preserves_ack_and_observed_mode();
         test_rtl_rejects_unusable_initial_context();
         test_rtl_rechecks_context_at_send();
         test_rtl_preserves_negative_missing_and_wrong_acknowledgements();
+        nomad::test::run_scenario("rtl_verdict_after_deadline",
+            test_rtl_cannot_accept_a_verdict_after_the_observation_deadline);
     });
 }
