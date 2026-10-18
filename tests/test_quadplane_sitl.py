@@ -41,7 +41,7 @@ def test_rc_probe_ci_is_isolated_bounded_and_preserves_the_flight_chain() -> Non
     assert "set -euo pipefail" in commands
     assert "for attempt in 1 2" in commands
     assert "-p nomad-quadplane-probe" in commands
-    assert "--rm --name nomad-quadplane-rc-probe" in commands
+    assert "--name nomad-quadplane-rc-probe" in commands
     assert "SITL_UDP_OUTPUT_ADDRESS=udp:host.docker.internal:14680" in commands
     assert "SITL_UDP_OBSERVER_ADDRESS=udp:host.docker.internal:14681" in commands
     assert 'probe_container=""' in commands

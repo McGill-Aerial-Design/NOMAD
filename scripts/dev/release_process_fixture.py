@@ -3,13 +3,19 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 from ground_router_fixture_support import management_request
 from runtime_fixture_support import request, require, stop_runtime
 from runtime_lifecycle_fixture import wait_for
+
+from scripts.release.manifest import digest_file
 
 
 class RuntimeProcess:
@@ -37,10 +43,35 @@ class RuntimeProcess:
 
     def preflight(self, candidate: dict) -> None:
         require(self.config.is_file(), "external protected runtime configuration remains available")
-        result = subprocess.run([str(self.executable(candidate)), "--version"], capture_output=True, timeout=10)
-        require(result.returncode == 0, "candidate runtime version probe starts without a vehicle connection")
+        executable = self.executable(candidate)
+        image_sha256 = digest_file(executable)
         label = "A" if candidate["source_sha"] == "a" * 40 else "B"
-        require(("0.0.0-fixture." + label).encode() in result.stdout, "candidate reports expected fixture version")
+        expected = ("0.0.0-fixture." + label).encode()
+        started = time.monotonic()
+        try:
+            result = subprocess.run([str(executable), "--version"], capture_output=True, timeout=10)
+        except subprocess.TimeoutExpired as error:
+            try:
+                output, stderr = error.output or b"", error.stderr or b""
+                record = {
+                    "scope": "release-version-probe",
+                    "phase": "timeout",
+                    "timeout_seconds": error.timeout,
+                    "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+                    "image_sha256": image_sha256,
+                    "stdout_bytes": len(output),
+                    "stdout_sha256": hashlib.sha256(output).hexdigest(),
+                    "stderr_bytes": len(stderr),
+                    "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+                    "expected_version_observed": expected in output,
+                }
+                print(json.dumps(record), file=sys.stderr)
+            except Exception:
+                # Diagnostic delivery must not replace the timeout.
+                pass
+            raise subprocess.TimeoutExpired(["<candidate-runtime>", "--version"], error.timeout) from None
+        require(result.returncode == 0, "candidate runtime version probe starts without a vehicle connection")
+        require(expected in result.stdout, "candidate reports expected fixture version")
 
     def stop(self) -> None:
         if self.child is None or self.child.poll() is not None:
