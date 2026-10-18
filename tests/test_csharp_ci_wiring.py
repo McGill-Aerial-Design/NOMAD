@@ -4,8 +4,13 @@
 
 import ast
 import fnmatch
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from scripts.ci.csharp_scope import QUALIFICATION_PATH_PATTERNS
 
@@ -139,3 +144,39 @@ def test_direct_command_architecture_guard_runs_for_plugin_changes():
     assert "tests/test_mission_planner_command_boundary.py" in QUALIFICATION_PATH_PATTERNS
     assert "Mission Planner direct-command architectural guard" in workflow
     assert "pixi run python -m pytest tests/test_mission_planner_command_boundary.py -q" in workflow
+
+
+@pytest.mark.parametrize("client_exit,status_exit", [(7, 0), (0, 7), (0, 0)])
+def test_native_status_step_preserves_each_check_result(client_exit, status_exit):
+    powershell = shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is unavailable for the workflow command check")
+    yaml = pytest.importorskip("yaml")
+    workflow = yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8"))
+    step = next(
+        item
+        for item in workflow["jobs"]["core"]["steps"]
+        if item.get("name") == "Qualify Mission Planner STATUS against the actual runtime"
+    )["run"]
+    commands = step[step.index("pixi run test-plugin-core-client") :]
+    script = f"""$ErrorActionPreference = 'Stop'
+$global:calls = @()
+function pixi {{
+    $name = if ($args -contains 'test-plugin-core-client') {{ 'client' }} else {{ 'status' }}
+    $global:calls += $name
+    $global:LASTEXITCODE = if ($name -eq 'client') {{ {client_exit} }} else {{ {status_exit} }}
+}}
+try {{
+{commands}
+}} catch {{
+    [Console]::WriteLine((@{{calls=@($global:calls)}} | ConvertTo-Json -Compress))
+    exit $global:LASTEXITCODE
+}}
+[Console]::WriteLine((@{{calls=@($global:calls)}} | ConvertTo-Json -Compress))
+if (Test-Path -LiteralPath variable:\\LASTEXITCODE) {{ exit $LASTEXITCODE }}
+"""
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == (client_exit or status_exit)
+    assert json.loads(result.stdout)["calls"] == (["client"] if client_exit else ["client", "status"])
