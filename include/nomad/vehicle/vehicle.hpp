@@ -128,7 +128,8 @@ class Vehicle {
     CommandResult wait_for_armed_state(bool expected, const char *name);
     CommandResult wait_for_mode(std::uint32_t expected, const char *name);
     CommandResult wait_for_mode(const std::function<bool(std::uint32_t)> &matches, const char *name);
-    CommandResult send_mode_and_verify(std::uint32_t custom_mode, const char *name);
+    CommandResult send_mode_and_verify(std::uint32_t custom_mode, const char *name,
+                                       const telemetry::VehicleState &initial);
     CommandResult wait_for_altitude(float minimum_altitude_m, const char *name);
     CommandResult wait_for_vtol_takeoff(float target_altitude_m, const telemetry::VehicleState &expected_state,
                                         std::chrono::steady_clock::time_point ack_boundary);
@@ -189,6 +190,7 @@ class Vehicle {
                                        std::chrono::steady_clock::time_point deadline,
                                        const std::function<bool()> &still_authorized);
     CommandResult require_operation(VehicleOperation operation) const;
+    CommandResult require_operation(VehicleOperation operation, const telemetry::VehicleState &state) const;
     // A fresh heartbeat does not imply a fresh position: callers fail closed
     // when this is true rather than trusting a stale fix.
     bool position_is_stale(const telemetry::VehicleState &state) const;

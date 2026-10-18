@@ -47,6 +47,14 @@ CommandResult validate_command_acknowledgement(
     return {true, std::string(name) + " accepted", true};
 }
 
+CommandOutcome failed_acknowledgement_outcome(
+    const std::optional<mavlink::CommandAck> &ack, bool acknowledged) {
+    if (ack && ack->status == mavlink::CommandAck::Status::AdmissionCancelled) {
+        return CommandOutcome::Interrupted;
+    }
+    return acknowledged ? CommandOutcome::Failed : CommandOutcome::Unknown;
+}
+
 } // namespace
 
 Vehicle::Vehicle(mavlink::MavlinkConnection &connection, VehicleConfig config)
@@ -129,8 +137,7 @@ CommandResult Vehicle::arm() {
     const auto ack_boundary = std::chrono::steady_clock::now();
     result = validate_command_acknowledgement(command, "arm", ack);
     if (!result.success) {
-        result.outcome = ack && ack->status == mavlink::CommandAck::Status::AdmissionCancelled ?
-            CommandOutcome::Interrupted : result.acknowledged ? CommandOutcome::Failed : CommandOutcome::Unknown;
+        result.outcome = failed_acknowledgement_outcome(ack, result.acknowledged);
         return result;
     }
     const auto verdict = [this, initial, ack_boundary](const telemetry::VehicleState &state)
@@ -166,23 +173,28 @@ CommandResult Vehicle::disarm() {
 }
 
 CommandResult Vehicle::set_mode(std::uint32_t custom_mode) {
-    const auto admission = require_operation(VehicleOperation::SetMode);
+    const auto initial = connection_.get_state();
+    auto admission = require_operation(VehicleOperation::SetMode, initial);
     if (!admission.success) {
+        admission.outcome = CommandOutcome::Rejected;
         return admission;
     }
-    return send_mode_and_verify(custom_mode, "set mode");
+    return send_mode_and_verify(custom_mode, "set mode", initial);
 }
 
 CommandResult Vehicle::set_guided_mode() {
-    const auto admission = require_operation(VehicleOperation::SetGuidedMode);
+    const auto initial = connection_.get_state();
+    auto admission = require_operation(VehicleOperation::SetGuidedMode, initial);
     if (!admission.success) {
+        admission.outcome = CommandOutcome::Rejected;
         return admission;
     }
-    const auto mode = telemetry::guided_mode_for(connection_.get_state().identity.aircraft_class);
+    const auto mode = telemetry::guided_mode_for(initial.identity.aircraft_class);
     if (!mode.has_value()) {
-        return {false, "guided mode is unavailable for an unknown or unsupported aircraft"};
+        return {false, "guided mode is unavailable for an unknown or unsupported aircraft",
+                false, CommandOutcome::Rejected};
     }
-    return send_mode_and_verify(*mode, "set guided mode");
+    return send_mode_and_verify(*mode, "set guided mode", initial);
 }
 
 CommandResult Vehicle::takeoff(float altitude_m) {
@@ -306,8 +318,7 @@ CommandResult Vehicle::return_to_launch() {
     const auto ack_boundary = std::chrono::steady_clock::now();
     auto result = validate_command_acknowledgement(command, "return to launch", ack);
     if (!result.success) {
-        result.outcome = ack && ack->status == mavlink::CommandAck::Status::AdmissionCancelled ?
-            CommandOutcome::Interrupted : result.acknowledged ? CommandOutcome::Failed : CommandOutcome::Unknown;
+        result.outcome = failed_acknowledgement_outcome(ack, result.acknowledged);
         return result;
     }
     const auto verdict = [this, initial, ack_boundary](const telemetry::VehicleState &state)
@@ -377,13 +388,49 @@ CommandResult Vehicle::wait_for_mode(std::uint32_t expected, const char *name) {
     return wait_for_mode([expected](std::uint32_t mode) { return mode == expected; }, name);
 }
 
-CommandResult Vehicle::send_mode_and_verify(std::uint32_t custom_mode, const char *name) {
-    const auto result = send_command(
-        make_command(kSetModeCommand, {1, static_cast<float>(custom_mode), 0, 0, 0, 0, 0}), name);
+CommandResult Vehicle::send_mode_and_verify(std::uint32_t custom_mode, const char *name,
+                                           const telemetry::VehicleState &initial) {
+    const bool identified = initial.session_id != 0 && initial.system_id != 0 && initial.component_id != 0 &&
+        initial.identity.autopilot_type == telemetry::kArduPilotAutopilot &&
+        (initial.identity.aircraft_class != telemetry::AircraftClass::Copter ||
+         detail::identified_copter_session(initial, initial));
+    if (!connection_.is_connected() || !identified ||
+        !detail::heartbeat_is_fresh(initial, kCommandTimeout, std::chrono::steady_clock::now())) {
+        return {false, std::string(name) + " requires a fresh qualified vehicle session",
+                false, CommandOutcome::Rejected};
+    }
+    auto command = make_command(kSetModeCommand, {1, static_cast<float>(custom_mode), 0, 0, 0, 0, 0});
+    const auto send_deadline = std::chrono::steady_clock::now() + kCommandTimeout;
+    command.state_admission = [initial, send_deadline](const telemetry::VehicleState &state) {
+        return std::chrono::steady_clock::now() < send_deadline && detail::same_vehicle_session(state, initial) &&
+               detail::heartbeat_is_fresh(state, kCommandTimeout, std::chrono::steady_clock::now());
+    };
+    const auto ack = connection_.send_command(command, initial.session_id, kCommandTimeout);
+    const auto ack_boundary = std::chrono::steady_clock::now();
+    auto result = validate_command_acknowledgement(command, name, ack);
     if (!result.success) {
+        result.outcome = failed_acknowledgement_outcome(ack, result.acknowledged);
         return result;
     }
-    return wait_for_mode(custom_mode, name);
+    const auto verdict = [this, initial, ack_boundary, custom_mode, name](const telemetry::VehicleState &state)
+        -> std::optional<CommandResult> {
+        if (!connection_.is_connected() || !state.connected || !detail::same_vehicle_session(state, initial)) {
+            return CommandResult{false, std::string(name) + " session or identity changed",
+                                 true, CommandOutcome::Interrupted};
+        }
+        if (state.custom_mode == custom_mode && state.heartbeat_updated_at > ack_boundary &&
+            detail::heartbeat_is_fresh(state, kCommandTimeout, std::chrono::steady_clock::now())) {
+            return CommandResult{true, std::string(name) + " verified", true, CommandOutcome::Success};
+        }
+        return std::nullopt;
+    };
+    result = wait_for_state_until(kStateTimeout,
+        std::string(name) + " acknowledgement received but mode verification timed out", verdict);
+    result.acknowledged = true;
+    if (!result.success && result.outcome == CommandOutcome::Unspecified) {
+        result.outcome = CommandOutcome::Unknown;
+    }
+    return result;
 }
 
 CommandResult Vehicle::wait_for_mode(const std::function<bool(std::uint32_t)> &matches, const char *name) {
@@ -399,7 +446,11 @@ CommandResult Vehicle::wait_for_mode(const std::function<bool(std::uint32_t)> &m
 }
 
 CommandResult Vehicle::require_operation(VehicleOperation operation) const {
-    const auto aircraft_class = connection_.get_state().identity.aircraft_class;
+    return require_operation(operation, connection_.get_state());
+}
+
+CommandResult Vehicle::require_operation(VehicleOperation operation, const telemetry::VehicleState &state) const {
+    const auto aircraft_class = state.identity.aircraft_class;
     if (supports_operation(aircraft_class, operation)) {
         return {true, "operation capability verified"};
     }

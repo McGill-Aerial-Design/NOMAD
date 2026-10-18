@@ -16,6 +16,12 @@ class FixedWingWaypointFakeConnection : public FakeConnection {
         apply_fixed_wing_waypoint_sample();
         if (auto_stamp_fresh_fields) {
             stamp_fresh_fields();
+        } else {
+            // Frozen navigation samples do not stop the fixture's healthy heartbeat feed.
+            std::lock_guard lock(state_mutex);
+            if (state->connected && state->heartbeat_fresh) {
+                state->heartbeat_updated_at = std::chrono::steady_clock::now();
+            }
         }
         return get_state();
     }

@@ -37,6 +37,7 @@ void configure_fixed_wing_quadplane(FixedWingWaypointFakeConnection &connection)
     state.set_gps({3, 12}, sample_time);
     state.set_vtol_state(VtolState::FixedWing, sample_time);
     connection.state = state.build();
+    connection.state->heartbeat_updated_at = sample_time;
     connection.connect();
 }
 
