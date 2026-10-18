@@ -280,6 +280,7 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     add_test(NAME nomad_mavsdk_validation_tests COMMAND nomad_mavsdk_validation_tests)
 
     nomad_add_core_test(nomad_core_tests tests/core_test.cpp)
+    nomad_add_core_test(nomad_rtl_verification_tests tests/rtl_verification_test.cpp)
     nomad_add_core_test(nomad_disarm_monitor_tests tests/disarm_monitor_test.cpp)
     nomad_add_core_test(nomad_copter_land_tests tests/copter_land_test.cpp)
     nomad_add_core_test(nomad_fake_connection_contract_tests tests/fake_connection_contract_test.cpp)

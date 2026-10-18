@@ -508,6 +508,10 @@ int main(int argc, char **argv) {
             run_native_audit_timing_scenarios();
             return;
         }
+        if (argc == 2 && std::string_view(argv[1]) == "--admission-audit-environment") {
+            native_timing_environment_fixture(true);
+            return;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--native-audit-environment") {
             native_timing_environment_fixture();
             return;

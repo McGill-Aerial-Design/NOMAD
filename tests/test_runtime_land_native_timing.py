@@ -301,6 +301,58 @@ def test_actual_native_environment_and_last_owner_delivery(modules, flag):
         assert land.project_native_timing(candidates[0][1]) is not None
 
 
+@pytest.mark.parametrize("flag", [None, "0", "1"])
+def test_actual_admission_capture_is_opt_in_and_post_owner(modules, flag):
+    _, support = modules
+    try:
+        binary = support.find_runtime().with_name(
+            "nomad_runtime_tests.exe" if os.name == "nt" else "nomad_runtime_tests"
+        )
+    except FileNotFoundError:
+        pytest.skip("native runtime build unavailable")
+    if not binary.is_file():
+        pytest.skip("native runtime test binary unavailable")
+    environment = dict(os.environ)
+    environment.pop("NOMAD_QUALIFICATION_AUDIT_TIMING", None)
+    if flag is not None:
+        environment["NOMAD_QUALIFICATION_AUDIT_TIMING"] = flag
+    result = subprocess.run(
+        [str(binary), "--admission-audit-environment"], env=environment, capture_output=True, timeout=10
+    )
+    assert result.returncode == 0
+    lines = result.stderr.splitlines()
+    before = lines.index(b"native_probe_before_final_release")
+    after = lines.index(b"native_probe_after_final_release")
+    candidates = [(index, json.loads(line)) for index, line in enumerate(lines) if line.startswith(b'{"capacity"')]
+    assert len(candidates) == (2 if flag == "1" else 0)
+    if flag != "1":
+        return
+    for index, value in candidates:
+        assert before < index < after
+        assert set(value) == {"event", "capacity", "overflow", "records"}
+        assert value["capacity"] == 8 and value["overflow"] is False
+    land = next(value for _, value in candidates if value["event"] == "runtime_land_native_timing")
+    admission = next(value for _, value in candidates if value["event"] == "runtime_admission_native_timing")
+    assert land["records"] == []
+    assert [row["journal_event"] for row in admission["records"]] == ["authority_intent", "authority_admission"]
+    assert [row["ordinal"] for row in admission["records"]] == [1, 2]
+    for row in admission["records"]:
+        assert set(row) == {
+            "journal_event",
+            "ordinal",
+            "lock_acquired_us",
+            "before_native_us",
+            "after_native_us",
+            "append_finish_us",
+            "native_success",
+            "append_success",
+        }
+        assert (
+            0 <= row["lock_acquired_us"] <= row["before_native_us"] <= row["after_native_us"] <= row["append_finish_us"]
+        )
+        assert row["native_success"] is True and row["append_success"] is True
+
+
 def test_actual_land_entry_sanitizes_timeout_command_contents(modules, monkeypatch, capsys):
     _, support = modules
     peer_module = importlib.import_module("mavsdk_peer")

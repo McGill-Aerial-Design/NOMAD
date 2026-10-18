@@ -28,9 +28,9 @@ class AuditJournal {
   private:
     friend struct AuditJournalTestAccess;
     using TimingClock = std::chrono::steady_clock;
-    enum class LandEvent { Intent, Outcome, Rejected };
+    enum class TimedEvent { Intent, Outcome, Rejected, AdmissionIntent, Admission };
     struct AppendTiming {
-        LandEvent event{};
+        TimedEvent event{};
         std::uint64_t ordinal{};
         std::int64_t lock_acquired_us{};
         std::optional<std::int64_t> before_native_us;
@@ -39,8 +39,9 @@ class AuditJournal {
         std::optional<bool> native_success;
         bool append_success{};
     };
-    static std::optional<LandEvent> land_event(const nlohmann::json &record);
-    nlohmann::json timing_json() const;
+    static std::optional<TimedEvent> timed_event(const nlohmann::json &record);
+    static const char *timed_event_name(TimedEvent event);
+    nlohmann::json timing_json(bool admission = false) const;
     bool validate_history(const std::string &directory);
     void fail();
     mutable std::mutex mutex_;
@@ -54,6 +55,9 @@ class AuditJournal {
     std::array<AppendTiming, 8> timings_{};
     std::size_t timing_count_{};
     bool timing_overflow_{false};
+    std::array<AppendTiming, 8> admission_timings_{};
+    std::size_t admission_timing_count_{};
+    bool admission_timing_overflow_{false};
 };
 
 } // namespace nomad::runtime::detail

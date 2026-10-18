@@ -164,15 +164,13 @@ void test_guided_mode_uses_its_semantic_operation() {
     CHECK(connection.last_command.parameters[1] == 4.0F);
 }
 
-void test_land_and_rtl_are_verified() {
+void test_land_is_verified() {
     FakeConnection connection;
     connection.connect();
     nomad::vehicle::Vehicle vehicle(connection);
 
     connection.acknowledgement = nomad::mavlink::CommandAck{21, 0};
     CHECK(vehicle.land().success);
-    connection.acknowledgement = nomad::mavlink::CommandAck{20, 0};
-    CHECK(vehicle.return_to_launch().success);
 }
 
 void test_plane_commands_are_rejected_before_transmission() {
@@ -422,7 +420,7 @@ int main() {
         test_quadplane_vtol_takeoff_does_not_treat_ack_as_completion();
         test_quadplane_vtol_takeoff_rejects_partial_climb();
         test_guided_mode_uses_its_semantic_operation();
-        test_land_and_rtl_are_verified();
+        test_land_is_verified();
         test_plane_commands_are_rejected_before_transmission();
         test_quadplane_generic_takeoff_is_rejected_before_transmission();
         test_quadplane_vtol_takeoff_rejects_stale_position_before_transmission();
