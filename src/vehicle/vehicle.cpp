@@ -102,15 +102,55 @@ std::optional<telemetry::VehicleState> Vehicle::wait_for_telemetry(
 }
 
 CommandResult Vehicle::arm() {
-    const auto admission = require_operation(VehicleOperation::Arm);
-    if (!admission.success) {
-        return admission;
-    }
-    const auto result = send_command(make_command(kArmDisarmCommand, {1, 0, 0, 0, 0, 0, 0}), "arm");
+    auto result = require_operation(VehicleOperation::Arm);
     if (!result.success) {
+        result.outcome = CommandOutcome::Rejected;
         return result;
     }
-    return wait_for_armed_state(true, "arm");
+    const auto initial = connection_.get_state();
+    if (initial.identity.aircraft_class == telemetry::AircraftClass::QuadPlane) {
+        result = send_command(make_command(kArmDisarmCommand, {1, 0, 0, 0, 0, 0, 0}), "arm");
+        if (!result.success) {
+            return result;
+        }
+        return wait_for_armed_state(true, "arm");
+    }
+    if (!connection_.is_connected() || !detail::identified_copter_session(initial, initial) ||
+        !detail::heartbeat_is_fresh(initial, kCommandTimeout, std::chrono::steady_clock::now())) {
+        return {false, "arm requires a fresh qualified Copter session", false, CommandOutcome::Rejected};
+    }
+    auto command = make_command(kArmDisarmCommand, {1, 0, 0, 0, 0, 0, 0});
+    const auto send_deadline = std::chrono::steady_clock::now() + kCommandTimeout;
+    command.state_admission = [initial, send_deadline](const telemetry::VehicleState &state) {
+        return std::chrono::steady_clock::now() < send_deadline && detail::identified_copter_session(state, initial) &&
+               detail::heartbeat_is_fresh(state, kCommandTimeout, std::chrono::steady_clock::now());
+    };
+    const auto ack = connection_.send_command(command, initial.session_id, kCommandTimeout);
+    const auto ack_boundary = std::chrono::steady_clock::now();
+    result = validate_command_acknowledgement(command, "arm", ack);
+    if (!result.success) {
+        result.outcome = ack && ack->status == mavlink::CommandAck::Status::AdmissionCancelled ?
+            CommandOutcome::Interrupted : result.acknowledged ? CommandOutcome::Failed : CommandOutcome::Unknown;
+        return result;
+    }
+    const auto verdict = [this, initial, ack_boundary](const telemetry::VehicleState &state)
+        -> std::optional<CommandResult> {
+        if (!connection_.is_connected() || !state.connected || !detail::identified_copter_session(state, initial)) {
+            return CommandResult{false, "arm session or identity changed", true, CommandOutcome::Interrupted};
+        }
+        if (state.armed && state.heartbeat_updated_at > ack_boundary &&
+            detail::heartbeat_is_fresh(state, kCommandTimeout, std::chrono::steady_clock::now())) {
+            return CommandResult{true, "arm verified", true, CommandOutcome::Success};
+        }
+        return std::nullopt;
+    };
+    result = wait_for_state_until(kStateTimeout,
+        "arm acknowledgement received but state verification timed out", verdict);
+    result.acknowledged = true;
+    if (!result.success && result.outcome == CommandOutcome::Unspecified) {
+        result.outcome = CommandOutcome::Unknown;
+    }
+    return result;
 }
 
 CommandResult Vehicle::disarm() {
