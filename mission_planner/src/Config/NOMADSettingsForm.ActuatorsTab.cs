@@ -27,11 +27,18 @@ namespace NOMAD.MissionPlanner
             var submit = new Button { Text = "Submit to runtime", Location = new Point(170, 345), Size = new Size(150, 28) };
             submit.Click += async (s, e) =>
             {
+                if (!SettingsRuntimeIsCurrent())
+                {
+                    _actuatorConfigStatus.Text = "Save this aircraft profile before accessing its runtime.";
+                    return;
+                }
+                int revision = _profileEditRevision;
                 NomadCoreRequestResult result = null;
                 try
                 {
-                    result = await OutputController.ConfigureActuatorsAsync(_actuatorJson.Text);
-                    if (IsDisposed)
+                    result = await OutputController.ConfigureActuatorsAsync(_actuatorJson.Text,
+                        () => revision == _profileEditRevision && SettingsRuntimeIsCurrent());
+                    if (IsDisposed || revision != _profileEditRevision || !SettingsRuntimeIsCurrent())
                     {
                         return;
                     }
@@ -40,12 +47,15 @@ namespace NOMAD.MissionPlanner
                     { _actuatorConfigStatus.Text += " Response has no current backend catalog; refresh the runtime configuration."; }
                     else if (result.Succeeded)
                     {
+                        _actuatorJson.Text = JsonConvert.SerializeObject(
+                            result.Actuators.Select(a => a.Config), Formatting.Indented);
+                        _actuatorConfigStatus.Text += " Save the aircraft profile to retain the runtime readback.";
                         ApplyActuatorActions(result.Actuators);
                     }
                 }
                 catch (System.Exception ex)
                 {
-                    if (IsDisposed)
+                    if (IsDisposed || revision != _profileEditRevision || !SettingsRuntimeIsCurrent())
                     {
                         return;
                     }
@@ -62,8 +72,15 @@ namespace NOMAD.MissionPlanner
 
         private async Task LoadActuatorConfigurationAsync()
         {
+            if (!SettingsRuntimeIsCurrent())
+            {
+                _actuatorConfigStatus.Text = "Save this aircraft profile before accessing its runtime.";
+                return;
+            }
+            int revision = _profileEditRevision;
             var result = await OutputController.GetActuatorsAsync();
-            if (IsDisposed || !result.PresentationCurrent)
+            if (IsDisposed || revision != _profileEditRevision ||
+                !SettingsRuntimeIsCurrent() || !result.PresentationCurrent)
             {
                 return;
             }

@@ -24,6 +24,8 @@ namespace NOMAD.MissionPlanner
             AddLabel(tab, "Client credential:", 20, y);
             _txtCoreClientCredential = AddTextBox(tab, 170, y, 360);
             _txtCoreClientCredential.UseSystemPasswordChar = true;
+            _numCoreRuntimePort.ValueChanged += (sender, args) => RuntimeConnectionEdited();
+            _txtCoreClientCredential.TextChanged += (sender, args) => RuntimeConnectionEdited();
             y += 35;
 
             var hint = new Label
@@ -49,7 +51,10 @@ namespace NOMAD.MissionPlanner
             AddLabel(tab, "Save core settings first. Reconnect never admits authority automatically.", 20, y);
             y += 35;
             AddSectionLabel(tab, "Copter LAND engagement", ref y);
-            tab.Controls.Add(new LandControlPanel { Location = new Point(20, y) });
+            tab.Controls.Add(new LandControlPanel(confirmLand: null, inputStillCurrent: SettingsRuntimeIsCurrent)
+            {
+                Location = new Point(20, y),
+            });
 
             return tab;
         }
@@ -64,27 +69,29 @@ namespace NOMAD.MissionPlanner
         private async Task RunAuthorityControlAsync(TabPage tab, string action)
         {
             var client = OutputController.CreateCoreClient();
-            if (client == null)
+            if (!SettingsRuntimeIsCurrent())
             {
                 MessageBox.Show("Save core settings before changing runtime authority.", "NOMAD Runtime");
                 return;
             }
             tab.Enabled = false;
+            int revision = _profileEditRevision;
+            Func<bool> current = () => revision == _profileEditRevision && SettingsRuntimeIsCurrent();
             Connectivity.NomadCoreRequestResult result;
             try
             {
                 result = await (action switch
                 {
-                    "admit" => client.AdmitAuthorityAsync(),
-                    "revoke" => client.RevokeAuthorityAsync(),
-                    _ => client.HandbackAuthorityAsync()
+                    "admit" => client.AdmitAuthorityAsync(inputStillCurrent: current),
+                    "revoke" => client.RevokeAuthorityAsync(inputStillCurrent: current),
+                    _ => client.HandbackAuthorityAsync(inputStillCurrent: current)
                 });
             }
             finally
             {
                 if (!IsDisposed) tab.Enabled = true;
             }
-            if (IsDisposed) return;
+            if (IsDisposed || !current()) return;
             var message = result.Succeeded ? "Runtime authority changed." : result.Message;
             MessageBox.Show(message, "NOMAD Runtime", MessageBoxButtons.OK,
                             result.Succeeded ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
@@ -100,7 +107,7 @@ namespace NOMAD.MissionPlanner
             y += 40;
 
             AddLabel(tab, "Mission Planner UDP port:", 20, y);
-            _numRouterLocalPort = AddNumericUpDown(tab, 190, y, 80, 1024, 65535, 14600);
+            _numRouterLocalPort = AddNumericUpDown(tab, 190, y, 80, 1, 65535, 14600);
             y += 35;
 
             AddLabel(tab, "Management TCP port:", 20, y);

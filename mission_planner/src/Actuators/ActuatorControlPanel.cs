@@ -41,10 +41,12 @@ namespace NOMAD.MissionPlanner
         private readonly Dictionary<string, TrackBar> _positions = new Dictionary<string, TrackBar>();
         private readonly Dictionary<string, double?> _shownPositions = new Dictionary<string, double?>();
         private bool _disposed;
+        private readonly NomadCoreClient _client;
         internal string OperatorStatus => _status.Text;
 
         public ActuatorControlPanel(NOMADConfig config)
         {
+            _client = OutputController.CreateCoreClientFor(config);
             BackColor = Color.FromArgb(35, 35, 38);
             Dock = DockStyle.Fill;
             Controls.Add(_rows);
@@ -55,8 +57,12 @@ namespace NOMAD.MissionPlanner
 
         internal async Task RefreshActuatorsAsync()
         {
+            if (_client == null || _client != OutputController.CreateCoreClient())
+            {
+                return;
+            }
             var result = await OutputController.GetActuatorsAsync();
-            if (_disposed || !result.PresentationCurrent)
+            if (_disposed || _client != OutputController.CreateCoreClient() || !result.PresentationCurrent)
             {
                 return;
             }
@@ -65,7 +71,9 @@ namespace NOMAD.MissionPlanner
                 _status.Text = OutputController.DescribeFailure("Discover actuators", result); return;
             }
             Render(result.Actuators);
-            _status.Text = result.ConfigurationRecoveryRequired ?
+            _status.Text = !OutputController.ProfileActuatorsCompatible ?
+                "Profile mappings differ from the runtime. Review Settings > Actuators before activation." :
+                result.ConfigurationRecoveryRequired ?
                 "Runtime configuration requires operator review; see runtime diagnostics." : result.Message;
         }
 
@@ -130,8 +138,13 @@ namespace NOMAD.MissionPlanner
 
         internal async Task SendActionAsync(string id, string operation, double? value = null)
         {
-            var result = await OutputController.ActuatorActionAsync(id, operation, value: value);
-            if (_disposed)
+            if (_disposed || _client == null || _client != OutputController.CreateCoreClient())
+            {
+                return;
+            }
+            var result = await OutputController.ActuatorActionAsync(id, operation, value: value,
+                inputStillCurrent: () => !_disposed && _client == OutputController.CreateCoreClient());
+            if (_disposed || _client != OutputController.CreateCoreClient())
             {
                 return;
             }
@@ -147,12 +160,13 @@ namespace NOMAD.MissionPlanner
 
         private void OnStateChanged(NomadActuatorState state)
         {
-            if (_disposed)
+            if (_disposed || _client != OutputController.CreateCoreClient())
             {
                 return;
             }
             UiAsync.RunSync(this, () =>
             {
+                if (_disposed || _client != OutputController.CreateCoreClient()) { return; }
                 state = OutputController.GetDisplayState(state.Id) ?? state;
                 if (!_states.TryGetValue(state.Id, out var label))
                 {

@@ -53,8 +53,6 @@ namespace NOMAD.MissionPlanner
             _numJoyGimbalDeadzone = AddNumericUpDown(tab, 95, y, 60, 0.00m, 0.50m, 0.08m, 2);
             AddLabel(tab, "Max rate (deg/s):", 175, y);
             _numJoyGimbalMaxRate = AddNumericUpDown(tab, 270, y, 70, 5, 200, 60);
-            _numJoyGimbalMaxRate.ValueChanged += (s, e) =>
-                GimbalController.MaxRateDegSec = (float)_numJoyGimbalMaxRate.Value;
             y += 36;
 
             // Camera tilt channel
@@ -215,10 +213,14 @@ namespace NOMAD.MissionPlanner
         private void UpdatePositionEligibility()
         {
             if (_txtJoyPositionActuatorId == null || _lblJoyPositionEligibility == null) { return; }
-            var metadata = OutputController.GetContinuousAxisMetadata(_txtJoyPositionActuatorId.Text.Trim());
+            var metadata = SettingsRuntimeIsCurrent() ?
+                OutputController.GetContinuousAxisMetadata(_txtJoyPositionActuatorId.Text.Trim()) : null;
             bool allowed = metadata?.ContinuousAxisAllowed == true;
             _chkJoyPositionEnabled.Enabled = allowed;
-            if (!allowed) { _chkJoyPositionEnabled.Checked = false; }
+            if (!allowed && !_loadingAircraft && SettingsRuntimeIsCurrent())
+            {
+                _chkJoyPositionEnabled.Checked = false;
+            }
             _lblJoyPositionEligibility.Text = allowed ? "Runtime supports continuous HID position input for this actuator." :
                 !string.IsNullOrEmpty(metadata?.ContinuousAxisBlockedReason) ? metadata.ContinuousAxisBlockedReason :
                 "Continuous HID binding is unavailable. Load runtime actions and select an eligible actuator; use the UI for discrete confirmations.";

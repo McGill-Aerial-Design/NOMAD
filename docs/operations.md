@@ -41,7 +41,8 @@ account with `nomad-runtime --validate-actuators <file>`. Configuration replacem
 through IPC requires protected storage, revision fencing and safe output recovery.
 Never replace operator data from a sample or an old settings export automatically.
 
-Mission Planner uses current JSON only. Unknown/retired fields, duplicate properties
+Mission Planner uses current JSON only, with the exact field names/case produced by
+Export Config. Unknown/retired fields, duplicate properties
 and invalid input mappings are rejected. Invalid primary settings stop plugin loading;
 they are not rewritten or replaced by defaults/backup. Defaults apply only when no
 saved settings exist; the backup is used only when the primary is missing. Preserve
@@ -52,6 +53,38 @@ own flight-log analysis. Use each advisory outline's Paste control for coordinat
 select latitude/longitude or longitude/latitude order, enter one pair per line with a
 decimal dot, and choose replacement or append. Invalid lines preserve the whole input
 for correction; coordinates remain local display data.
+
+### Saved aircraft profiles
+
+Settings > Aircraft creates, copies, removes and selects named aircraft. Every
+configuration tab belongs to the selected aircraft: hardware/firmware and RC roles,
+runtime/router endpoints, video, joystick bindings, gimbal presets, alerts and desired
+actuator definitions. RC inputs are numbered 1–18; unconfigured roles stay blank.
+Hardware and RC entries record intended setup; saving them does not program or qualify
+the FC. Site advisory outlines/presets remain separate local map data.
+
+Changes stay in the settings draft until Save. Save writes the full collection and
+selected aircraft atomically to `nomad_aircraft_profiles.json` under the operator's
+local Mission Planner plugins directory, then activates it. Restart restores that
+selection. Changing aircraft retires old controls/responses and resets local gimbal
+targets; it does not start a router/runtime or admit aircraft authority. Configure
+each separately supervised host for the intended aircraft before using its endpoint.
+An already sent operation can continue on its original aircraft; inspect its outcome
+before issuing another command.
+
+On first load, an existing `nomad_config.json` becomes “Current aircraft” without
+rewriting the old file. An invalid new profile file stops loading; backup recovery
+applies only when its primary is missing. Keep the old files until migration is reviewed.
+Load Config replaces only the selected draft aircraft. Export Config shares only
+that aircraft and omits its runtime client credential; review connection URLs and
+device details before sharing, and provision the recipient's credential independently.
+
+Actuator definitions saved in a profile are intended settings. For the saved active
+aircraft, Settings > Actuators can load authoritative runtime definitions or submit
+them explicitly while disarmed. Review the returned canonical definitions and Save
+to retain that readback. Activation and continuous input require a matching catalog
+when a profile contains definitions; explicit safe actions remain available. Selecting,
+importing or saving a profile never applies actuator mappings to the runtime.
 
 ## Copter LAND engagement
 

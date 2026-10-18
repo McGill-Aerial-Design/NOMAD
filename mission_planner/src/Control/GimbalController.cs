@@ -72,6 +72,21 @@ namespace NOMAD.MissionPlanner
         private static long _modeRevision;
         private static Task<NomadCoreRequestResult> _pendingModeRequest;
 
+        internal static void ApplyProfile(NOMADConfig config)
+        {
+            lock (ModeLock)
+            {
+                _modeRevision++;
+                SelectedMode = (MountMode)config.GimbalMountMode;
+                _configuredMode = null;
+                _targetModeBlocked = false;
+                _pendingModeRequest = null;
+            }
+            MaxRateDegSec = config.JoystickGimbalMaxRateDegSec;
+            SetTargetAngles(0, 0);
+            ModeChanged?.Invoke(SelectedMode);
+        }
+
         public static void SetTargetAngles(float pitchDeg, float rollDeg)
         {
             TargetPitchDeg = GimbalCommand.ClampPitch(pitchDeg);

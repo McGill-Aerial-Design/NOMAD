@@ -80,21 +80,6 @@ namespace NOMAD.MissionPlanner
                 Log.Debug($"device acquire failed — {ex.Message}");
             }
 
-            // The mount only honors absolute-angle requests in MAVLink targeting
-            // mode. Without this ping the mount may
-            // be sitting in RC targeting from a previous session and silently drop
-            // every angle command we send — which feels like the joystick is
-            // controlling a rate instead of a position, since the gimbal won't
-            // hold the angle we asked for.
-            if (_config.JoystickGimbalEnabled)
-            {
-                GimbalController.SetMode(MountMode.MavlinkTargeting);
-            }
-
-            // Seed the centralized rate from persisted config so the floating
-            // window's slider and our integrator start with the same value.
-            GimbalController.MaxRateDegSec = _config.JoystickGimbalMaxRateDegSec;
-
             _timer = new Timer { Interval = 1000 / POLL_HZ };
             _timer.Tick += OnTick;
             _timer.Start();

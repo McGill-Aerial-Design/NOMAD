@@ -67,6 +67,17 @@ jobs:
       - name: Qualify Mission Planner STATUS against the actual runtime
         if: runner.os == 'Windows'
         run: |
+          $version = (Get-Content scripts/release/mission-planner-target.json -Raw | ConvertFrom-Json).version
+          $archive = Join-Path $env:RUNNER_TEMP 'mission-planner-reference.zip'
+          $reference = Join-Path $env:RUNNER_TEMP 'mission-planner-reference'
+          $url = "https://firmware.ardupilot.org/Tools/MissionPlanner/MissionPlanner-$version.zip"
+          Invoke-WebRequest $url -OutFile $archive
+          Expand-Archive -Path $archive -DestinationPath $reference
+          $exe = Get-ChildItem $reference -Recurse -Filter MissionPlanner.exe | Select-Object -First 1
+          if (-not $exe) { throw 'Reviewed Mission Planner reference is missing.' }
+          $destination = Join-Path ${env:ProgramFiles(x86)} 'Mission Planner'
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          Copy-Item -LiteralPath (Join-Path $exe.Directory.FullName 'Newtonsoft.Json.dll') -Destination $destination
           pixi run test-plugin-core-client
           pixi run --skip-deps test-plugin-runtime-status
 

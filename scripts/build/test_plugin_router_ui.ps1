@@ -18,7 +18,8 @@ $references = @(
     '/r:System.Drawing.dll',
     '/r:System.Windows.Forms.dll',
     "/r:$mpDir/MissionPlanner.exe",
-    "/r:$mpDir/MissionPlanner.Controls.dll"
+    "/r:$mpDir/MissionPlanner.Controls.dll",
+    "/r:$mpDir/Interfaces.dll"
 )
 & $csc /nologo /target:exe /langversion:latest "/out:$exe" @references `
     (Join-Path $repoRoot 'mission_planner/tests/router/RouterStatusUiTests.cs')

@@ -120,13 +120,18 @@ def test_dead_code_checks_run_in_ci():
     assert "/t:Rebuild" in lint and "/warnaserror:$deadCodeWarnings" in lint
 
 
-def test_received_position_harness_has_staged_host_dependencies():
+def test_plugin_harnesses_have_staged_host_dependencies():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     logic = workflow.split("  plugin-tests:", maxsplit=1)[1].split("  router-tests:", maxsplit=1)[0]
     build = workflow.split("  plugin-build:", maxsplit=1)[1].split("  csharp-qualification-gate:", maxsplit=1)[0]
-    harness = "scripts/build/test_plugin_geometry.ps1"
-    assert harness not in logic, "Real MAVLink packet tests require staged Mission Planner assemblies"
-    assert build.index("Stage Mission Planner reference assemblies") < build.index(harness)
+    for harness in ("test_plugin_geometry.ps1", "test_plugin_core_client.ps1"):
+        assert harness not in logic, "The harness requires dependencies from the reviewed Mission Planner target"
+        assert build.index("Stage Mission Planner reference assemblies") < build.index(harness)
+
+    native = (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
+    status = native.split("- name: Qualify Mission Planner STATUS against the actual runtime", maxsplit=1)[1]
+    assert status.index("mission-planner-target.json") < status.index("test-plugin-core-client")
+    assert status.index("Newtonsoft.Json.dll") < status.index("test-plugin-core-client")
 
 
 def test_direct_command_architecture_guard_runs_for_plugin_changes():

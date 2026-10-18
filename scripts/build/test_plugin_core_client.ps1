@@ -16,7 +16,7 @@
 # Exits non-zero on compile error or test failure.
 # ============================================================
 
-param([switch]$StatusOnly)
+param([switch]$StatusOnly, [switch]$ActuatorOnly)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 
@@ -50,6 +50,7 @@ $sources = @(
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\AsyncRuntimeTestFixture.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientOutcomeTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputOutcomeTests.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\AircraftProfileOutputTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\OutputTestFixtures.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\JoystickMappingTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\JoystickInputConfigurationTests.cs'),
@@ -75,7 +76,14 @@ if (-not (Test-Path $systemWebExtensions)) {
     Write-Host "ERROR: .NET Framework 4.8 reference assembly not found at $systemWebExtensions" -ForegroundColor Red
     exit 1
 }
-& $csc /nologo /target:exe /langversion:latest /reference:System.Drawing.dll /reference:System.Windows.Forms.dll "/reference:$systemWebExtensions" "/out:$exe" @sources
+$newtonsoft = Join-Path ${env:ProgramFiles(x86)} 'Mission Planner\Newtonsoft.Json.dll'
+if (-not (Test-Path -LiteralPath $newtonsoft -PathType Leaf)) {
+    throw 'The reviewed Mission Planner Newtonsoft.Json dependency is required.'
+}
+Copy-Item -LiteralPath $newtonsoft -Destination $outDir -Force
+& $csc /nologo /target:exe /langversion:latest `
+    /reference:System.Drawing.dll /reference:System.Windows.Forms.dll `
+    "/reference:$systemWebExtensions" "/reference:$newtonsoft" "/out:$exe" @sources
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Compile FAILED." -ForegroundColor Red
     exit 1
@@ -83,7 +91,9 @@ if ($LASTEXITCODE -ne 0) {
 
 # ---- Run ----
 Write-Host "Running core-client tests..." -ForegroundColor Yellow
-if ($StatusOnly) {
+if ($ActuatorOnly) {
+    & $exe --actuator-only
+} elseif ($StatusOnly) {
     & $exe --status-only
 } else {
     & $exe

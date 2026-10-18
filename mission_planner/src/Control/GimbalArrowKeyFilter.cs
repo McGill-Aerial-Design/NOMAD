@@ -20,27 +20,39 @@ namespace NOMAD.MissionPlanner
         private static GimbalArrowKeyFilter s_current;
 
         private readonly NOMADConfig _config;
+        private readonly NOMADProfiles _profiles;
         private bool _enabled;
         private bool _disposed;
 
         public static bool Enabled => s_current?._enabled ?? false;
         public static event Action<bool> EnabledChanged;
 
-        public GimbalArrowKeyFilter(NOMADConfig config)
+        public GimbalArrowKeyFilter(NOMADProfiles profiles)
         {
-            _config = config ?? throw new ArgumentNullException(nameof(config));
-            _enabled = config.GimbalArrowKeysEnabled;
+            _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
+            _config = profiles.Selected.Config;
+            _enabled = _config.GimbalArrowKeysEnabled;
             s_current = this;
             Application.AddMessageFilter(this);
+            EnabledChanged?.Invoke(_enabled);
         }
 
         public static void SetEnabled(bool enabled)
         {
             if (s_current == null || s_current._enabled == enabled) return;
 
-            s_current._enabled = enabled;
+            bool previous = s_current._config.GimbalArrowKeysEnabled;
             s_current._config.GimbalArrowKeysEnabled = enabled;
-            s_current._config.Save();
+            try
+            {
+                s_current._profiles.Save();
+            }
+            catch
+            {
+                s_current._config.GimbalArrowKeysEnabled = previous;
+                throw;
+            }
+            s_current._enabled = enabled;
             EnabledChanged?.Invoke(enabled);
         }
 

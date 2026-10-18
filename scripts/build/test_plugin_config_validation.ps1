@@ -77,6 +77,10 @@ try {
         throw 'Configuration fixture log path was not installed.'
     }
 
+    . (Join-Path $PSScriptRoot 'test_aircraft_profiles.ps1')
+    Invoke-AircraftProfileTests $plugin $configType $temporary
+    Invoke-AircraftProfileUiTests $plugin $configType
+
     $config = Load-Config '{"CoreRuntimePort":14631,"RouterLocalPort":14620,"ManagementPort":14621,"CoreClientCredential":"test-only-credential"}'
     if ($config.CoreRuntimePort -ne 14631) { throw 'Current runtime endpoint changed.' }
     $export = Join-Path $temporary 'export.json'
@@ -116,7 +120,13 @@ try {
     $config.JoystickSwitchDevice = 'selected-unplugged-usb-hid'
     $formArguments = New-Object object[] 1
     $formArguments[0] = $config
-    $form = $formType.GetConstructor([type[]]@($configType)).Invoke($formArguments)
+    $profilesType = $plugin.GetType('NOMAD.MissionPlanner.NOMADProfiles', $true)
+    $profiles = $profilesType.GetConstructor([type[]]@($configType)).Invoke($formArguments)
+    $formArguments[0] = $profiles
+    $outputType = $plugin.GetType('NOMAD.MissionPlanner.OutputController', $true)
+    $initializeOutput = $outputType.GetMethod('Initialize', [Reflection.BindingFlags]'Static,NonPublic')
+    $initializeOutput.Invoke($null, [object[]]@($config)) | Out-Null
+    $form = $formType.GetConstructor([type[]]@($profilesType)).Invoke($formArguments)
     try {
         $privateFlags = [Reflection.BindingFlags]'Instance,NonPublic'
         $device = $formType.GetField('_cmbSwitchDevice', $privateFlags).GetValue($form)

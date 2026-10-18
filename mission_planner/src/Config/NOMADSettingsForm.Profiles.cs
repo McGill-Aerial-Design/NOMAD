@@ -21,7 +21,7 @@ namespace NOMAD.MissionPlanner
 
                 try
                 {
-                    Config = NOMADConfig.LoadFromFile(dialog.FileName);
+                    LoadAircraftConfiguration(NOMADConfig.LoadFromFile(dialog.FileName));
                     LoadSettings();
                     MessageBox.Show(
                         "Configuration loaded. Review the settings, then click Save to make this profile active.",
@@ -42,10 +42,22 @@ namespace NOMAD.MissionPlanner
             }
         }
 
+        private void LoadAircraftConfiguration(NOMADConfig imported)
+        {
+            var candidate = Profiles.Clone();
+            if (string.IsNullOrWhiteSpace(imported.AircraftName))
+            {
+                imported.AircraftName = candidate.Selected.Name;
+            }
+            candidate.Selected.Config = imported.Clone();
+            candidate.Validate();
+            Profiles = candidate;
+        }
+
         private void BtnExportConfig_Click(object sender, EventArgs e)
         {
             var warning = MessageBox.Show(
-                "The exported configuration may contain API keys and connection details. Store it securely.",
+                "Export omits the runtime client credential. Review connection URLs and device details before sharing.",
                 "Export NOMAD Configuration",
                 MessageBoxButtons.OKCancel,
                 MessageBoxIcon.Warning

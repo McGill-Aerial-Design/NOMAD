@@ -11,21 +11,6 @@ namespace NOMAD.MissionPlanner
 {
     public partial class NOMADConfig
     {
-        private static string ConfigPath => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Mission Planner",
-            "plugins",
-            "nomad_config.json"
-        );
-
-        /// <summary>
-        /// Load current configuration; reject invalid saved data without rewriting it.
-        /// </summary>
-        public static NOMADConfig Load()
-        {
-            return LoadFromPaths(ConfigPath, ConfigPath + ".bak");
-        }
-
         internal static NOMADConfig LoadFromPaths(string primary, string backup)
         {
             if (File.Exists(primary))
@@ -52,35 +37,27 @@ namespace NOMAD.MissionPlanner
             return Deserialize(json);
         }
 
-        /// <summary>
-        /// Save configuration atomically: write to .tmp first, then swap
-        /// using File.Replace which keeps the previous version as .bak.
-        /// </summary>
-        public void Save()
+        internal static void WriteAtomically(string path, string json)
         {
+            var temporary = path + ".tmp";
             try
             {
-                Validate();
-                var path = ConfigPath;
                 var dir = Path.GetDirectoryName(path);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                {
                     Directory.CreateDirectory(dir);
-
-                var json = JsonConvert.SerializeObject(this, Formatting.Indented);
-                var tmp = path + ".tmp";
-                var bak = path + ".bak";
-
-                File.WriteAllText(tmp, json);
+                }
+                File.WriteAllText(temporary, json);
 
                 if (File.Exists(path))
                 {
                     // Atomic rename + backup. Replace() requires the destination
                     // to exist; otherwise fall through to a plain Move().
-                    File.Replace(tmp, path, bak, ignoreMetadataErrors: true);
+                    File.Replace(temporary, path, path + ".bak", ignoreMetadataErrors: true);
                 }
                 else
                 {
-                    File.Move(tmp, path);
+                    File.Move(temporary, path);
                 }
             }
             catch (Exception ex)
@@ -88,11 +65,11 @@ namespace NOMAD.MissionPlanner
                 Log.Error($"Failed to save config - {ex.Message}");
                 try
                 {
-                    File.Delete(ConfigPath + ".tmp");
+                    File.Delete(temporary);
                 }
                 catch
                 {
-
+                    // Cleanup must not hide the original save failure.
                 }
                 throw new IOException("Configuration was not saved.", ex);
             }
@@ -101,6 +78,7 @@ namespace NOMAD.MissionPlanner
         /// <summary>Export this configuration as a portable JSON profile.</summary>
         public void ExportToFile(string path)
         {
+            Validate();
             if (string.IsNullOrWhiteSpace(path))
                 throw new ArgumentException("A configuration file path is required.", nameof(path));
 
@@ -110,15 +88,13 @@ namespace NOMAD.MissionPlanner
 
             var profile = JObject.FromObject(this);
             profile.Remove(nameof(CoreClientCredential));
-            File.WriteAllText(path, profile.ToString(Formatting.Indented));
+            WriteAtomically(path, profile.ToString(Formatting.Indented));
         }
 
         private static NOMADConfig Deserialize(string json)
         {
-            var document = JObject.Parse(json, new JsonLoadSettings
-            {
-                DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error,
-            });
+            var document = ReadToken(json) as JObject ??
+                throw new JsonSerializationException("Expected a NOMAD configuration object.");
             ValidateInputDocument(document);
             var serializer = JsonSerializer.Create(new JsonSerializerSettings
             {
@@ -133,8 +109,35 @@ namespace NOMAD.MissionPlanner
             return config;
         }
 
-        private static void ValidateInputDocument(JObject document)
+        internal static JToken ReadToken(string json)
         {
+            using (var reader = new JsonTextReader(new StringReader(json)))
+            {
+                reader.DateParseHandling = DateParseHandling.None;
+                var document = JToken.Load(reader, new JsonLoadSettings
+                { DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error });
+                while (reader.Read())
+                {
+                    if (reader.TokenType != JsonToken.Comment)
+                    {
+                        throw new JsonSerializationException("Unexpected content after configuration object.");
+                    }
+                }
+                return document;
+            }
+        }
+
+        internal static void ValidateInputDocument(JObject document)
+        {
+            foreach (var property in document.Properties())
+            {
+                // Json.NET's case-insensitive coercion must not bypass raw-token validation below.
+                if (typeof(NOMADConfig).GetProperty(property.Name) == null)
+                {
+                    throw new JsonSerializationException("Unknown configuration field: " + property.Name);
+                }
+            }
+            ValidateAircraftDocument(document);
             var termination = document["JoystickTerminationButtonIndex"];
             var monitor = document["JoystickKillSwitchEnabled"];
             if ((termination != null && termination.Type != JTokenType.Integer) ||
@@ -162,8 +165,9 @@ namespace NOMAD.MissionPlanner
             { throw new JsonSerializationException(name + " must be an integer between 0 and 127."); }
         }
 
-        private void Validate()
+        internal void Validate()
         {
+            ValidateAircraftSettings();
             ValidateInputBindings();
             if (CoreRuntimePort < 1 || CoreRuntimePort > 65535 || RouterLocalPort < 1 || RouterLocalPort > 65535 ||
                 ManagementPort < 1 || ManagementPort > 65535)
@@ -187,8 +191,5 @@ namespace NOMAD.MissionPlanner
             return Deserialize(json);
         }
 
-        /// <summary>
-        /// Reset to default values.
-        /// </summary>
     }
 }

@@ -35,6 +35,7 @@ namespace NOMAD.MissionPlanner
 
         // Plugin state
         private NOMADConfig _config;
+        private NOMADProfiles _profiles;
         private NotificationService _notificationService;
         private GeofenceConfig _geofenceConfig;               // Plugin-owned: survives NOMAD screen disposal
         private AdvisoryBoundaryMonitor _advisoryBoundaryMonitor; // Plugin-owned local outline preview
@@ -65,11 +66,13 @@ namespace NOMAD.MissionPlanner
                 WarnIfUntestedMissionPlannerVersion();
 
                 // Load configuration
-                _config = NOMADConfig.Load();
+                _profiles = NOMADProfiles.Load();
+                _config = _profiles.Selected.Config;
                 _geofenceConfig = GeofenceConfig.Load();
 
                 // OutputController builds the loopback runtime client from the
                 // saved port and local actuation gate.
+                GimbalController.ApplyProfile(_config);
                 OutputController.Initialize(_config);
 
                 // Notification service runs plugin-wide so battery / GPS
@@ -104,16 +107,10 @@ namespace NOMAD.MissionPlanner
                     InitializeConnectionManager();
                 }
 
-                // Seed centralized gimbal rate from persisted config so the floating
-                // gimbal window, the settings dialog, and the physical joystick
-                // service all start with the same value (single source of truth lives
-                // on GimbalController.MaxRateDegSec).
-                GimbalController.MaxRateDegSec = _config.JoystickGimbalMaxRateDegSec;
-
                 // Capture arrow keys at the application message-pump level so
                 // focused buttons, grids, and non-NOMAD views cannot consume them
                 // while the operator has enabled gimbal keyboard control.
-                _gimbalArrowKeyFilter = new GimbalArrowKeyFilter(_config);
+                _gimbalArrowKeyFilter = new GimbalArrowKeyFilter(_profiles);
 
                 // Physical joystick service — starts only if either channel is enabled in config.
                 _joystickService = new NomadJoystickService(_config);
@@ -283,13 +280,21 @@ namespace NOMAD.MissionPlanner
 
         private void ShowSettings()
         {
-            using (var form = new NOMADSettingsForm(_config))
+            using (var form = new NOMADSettingsForm(_profiles))
             {
 
                 if (form.ShowDialog() == DialogResult.OK)
                 {
-                    _config = form.Config;
-                    _config.Save();
+                    try
+                    {
+                        form.Profiles.Save();
+                    }
+                    catch (Exception error)
+                    {
+                        MessageBox.Show(error.Message, "Aircraft profiles were not saved",
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
+                    }
                     try
                     {
                         _joystickService?.Stop();
@@ -298,7 +303,15 @@ namespace NOMAD.MissionPlanner
                     {
                         Log.Error($"Joystick stop before output reconfiguration failed — {ex.Message}");
                     }
+                    StopHudVideo();
+                    GimbalJoystickWindow.CloseSingleton();
+                    _gimbalArrowKeyFilter?.Dispose();
+                    _profiles = form.Profiles;
+                    _config = _profiles.Selected.Config;
+                    GimbalController.ApplyProfile(_config);
                     OutputController.Initialize(_config);
+                    _gimbalArrowKeyFilter = new GimbalArrowKeyFilter(_profiles);
+                    AudioAlerts.ApplyConfig(_config);
                     ApplyRouterClientSettings();
                     try
                     {
