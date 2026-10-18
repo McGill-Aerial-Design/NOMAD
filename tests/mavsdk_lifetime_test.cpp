@@ -36,6 +36,11 @@ struct MavsdkConnectionTestAccess {
         return connection.resources_->system;
     }
 
+    static void callback_executor(Connection &connection,
+                                  std::function<void(std::function<void()>)> executor) {
+        connection.sdk_.set_callback_executor(std::move(executor));
+    }
+
     static std::unique_ptr<Resources> prepare(Connection &connection, std::shared_ptr<mavsdk::System> selected) {
         auto candidate = std::make_unique<Resources>(std::move(selected));
         connection.subscribe(*candidate);
@@ -285,6 +290,80 @@ void test_in_flight_callback_retirement(Connection &connection, Readers &readers
     readers.observe_phase();
 }
 
+void test_command_budget_includes_callback_delivery(const std::string &endpoint) {
+    std::mutex mutex;
+    std::vector<std::function<void()>> queued;
+    Connection connection(endpoint, 1, 3s);
+    CHECK(connection.connect());
+    CHECK(connection.wait_for_heartbeat(3s));
+    Access::callback_executor(connection, [&](auto callback) {
+        std::lock_guard lock(mutex);
+        queued.push_back(std::move(callback));
+    });
+    auto command = std::async(std::launch::async, [&] {
+        return connection.send_command({MAV_CMD_DO_SET_RELAY, {}}, 100ms);
+    });
+    const bool bounded = command.wait_for(750ms) == std::future_status::ready;
+    Access::callback_executor(connection, {});
+    // Drain callbacks captured by the previous executor before retiring their owners.
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::vector<std::function<void()>> pending;
+        {
+            std::lock_guard lock(mutex);
+            pending.swap(queued);
+        }
+        for (const auto &callback : pending) {
+            callback();
+        }
+        if (command.wait_for(1ms) == std::future_status::ready) {
+            break;
+        }
+    }
+    const auto result = command.get();
+    connection.disconnect();
+    CHECK(bounded);
+    CHECK(!result.has_value());
+}
+
+void test_expired_command_cannot_send_after_admission_returns(const std::string &endpoint) {
+    Connection connection(endpoint, 1, 3s);
+    CHECK(connection.connect());
+    CHECK(connection.wait_for_heartbeat(3s));
+    const auto entered = std::make_shared<std::promise<void>>();
+    const auto announced = std::make_shared<std::atomic<bool>>(false);
+    std::promise<void> release;
+    const auto released = release.get_future().share();
+    connection.set_transmission_admission_factory([entered, announced, released] {
+        const auto caller = std::this_thread::get_id();
+        return nomad::mavlink::TransmissionAdmission([caller, entered, announced, released](const auto &send) {
+            if (std::this_thread::get_id() != caller) {
+                if (!announced->exchange(true)) {
+                    entered->set_value();
+                }
+                released.wait();
+            }
+            send();
+            return true;
+        });
+    });
+    auto command = std::async(std::launch::async, [&] {
+        return connection.send_command({MAV_CMD_DO_SET_RELAY, {}}, 100ms);
+    });
+    const bool guard_entered = entered->get_future().wait_for(2s) == std::future_status::ready;
+    const bool bounded = command.wait_for(750ms) == std::future_status::ready;
+    release.set_value();
+    const auto result = command.get();
+    connection.set_transmission_admission_factory({});
+    // A later peer reply makes the fixture's final wire-count observation authoritative.
+    const auto progress = connection.read_param("FENCE_ENABLE", 1s);
+    CHECK(progress && *progress == 1.0F);
+    connection.disconnect();
+    CHECK(guard_entered);
+    CHECK(bounded);
+    CHECK(!result.has_value());
+}
+
 void test_generations_and_owner_destruction(const std::string &endpoint) {
     std::function<void()> retired_callback;
     {
@@ -327,6 +406,11 @@ int main(int argc, char **argv) {
         }
         if (argc == 3 && std::string(argv[1]) == "--no-peer") {
             test_failed_discovery_retry(argv[2]);
+            return;
+        }
+        if (argc == 3 && std::string(argv[1]) == "--callback-budget") {
+            test_command_budget_includes_callback_delivery(argv[2]);
+            test_expired_command_cannot_send_after_admission_returns(argv[2]);
             return;
         }
         CHECK(argc == 2);
