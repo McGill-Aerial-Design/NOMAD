@@ -4,12 +4,43 @@
 #include "nomad/vehicle/vehicle.hpp"
 #include "../../support/test_harness.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <string_view>
+#include <thread>
 
 namespace {
+
+enum class WaitObservation { OnTime, Late, Missing };
+
+class DeadlineTransitionConnection final : public FakeConnection {
+  public:
+    explicit DeadlineTransitionConnection(WaitObservation value) : observation(value) {}
+
+    std::optional<nomad::telemetry::VehicleState> wait_for_state(std::chrono::milliseconds timeout) override {
+        ++polls;
+        largest_wait = (std::max)(largest_wait, timeout);
+        if (observation == WaitObservation::Missing) {
+            std::this_thread::sleep_for(timeout);
+            return std::nullopt;
+        }
+        if (observation == WaitObservation::Late) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        }
+        std::lock_guard lock(state_mutex);
+        state->vtol_state = nomad::telemetry::VtolState::FixedWing;
+        state->vtol_state_valid = true;
+        state->vtol_state_updated_at = std::chrono::steady_clock::now();
+        return *state;
+    }
+
+    WaitObservation observation;
+    int polls{};
+    std::chrono::milliseconds largest_wait{};
+};
 
 class PostAckTransitionConnection final : public FakeConnection {
   public:
@@ -92,6 +123,46 @@ nomad::vehicle::Vehicle make_short_transition_vehicle(FakeConnection &connection
     nomad::vehicle::VehicleConfig config{};
     config.timeouts.transition_state = std::chrono::milliseconds(20);
     return nomad::vehicle::Vehicle(connection, config);
+}
+
+void test_transition_observation_deadline(WaitObservation observation) {
+    DeadlineTransitionConnection connection(observation);
+    CHECK(connection.connect());
+    configure_quadplane_transition_state(connection);
+    connection.auto_stamp_fresh_fields = false;
+    connection.complete_transition_on_command = false;
+    const auto budget = std::chrono::milliseconds(observation == WaitObservation::OnTime ? 1000 : 200);
+    nomad::vehicle::VehicleConfig config{};
+    config.timeouts.transition_state = budget;
+    nomad::vehicle::Vehicle vehicle(connection, config);
+
+    const auto result = vehicle.transition_to_fixed_wing();
+
+    CHECK(result.success == (observation == WaitObservation::OnTime));
+    CHECK(connection.polls == 1);
+    CHECK(connection.largest_wait > std::chrono::milliseconds::zero());
+    CHECK(connection.largest_wait <= budget);
+    CHECK(connection.command_history.size() == 1);
+    CHECK(connection.command_history.front().id == 3000);
+    if (observation != WaitObservation::OnTime) {
+        CHECK(result.message ==
+              "transition to fixed wing acknowledgement received but fixed-wing state verification timed out");
+    }
+    if (observation == WaitObservation::Late) {
+        CHECK(connection.state->vtol_state == nomad::telemetry::VtolState::FixedWing);
+    }
+}
+
+void run_transition_deadline_cases() {
+    nomad::test::run_scenario("transition_wait_on_time", [] {
+        test_transition_observation_deadline(WaitObservation::OnTime);
+    });
+    nomad::test::run_scenario("transition_wait_late", [] {
+        test_transition_observation_deadline(WaitObservation::Late);
+    });
+    nomad::test::run_scenario("transition_wait_missing", [] {
+        test_transition_observation_deadline(WaitObservation::Missing);
+    });
 }
 
 void test_quadplane_transition_constructs_command_and_verifies_fixed_wing_state() {
@@ -353,8 +424,24 @@ void test_unsupported_transition_aircrafts_reject_before_transmission() {
 
 } // namespace
 
-int main() {
-    return nomad::test::run_tests([] {
+int main(int argc, char **argv) {
+    return nomad::test::run_tests([argc, argv] {
+        if (argc == 2 && std::string_view(argv[1]) == "--wait-late") {
+            nomad::test::run_scenario("transition_wait_late", [] {
+                test_transition_observation_deadline(WaitObservation::Late);
+            });
+            return;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--wait-budget") {
+            nomad::test::run_scenario("transition_wait_missing", [] {
+                test_transition_observation_deadline(WaitObservation::Missing);
+            });
+            return;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--wait-deadline") {
+            run_transition_deadline_cases();
+            return;
+        }
         test_quadplane_transition_constructs_command_and_verifies_fixed_wing_state();
         test_zero_transition_timeout_stops_before_post_ack_state_completion();
         test_quadplane_transition_rejects_same_system_id_new_session();
@@ -370,5 +457,6 @@ int main() {
         test_quadplane_transition_intermediate_state_times_out();
         test_quadplane_transition_fails_closed_on_state_interruption();
         test_unsupported_transition_aircrafts_reject_before_transmission();
+        run_transition_deadline_cases();
     });
 }

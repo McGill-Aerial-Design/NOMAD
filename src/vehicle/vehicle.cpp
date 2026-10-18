@@ -296,11 +296,21 @@ CommandResult Vehicle::wait_for_state_until(std::chrono::milliseconds timeout, s
                                             const StateVerdict &verdict) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
-        const auto state = connection_.wait_for_state(kStatePollTimeout);
+        const auto remaining =
+            std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+        if (remaining <= std::chrono::milliseconds::zero()) {
+            break;
+        }
+        const auto state = connection_.wait_for_state((std::min)(kStatePollTimeout, remaining));
+        if (std::chrono::steady_clock::now() >= deadline) {
+            break;
+        }
         if (!state.has_value()) {
             continue;
         }
-        if (const auto decision = verdict(*state); decision.has_value()) {
+        // A verdict may read connection state and itself finish after the deadline.
+        if (const auto decision = verdict(*state);
+            decision.has_value() && std::chrono::steady_clock::now() < deadline) {
             return *decision;
         }
     }
