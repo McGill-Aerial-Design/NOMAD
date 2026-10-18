@@ -9,6 +9,7 @@
 #include "command_ids.hpp"
 #include "state_time.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -220,13 +221,50 @@ CommandResult Vehicle::land() {
 }
 
 CommandResult Vehicle::wait_until_disarmed(std::chrono::milliseconds timeout) {
-    const auto verdict = [](const telemetry::VehicleState &state) -> std::optional<CommandResult> {
-        if (state.armed) {
-            return std::nullopt;
+    const auto started = std::chrono::steady_clock::now();
+    if (timeout <= std::chrono::milliseconds::zero()) {
+        return {false, "disarm monitoring timeout must be positive", false, CommandOutcome::Rejected};
+    }
+    const auto initial = connection_.get_state();
+    if (!connection_.is_connected() || !initial.connected ||
+        initial.session_id == 0 || initial.system_id == 0 || initial.component_id == 0) {
+        return {false, "disarm monitoring requires a connected session", false, CommandOutcome::Rejected};
+    }
+    const auto deadline = started + timeout;
+    auto next_poll = started;
+    while (std::chrono::steady_clock::now() < deadline) {
+        // A transport can return the same cached sample immediately.
+        std::this_thread::sleep_until(next_poll);
+        if (!connection_.is_connected()) {
+            return {false, "disarm monitoring lost the connection", false, CommandOutcome::Interrupted};
         }
-        return CommandResult{true, "vehicle disarmed"};
-    };
-    return wait_for_state_until(timeout, "timed out waiting for vehicle to disarm", verdict);
+        const auto remaining =
+            std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+        if (remaining <= std::chrono::milliseconds::zero()) {
+            break;
+        }
+        const auto state = connection_.wait_for_state((std::min)(kStatePollTimeout, remaining));
+        next_poll = (std::min)(deadline, std::chrono::steady_clock::now() + std::chrono::milliseconds(20));
+        if (!state) {
+            continue;
+        }
+        if (!connection_.is_connected() || !state->connected || state->session_id != initial.session_id ||
+            state->system_id != initial.system_id || state->component_id != initial.component_id ||
+            state->identity.aircraft_class != initial.identity.aircraft_class ||
+            state->identity.autopilot_type != initial.identity.autopilot_type ||
+            state->identity.vehicle_type != initial.identity.vehicle_type) {
+            return {false, "disarm monitoring session or identity changed", false, CommandOutcome::Interrupted};
+        }
+        const auto observed = std::chrono::steady_clock::now();
+        if (observed >= deadline) {
+            break;
+        }
+        if (!state->armed && state->heartbeat_fresh && state->heartbeat_updated_at > started &&
+            detail::timestamp_is_fresh(state->heartbeat_updated_at, kCommandTimeout, observed)) {
+            return {true, "vehicle disarmed", false, CommandOutcome::Success};
+        }
+    }
+    return {false, "timed out waiting for vehicle to disarm", false, CommandOutcome::Unknown};
 }
 
 CommandResult Vehicle::return_to_launch() {

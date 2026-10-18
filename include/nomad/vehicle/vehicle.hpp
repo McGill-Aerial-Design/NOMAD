@@ -105,6 +105,8 @@ class Vehicle {
     CommandResult goto_location(const Location &location);
     CommandResult land();
     CommandResult engage_copter_land(const std::function<bool()> &still_authorized = {});
+    // Observe a fresh disarmed heartbeat from the original session after monitoring starts.
+    // This sends no command and does not establish physical touchdown.
     CommandResult wait_until_disarmed(std::chrono::milliseconds timeout);
     CommandResult return_to_launch();
     CommandResult upload_fence(const std::vector<safety::GlobalPoint> &boundary);
