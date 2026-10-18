@@ -15,8 +15,8 @@ from pathlib import Path
 from ground_router_fixture_support import config_for, management_request
 
 
-def peer():
-    result = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+def peer(kind=socket.SOCK_DGRAM):
+    result = socket.socket(socket.AF_INET, kind)
     result.bind(("127.0.0.1", 0))
     result.settimeout(0.05)
     return result
@@ -217,7 +217,7 @@ def assert_receive_only(ports, physical, consumer):
 
 
 def assert_ports_released(ports, management_port):
-    for port in ports:
+    for port in ports[:5]:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as rebound:
             rebound.bind(("127.0.0.1", port))
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as rebound:
@@ -228,7 +228,7 @@ def main():
     with contextlib.ExitStack() as stack:
         physical = [stack.enter_context(peer()) for _ in range(3)]
         consumers = [stack.enter_context(peer()) for _ in range(2)]
-        reserved = [peer() for _ in range(6)]
+        reserved = [peer() for _ in range(5)] + [peer(socket.SOCK_STREAM)]
         ports = [sock.getsockname()[1] for sock in reserved]
         management_port = ports[5]
         config = config_for(ports, [sock.getsockname()[1] for sock in consumers], management_port)
