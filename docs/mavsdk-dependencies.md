@@ -11,7 +11,7 @@ reviewed fork gitlink.
 
 | Component | Reviewed source | License found in fetched source |
 |---|---|---|
-| MAVSDK | NOMAD gitlink `7bb70c46b3a8eda2a45d54ad91c30f667977042a` | BSD-3-Clause |
+| MAVSDK | NOMAD gitlink `e258fc27bb8b8677c1dd578dc52b6883ba982779` | BSD-3-Clause |
 | MAVSDK proto | nested gitlink `5c81ecfeb6110cf74ba75ae50b78a1b265c05670` | Unknown: no separate license declaration found; server disabled |
 | Asio | tag `asio-1-30-2` | Boost-1.0 |
 | fmt | tag `12.1.0` | MIT |
@@ -49,6 +49,9 @@ The reviewed fork is rebased on upstream main `28f37e1aee019a382868f3d871cdef348
 and retains ArduPilot semantics, command-admission fencing and
 subscription/connection lifetime guarantees. The transport, lifetime test and
 heartbeat-startup probe explicitly opt into the SDK MAVLink C APIs they use.
+Bounded command and parameter reads also bound completion waiting. Command delivery
+eligibility closes at completion or timeout; owned callback state remains valid while
+already queued work drains.
 Any pin or enabled-plugin change requires provenance verification plus
 deterministic and full aircraft qualification.
 
