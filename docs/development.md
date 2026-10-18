@@ -102,5 +102,7 @@ produce a production package. Release fixture A/B activation/rollback checks are
 [test.yml](../.github/workflows/test.yml). [Operations](operations.md) covers protected
 configuration and explicit deployment.
 
-Main protection is specified in [github-main-protection.json](../config/github-main-protection.json).
+The branch-protection template is [github-main-protection.json](../config/github-main-protection.json).
+Verify effective protection in GitHub before merging: rulesets and configured bypass actors
+apply independently of this template.
 Do not weaken required safety checks or use admin bypass to clear a failing gate.
