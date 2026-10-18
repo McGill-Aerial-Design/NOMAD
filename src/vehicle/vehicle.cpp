@@ -7,7 +7,7 @@
 #include "nomad/vehicle/vehicle.hpp"
 
 #include "command_ids.hpp"
-#include "state_time.hpp"
+#include "state_context.hpp"
 
 #include <algorithm>
 #include <array>
@@ -28,23 +28,6 @@ constexpr auto kNavigationStateTimeout = std::chrono::seconds(60);
 constexpr auto kStatePollTimeout = std::chrono::milliseconds(500);
 constexpr double kLocationToleranceDegrees = 0.00002;
 constexpr float kAltitudeToleranceMeters = 2.0F;
-
-bool rtl_identity_matches(const telemetry::VehicleState &state, const telemetry::VehicleState &expected) {
-    return expected.session_id != 0 && expected.system_id != 0 && expected.component_id != 0 &&
-           expected.identity.aircraft_class == telemetry::AircraftClass::Copter &&
-           telemetry::identify_vehicle(expected.identity.autopilot_type, expected.identity.vehicle_type)
-               .aircraft_class == telemetry::AircraftClass::Copter &&
-           state.session_id == expected.session_id && state.system_id == expected.system_id &&
-           state.component_id == expected.component_id &&
-           state.identity.aircraft_class == expected.identity.aircraft_class &&
-           state.identity.autopilot_type == expected.identity.autopilot_type &&
-           state.identity.vehicle_type == expected.identity.vehicle_type;
-}
-
-bool rtl_heartbeat_is_fresh(const telemetry::VehicleState &state) {
-    return state.connected && state.heartbeat_fresh &&
-           detail::timestamp_is_fresh(state.heartbeat_updated_at, kCommandTimeout, std::chrono::steady_clock::now());
-}
 
 CommandResult validate_command_acknowledgement(
     const mavlink::Command &command, const char *name,
@@ -248,19 +231,15 @@ CommandResult Vehicle::wait_until_disarmed(std::chrono::milliseconds timeout) {
         if (!state) {
             continue;
         }
-        if (!connection_.is_connected() || !state->connected || state->session_id != initial.session_id ||
-            state->system_id != initial.system_id || state->component_id != initial.component_id ||
-            state->identity.aircraft_class != initial.identity.aircraft_class ||
-            state->identity.autopilot_type != initial.identity.autopilot_type ||
-            state->identity.vehicle_type != initial.identity.vehicle_type) {
+        if (!connection_.is_connected() || !state->connected || !detail::same_vehicle_session(*state, initial)) {
             return {false, "disarm monitoring session or identity changed", false, CommandOutcome::Interrupted};
         }
         const auto observed = std::chrono::steady_clock::now();
         if (observed >= deadline) {
             break;
         }
-        if (!state->armed && state->heartbeat_fresh && state->heartbeat_updated_at > started &&
-            detail::timestamp_is_fresh(state->heartbeat_updated_at, kCommandTimeout, observed)) {
+        if (!state->armed && state->heartbeat_updated_at > started &&
+            detail::heartbeat_is_fresh(*state, kCommandTimeout, observed)) {
             return {true, "vehicle disarmed", false, CommandOutcome::Success};
         }
     }
@@ -273,14 +252,15 @@ CommandResult Vehicle::return_to_launch() {
         return admission;
     }
     const auto initial = connection_.get_state();
-    if (!connection_.is_connected() || !rtl_identity_matches(initial, initial) || !rtl_heartbeat_is_fresh(initial)) {
+    if (!connection_.is_connected() || !detail::identified_copter_session(initial, initial) ||
+        !detail::heartbeat_is_fresh(initial, kCommandTimeout, std::chrono::steady_clock::now())) {
         return {false, "return to launch requires a fresh qualified Copter session", false, CommandOutcome::Rejected};
     }
     auto command = make_command(kReturnToLaunchCommand);
     const auto send_deadline = std::chrono::steady_clock::now() + kCommandTimeout;
     command.state_admission = [initial, send_deadline](const telemetry::VehicleState &state) {
-        return std::chrono::steady_clock::now() < send_deadline && rtl_identity_matches(state, initial) &&
-               rtl_heartbeat_is_fresh(state);
+        return std::chrono::steady_clock::now() < send_deadline && detail::identified_copter_session(state, initial) &&
+               detail::heartbeat_is_fresh(state, kCommandTimeout, std::chrono::steady_clock::now());
     };
     const auto ack = connection_.send_command(command, initial.session_id, kCommandTimeout);
     const auto ack_boundary = std::chrono::steady_clock::now();
@@ -292,11 +272,12 @@ CommandResult Vehicle::return_to_launch() {
     }
     const auto verdict = [this, initial, ack_boundary](const telemetry::VehicleState &state)
         -> std::optional<CommandResult> {
-        if (!connection_.is_connected() || !state.connected || !rtl_identity_matches(state, initial)) {
+        if (!connection_.is_connected() || !state.connected || !detail::identified_copter_session(state, initial)) {
             return CommandResult{false, "return to launch session or identity changed", true,
                                  CommandOutcome::Interrupted};
         }
-        if (rtl_heartbeat_is_fresh(state) && state.heartbeat_updated_at > ack_boundary &&
+        if (detail::heartbeat_is_fresh(state, kCommandTimeout, std::chrono::steady_clock::now()) &&
+            state.heartbeat_updated_at > ack_boundary &&
             telemetry::is_return_to_launch_mode(initial.identity.aircraft_class, state.custom_mode)) {
             return CommandResult{true, "return to launch verified", true, CommandOutcome::Success};
         }
