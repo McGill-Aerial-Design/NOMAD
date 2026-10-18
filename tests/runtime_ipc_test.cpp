@@ -450,6 +450,7 @@ void run_runtime_scenarios() {
     run_scenario("native_file_failure_and_lock", test_native_file_failure_and_lock);
     run_scenario("authenticated_authority_events", test_authenticated_authority_events);
     run_authority_expiry_scenarios();
+    run_authority_state_scenarios();
     run_scenario("rejection_audit_failure", [] { test_rejection_audit_failure(false); });
     run_scenario("authentication_rejection_audit_failure", [] { test_rejection_audit_failure(true); });
     run_scenario("ack_without_admission_evidence", [] { test_acknowledgement_without_admission_evidence(false); });
@@ -469,6 +470,10 @@ void run_runtime_scenarios() {
 
 int main(int argc, char **argv) {
     return nomad::test::run_tests([argc, argv] {
+        if (argc == 2 && std::string_view(argv[1]) == "--authority-intent-state") {
+            run_authority_state_scenarios();
+            return;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--authority-intent-expiry") {
             run_authority_expiry_scenarios();
             return;

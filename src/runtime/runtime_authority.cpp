@@ -124,13 +124,25 @@ Json Runtime::Implementation::handle_authority_request(const Request &request) {
     if (!journal_->append(request_record(request, "authority_intent", "pending"))) {
         return audit_error(request);
     }
-    if (!valid_expiry(request)) {
+    // Final-send validation takes observation locks before the authority gate.
+    // Refresh without the gate, then revalidate after another request may have run.
+    lock.unlock();
+    const auto current_state = connection_->get_state();
+    const bool current_connection_open = connection_->is_connected();
+    lock.lock();
+    revoke_changed_session_locked(current_state, current_connection_open);
+    if (!journal_->healthy()) {
+        return audit_error(request);
+    }
+    if (authority_gate_->stopping || !authority_gate_->owner.empty() ||
+        !valid_context(request, current_state.session_id) || !valid_expiry(request) ||
+        !current_connection_open || !current_state.connected || !current_state.heartbeat_fresh) {
         return error_response(request.id, "stale_authority",
-                              "authority request validity is stale after durable intent");
+                              "authority context or fresh aircraft state changed during durable intent");
     }
     ++authority_gate_->generation;
     authority_gate_->owner = request.source;
-    authority_gate_->owner_session = state.session_id;
+    authority_gate_->owner_session = current_state.session_id;
     authority_gate_->ever_admitted = true;
     authority_gate_->last_sequence = 0;
     return record_authority_response(request, handback ? "authority_handback" : "authority_admission");

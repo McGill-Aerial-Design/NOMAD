@@ -480,8 +480,10 @@ admits itself. Session mismatch revokes during hello/status/mutation/admission, 
 waiting for the monitor loop. Runtime replacement creates a new incarnation and ownerless
 state; no prior operation is restored.
 
-Admission and handback recheck request validity after persisting their intent. A request
-that expires during that write is rejected before ownership or generation changes.
+Admission and handback refresh aircraft state and recheck the session, connection,
+heartbeat, request validity and current authority after persisting their intent.
+Lost eligibility rejects the request before granting ownership or a new generation;
+an intervening revocation or competing grant cannot be overwritten by that request.
 
 Mission Planner coordinates sequence allocation and a nonwaiting mutation gate by
 endpoint/client identity across instances in one process. Authority controls bypass
