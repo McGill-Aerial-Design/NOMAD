@@ -132,16 +132,32 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
     }
 
     bool goto_location_relative(double latitude_deg, double longitude_deg, float relative_altitude_m,
+                                const nomad::mavlink::StateAdmission &state_admission,
                                 std::chrono::milliseconds) override {
+        const auto admission = capture_transmission_admission();
         std::lock_guard lock(state_mutex);
-        last_goto = GotoRequest{latitude_deg, longitude_deg, relative_altitude_m};
+        if (!state_admission || !state_admission(*state)) {
+            return false;
+        }
+        const auto record = [this, latitude_deg, longitude_deg, relative_altitude_m] {
+            last_goto = GotoRequest{latitude_deg, longitude_deg, relative_altitude_m};
+            if (acknowledgement && acknowledgement->command == 192 && acknowledgement->result == 0) {
+                state->position_valid = true;
+                state->position.latitude_deg = latitude_deg;
+                state->position.longitude_deg = longitude_deg;
+                state->position.relative_altitude_m = relative_altitude_m;
+            }
+        };
+        if (admission) {
+            if (!admission(record)) {
+                return false;
+            }
+        } else {
+            record();
+        }
         if (!acknowledgement || acknowledgement->command != 192 || acknowledgement->result != 0) {
             return false;
         }
-        state->position_valid = true;
-        state->position.latitude_deg = latitude_deg;
-        state->position.longitude_deg = longitude_deg;
-        state->position.relative_altitude_m = relative_altitude_m;
         return true;
     }
 

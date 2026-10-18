@@ -296,13 +296,13 @@ std::optional<telemetry::VehicleState> MavsdkMavlinkConnection::wait_for_state(s
     return std::nullopt;
 }
 
-TransmissionAdmission MavsdkMavlinkConnection::get_command_admission(
-    const Command &command, const TransmissionAdmission &admission) const {
-    if (!command.state_admission) {
+TransmissionAdmission MavsdkMavlinkConnection::get_state_admission(
+    const StateAdmission &validate, const TransmissionAdmission &admission) const {
+    if (!validate) {
         return admission;
     }
     const auto callbacks = resources_->callbacks;
-    return [callbacks, admission, validate = command.state_admission](const auto &send) {
+    return [callbacks, admission, validate](const auto &send) {
         std::lock_guard callback_lock(callbacks->mutex);
         if (!callbacks->owner || !send) {
             return false;
@@ -336,7 +336,7 @@ mavsdk::MavlinkPassthrough::Result MavsdkMavlinkConnection::send_long(
         return mavsdk::MavlinkPassthrough::Result::CommandAdmissionCancelled;
     }
     mavsdk::OperationOptions options{timeout};
-    options.transmission_admission = get_command_admission(command, admission);
+    options.transmission_admission = get_state_admission(command.state_admission, admission);
     return resources_->passthrough->send_command_long(wire, options);
 }
 

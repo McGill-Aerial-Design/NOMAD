@@ -14,11 +14,13 @@
 
 namespace nomad::mavlink {
 
+using StateAdmission = std::function<bool(const telemetry::VehicleState &)>;
+
 struct Command {
     std::uint16_t id{};
     std::array<float, 7> parameters{};
     // The vehicle may require current observation facts at every covered send.
-    std::function<bool(const telemetry::VehicleState &)> state_admission{};
+    StateAdmission state_admission{};
 };
 
 struct CommandAck {
@@ -128,6 +130,7 @@ class MavlinkConnection {
         return send_command(command, timeout);
     }
     virtual bool goto_location_relative(double latitude_deg, double longitude_deg, float relative_altitude_m,
+                                        const StateAdmission &state_admission,
                                         std::chrono::milliseconds timeout) = 0;
     virtual std::optional<CommandAck> send_fixed_wing_waypoint(
         const FixedWingWaypointCommand &waypoint, std::uint64_t expected_session_id,

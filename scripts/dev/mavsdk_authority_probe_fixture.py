@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from mavsdk_authority_peer import AuthorityPeer
-from mavsdk_peer import ACCEPTED, COMMAND_DO_REPOSITION, COMMAND_DO_SET_SERVO
+from mavsdk_peer import ACCEPTED, COMMAND_DO_REPOSITION, COMMAND_DO_SET_MODE, COMMAND_DO_SET_SERVO
 from runtime_fixture_support import ROOT, free_port
 
 RETRY_WINDOW_SECONDS = 1.8
@@ -88,7 +88,9 @@ class Probe:
 
 def command_count(peer: AuthorityPeer, kind: str) -> int:
     """Count decoded command frames at the peer, not SDK method calls."""
-    command_id = COMMAND_DO_REPOSITION if kind == "int" else COMMAND_DO_SET_SERVO
+    command_id = (
+        COMMAND_DO_REPOSITION if kind == "int" else (COMMAND_DO_SET_MODE if kind == "mode" else COMMAND_DO_SET_SERVO)
+    )
     wire_kind = "COMMAND_INT" if kind == "int" else "COMMAND_LONG"
     return sum(frame[0] == wire_kind and frame[1] == command_id for frame in peer.commands())
 
@@ -127,6 +129,39 @@ def verify_kind(probe: Probe, peer: AuthorityPeer, kind: str) -> None:
     probe.expect(f"{kind}=accepted")
     time.sleep(RETRY_WINDOW_SECONDS)
     assert command_count(peer, kind) == before + 2, f"old {kind} command resurrected"
+
+
+def verify_goto_state_admission(probe: Probe, peer: AuthorityPeer) -> None:
+    """Lose observation admission during Action's mode and reposition phases."""
+    for kind in ("mode", "int"):
+        before_mode, before_int = command_count(peer, "mode"), command_count(peer, "int")
+        peer.set_ack_result(None)
+        probe.command("context-on")
+        probe.expect("context-on=ok")
+        probe.command("handback")
+        probe.expect("handback=ok")
+        probe.command("goto")
+        probe.expect("goto=started")
+        wait_for_command(peer, kind, (before_mode if kind == "mode" else before_int) + 1)
+        probe.command("context-off")
+        probe.expect("context-off=ok")
+        probe.expect("goto=cancelled_or_unacknowledged")
+        time.sleep(RETRY_WINDOW_SECONDS)
+        assert command_count(peer, "mode") == before_mode + (kind == "mode"), "stale goto mode retried"
+        assert command_count(peer, "int") == before_int + (kind == "int"), "stale goto reposition sent or retried"
+
+    before = command_count(peer, "int")
+    peer.set_ack_result(ACCEPTED)
+    probe.command("context-on")
+    probe.expect("context-on=ok")
+    probe.command("handback")
+    probe.expect("handback=ok")
+    probe.command("goto")
+    probe.expect("goto=started")
+    wait_for_command(peer, "int", before + 1)
+    probe.expect("goto=accepted")
+    time.sleep(RETRY_WINDOW_SECONDS)
+    assert command_count(peer, "int") == before + 1, "old goto resumed after new context admission"
 
 
 def verify_pending_shutdown(probe: Probe, peer: AuthorityPeer) -> None:
@@ -169,6 +204,7 @@ def main() -> None:
         verify_kind(probe, peer, "long")
         verify_cancel_before_first_frame(probe, peer)
         verify_kind(probe, peer, "int")
+        verify_goto_state_admission(probe, peer)
         verify_pending_shutdown(probe, peer)
     finally:
         if probe.process.poll() is None:
