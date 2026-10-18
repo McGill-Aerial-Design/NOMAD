@@ -62,7 +62,7 @@ test-copter-land-sitl-harness = "pytest tests/test_copter_land_sitl.py -q"
 # only trend up; raise it as more of the codebase gets tested.
 # Plain pytest without the coverage gate.
 test-python = "pytest"
-test-release-lifecycle = "pytest tests/test_release_identity.py tests/test_release_lifecycle.py tests/test_release_windows.py tests/test_release_linux.py tests/test_release_storage.py -q"
+test-release-lifecycle = "pytest tests/test_release_identity.py tests/test_release_lifecycle.py tests/test_release_windows.py tests/test_release_linux.py tests/test_release_storage.py tests/test_release_version_probe.py -q"
 
 # Hardware-free SITL stack (Docker), no Isaac Sim.
 #   pixi run dev-up      # start ArduPilot SITL and the Mission Planner bridge
@@ -135,6 +135,7 @@ test-plugin-video = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts
 # fail-closed validation and authority controls,
 # protocol negotiation and unknown-outcome no-replay behavior.
 test-plugin-core-client = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_core_client.ps1"
+test-plugin-runtime-status = { cmd = "python scripts/dev/mission_planner_status_fixture.py", depends-on = ["build-core", "test-plugin-core-client"] }
 
 # Unit tests for the Airbus-style altitude callouts (Windows only) — compiles the
 # Mission Planner-free AltitudeCallout with VS's csc and asserts the threshold-

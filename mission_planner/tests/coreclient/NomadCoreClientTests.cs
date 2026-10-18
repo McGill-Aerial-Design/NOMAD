@@ -19,11 +19,21 @@ internal static partial class NomadCoreClientTests
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--runtime-status")
+        {
+            return ReadActualRuntimeStatus(int.Parse(args[1]), args[2]);
+        }
         if (args.Length == 2 && args[0] == "--async-restart-child")
         {
             return RunAsyncRestartChild(int.Parse(args[1]));
         }
         System.Windows.Forms.Control.CheckForIllegalCrossThreadCalls = true;
+        if (args.Length == 1 && args[0] == "--status-only")
+        {
+            Runtime_StatusTests();
+            Console.WriteLine($"STATUS failures: {_failures}");
+            return _failures == 0 ? 0 : 1;
+        }
         if (args.Length == 1 && args[0] == "--actuator-only")
         {
             ActuatorClient_ReportsBackendEvidence();
@@ -31,6 +41,7 @@ internal static partial class NomadCoreClientTests
         Joystick_InputConfigurationTests();
             return _failures == 0 ? 0 : 1;
         }
+        Runtime_StatusTests();
         Runtime_AsyncTests();
         Runtime_LandTests();
         Termination_ReportsUnavailableWithoutVehicleDispatch();

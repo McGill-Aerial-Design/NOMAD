@@ -22,36 +22,59 @@ AuditJournal::~AuditJournal() noexcept {
     // No output is performed by append/stop while a caller may hold authority locks.
     try {
         std::cerr << timing_json().dump() << '\n';
+        if (admission_timing_count_ != 0) {
+            std::cerr << timing_json(true).dump() << '\n';
+        }
     } catch (...) {
         // Missing diagnostic delivery must not change audit or shutdown outcomes.
     }
 }
 
-std::optional<AuditJournal::LandEvent> AuditJournal::land_event(const nlohmann::json &record) {
+std::optional<AuditJournal::TimedEvent> AuditJournal::timed_event(const nlohmann::json &record) {
     const auto operation = record.find("operation");
     const auto event = record.find("event");
-    if (operation == record.end() || !operation->is_string() || operation->get_ref<const std::string &>() != "land" ||
-        event == record.end() || !event->is_string()) {
+    if (operation == record.end() || !operation->is_string() || event == record.end() || !event->is_string()) {
         return std::nullopt;
     }
     const auto &name = event->get_ref<const std::string &>();
+    const auto &command = operation->get_ref<const std::string &>();
+    if (command == "admit_authority") {
+        if (name == "authority_intent") {
+            return TimedEvent::AdmissionIntent;
+        }
+        return name == "authority_admission" ? std::optional{TimedEvent::Admission} : std::nullopt;
+    }
+    if (command != "land") {
+        return std::nullopt;
+    }
     if (name == "mutation_intent") {
-        return LandEvent::Intent;
+        return TimedEvent::Intent;
     }
     if (name == "mutation_outcome") {
-        return LandEvent::Outcome;
+        return TimedEvent::Outcome;
     }
-    return name == "request_rejected" ? std::optional{LandEvent::Rejected} : std::nullopt;
+    return name == "request_rejected" ? std::optional{TimedEvent::Rejected} : std::nullopt;
 }
 
-nlohmann::json AuditJournal::timing_json() const {
+const char *AuditJournal::timed_event_name(TimedEvent event) {
+    switch (event) {
+    case TimedEvent::Intent: return "mutation_intent";
+    case TimedEvent::Outcome: return "mutation_outcome";
+    case TimedEvent::Rejected: return "request_rejected";
+    case TimedEvent::AdmissionIntent: return "authority_intent";
+    case TimedEvent::Admission: return "authority_admission";
+    }
+    return "unknown";
+}
+
+nlohmann::json AuditJournal::timing_json(bool admission) const {
     using Json = nlohmann::json;
     auto rows = Json::array();
-    for (std::size_t index = 0; index < timing_count_; ++index) {
-        const auto &item = timings_[index];
-        const auto event = item.event == LandEvent::Intent ? "mutation_intent" :
-                           item.event == LandEvent::Outcome ? "mutation_outcome" : "request_rejected";
-        rows.push_back({{"journal_event", event}, {"ordinal", item.ordinal},
+    const auto &timings = admission ? admission_timings_ : timings_;
+    const auto count = admission ? admission_timing_count_ : timing_count_;
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto &item = timings[index];
+        rows.push_back({{"journal_event", timed_event_name(item.event)}, {"ordinal", item.ordinal},
             {"lock_acquired_us", item.lock_acquired_us},
             {"before_native_us", item.before_native_us ? Json(*item.before_native_us) : Json(nullptr)},
             {"after_native_us", item.after_native_us ? Json(*item.after_native_us) : Json(nullptr)},
@@ -59,8 +82,9 @@ nlohmann::json AuditJournal::timing_json() const {
             {"native_success", item.native_success ? Json(*item.native_success) : Json(nullptr)},
             {"append_success", item.append_success}});
     }
-    return {{"event", "runtime_land_native_timing"}, {"capacity", timings_.size()},
-            {"overflow", timing_overflow_}, {"records", std::move(rows)}};
+    return {{"event", admission ? "runtime_admission_native_timing" : "runtime_land_native_timing"},
+            {"capacity", timings.size()}, {"overflow", admission ? admission_timing_overflow_ : timing_overflow_},
+            {"records", std::move(rows)}};
 }
 
 bool AuditJournal::validate_history(const std::string &directory) {
@@ -135,13 +159,15 @@ bool AuditJournal::append(nlohmann::json record) {
     record["time_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     std::optional<AppendTiming> timing;
+    bool admission_timing = false;
     const auto elapsed_us = [&] {
         return std::chrono::duration_cast<std::chrono::microseconds>(TimingClock::now() - entered).count();
     };
     if (timing_enabled_) {
-        if (const auto event = land_event(record)) {
+        if (const auto event = timed_event(record)) {
             timing = AppendTiming{};
             timing->event = *event;
+            admission_timing = *event == TimedEvent::AdmissionIntent || *event == TimedEvent::Admission;
             timing->ordinal = ordinal_;
             timing->lock_acquired_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(acquired - entered).count();
@@ -153,10 +179,13 @@ bool AuditJournal::append(nlohmann::json record) {
         }
         timing->append_success = success;
         timing->append_finish_us = elapsed_us();
-        if (timing_count_ < timings_.size()) {
-            timings_[timing_count_++] = *timing;
+        auto &timings = admission_timing ? admission_timings_ : timings_;
+        auto &count = admission_timing ? admission_timing_count_ : timing_count_;
+        auto &overflow = admission_timing ? admission_timing_overflow_ : timing_overflow_;
+        if (count < timings.size()) {
+            timings[count++] = *timing;
         } else {
-            timing_overflow_ = true;
+            overflow = true;
         }
     };
     try {

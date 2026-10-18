@@ -3,10 +3,12 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Windows.Forms;
 using NOMAD.MissionPlanner;
+using NOMAD.MissionPlanner.Connectivity;
 
 internal static class RouterStatusUiTests
 {
@@ -29,6 +31,7 @@ internal static class RouterStatusUiTests
             return File.Exists(path) ? Assembly.LoadFrom(path) : null;
         };
         Run("dashboard router summary", DashboardSummary);
+        Run("dashboard runtime status entry", DashboardRuntimeStatusEntry);
         Run("Links view availability", LinksViewAvailability);
         Console.WriteLine($"Router status UI checks: {_checks}; failures: {_failures}");
         return _failures == 0 ? 0 : 1;
@@ -119,6 +122,80 @@ internal static class RouterStatusUiTests
             CheckLinksView(manager, null, false, "failed panel initialization");
             CheckLinksView(manager, new NOMADConfig { RouterClientEnabled = false }, true, "disabled retained client");
         }
+    }
+
+    private static void DashboardRuntimeStatusEntry()
+    {
+        var previousService = NotificationService.Shared;
+        var controller = typeof(NOMADDashboardView).Assembly.GetType("NOMAD.MissionPlanner.OutputController", true);
+        var initialize = controller.GetMethod("Initialize", BindingFlags.Static | BindingFlags.NonPublic);
+        using var service = new NotificationService();
+        NotificationService.Shared = service;
+        try
+        {
+            var cached = new NOMADConfig { CoreClientCredential = "fixture-key", VideoUrl = "" };
+            using var view = new NOMADDashboardView(cached, null);
+            using var host = new Form { ShowInTaskbar = false, Opacity = 0, Width = 900, Height = 650 };
+            view.Dock = DockStyle.Fill;
+            host.Controls.Add(view);
+            host.Show();
+            Application.DoEvents();
+            var update = typeof(NOMADDashboardView).GetMethod("UpdateCoreCard", PrivateInstance);
+            var label = (Label)typeof(NOMADDashboardView).GetField("_lblCore", PrivateInstance).GetValue(view);
+            initialize.Invoke(null, new object[] { cached });
+            update.Invoke(view, null);
+            Check(label.Text.Contains("configured") && label.ForeColor != NOMADTheme.SUCCESS,
+                "dashboard configuration remains distinct from runtime readiness");
+            initialize.Invoke(null, new object[] { null });
+            update.Invoke(view, null);
+            Check(label.Text == "Not configured", "cached dashboard rechecks the current core client");
+            var invalid = new NomadCoreClient("fixture-key", 0);
+            Check(!invalid.IsConfigured && invalid.RuntimePort == 0, "invalid modal fixture port has no default fallback");
+            if (invalid.IsConfigured || invalid.RuntimePort != 0) { return; }
+            initialize.Invoke(null, new object[] { new NOMADConfig { CoreRuntimePort = 0 } });
+            var buttons = view.Controls.Find("ReadRuntimeStatus", true);
+            Check(buttons.Length == 1 && buttons[0] is Button, "dashboard provides its explicit runtime read button");
+            if (buttons.Length != 1) { return; }
+            Check(!buttons[0].Bounds.IntersectsWith(label.Bounds), "runtime read button preserves the core value's space");
+            InspectRuntimeDialog((Button)buttons[0]);
+        }
+        finally
+        {
+            initialize.Invoke(null, new object[] { null });
+            NotificationService.Shared = previousService;
+        }
+    }
+
+    private static void InspectRuntimeDialog(Button button)
+    {
+        bool inspected = false;
+        var watch = Stopwatch.StartNew();
+        using var timer = new System.Windows.Forms.Timer { Interval = 25 };
+        timer.Tick += (sender, args) =>
+        {
+            foreach (Form dialog in Application.OpenForms)
+            {
+                if (!dialog.Modal) { continue; }
+                if (dialog.Text == "NOMAD runtime snapshot")
+                {
+                    var summaries = dialog.Controls.Find("RuntimeStatusSummary", true);
+                    Check(summaries.Length == 1 && summaries[0].Text.Contains("port is invalid"),
+                        "real dashboard click reads the current client and reports its local configuration failure");
+                    inspected = true;
+                    dialog.Close();
+                    return;
+                }
+                if (watch.ElapsedMilliseconds > 5000)
+                {
+                    dialog.Close();
+                    return;
+                }
+            }
+        };
+        timer.Start();
+        button.PerformClick();
+        timer.Stop();
+        Check(inspected, "dashboard runtime dialog completes under its UI test deadline");
     }
 
     private static void CheckLinksView(MAVLinkConnectionManager manager, NOMADConfig config, bool disabled, string name)

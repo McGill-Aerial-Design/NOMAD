@@ -50,6 +50,7 @@ pixi run lint-plugin
 pixi run test-plugin-build-only
 pixi run test-plugin-config-validation
 pixi run test-plugin-core-client
+pixi run test-plugin-runtime-status
 pixi run test-plugin-geometry
 pixi run test-plugin-gimbal
 pixi run test-plugin-gimbal-ui
