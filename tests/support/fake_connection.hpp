@@ -306,6 +306,9 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
     void stamp_fresh_fields() {
         std::lock_guard lock(state_mutex);
         const auto now = std::chrono::steady_clock::now();
+        if (state->connected && state->heartbeat_fresh) {
+            state->heartbeat_updated_at = now;
+        }
         if (state->position_valid) {
             state->position_updated_at = now;
         }
