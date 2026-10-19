@@ -79,7 +79,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $destination | Out-Null
           Copy-Item -LiteralPath (Join-Path $exe.Directory.FullName 'Newtonsoft.Json.dll') -Destination $destination
           pixi run test-plugin-core-client
+          if ($LASTEXITCODE -ne 0) { throw 'Mission Planner client tests failed.' }
           pixi run --skip-deps test-plugin-runtime-status
+          if ($LASTEXITCODE -ne 0) { throw 'Mission Planner runtime STATUS qualification failed.' }
 
   core-release:
     name: Core release qualification (${{ matrix.os }})
