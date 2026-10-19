@@ -197,7 +197,7 @@ CommandResult Vehicle::set_guided_mode() {
     return send_mode_and_verify(*mode, "set guided mode", initial);
 }
 
-CommandResult Vehicle::takeoff(float altitude_m) {
+CommandResult Vehicle::takeoff(float altitude_m, const std::function<bool()> &still_authorized) {
     if (!std::isfinite(altitude_m) || altitude_m <= 0.0F) {
         return {false, "takeoff altitude must be finite and greater than zero", false, CommandOutcome::Rejected};
     }
@@ -210,6 +210,9 @@ CommandResult Vehicle::takeoff(float altitude_m) {
     if (!connection_.is_connected() || !detail::identified_copter_session(initial, initial) ||
         !detail::heartbeat_is_fresh(initial, kCommandTimeout, std::chrono::steady_clock::now())) {
         return {false, "takeoff requires a fresh qualified Copter session", false, CommandOutcome::Rejected};
+    }
+    if (still_authorized && !still_authorized()) {
+        return {false, "takeoff authority unavailable before send", false, CommandOutcome::Rejected};
     }
     auto command = make_command(kTakeoffCommand, {0, 0, 0, 0, 0, 0, altitude_m});
     const auto send_deadline = std::chrono::steady_clock::now() + kCommandTimeout;
@@ -224,7 +227,7 @@ CommandResult Vehicle::takeoff(float altitude_m) {
         result.outcome = failed_acknowledgement_outcome(ack, result.acknowledged);
         return result;
     }
-    return wait_for_takeoff(altitude_m * 0.8F, initial, ack_boundary);
+    return wait_for_takeoff(altitude_m * 0.8F, initial, ack_boundary, still_authorized);
 }
 
 CommandResult Vehicle::goto_location(const Location &location) {
@@ -368,15 +371,25 @@ CommandResult Vehicle::return_to_launch() {
 }
 
 CommandResult Vehicle::wait_for_state_until(std::chrono::milliseconds timeout, std::string timeout_message,
-                                            const StateVerdict &verdict) {
+                                            const StateVerdict &verdict,
+                                            const std::function<bool()> &still_authorized) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
+    const auto cancelled = [&] { return still_authorized && !still_authorized(); };
+    const CommandResult interrupted{false, "operation authority interrupted; aircraft outcome unknown",
+                                    false, CommandOutcome::Interrupted};
     while (std::chrono::steady_clock::now() < deadline) {
+        if (cancelled()) {
+            return interrupted;
+        }
         const auto remaining =
             std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
         if (remaining <= std::chrono::milliseconds::zero()) {
             break;
         }
         const auto state = connection_.wait_for_state((std::min)(kStatePollTimeout, remaining));
+        if (cancelled()) {
+            return interrupted;
+        }
         if (std::chrono::steady_clock::now() >= deadline) {
             break;
         }
@@ -384,8 +397,11 @@ CommandResult Vehicle::wait_for_state_until(std::chrono::milliseconds timeout, s
             continue;
         }
         // A verdict may read connection state and itself finish after the deadline.
-        if (const auto decision = verdict(*state);
-            decision.has_value() && std::chrono::steady_clock::now() < deadline) {
+        const auto decision = verdict(*state);
+        if (cancelled()) {
+            return interrupted;
+        }
+        if (decision.has_value() && std::chrono::steady_clock::now() < deadline) {
             return *decision;
         }
     }
@@ -483,7 +499,8 @@ CommandResult Vehicle::require_operation(VehicleOperation operation, const telem
 }
 
 CommandResult Vehicle::wait_for_takeoff(float minimum_altitude_m, const telemetry::VehicleState &initial,
-                                       std::chrono::steady_clock::time_point ack_boundary) {
+                                       std::chrono::steady_clock::time_point ack_boundary,
+                                       const std::function<bool()> &still_authorized) {
     const auto verdict = [this, minimum_altitude_m, initial, ack_boundary](const telemetry::VehicleState &state)
         -> std::optional<CommandResult> {
         if (!connection_.is_connected() || !state.connected || !detail::identified_copter_session(state, initial)) {
@@ -508,7 +525,7 @@ CommandResult Vehicle::wait_for_takeoff(float minimum_altitude_m, const telemetr
         return std::nullopt;
     };
     auto result = wait_for_state_until(kTakeoffStateTimeout,
-        "takeoff acknowledgement received but altitude verification timed out", verdict);
+        "takeoff acknowledgement received but altitude verification timed out", verdict, still_authorized);
     result.acknowledged = true;
     if (!result.success && result.outcome == CommandOutcome::Unspecified) {
         result.outcome = CommandOutcome::Unknown;

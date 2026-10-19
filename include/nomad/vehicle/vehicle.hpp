@@ -84,7 +84,8 @@ class Vehicle {
     CommandResult disarm();
     CommandResult set_mode(std::uint32_t custom_mode);
     CommandResult set_guided_mode();
-    CommandResult takeoff(float altitude_m);
+    // Ownership loss stops observation; transport admission still fences every send.
+    CommandResult takeoff(float altitude_m, const std::function<bool()> &still_authorized = {});
     CommandResult vtol_takeoff(float altitude_m);
     CommandResult transition_to_fixed_wing();
     CommandResult transition_to_vtol(const RecoveryPoint &point);
@@ -124,14 +125,16 @@ class Vehicle {
     CommandResult set_guided_mode_for_vtol_takeoff(std::uint64_t expected_session_id,
                                                    telemetry::AircraftClass aircraft_class);
     CommandResult wait_for_state_until(std::chrono::milliseconds timeout, std::string timeout_message,
-                                       const StateVerdict &verdict);
+                                       const StateVerdict &verdict,
+                                       const std::function<bool()> &still_authorized = {});
     CommandResult wait_for_armed_state(bool expected, const char *name);
     CommandResult wait_for_mode(std::uint32_t expected, const char *name);
     CommandResult wait_for_mode(const std::function<bool(std::uint32_t)> &matches, const char *name);
     CommandResult send_mode_and_verify(std::uint32_t custom_mode, const char *name,
                                        const telemetry::VehicleState &initial);
     CommandResult wait_for_takeoff(float minimum_altitude_m, const telemetry::VehicleState &initial,
-                                    std::chrono::steady_clock::time_point ack_boundary);
+                                    std::chrono::steady_clock::time_point ack_boundary,
+                                    const std::function<bool()> &still_authorized);
     CommandResult wait_for_vtol_takeoff(float target_altitude_m, const telemetry::VehicleState &expected_state,
                                         std::chrono::steady_clock::time_point ack_boundary);
     std::optional<std::string> vtol_takeoff_identity_error(const telemetry::VehicleState &state,
