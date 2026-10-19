@@ -69,8 +69,10 @@ exclusive control, descent, touchdown nor termination. Negative ACK is `failed`;
 missing ACK, unverified engagement or admission expiry with intact context is `unknown`.
 Known authority/identity/session/lifecycle loss is `interrupted`; pre-dispatch refusal
 is `rejected`. ACK evidence stays separate. No timeout/disconnect/revoke causes replay
-or an undo command. Safe actuator requests retain their original expiry after waiting
-behind LAND. Scheduling, IPC and audit I/O overhead are measured separately; this is
+or an undo command. After accepted ACK, LAND retains exclusive ordinary-operation ownership
+while safe actuator commands may use the command transport during observation. Safe requests
+retain their own original authority, expiry and durable-audit checks; other ordinary mutations
+remain busy until LAND finishes. Scheduling, IPC and audit I/O overhead are measured separately; this is
 not a hard real-time response guarantee.
 
 `STATUS` reports runtime IPC readiness, MAVSDK connection open, vehicle

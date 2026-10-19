@@ -5,6 +5,71 @@ Json land_request(const std::string &id) {
     return authority_request(id, "land");
 }
 
+class LandAfterSafeConnection final : public CopterLandConnection {
+  public:
+    std::optional<nomad::mavlink::CommandAck> send_command(
+        const nomad::mavlink::Command &command, std::chrono::milliseconds timeout) override {
+        const auto before = command_count();
+        const auto result = FakeConnection::send_command(command, timeout);
+        if (command.id == 183 && command_count() > before) {
+            safe_sent = true;
+        }
+        return result;
+    }
+
+    nomad::telemetry::VehicleState get_state() const override {
+        auto observed = CopterLandConnection::get_state();
+        if (land_sent && (!safe_sent || !allow_land_observation)) {
+            observed.custom_mode = 4;
+        }
+        return observed;
+    }
+
+    std::atomic_bool safe_sent{false};
+    std::atomic_bool allow_land_observation{false};
+};
+
+void test_runtime_safe_output_during_land_observation() {
+    auto config = test_config();
+    config.ipc_port = free_port();
+    config.actuation_enabled = true;
+    config.actuators = {runtime_actuator(nomad::runtime::ActuatorBehavior::ServoToggle)};
+    auto connection = std::make_unique<LandAfterSafeConnection>();
+    auto *observed = connection.get();
+    nomad::runtime::Runtime runtime(std::move(connection), config);
+    start_ready(runtime, config.ipc_port);
+    admit_authority(config.ipc_port);
+    Client pending(config.ipc_port, std::chrono::seconds(5));
+    pending.send(land_request("land-needs-safe-observation"));
+    wait_until([&] { return observed->land_sent.load(); });
+    Client safe_client(config.ipc_port, std::chrono::seconds(5));
+
+    const auto safe = safe_client.request(actuator_request("safe-before-land-observed", "safe"));
+    Client observer(config.ipc_port);
+    CHECK(observer.request(land_request("land-competing-operation"))["error"]["code"] == "busy");
+    CHECK(observer.request(actuator_request("land-competing-activation", "activate"))["error"]["code"] == "busy");
+    for (const auto *metadata : {"neutral", "safe"}) {
+        auto configure = authority_request(std::string("land-competing-config-") + metadata, "configure_actuators");
+        configure["actuator_configs"] = Json::array();
+        configure["operation"] = metadata;
+        CHECK(observer.request(configure)["error"]["code"] == "busy");
+    }
+    observed->allow_land_observation = true;
+    const auto land = pending.receive();
+
+    CHECK(safe["outcome"] == "success");
+    CHECK(safe["command_result"]["acknowledged"] == true);
+    CHECK(observed->safe_sent.load());
+    CHECK(land["outcome"] == "success");
+    CHECK(land["command_result"]["acknowledged"] == true);
+    CHECK(observed->command_count() == 2);
+    check_audited_outcome(config.audit_directory, safe);
+    check_audited_outcome(config.audit_directory, land);
+    CHECK(observer.request(land_request("land-explicit-new-operation"))["outcome"] == "success");
+    CHECK(observed->command_count() == 3);
+    CHECK(runtime.stop());
+}
+
 void test_runtime_land_engagement_and_replay() {
     auto config = test_config();
     config.ipc_port = free_port();
@@ -157,10 +222,22 @@ void test_runtime_land_safe_output_budget() {
 }
 
 void test_runtime_land_expired_safe_output_is_not_sent() {
+    std::atomic_bool safe_intent_seen{false};
     auto config = test_config();
     config.ipc_port = free_port();
     config.actuation_enabled = true;
     config.actuators = {runtime_actuator(nomad::runtime::ActuatorBehavior::ServoToggle)};
+    config.audit_write_guard = [&](const std::string &line) {
+        const auto record = Json::parse(line);
+        if (record.value("event", "") == "mutation_intent" &&
+            record.value("request_id", "") == "land-expired-safe-output") {
+            safe_intent_seen = true;
+            const auto expiry = record.at("expires_at_ms").get<std::int64_t>();
+            std::this_thread::sleep_until(
+                std::chrono::system_clock::time_point(std::chrono::milliseconds(expiry + 1)));
+        }
+        return true;
+    };
     auto connection = std::make_unique<CopterLandConnection>();
     auto *observed = connection.get();
     observed->observation = CopterLandConnection::Observation::PreAckLand;
@@ -176,6 +253,7 @@ void test_runtime_land_expired_safe_output_is_not_sent() {
 
     const auto safe = safe_client.request(safe_request);
 
+    CHECK(safe_intent_seen.load());
     CHECK(safe["outcome"] == "rejected");
     CHECK(safe["error"]["code"] == "expired_request");
     CHECK(pending.receive()["outcome"] == "unknown");

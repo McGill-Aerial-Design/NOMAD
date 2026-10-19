@@ -120,7 +120,8 @@ Json Runtime::Implementation::execute_actuator_request(const Request &request) {
     if (const auto denied = check_request_authority(request); denied.has_value()) {
         return *denied;
     }
-    const auto operation = field_string(request.original, "operation");
+    const auto operation = request.type == "actuator_action" ?
+        field_string(request.original, "operation") : std::string{};
     const auto id = field_string(request.original, "actuator_id");
     bool safe = operation == "safe" || operation == "stop";
     bool intent_recorded = false;
@@ -136,6 +137,10 @@ Json Runtime::Implementation::execute_actuator_request(const Request &request) {
         }
         intent_recorded = true;
         actuators_.signal_safe(id);
+    }
+    std::unique_lock operation_lock(operation_mutex_, std::defer_lock);
+    if (!safe && operation != "neutral" && !operation_lock.try_lock()) {
+        return error_response(request.id, "busy", "another NOMAD command is still executing");
     }
     std::unique_lock command_lock(command_mutex_, std::defer_lock);
     if (request.type == "configure_actuators" || operation != "neutral") {
