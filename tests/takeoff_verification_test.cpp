@@ -4,6 +4,7 @@
 #include "support/test_harness.hpp"
 
 #include <chrono>
+#include <functional>
 #include <limits>
 #include <string_view>
 #include <thread>
@@ -30,13 +31,29 @@ class TakeoffConnection final : public FakeConnection {
     std::optional<nomad::mavlink::CommandAck> send_command(
         const nomad::mavlink::Command &command, std::chrono::milliseconds timeout) override {
         const auto result = FakeConnection::send_command(command, timeout);
+        if (after_ack) {
+            after_ack();
+        }
         return result && result->status != nomad::mavlink::CommandAck::Status::AdmissionCancelled ?
             acknowledgement : result;
+    }
+
+    bool is_connected() const override {
+        if (before_connected_read) {
+            before_connected_read();
+        }
+        return FakeConnection::is_connected();
     }
 
     std::optional<nomad::telemetry::VehicleState> wait_for_state(std::chrono::milliseconds) override {
         ++polls;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (before_poll) {
+            before_poll();
+        }
+        if (empty_first_poll && polls == 1) {
+            return std::nullopt;
+        }
         std::lock_guard lock(state_mutex);
         const auto now = std::chrono::steady_clock::now();
         if (observation != Observation::Cached) {
@@ -73,7 +90,91 @@ class TakeoffConnection final : public FakeConnection {
 
     Observation observation;
     int polls{};
+    std::function<void()> after_ack;
+    std::function<void()> before_connected_read;
+    std::function<void()> before_poll;
+    bool empty_first_poll{};
 };
+
+void test_takeoff_denied_before_send() {
+    TakeoffConnection connection(Observation::Fresh);
+    CHECK(connection.connect());
+    nomad::vehicle::Vehicle vehicle(connection);
+    const auto result = vehicle.takeoff(10.0F, [] { return false; });
+    CHECK(!result.success);
+    CHECK(!result.acknowledged);
+    CHECK(result.outcome == Outcome::Rejected);
+    CHECK(connection.command_history.empty());
+    CHECK(connection.polls == 0);
+}
+
+void test_takeoff_cancelled_after_ack() {
+    TakeoffConnection connection(Observation::Fresh);
+    CHECK(connection.connect());
+    bool authorized = true;
+    connection.after_ack = [&] { authorized = false; };
+    nomad::vehicle::Vehicle vehicle(connection);
+    const auto result = vehicle.takeoff(10.0F, [&] { return authorized; });
+    CHECK(!result.success);
+    CHECK(result.acknowledged);
+    CHECK(result.outcome == Outcome::Interrupted);
+    CHECK(connection.command_history.size() == 1);
+    CHECK(connection.polls == 0);
+}
+
+void test_takeoff_cancelled_during_poll(bool empty_sample) {
+    TakeoffConnection connection(Observation::Fresh);
+    CHECK(connection.connect());
+    bool authorized = true;
+    connection.empty_first_poll = empty_sample;
+    connection.before_poll = [&] { authorized = false; };
+    nomad::vehicle::Vehicle vehicle(connection);
+    const auto result = vehicle.takeoff(10.0F, [&] { return authorized; });
+    CHECK(!result.success);
+    CHECK(result.acknowledged);
+    CHECK(result.outcome == Outcome::Interrupted);
+    CHECK(connection.command_history.size() == 1);
+    CHECK(connection.polls == 1);
+    CHECK(connection.connected);
+}
+
+void test_takeoff_cancelled_during_verdict() {
+    TakeoffConnection connection(Observation::Fresh);
+    CHECK(connection.connect());
+    bool authorized = true;
+    connection.before_poll = [&] {
+        connection.before_connected_read = [&] { authorized = false; };
+    };
+    nomad::vehicle::Vehicle vehicle(connection);
+    const auto result = vehicle.takeoff(10.0F, [&] { return authorized; });
+    CHECK(!result.success);
+    CHECK(result.acknowledged);
+    CHECK(result.outcome == Outcome::Interrupted);
+    CHECK(connection.command_history.size() == 1);
+    CHECK(connection.polls == 1);
+}
+
+void test_takeoff_requires_new_operation_after_cancellation() {
+    TakeoffConnection connection(Observation::Fresh);
+    CHECK(connection.connect());
+    bool authorized = true;
+    connection.before_poll = [&] { authorized = false; };
+    nomad::vehicle::Vehicle vehicle(connection);
+    const auto cancelled = vehicle.takeoff(10.0F, [&] { return authorized; });
+    CHECK(!cancelled.success);
+    CHECK(cancelled.acknowledged);
+    CHECK(cancelled.outcome == Outcome::Interrupted);
+    CHECK(connection.command_history.size() == 1);
+    connection.before_poll = {};
+    connection.polls = 0;
+    authorized = true;
+    const auto fresh = vehicle.takeoff(10.0F, [&] { return authorized; });
+    CHECK(fresh.success);
+    CHECK(fresh.acknowledged);
+    CHECK(fresh.outcome == Outcome::Success);
+    CHECK(connection.command_history.size() == 2);
+    CHECK(connection.polls == 1);
+}
 
 void test_takeoff_rejects_replaced_context(Observation observation) {
     TakeoffConnection connection(observation);
@@ -207,5 +308,11 @@ int main(int argc, char **argv) {
         test_takeoff_rejects_unusable_initial_context();
         test_takeoff_preserves_command_and_acknowledgement();
         test_takeoff_preserves_negative_missing_and_wrong_ack();
+        test_takeoff_denied_before_send();
+        test_takeoff_cancelled_after_ack();
+        test_takeoff_cancelled_during_poll(false);
+        test_takeoff_cancelled_during_poll(true);
+        test_takeoff_cancelled_during_verdict();
+        test_takeoff_requires_new_operation_after_cancellation();
     });
 }
