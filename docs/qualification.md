@@ -36,6 +36,16 @@ actual target, including memory pressure, disk/audit failure and competing workl
 
 ## SITL qualification
 
+Maintain the latest stable ArduPilot release for each supported aircraft family.
+As checked on 2026-10-18, the current target is
+[Copter 4.7.2](https://github.com/ArduPilot/ardupilot/releases/tag/Copter-4.7.2) and
+[Plane 4.7.2](https://github.com/ArduPilot/ardupilot/releases/tag/Plane-4.7.2).
+Qualification uses reviewed, pinned revisions rather than a floating latest tag.
+Update those pins deliberately and run the full affected gates before claiming
+coverage of a new release; retain the earlier revision and its results as evidence.
+The retained SITL baseline below is still 4.7.1. Selecting a profile does not update
+firmware. Conventional Plane operations require evidence beyond the QuadPlane gate.
+
 [sitl.yml](../.github/workflows/sitl.yml) requires full Copter and QuadPlane jobs on
 safety-sensitive changes and scheduled/manual runs. Its scope output is fail-closed.
 The MAVSDK connectivity smoke is a separate limited check and cannot replace them.

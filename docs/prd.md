@@ -36,6 +36,7 @@ Compute-placement rows describe goals; named profiles and optional providers are
 |---|---|---|---|
 | U-CORE-01 | U | C++ owns vehicle behavior, safety validation, missions, telemetry models and MAVLink interaction | G2 |
 | U-AP-01 | U | Preserve ArduPilot control, EKF and failsafes; NOMAD does not replace them | G2/G7 |
+| U-AP-02 | U | Support ArduPilot Copter and Plane aircraft across flight-controller models and frames; keep aircraft setup in saved profiles and operation semantics in shared vehicle policy | G2/G7 |
 | U-PY-01 | U | Remove Edge Core and Python-owned vehicle decisions; retain Python for CV/ML/tools/tests | G1/G2 |
 | U-ADAPT-01 | U | Mission Planner and ROS 2 are clients/adapters; no parallel vehicle policy | G2 |
 | U-MOD-01 | U | Keep NOMAD general-purpose: competition/event-specific schemas, credentials, cadence and scoring behavior live in opt-in application modules with no core dependency on those details and no direct vehicle-command path | G2/G4 |
@@ -44,9 +45,11 @@ Compute-placement rows describe goals; named profiles and optional providers are
 | U-PROF-03 | U | groundstation_minimal works with runtime IPC and the standalone ground router without companion/perception; missing features are explicit | G3 |
 | U-TEST-01 | U | Important behavior is testable without hardware; safety needs invalid, boundary and failure cases | All |
 
-Board-independent MAVLink is the design boundary. Current verification is
-Copter-oriented; this is not a claim that every ArduPilot vehicle type, board,
-payload channel mapping, or transport has been qualified.
+Board-independent MAVLink is the design boundary. Operation eligibility depends on
+the connected vehicle family, supported capabilities and fresh state; profile labels
+do not grant support or authority. Copter, conventional Plane and QuadPlane operations
+need their own evidence. [Qualification](qualification.md) records current coverage
+and firmware targets; it does not qualify every board, frame, channel map or transport.
 
 ## User direction recorded during review
 
@@ -57,8 +60,8 @@ payload channel mapping, or transport has been qualified.
   droppings and other permitted samples. This is project direction, not
   qualified hardware or payload capability.
 - Walksnail FPV camera planned; additional camera TBD. No ZED dependency.
-- Use the flight controller's IMU. Cube Orange or a custom ArduPilot controller
-  is under consideration; UART/PWM counts and board integration need validation.
+- Use the flight controller's IMU. Aircraft may use different ArduPilot controllers
+  and frames; UART/PWM counts and each board integration need validation.
 - Here4 GNSS with RTK base is intended; correction delivery and degraded-fix
   behavior require qualification.
 - Custom tracker, possibly ESP32, remains undecided. Tagging and sample
@@ -89,7 +92,7 @@ D09 is substantially resolved at the topology/interface level:
   The conventional transmitter is the primary manual interface. The owner reports
   Cube Orange Plus, ELRS arming on RC input CH5 and flight modes on CH6 for one
   aircraft. Store these values in that aircraft's profile; they are not defaults
-  for other aircraft. Firmware, airframe, calibration and FC readbacks remain open.
+  for other aircraft. Exact frame, calibration and FC readbacks remain open.
 - LTE/MAVLink is secondary/redundant C2 and data. The intended alternate pilot
   path is ground-station joystick → Mission Planner/NOMAD → LTE → aircraft.
   This is not an independent RC radio or a qualified takeover implementation.
