@@ -23,6 +23,19 @@ Mission Planner owns its normal command ACKs/retries; pending helpers can finish
 past NOMAD Stop/unload. External MP/mission/RC actions are outside NOMAD's local
 interlocks and may change output state or the controller's shared repeat slot.
 
+The optional [native simulator check](development.md#manual-native-simulator-acceptance)
+runs the actual installed plugin and host against pinned Copter and Plane SITL binaries.
+Fresh PWM/relay telemetry verifies software output transitions for all five payload
+behaviors, timed returns, Safe and gimbal positioning; native ACKs remain software
+evidence. ReadOnly/stale generation rejection and normal host lifecycle are checked.
+The same finite output checks pass with pinned Copter 4.8.0-dev and Plane 4.7.0-dev
+simulators, using 10 Hz output/status streams. Positive and negative bidirectional
+motion, native neutral return and explicit Safe are observed on both. Gimbal native
+submission is checked separately from PWM response. This does not cover continuous
+link-loss timing, reconnect, physical HID/video/map/audio, QuadPlane output behavior,
+or real mechanisms. Existing focused fault/HID gates
+remain necessary; simulator PWM is not measured electrical PWM or physical completion.
+
 ## Aircraft acceptance remains open
 
 - Copter, Plane and QuadPlane native flight behavior across the chosen firmware,

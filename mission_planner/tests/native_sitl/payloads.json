@@ -1,0 +1,50 @@
+[
+  {
+    "id": "toggle",
+    "name": "toggle",
+    "behavior": "ServoToggle",
+    "channel": 9,
+    "safe_pwm": 1000,
+    "hazardous": false,
+    "confirmation_count": 0
+  },
+  {
+    "id": "position",
+    "name": "position",
+    "behavior": "ServoPosition",
+    "channel": 10,
+    "safe_pwm": 1500,
+    "hazardous": false,
+    "confirmation_count": 0
+  },
+  {
+    "id": "motion",
+    "name": "motion",
+    "behavior": "ServoBidirectional",
+    "channel": 11,
+    "safe_pwm": 1500,
+    "hazardous": false,
+    "confirmation_count": 0,
+    "pwm_neutral": 1500,
+    "hold_ms": 600
+  },
+  {
+    "id": "relay",
+    "name": "relay",
+    "behavior": "RelayToggle",
+    "channel": 0,
+    "safe_pwm": 1000,
+    "hazardous": false,
+    "confirmation_count": 0
+  },
+  {
+    "id": "pulse",
+    "name": "pulse",
+    "behavior": "RelayPulse",
+    "channel": 1,
+    "safe_pwm": 1000,
+    "hazardous": false,
+    "confirmation_count": 0,
+    "pulse_ms": 600
+  }
+]

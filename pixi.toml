@@ -38,3 +38,6 @@ test-plugin-geometry = "powershell -NoProfile -ExecutionPolicy Bypass -File scri
 test-plugin-audio = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_audio.ps1"
 test-plugin-version = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_version.ps1"
 test-ground-router-logic = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_ground_router.ps1"
+
+# Manual installed-host simulator check; requires explicit source and DLL hash arguments.
+test-plugin-native-sitl = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_native_sitl.ps1"
