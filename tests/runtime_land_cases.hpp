@@ -5,6 +5,115 @@ Json land_request(const std::string &id) {
     return authority_request(id, "land");
 }
 
+class LandProgressConnection final : public CopterLandConnection {
+  public:
+    std::optional<nomad::mavlink::CommandAck> send_command(const nomad::mavlink::Command &command,
+        std::uint64_t expected_session, std::chrono::milliseconds timeout) override {
+        const auto result = CopterLandConnection::send_command(command, expected_session, timeout);
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        ack_ready = true;
+        while (!release_ack && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return release_ack ? result : std::nullopt;
+    }
+
+    nomad::telemetry::VehicleState get_state() const override {
+        auto observed = CopterLandConnection::get_state();
+        if (!release_observation) {
+            observed.custom_mode = 4;
+        }
+        return observed;
+    }
+
+    std::atomic_bool ack_ready{false};
+    std::atomic_bool release_ack{false};
+    std::atomic_bool release_observation{false};
+};
+
+void test_runtime_land_request_progress() {
+    auto config = test_config();
+    config.ipc_port = free_port();
+    config.actuation_enabled = true;
+    auto connection = std::make_unique<LandProgressConnection>();
+    auto *observed = connection.get();
+    nomad::runtime::Runtime runtime(std::move(connection), config);
+    start_ready(runtime, config.ipc_port);
+    Client observer(config.ipc_port);
+    const auto initial = observer.request(base_request("initial-flight-request", "status"))["status"];
+    CHECK(initial.contains("last_flight_request"));
+    CHECK(initial["last_flight_request"].is_null());
+    admit_authority(config.ipc_port);
+    Client pending(config.ipc_port, std::chrono::seconds(5));
+    const auto request = land_request("land-request-progress");
+    const auto progress = [&] {
+        return observer.request(base_request("flight-request-progress", "status"))["status"]["last_flight_request"];
+    };
+
+    pending.send(request);
+    wait_until([&] { return observed->ack_ready.load(); });
+    const auto sending = progress();
+    CHECK(sending["request_id"] == request["id"]);
+    CHECK(sending["operation"] == "land");
+    CHECK(sending["vehicle_session"] == request["vehicle_session"]);
+    CHECK(sending["authority_generation"] == request["authority_generation"]);
+    CHECK(sending["age_ms"].is_number_integer());
+    CHECK(sending["age_ms"] >= 0);
+    CHECK(sending["phase"] == "sending");
+    CHECK(sending["acknowledged"] == false);
+    CHECK(sending["outcome"].is_null());
+    observed->release_ack = true;
+    Json observing;
+    wait_until([&] { observing = progress(); return observing["phase"] == "observing"; });
+    CHECK(observing["acknowledged"] == true);
+    CHECK(observing["outcome"].is_null());
+    CHECK(observed->command_count() == 1);
+    observed->release_observation = true;
+    const auto response = pending.receive();
+
+    const auto completed = progress();
+    CHECK(response["outcome"] == "success");
+    CHECK(completed["phase"] == "completed");
+    CHECK(completed["acknowledged"] == true);
+    CHECK(completed["outcome"] == response["outcome"]);
+    CHECK(completed["age_ms"] >= sending["age_ms"]);
+    CHECK(observer.request(request) == response);
+    const auto replayed = progress();
+    CHECK(replayed["request_id"] == completed["request_id"]);
+    CHECK(replayed["outcome"] == completed["outcome"]);
+    CHECK(replayed["age_ms"] >= completed["age_ms"]);
+    CHECK(observed->command_count() == 1);
+    CHECK(runtime.stop());
+}
+
+void test_runtime_land_request_cache_lifetime() {
+    auto config = test_config();
+    config.ipc_port = free_port();
+    config.actuation_enabled = true;
+    auto connection = std::make_unique<CopterLandConnection>();
+    auto *observed = connection.get();
+    nomad::runtime::Runtime runtime(std::move(connection), config);
+    start_ready(runtime, config.ipc_port);
+    admit_authority(config.ipc_port);
+    Client client(config.ipc_port);
+    CHECK(client.request(land_request("land-cache-lifetime"))["outcome"] == "success");
+    CHECK(client.request(base_request("completed-flight-request", "status"))
+              ["status"]["last_flight_request"]["phase"] == "completed");
+
+    for (int index = 0; index < 257; ++index) {
+        CHECK(client.request(servo_request("flight-cache-fill-" + std::to_string(index), 1500))
+                  ["outcome"] == "success");
+    }
+
+    CHECK(client.request(base_request("evicted-flight-request", "status"))
+              ["status"]["last_flight_request"].is_null());
+    CHECK(client.request(servo_request("land-cache-lifetime", 1500))["outcome"] == "success");
+    CHECK(client.request(base_request("reused-flight-id", "status"))
+              ["status"]["last_flight_request"].is_null());
+    CHECK(observed->command_count() == 259);
+    CHECK(runtime.stop());
+}
+
 class LandAfterSafeConnection final : public CopterLandConnection {
   public:
     std::optional<nomad::mavlink::CommandAck> send_command(
@@ -123,6 +232,11 @@ void test_runtime_land_outcomes() {
         CHECK(response["outcome"] == expected);
         CHECK(response["command_result"]["success"] == false);
         CHECK(response["command_result"]["acknowledged"] == true);
+        const auto progress = client.request(base_request("land-final-request-state", "status"))
+            ["status"]["last_flight_request"];
+        CHECK(progress["phase"] == "completed");
+        CHECK(progress["acknowledged"] == true);
+        CHECK(progress["outcome"] == expected);
         check_audited_outcome(config.audit_directory, response);
         CHECK(client.request(request) == response);
         CHECK(observed->command_count() == 1);
@@ -281,6 +395,15 @@ void test_runtime_land_audit_failure(bool after_send) {
     CHECK(observed->command_count() == (after_send ? 1U : 0U));
     if (after_send) {
         CHECK(response["command_result"]["acknowledged"] == true);
+    }
+    const auto progress = client.request(base_request("land-audit-request-state", "status"))
+        ["status"]["last_flight_request"];
+    if (after_send) {
+        CHECK(progress["phase"] == "completed");
+        CHECK(progress["acknowledged"] == true);
+        CHECK(progress["outcome"] == "unknown");
+    } else {
+        CHECK(progress.is_null());
     }
     CHECK(!runtime.stop());
 }

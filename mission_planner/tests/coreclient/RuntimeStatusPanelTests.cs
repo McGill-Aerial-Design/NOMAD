@@ -18,6 +18,8 @@ internal static partial class NomadCoreClientTests
             try
             {
                 StatusPanel_ReportsSeparateFactsAndDatums();
+                StatusPanel_FlightRequestHistoryIsReadOnly();
+                StatusPanel_InvalidFlightRequestStaysUnknown();
                 StatusPanel_UnknownFieldsStayUnknown();
                 StatusPanel_ReplacedClientCannotPublishQueuedResponse();
                 StatusPanel_ViewLifetimeFencesQueuedResponse();
@@ -82,6 +84,60 @@ internal static partial class NomadCoreClientTests
             "STATUS view reports its capture date and observation boundary");
         Expect(StatusButton(panel).Enabled && runtime.Requests().Length == 2,
             "refresh finishes without automatic polling");
+    }
+
+    private static void StatusPanel_FlightRequestHistoryIsReadOnly()
+    {
+        var cases = new (string Phase, string Text, int Session)[]
+        {
+            ("sending", "Sending LAND request", 7),
+            ("observing", "Awaiting LAND mode result", 7),
+            ("completed", "LAND request finished", 7),
+            ("completed", "LAND request finished (different connection or authority)", 8),
+        };
+        foreach (var sample in cases)
+        {
+            using var runtime = new StatusRuntime(changeResponse: response =>
+            {
+                var request = FlightRequestSnapshot(sample.Phase, sample.Phase != "sending",
+                    sample.Phase == "completed" ? "success" : null);
+                request["vehicle_session"] = sample.Session;
+                ((Dictionary<string, object>)response["status"])["last_flight_request"] = request;
+            });
+            OutputController.Initialize(new NOMADConfig { CoreRuntimePort = runtime.Port });
+            using var panel = new RuntimeStatusPanel();
+            using var form = ShowStatusPanel(panel);
+            StatusButton(panel).PerformClick();
+            WaitForPanel(panel.ActiveRequest);
+            Expect(StatusValue(panel, "Last flight request") == sample.Text,
+                "flight request phase and different context are displayed explicitly");
+            Expect(StatusValue(panel, "Last flight request ACK") == (sample.Phase == "sending" ? "No" : "Yes"),
+                "flight request acknowledgement is displayed independently");
+            Expect(StatusValue(panel, "Last flight request outcome") == (sample.Phase == "completed"
+                    ? "LAND mode observed; touchdown not verified" : "Pending"),
+                "request progress and mode observation cannot claim touchdown");
+            Expect(StatusValue(panel, "Last flight request age (ms)") != "Unknown" && runtime.Requests().Length == 2,
+                "flight request age is shown by a read-only refresh");
+        }
+    }
+
+    private static void StatusPanel_InvalidFlightRequestStaysUnknown()
+    {
+        using var runtime = new StatusRuntime(changeResponse: response =>
+        {
+            var request = FlightRequestSnapshot();
+            request["acknowledged"] = false;
+            ((Dictionary<string, object>)response["status"])["last_flight_request"] = request;
+        });
+        OutputController.Initialize(new NOMADConfig { CoreRuntimePort = runtime.Port });
+        using var panel = new RuntimeStatusPanel();
+        using var form = ShowStatusPanel(panel);
+        StatusButton(panel).PerformClick();
+        WaitForPanel(panel.ActiveRequest);
+        Expect(StatusValue(panel, "Last flight request") == "Unknown"
+            && StatusValue(panel, "Last flight request ACK") == "Unknown"
+            && StatusValue(panel, "Last flight request outcome") == "Unknown",
+            "invalid request evidence cannot become a known phase, acknowledgement or outcome");
     }
 
     private static void StatusPanel_UnknownFieldsStayUnknown()

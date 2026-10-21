@@ -150,8 +150,17 @@ Json Runtime::Implementation::execute_mutating_request(const Request &request) {
 vehicle::CommandResult Runtime::Implementation::invoke_vehicle(
     const Request &request, std::unique_lock<std::mutex> &command_lock) {
     if (request.type == "land") {
+        {
+            std::lock_guard lock(cache_mutex_);
+            last_flight_request_ = FlightRequest{cache_key(request), request.id, request.type,
+                request.session, request.generation, request.ack_observed, Clock::now()};
+        }
         return vehicle_.engage_copter_land([&] { return owns_generation(request); }, [&] {
             *request.ack_observed = true;
+            {
+                std::lock_guard lock(cache_mutex_);
+                last_flight_request_->observing = true;
+            }
             command_lock.unlock();
         });
     }
@@ -186,6 +195,9 @@ void Runtime::Implementation::remember_response(
     while (cache_order_.size() > kRequestCacheCapacity) {
         const auto oldest = std::move(cache_order_.front());
         cache_order_.pop_front();
+        if (last_flight_request_ && last_flight_request_->key == oldest) {
+            last_flight_request_.reset();
+        }
         response_cache_.erase(oldest);
     }
 }

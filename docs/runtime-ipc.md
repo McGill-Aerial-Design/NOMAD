@@ -36,7 +36,7 @@ fields are ignored. Clients negotiate with `hello` before sending a command.
 |---|---|
 | `hello` | Protocol/version, runtime version and supported capabilities |
 | `ping` | `pong` health response |
-| `status` | Runtime readiness; MAVSDK connection open and vehicle transport connected; vehicle session and heartbeat state; identity/class; armed state; current custom mode; valid telemetry fields and their observed ages |
+| `status` | Runtime readiness; connection/session/heartbeat state; identity/class; armed state; current custom mode; telemetry validity/age; last tracked flight request's phase and result |
 | `admit_authority` | Explicit first admission of one local software source into a new generation |
 | `revoke_authority` | Invalidate the current generation and inhibit mutations |
 | `handback_authority` | Explicit admission after revocation into another new generation |
@@ -117,6 +117,23 @@ heartbeat age/freshness, connection/session state, actuation enablement, audit
 health and authority. The list grants no authority and does not predict command
 admission or successful execution. The runtime rechecks those conditions when
 handling each mutation.
+
+`status.last_flight_request` is null when no tracked request remains. Otherwise it
+contains `request_id`, `operation` (currently `land`), original `vehicle_session`
+and `authority_generation`, `age_ms` since dispatch began, `phase`, `acknowledged`
+and `outcome`. Phase is `sending` before the accepted-ACK handoff, `observing` while
+awaiting the mode/result, and `completed` after the final response is recorded.
+Pending outcomes are null; completed outcomes use the existing mutation outcomes.
+ACK observation, request completion and physical completion remain separate facts.
+LAND success still means mode observed, not touchdown.
+
+Tracking starts after durable mutation intent, immediately before the Vehicle call.
+Earlier admission/busy rejections do not replace the last tracked request. A completed
+entry remains only while its response is cached; eviction clears the projection, so
+reusing its ID for another request cannot inherit old flight metadata. Restart clears
+it. This is read-only request history, not a retry/resume handle or evidence of no
+aircraft activity. Clients retain its age and original context, show missing/invalid
+data as unknown, and label a different connection/authority context explicitly.
 
 Mutating requests use a try-lock command policy: one mutating `Vehicle` call at
 a time. A concurrent mutation receives `busy`; it is not queued. Read-only

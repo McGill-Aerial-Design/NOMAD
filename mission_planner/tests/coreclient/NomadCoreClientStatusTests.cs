@@ -52,6 +52,9 @@ internal static partial class NomadCoreClientTests
     private static void Runtime_StatusTests()
     {
         Status_ReadsWithoutAuthorityAndPreservesDistinctFacts();
+        Status_ReadsFlightRequestPhases();
+        Status_FlightRequestIdUsesProtocolByteLimit();
+        Status_InvalidFlightRequestStaysUnknown();
         Status_RejectsMismatchedEnvelopeAndIncarnation();
         Status_RejectsUnauthenticatedServer();
         Status_RejectsMalformedHelloAndDroppedResponse();
@@ -65,6 +68,114 @@ internal static partial class NomadCoreClientTests
             "STATUS with empty credential fails before connecting");
         Expect(StatusResult(new NomadCoreClient("test-key", -1).GetStatusAsync()).ErrorCode == "invalid_configuration",
             "STATUS with an invalid port does not query the default runtime");
+    }
+
+    private static Dictionary<string, object> FlightRequestSnapshot(string phase = "observing",
+        bool acknowledged = true, string outcome = null) => new Dictionary<string, object>
+    {
+        ["request_id"] = "fixture-land",
+        ["operation"] = "land",
+        ["vehicle_session"] = 7,
+        ["authority_generation"] = 9,
+        ["age_ms"] = 0,
+        ["phase"] = phase,
+        ["acknowledged"] = acknowledged,
+        ["outcome"] = outcome,
+    };
+
+    private static void Status_ReadsFlightRequestPhases()
+    {
+        var cases = new (string Phase, bool Ack, string Outcome)[]
+        {
+            ("sending", false, null), ("sending", true, null), ("observing", true, null),
+            ("completed", true, "success"), ("completed", true, "failed"),
+            ("completed", false, "rejected"), ("completed", false, "unknown"),
+            ("completed", true, "unknown"), ("completed", false, "interrupted"),
+            ("completed", true, "interrupted"),
+        };
+        foreach (var sample in cases)
+        {
+            using var runtime = new StatusRuntime(changeResponse: response =>
+                ((Dictionary<string, object>)response["status"])["last_flight_request"] =
+                    FlightRequestSnapshot(sample.Phase, sample.Ack, sample.Outcome));
+            var status = StatusResult(new NomadCoreClient("test-key", runtime.Port).GetStatusAsync()).Snapshot;
+            var request = status?.LastFlightRequest;
+            Expect(request?.RequestId == "fixture-land" && request.Operation == "land"
+                && request.VehicleSession == 7 && request.AuthorityGeneration == 9 && request.AgeMilliseconds == 0,
+                "flight request projection retains its original context and observed zero age");
+            Expect(request?.Phase == sample.Phase && request.Acknowledged == sample.Ack
+                && request.Outcome == sample.Outcome, "flight request phase, ACK and outcome remain distinct");
+            Expect(status?.ActuationEnabled == false && status.AuthorityOwner == null
+                && runtime.Requests().Length == 2 && runtime.Requests()[1]["type"].Equals("status"),
+                "flight request history grants no authority and dispatches no mutation");
+        }
+    }
+
+    private static void Status_FlightRequestIdUsesProtocolByteLimit()
+    {
+        var cases = new (string Id, bool Valid)[]
+        {
+            (new string('r', 64), true), (new string('r', 65), false),
+            (new string('\u00E9', 32), true), (new string('\u00E9', 33), false),
+        };
+        foreach (var sample in cases)
+        {
+            using var runtime = new StatusRuntime(changeResponse: response =>
+            {
+                var request = FlightRequestSnapshot();
+                request["request_id"] = sample.Id;
+                ((Dictionary<string, object>)response["status"])["last_flight_request"] = request;
+            });
+            var result = StatusResult(new NomadCoreClient("test-key", runtime.Port).GetStatusAsync());
+            Expect(result.Succeeded && (sample.Valid
+                    ? result.Snapshot.LastFlightRequest?.RequestId == sample.Id
+                    : result.Snapshot.LastFlightRequest == null),
+                sample.Valid ? "flight request ID at the UTF-8 byte limit remains valid"
+                    : "oversized UTF-8 flight request ID stays unknown");
+        }
+    }
+
+    private static void Status_InvalidFlightRequestStaysUnknown()
+    {
+        var changes = new Action<Dictionary<string, object>>[]
+        {
+            value => value["request_id"] = "", value => value["request_id"] = "bad\nrequest",
+            value => value["operation"] = "takeoff", value => value["vehicle_session"] = 0,
+            value => value["authority_generation"] = -1, value => value["age_ms"] = -1,
+            value => value["age_ms"] = 0.5, value => value["acknowledged"] = "yes",
+            value => value["phase"] = "running", value => value["outcome"] = "success",
+            value => value.Remove("outcome"), value => value["acknowledged"] = false,
+            value => value["phase"] = "completed",
+            value =>
+            {
+                value["phase"] = "completed";
+                value["outcome"] = "success";
+                value["acknowledged"] = false;
+            },
+            value =>
+            {
+                value["phase"] = "completed";
+                value["outcome"] = "failed";
+                value["acknowledged"] = false;
+            },
+            value =>
+            {
+                value["phase"] = "completed";
+                value["outcome"] = "rejected";
+            },
+        };
+        foreach (var change in changes)
+        {
+            using var runtime = new StatusRuntime(changeResponse: response =>
+            {
+                var request = FlightRequestSnapshot();
+                change(request);
+                ((Dictionary<string, object>)response["status"])["last_flight_request"] = request;
+            });
+            var result = StatusResult(new NomadCoreClient("test-key", runtime.Port).GetStatusAsync());
+            Expect(result.Succeeded && result.Snapshot.LastFlightRequest == null,
+                "malformed optional flight request data stays unknown without hiding other status facts");
+        }
     }
 
     private static void Status_InvalidEndpointDoesNotSelectDefault()
@@ -107,6 +218,7 @@ internal static partial class NomadCoreClientTests
         }
         Expect(status.RuntimeReady == true && status.AuditHealthy == false && status.ActuationEnabled == false,
             "listener readiness does not imply audit or actuation readiness");
+        Expect(status.LastFlightRequest == null, "older runtime without flight request data remains readable");
         Expect(status.ProtocolCapabilities.Count == 2 && status.SupportedFlightOperations.Count == 0,
             "protocol LAND advertisement does not create QuadPlane operation support");
         Expect(status.VehicleSession == 7 && status.AuthorityGeneration == 9 && status.AuthorityOwnerKnown

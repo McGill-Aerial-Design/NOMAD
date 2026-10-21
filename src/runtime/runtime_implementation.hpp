@@ -23,9 +23,10 @@ namespace nomad::runtime {
 // - operation_mutex_ serializes ordinary mutations through observation; safe actuator actions bypass it.
 // - command_mutex_ serializes command stages; LAND releases it after accepted ACK, before observation.
 // - Revoke/status/session callbacks take neither operation nor command mutex.
-// - cache_mutex_ protects response_cache_, cache_order_ and in_flight_; released before execution.
+// - cache_mutex_ protects response_cache_, cache_order_, in_flight_ and last_flight_request_.
+//   Command execution holds it only to record the flight request and accepted-ACK observation phase.
 // - AuditJournal owns its mutex/files; final admission holds gate then journal locks through send.
-// - Nested locks: operation -> command -> gate -> journal, or cache -> gate -> journal.
+// - Nested locks: operation -> command -> cache -> gate -> journal; paths may skip locks.
 //   Never acquire operation/command/cache under gate.
 // - *_locked, valid_context, authority_response, record_authority_response and audit_session_loss
 //   require the caller's gate lock. audit_request releases its gate snapshot lock before append.
@@ -40,6 +41,17 @@ struct Runtime::Implementation {
     struct CacheEntry {
         std::string fingerprint;
         Json response;
+    };
+
+    struct FlightRequest {
+        std::string key;
+        std::string id;
+        std::string operation;
+        std::uint64_t session;
+        std::uint64_t generation;
+        std::shared_ptr<std::atomic_bool> acknowledged;
+        detail::Clock::time_point started_at;
+        bool observing{};
     };
 
     // Lifecycle and IPC.
@@ -82,6 +94,7 @@ struct Runtime::Implementation {
     // Read requests and status.
     Json handle_read_request(const Request &request);
     Json status_snapshot() const;
+    Json last_flight_request_snapshot() const;
     std::uint64_t current_generation() const;
     std::uint64_t next_sequence() const;
 
@@ -112,7 +125,8 @@ struct Runtime::Implementation {
     std::thread connection_worker_;
     std::mutex operation_mutex_;
     std::mutex command_mutex_;
-    std::mutex cache_mutex_;
+    mutable std::mutex cache_mutex_;
+    std::optional<FlightRequest> last_flight_request_;
     std::unordered_map<std::string, CacheEntry> response_cache_;
     std::deque<std::string> cache_order_;
     std::unordered_set<std::string> in_flight_;

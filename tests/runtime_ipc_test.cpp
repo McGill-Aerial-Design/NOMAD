@@ -404,6 +404,8 @@ void run_runtime_scenarios() {
     using nomad::test::run_scenario;
     run_native_audit_timing_scenarios();
     run_scenario("land_engagement_and_replay", test_runtime_land_engagement_and_replay);
+    run_scenario("land_request_progress", test_runtime_land_request_progress);
+    run_scenario("land_request_cache_lifetime", test_runtime_land_request_cache_lifetime);
     run_scenario("land_outcomes", test_runtime_land_outcomes);
     run_scenario("land_validation", test_runtime_land_validation);
     run_scenario("land_revoke", test_runtime_land_revoke);
@@ -471,6 +473,11 @@ void run_runtime_scenarios() {
 
 int main(int argc, char **argv) {
     return nomad::test::run_tests([argc, argv] {
+        if (argc == 2 && std::string_view(argv[1]) == "--land-request-progress") {
+            nomad::test::run_scenario("land_request_progress", test_runtime_land_request_progress);
+            nomad::test::run_scenario("land_request_cache_lifetime", test_runtime_land_request_cache_lifetime);
+            return;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--safe-land-observation") {
             nomad::test::run_scenario("safe_during_land_observation",
                 test_runtime_safe_output_during_land_observation);
