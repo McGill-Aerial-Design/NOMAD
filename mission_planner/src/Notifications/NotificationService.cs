@@ -4,7 +4,7 @@
 // NOMAD Notification Service
 // ============================================================
 // Centralized notification system for flight-critical warnings.
-// Monitors GPS health, EKF source changes, battery, optical flow,
+// Monitors GPS health, EKF position validity, battery, rangefinder,
 // and local advisory outline position. Non-intrusive timestamped alerts.
 // ============================================================
 
@@ -12,6 +12,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Timers;
+using MissionPlanner;
 
 namespace NOMAD.MissionPlanner
 {
@@ -81,7 +82,10 @@ namespace NOMAD.MissionPlanner
         private int _pollGuard;
 
         private AdvisoryBoundaryMonitor _advisoryBoundaryMonitor;
-        private int _lastEkfSource = -1;
+        private MAVLinkInterface _observedConnection;
+        private MAVState _observedMav;
+        private CurrentState _observedState;
+        private int _lastEkfPositionValidity = -1;
         private int _lastGpsFix = -1;
         private readonly Dictionary<int, int> _lastBatterySeverity = new Dictionary<int, int>();
         private readonly Dictionary<int, DateTime> _lastBatterySpeechUtc = new Dictionary<int, DateTime>();

@@ -21,6 +21,7 @@ $csc = Find-RoslynCompiler
 # ---- Compile ----
 $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Notifications\AltitudeCallout.cs'),
+    (Join-Path $repoRoot 'mission_planner/src/Telemetry/AltitudeUnits.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\audio\AltitudeCalloutTests.cs')
 )
 $outDir = Join-Path $repoRoot 'mission_planner\tests\audio\bin'

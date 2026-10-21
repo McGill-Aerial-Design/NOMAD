@@ -49,12 +49,12 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Read battery n (1-based) from the connected vehicle and evaluate it
         /// against its own configured thresholds. Returns null when there is no
-        /// MAV or the battery monitor is disabled.
+        /// MAV, the battery monitor is disabled or its voltage is unavailable.
         /// </summary>
-        public static BatteryStatus Read(int idx)
+        public static BatteryStatus Read(MAVState mav, int idx)
         {
-            var mav = MainV2.comPort?.MAV;
-            if (mav?.cs == null) return null;
+            var cs = mav?.cs;
+            if (cs == null) return null;
 
             if (GetBattParam(mav, idx, "MONITOR") <= 0) return null;
 
@@ -62,8 +62,9 @@ namespace NOMAD.MissionPlanner
 
             // Live readings. MP exposes per-battery fields as battery_voltage /
             // battery_voltage2 / ..., same pattern for usedmah.
-            s.Voltage = GetCsDouble(mav.cs, idx == 1 ? "battery_voltage" : $"battery_voltage{idx}");
-            s.UsedMah = GetCsDouble(mav.cs, idx == 1 ? "battery_usedmah" : $"battery_usedmah{idx}");
+            s.Voltage = GetCsDouble(cs, idx == 1 ? "battery_voltage" : $"battery_voltage{idx}");
+            if (double.IsNaN(s.Voltage) || double.IsInfinity(s.Voltage) || s.Voltage <= 0) { return null; }
+            s.UsedMah = GetCsDouble(cs, idx == 1 ? "battery_usedmah" : $"battery_usedmah{idx}");
 
             // Voltage thresholds straight from the vehicle (0 = disabled there).
             s.LowVoltage = GetBattParam(mav, idx, "LOW_VOLT");
@@ -93,7 +94,7 @@ namespace NOMAD.MissionPlanner
                 s.RemainingMah = Math.Max(0, s.CapacityMah - s.UsedMah);
             }
 
-            Evaluate(s, armed: mav.cs.armed);
+            Evaluate(s, armed: cs.armed);
             return s;
         }
 

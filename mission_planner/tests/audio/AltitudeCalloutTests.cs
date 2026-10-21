@@ -18,6 +18,7 @@ internal static class AltitudeCalloutTests
 
     private static int Main()
     {
+        DisplayUnitsPreserveMeterCallouts();
         FirstReadPrimesSilently();
         RisingEdgeFiresAtExactThreshold();
         ClimbAnnouncesEachThresholdCrossed();
@@ -30,6 +31,29 @@ internal static class AltitudeCalloutTests
             ? "All altitude-callout tests passed."
             : $"{_failures} altitude-callout test(s) FAILED.");
         return _failures == 0 ? 0 : 1;
+    }
+
+    private static void DisplayUnitsPreserveMeterCallouts()
+    {
+        int metersBand = -1, feetBand = -1;
+        const float feetPerMeter = 3.28084f;
+        foreach (double meters in new[] { 5.0, 11.0, 21.0, 49.0, 50.0, 99.0, 100.0 })
+        {
+            var converted = AltitudeUnits.ToMeters((float)meters * feetPerMeter, feetPerMeter);
+            if (!converted.HasValue) { throw new InvalidOperationException("Finite altitude conversion was unavailable."); }
+            string expected = AltitudeCallout.Next(meters, ref metersBand);
+            string actual = AltitudeCallout.Next(converted.Value, ref feetBand);
+            if (actual != expected) { throw new InvalidOperationException("Display feet changed a meter callout."); }
+        }
+        foreach (float invalid in new[] { 0f, -1f, float.NaN, float.PositiveInfinity })
+        {
+            if (AltitudeUnits.ToMeters(100, invalid).HasValue)
+            { throw new InvalidOperationException("Invalid altitude display multiplier was accepted."); }
+        }
+        if (AltitudeUnits.ToMeters(float.NaN, 1).HasValue ||
+            AltitudeUnits.ToMeters(float.PositiveInfinity, 1).HasValue ||
+            AltitudeUnits.ToMeters(float.MaxValue, float.Epsilon).HasValue)
+        { throw new InvalidOperationException("Invalid or overflowing altitude produced a meter reading."); }
     }
 
     private static void FirstReadPrimesSilently()
