@@ -132,6 +132,18 @@ namespace NOMAD.MissionPlanner
             document.Remove("CoreRuntimePort");
             document.Remove("CoreClientCredential");
             document.Remove("ManagementPort");
+            var termination = document["JoystickTerminationButtonIndex"];
+            var monitor = document["JoystickKillSwitchEnabled"];
+            if ((termination != null && termination.Type != JTokenType.Integer) ||
+                (monitor != null && monitor.Type != JTokenType.Boolean))
+            {
+                throw new JsonSerializationException(
+                    "Retired HID termination index must be an integer and its enabled flag must be boolean.");
+            }
+            if (termination != null) { ValidatePhysicalIndex(termination, "Retired HID termination index"); }
+            // The unavailable monitor has no input ownership; accept only its exact typed legacy keys.
+            document.Remove("JoystickTerminationButtonIndex");
+            document.Remove("JoystickKillSwitchEnabled");
             foreach (var property in document.Properties())
             {
                 // Json.NET's case-insensitive coercion must not bypass raw-token validation below.
@@ -148,15 +160,6 @@ namespace NOMAD.MissionPlanner
             { throw new JsonSerializationException("RouterClientEnabled must be boolean."); }
             if (document[nameof(RouterLocalPort)] != null && document[nameof(RouterLocalPort)].Type != JTokenType.Integer)
             { throw new JsonSerializationException("RouterLocalPort must be an integer."); }
-            var termination = document["JoystickTerminationButtonIndex"];
-            var monitor = document["JoystickKillSwitchEnabled"];
-            if ((termination != null && termination.Type != JTokenType.Integer) ||
-                (monitor != null && monitor.Type != JTokenType.Boolean))
-            {
-                throw new JsonSerializationException(
-                    "HID termination index must be an integer and its enabled flag must be boolean.");
-            }
-            if (termination != null) { ValidatePhysicalIndex(termination, "HID termination index"); }
             if (document["JoystickButtonIndices"] == null) { return; }
             if (!(document["JoystickButtonIndices"] is JArray indices))
             { throw new JsonSerializationException("HID button indices must be an integer array."); }

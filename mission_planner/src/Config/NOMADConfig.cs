@@ -8,9 +8,7 @@
 // Configures saved aircraft settings, video, router status, observation, and operator input.
 // ============================================================
 
-using System;
 using System.Collections.Generic;
-using Newtonsoft.Json;
 
 namespace NOMAD.MissionPlanner
 {
@@ -20,23 +18,14 @@ namespace NOMAD.MissionPlanner
     public partial class NOMADConfig
     {
         // ============================================================
-        // Connection Configuration
-        // ============================================================
-
-
-        // ============================================================
         // Video Streaming Configuration
         // ============================================================
 
         /// <summary>
         /// Video stream URL for the configured camera or video source.
-        /// Default: RTSP stream supporting multiple simultaneous viewers.
-        /// Format: rtsp://&lt;video-host&gt;:8554/stream
+        /// Supports RTSP URLs and UDP listening ports; empty means no configured source.
         /// </summary>
         public string VideoUrl { get; set; } = "";
-
-
-
 
         /// <summary>
         /// Auto-start video on Mission Planner's HUD when plugin loads.
@@ -77,18 +66,13 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         /// <summary>
-        /// Enable debug logging.
+        /// Show the startup diagnostics popup.
         /// </summary>
         public bool DebugMode { get; set; } = false;
-
-
-
 
         // ============================================================
         // Alert Configuration
         // ============================================================
-
-
 
         /// <summary>
         /// Enable audio alerts for critical warnings.
@@ -100,27 +84,13 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public bool AltitudeCallouts { get; set; } = true;
 
-        // ============================================================
-        // Drone Geometry Configuration
-        // ============================================================
-
-
-
-
-
-
-
-
-
-
-        // ============================================================
         // Saved actuator mappings bind custom payload controls to this aircraft profile.
         public string JoystickPositionActuatorId { get; set; } = "";
         // ============================================================
         // Joystick Configuration (Mission Planner DirectInput-based)
         // ============================================================
         // Gimbal input produces angle targets; position input produces normalized
-        // values for an explicitly configured runtime actuator ID.
+        // values for an explicitly configured payload ID.
         // DirectInput axes: X, Y, Z, Rx, Ry, Rz, Slider1, Slider2.
 
         /// <summary>Enable the gimbal joystick channel.</summary>
@@ -162,7 +132,7 @@ namespace NOMAD.MissionPlanner
         public float JoystickPositionDeadzone { get; set; } = 0.08f;
 
         // Each physical switch uses configurable UP/DOWN DirectInput button indices.
-        // Bindings carry backend actuator IDs and operation strings.
+        // Bindings carry saved payload IDs and operation strings.
         public int[] JoystickButtonIndices { get; set; } = new[] { 0, 1, 2, 3, 4, 5 };
         public string JoystickSwitchDevice  { get; set; } = "";
 
@@ -172,11 +142,6 @@ namespace NOMAD.MissionPlanner
         public string JoystickSw2DownAction { get; set; } = "None";
         public string JoystickSw3UpAction   { get; set; } = "None";
         public string JoystickSw3DownAction { get; set; } = "None";
-
-        /// <summary>Direct USB HID button index used only for the unavailable-termination monitor.</summary>
-        public int JoystickTerminationButtonIndex { get; set; } = 6;
-        /// <summary>Monitor the configured button and visibly report aircraft termination as unavailable.</summary>
-        public bool JoystickKillSwitchEnabled { get; set; } = true;
 
     }
 }

@@ -77,8 +77,6 @@ namespace NOMAD.MissionPlanner
                 actionCombos[index].Text = actionIds[index];
                 _switchButtons[index].Value = Config.JoystickButtonIndices[index];
             }
-            _chkKillSwitchEnabled.Checked = Config.JoystickKillSwitchEnabled;
-            _numTerminationButton.Value = Config.JoystickTerminationButtonIndex;
             UpdatePositionEligibility();
 
         }
@@ -130,8 +128,6 @@ namespace NOMAD.MissionPlanner
             Config.JoystickSw2DownAction = (_cmbSw2Down?.Text ?? "None");
             Config.JoystickSw3UpAction = (_cmbSw3Up?.Text ?? "None");
             Config.JoystickSw3DownAction = (_cmbSw3Down?.Text ?? "None");
-            Config.JoystickKillSwitchEnabled = _chkKillSwitchEnabled.Checked;
-            Config.JoystickTerminationButtonIndex = (int)_numTerminationButton.Value;
             Config.ValidateInputBindings();
 
         }

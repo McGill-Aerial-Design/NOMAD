@@ -133,7 +133,41 @@ try {
     Assert-ThrowsMessage '{"RouterLocalPort":0}' 'ports'
     Assert-ThrowsMessage '{"JoystickButtonIndices":[0,1,2,3,4,128]}' 'between 0 and 127'
     Assert-ThrowsMessage '{"JoystickButtonIndices":[0,1,2,3,4,5.5]}' 'integers'
-    Assert-ThrowsMessage '{"JoystickTerminationButtonIndex":0,"JoystickKillSwitchEnabled":true,"JoystickSw1UpAction":"a:activate"}' 'disjoint'
+    $freedButton = Load-Config '{"JoystickButtonIndices":[6,1,2,3,4,5],"JoystickSw1UpAction":"a:activate"}'
+    if ($freedButton.JoystickButtonIndices[0] -ne 6) { throw 'The removed monitor still reserved its former default button.' }
+    foreach ($button in @(0, 127)) {
+        $retiredPath = Join-Path $temporary ('retired-monitor-' + $button + '.json')
+        $retiredJson = '{"JoystickTerminationButtonIndex":' + $button +
+            ',"JoystickKillSwitchEnabled":true,"JoystickButtonIndices":[' + $button +
+            ',1,2,3,4,5],"JoystickSw1UpAction":"a:activate"}'
+        [IO.File]::WriteAllText($retiredPath, $retiredJson)
+        $retired = $loadMethod.Invoke($null, [object[]]@([string]$retiredPath))
+        if ($retired.JoystickButtonIndices[0] -ne $button -or $retired.JoystickSw1UpAction -ne 'a:activate' -or
+            [IO.File]::ReadAllText($retiredPath) -cne $retiredJson) {
+            throw 'Retired termination monitoring reserved a payload button or changed its input file.'
+        }
+        $retiredExport = Join-Path $temporary ('retired-monitor-export-' + $button + '.json')
+        $retired.ExportToFile($retiredExport)
+        $saved = [IO.File]::ReadAllText($retiredExport)
+        if ($saved.Contains('JoystickTerminationButtonIndex') -or $saved.Contains('JoystickKillSwitchEnabled')) {
+            throw 'Current configuration export persisted unused termination monitor settings.'
+        }
+    }
+    foreach ($invalid in @('{"JoystickKillSwitchEnabled":"true"}', '{"JoystickKillSwitchEnabled":1}',
+        '{"JoystickKillSwitchEnabled":null}', '{"JoystickTerminationButtonIndex":"0"}',
+        '{"JoystickTerminationButtonIndex":0.5}', '{"JoystickTerminationButtonIndex":null}')) {
+        Assert-ThrowsMessage $invalid 'must be'
+    }
+    foreach ($invalid in @('{"JoystickTerminationButtonIndex":-1}', '{"JoystickTerminationButtonIndex":128}',
+        '{"JoystickTerminationButtonIndex":999999999999999999999}')) {
+        Assert-ThrowsMessage $invalid 'between 0 and 127'
+    }
+    foreach ($field in @('joystickKillSwitchEnabled', 'joystickTerminationButtonIndex', 'JoystickTerminationEnabled')) {
+        Assert-ThrowsMessage ('{"' + $field + '":true}') $field
+    }
+    Assert-ThrowsMessage '{"JoystickKillSwitchEnabled":true,"JoystickKillSwitchEnabled":false}' 'already exists'
+    Assert-ThrowsMessage '{"JoystickTerminationButtonIndex":0,"JoystickTerminationButtonIndex":1}' 'already exists'
+    Assert-ThrowsMessage '{"JoystickButtonIndices":[0,0,2,3,4,5],"JoystickSw1UpAction":"a:activate","JoystickSw1DownAction":"b:activate"}' 'unique'
     Assert-ThrowsMessage '{"CoreRuntimePort":14611,"CoreRuntimePort":14612}' 'already exists'
     $legacyAdvisoryJson = '{"SoftBoundary":{"Name":"Synthetic inner","BoundaryType":"Soft","DisplayColor":"#808080","MaxAltitudeAgl":90,"MinAltitudeAgl":0,"Vertices":[{"Lat":0,"Lon":1,"Alt":10},{"Lat":2,"Lon":3,"Alt":11},{"Lat":4,"Lon":5,"Alt":12}]},"HardBoundary":{"Name":"Synthetic outer","BoundaryType":"Hard","DisplayColor":"#909090","MaxAltitudeAgl":100,"MinAltitudeAgl":0,"Vertices":[{"Lat":6,"Lon":7,"Alt":20},{"Lat":8,"Lon":9,"Alt":21},{"Lat":10,"Lon":11,"Alt":22}]},"ReturnPoint":null,"MaxAltitudeAglMeters":95,"Failsafe":{"HardBoundaryAction":"Terminate"},"MonitoringEnabled":true,"TerminationDescentRateMps":2,"BoundaryViolations":[]}'
     $legacyAdvisoryPath = Join-Path $temporary 'legacy-advisory.json'

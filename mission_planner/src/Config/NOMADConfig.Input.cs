@@ -10,8 +10,6 @@ namespace NOMAD.MissionPlanner
         {
             if (JoystickButtonIndices == null || JoystickButtonIndices.Length != 6)
             { return "Direct USB HID mappings require six button indices."; }
-            if (JoystickTerminationButtonIndex < 0 || JoystickTerminationButtonIndex > 127)
-            { return "Termination monitor button index must be between 0 and 127."; }
             var active = new HashSet<int>();
             var bindings = new[] { JoystickSw1UpAction, JoystickSw1DownAction, JoystickSw2UpAction,
                 JoystickSw2DownAction, JoystickSw3UpAction, JoystickSw3DownAction };
@@ -25,8 +23,6 @@ namespace NOMAD.MissionPlanner
                 if (separator <= 0 || separator == binding.Length - 1)
                 { return "Joystick actions must refer to payload IDs and operations. Review unsupported mappings before loading."; }
                 if (!active.Add(index)) { return "Active actuator bindings must use unique physical HID button indices."; }
-                if (JoystickKillSwitchEnabled && index == JoystickTerminationButtonIndex)
-                { return "Termination monitor button must be disjoint from active actuator HID bindings."; }
             }
             return null;
         }

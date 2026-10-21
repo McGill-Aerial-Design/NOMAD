@@ -74,14 +74,13 @@ namespace NOMAD.MissionPlanner
         public JArray ActuatorDefinitions;
         public int GimbalMountMode = 2;
         public float JoystickGimbalMaxRateDegSec = 60;
-        public bool JoystickGimbalEnabled, JoystickPositionEnabled, JoystickKillSwitchEnabled;
+        public bool JoystickGimbalEnabled, JoystickPositionEnabled;
         public string JoystickGimbalDevice = "", JoystickPositionDevice = "", JoystickSwitchDevice = "";
         public string JoystickGimbalRollAxis = "X", JoystickGimbalPitchAxis = "Y", JoystickPositionAxis = "Y";
         public bool JoystickGimbalRollInvert, JoystickGimbalPitchInvert, JoystickPositionInvert;
         public float JoystickGimbalDeadzone = 0.08f, JoystickPositionDeadzone = 0.08f;
         public string JoystickPositionActuatorId = "position";
         public int[] JoystickButtonIndices = { 0, 1, 2, 3, 4, 5 };
-        public int JoystickTerminationButtonIndex = 6;
         public string JoystickSw1UpAction = "None", JoystickSw1DownAction = "None", JoystickSw2UpAction = "None",
             JoystickSw2DownAction = "None", JoystickSw3UpAction = "None", JoystickSw3DownAction = "None";
         internal bool HasSameOutputSettings(NOMADConfig other) => JToken.DeepEquals(ActuatorDefinitions, other.ActuatorDefinitions);

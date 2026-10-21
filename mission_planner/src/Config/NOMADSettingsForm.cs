@@ -58,11 +58,9 @@ namespace NOMAD.MissionPlanner
         private Button _btnJoyRefreshDevices;
         private Label _lblJoyStatus;
         private Label _lblJoyPositionEligibility;
-        private NumericUpDown _numTerminationButton;
         // 3-position switch action mapping (6 slots: sw1/2/3 x up/down)
         private ComboBox _cmbSw1Up, _cmbSw1Down, _cmbSw2Up, _cmbSw2Down, _cmbSw3Up, _cmbSw3Down;
         private ComboBox _cmbSwitchDevice;
-        private CheckBox _chkKillSwitchEnabled;
 
         // Buttons
         private Button _btnOK;
