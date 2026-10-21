@@ -1,229 +1,67 @@
 name: csharp
-
-# Real compile gate for the Mission Planner plugin.
-#
-# Hosted windows-latest already ships VS2022 + the .NET Framework 4.8 targeting
-# pack, so WinForms/WPF and the framework references resolve out of the box. The
-# only thing missing is Mission Planner itself: the plugin references ~13 of its
-# DLLs by absolute HintPath (C:\Program Files (x86)\Mission Planner\*). We stage
-# a *pinned* portable Mission Planner build at that canonical path so the csproj
-# HintPaths resolve unchanged, then run MSBuild. No .NET SDK is required (the
-# project is a plain MSBuild/.NET Framework project, not SDK-style).
-#
-# The reviewed target is owned by scripts/release/mission-planner-target.json.
-
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
-    branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: csharp-${{ github.ref }}
   cancel-in-progress: true
-
 env:
   MP_DIR: 'C:\Program Files (x86)\Mission Planner'
-
 defaults:
   run:
     shell: pwsh
-
 jobs:
-  csharp-scope:
-    name: Determine plugin and router test scope
-    runs-on: ubuntu-latest
-    outputs:
-      required: ${{ steps.scope.outputs.required }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - name: Select qualification scope
-        id: scope
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          PUSH_BEFORE: ${{ github.event.before }}
-          BASE_BRANCH: origin/${{ github.base_ref }}
-          HEAD_SHA: ${{ github.sha }}
-        run: python scripts/ci/csharp_scope.py
-
-  plugin-tests:
-    name: Plugin logic tests (Windows)
-    needs: csharp-scope
-    if: needs.csharp-scope.outputs.required == 'true'
+  plugin:
+    name: Mission Planner plugin build and tests (Windows)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: prefix-dev/setup-pixi@v0.9.6
-        with:
-          cache: true
-
-      # The plugin's pure SC logic is tested with standalone Roslyn (csc)
-      # assertion harnesses — no .NET SDK, NuGet, or staged Mission Planner
-      # needed. setup-msbuild puts MSBuild on PATH; the scripts locate csc next
-      # to it. This matches the repo's existing test-plugin-* idiom.
-      - name: Add MSBuild to PATH
-        uses: microsoft/setup-msbuild@v3
-
-      - name: Mission Planner direct-command architectural guard
-        run: pixi run python -m pytest tests/test_mission_planner_command_boundary.py -q
-
-      - name: Gimbal command tests
-        run: pwsh -File scripts/build/test_plugin_gimbal.ps1
-
-
-      - name: Altitude callout tests
-        run: pwsh -File scripts/build/test_plugin_audio.ps1
-
-
-      - name: Mission Planner reviewed-target warning tests
-        run: pwsh -File scripts/build/test_plugin_version.ps1
-
-  router-tests:
-    name: Router tests and release qualification (Windows)
-    needs: csharp-scope
-    if: needs.csharp-scope.outputs.required == 'true'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: prefix-dev/setup-pixi@v0.9.6
-        with:
-          cache: true
-      - name: Add MSBuild to PATH
-        uses: microsoft/setup-msbuild@v3
-
-      - name: Build standalone ground router
-        run: pwsh -File scripts/build/build_ground_router.ps1
-
-      - name: Standalone router and management-client tests
-        run: pwsh -File scripts/build/test_ground_router.ps1
-
-      - name: Standalone router smoke
-        run: python scripts/dev/ground_router_smoke.py
-      - name: Build distinguishable release A and B router fixtures
-        run: pwsh -File scripts/build/build_release_router_fixtures.ps1
-      - name: Qualify router activation health failure and exact binary rollback
-        run: >-
-          pixi run python scripts/dev/release_process_qualification.py
-          --router-a build/release-fixtures/router-A --router-b build/release-fixtures/router-B
-
-      - name: Upload standalone ground router artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: NOMADLinkRouter
-          path: build/ground-router/*
-          if-no-files-found: error
-
-  plugin-build:
-    name: Plugin build and integration (Windows)
-    needs: csharp-scope
-    if: needs.csharp-scope.outputs.required == 'true'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Add MSBuild to PATH
-        uses: microsoft/setup-msbuild@v3
-
-      - name: Build-only dispatch tests (isolated installation)
-        run: pwsh -File scripts/build/test_build_plugin_windows.ps1
-
+      - uses: microsoft/setup-msbuild@v3
       - name: Read reviewed Mission Planner target
         run: |
           $version = (Get-Content scripts/release/mission-planner-target.json -Raw | ConvertFrom-Json).version
           "MP_VERSION=$version" >> $env:GITHUB_ENV
-
-      # Cache the 116 MB portable zip keyed on the pinned version so it is
-      # downloaded once and restored on subsequent runs.
-      - name: Cache Mission Planner ${{ env.MP_VERSION }}
+      - uses: actions/cache@v5
         id: mp-cache
-        uses: actions/cache@v5
         with:
           path: mp-portable.zip
           key: missionplanner-${{ env.MP_VERSION }}
-
-      - name: Download Mission Planner ${{ env.MP_VERSION }}
+      - name: Download reviewed host reference bundle
         if: steps.mp-cache.outputs.cache-hit != 'true'
         run: |
           $url = "https://firmware.ardupilot.org/Tools/MissionPlanner/MissionPlanner-$env:MP_VERSION.zip"
-          Write-Host "Downloading $url"
           Invoke-WebRequest $url -OutFile mp-portable.zip
-
-      - name: Stage Mission Planner reference assemblies
+      - name: Stage host references on the disposable runner
         run: |
           $tmp = Join-Path $env:RUNNER_TEMP "mp-extract"
           Expand-Archive -Path mp-portable.zip -DestinationPath $tmp -Force
           $exe = Get-ChildItem $tmp -Recurse -Filter MissionPlanner.exe | Select-Object -First 1
-          if (-not $exe) { throw "MissionPlanner.exe not found in the portable zip" }
+          if (-not $exe) { throw "MissionPlanner.exe missing from portable bundle" }
+          if ($exe.VersionInfo.FileVersion -ne $env:MP_VERSION) { throw "Unexpected Mission Planner version" }
           New-Item -ItemType Directory -Force -Path $env:MP_DIR | Out-Null
           Copy-Item -Path (Join-Path $exe.Directory.FullName '*') -Destination $env:MP_DIR -Recurse -Force
-          Write-Host "Staged Mission Planner $env:MP_VERSION at $env:MP_DIR"
-
-      - name: Advisory geometry and received-position tests
-        run: pwsh -File scripts/build/test_plugin_geometry.ps1
-
-      - name: Build plugin (Release)
+      - name: Build-only isolation tests
+        run: powershell -NoProfile -File scripts/build/test_build_plugin_windows.ps1
+      - name: Build product DLL (never install)
+        run: powershell -NoProfile -File scripts/build/build_plugin_windows.ps1
+      - name: Run retained product gates
         run: |
-          pwsh -File scripts/build/build_plugin_windows.ps1
-          if (-not (Test-Path "mission_planner/src/bin/Release/NOMADPlugin.dll")) {
-            throw "build did not produce NOMADPlugin.dll"
+          $checks = @('lint_plugin_deadcode', 'test_plugin_gimbal', 'test_plugin_payload',
+            'test_plugin_config_validation', 'test_plugin_geometry',
+            'test_plugin_audio', 'test_plugin_version', 'test_ground_router',
+            'test_plugin_gimbal_ui', 'test_plugin_router_ui', 'test_plugin_video')
+          foreach ($check in $checks) {
+            & powershell -NoProfile -File "scripts/build/$check.ps1"
+            if ($LASTEXITCODE -ne 0) { throw "$check failed with exit $LASTEXITCODE" }
           }
-
-      - name: Mission Planner dead-code lint
-        run: pwsh -File scripts/build/lint_plugin_deadcode.ps1
-
-      - name: Current configuration validation and settings UI tests
-        run: pwsh -File scripts/build/test_plugin_config_validation.ps1
-
-      - name: Semantic client, actuator UI and USB HID mapping tests
-        run: pwsh -File scripts/build/test_plugin_core_client.ps1
-
-      - name: Gimbal joystick UI smoke
-        run: pwsh -File scripts/build/test_plugin_gimbal_ui.ps1
-
-      - name: Router status UI tests
-        run: pwsh -File scripts/build/test_plugin_router_ui.ps1
-
-      - name: Video lifetime and cleanup tests
-        run: pwsh -File scripts/build/test_plugin_video.ps1
-
-
-      - name: Upload plugin artifact
+      - name: Upload product DLL only
         uses: actions/upload-artifact@v6
         with:
           name: NOMADPlugin
           path: mission_planner/src/bin/Release/NOMADPlugin.dll
           if-no-files-found: error
-
-  csharp-qualification-gate:
-    name: Mission Planner and router qualification gate
-    if: always()
-    needs: [csharp-scope, plugin-tests, router-tests, plugin-build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require Windows qualification for relevant changes
-        env:
-          SCOPE_RESULT: ${{ needs.csharp-scope.result }}
-          REQUIRED: ${{ needs.csharp-scope.outputs.required }}
-          PLUGIN_TEST_RESULT: ${{ needs.plugin-tests.result }}
-          ROUTER_TEST_RESULT: ${{ needs.router-tests.result }}
-          PLUGIN_BUILD_RESULT: ${{ needs.plugin-build.result }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$SCOPE_RESULT" = "success"
-          if [[ "$REQUIRED" == "true" ]]; then
-            test "$PLUGIN_TEST_RESULT" = "success"
-            test "$ROUTER_TEST_RESULT" = "success"
-            test "$PLUGIN_BUILD_RESULT" = "success"
-          elif [[ "$REQUIRED" == "false" ]]; then
-            echo "Windows plugin and router qualification was not required for this change; those jobs were skipped by path scope."
-          else
-            echo "Invalid qualification scope output; expected true or false." >&2
-            exit 1
-          fi

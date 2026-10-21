@@ -77,19 +77,24 @@ try {
         throw 'Configuration fixture log path was not installed.'
     }
 
+    # This isolated process has no live Mission Planner connection or selected MAV.
+    $outputType = $plugin.GetType('NOMAD.MissionPlanner.OutputController', $true)
+    $connectionField = $outputType.GetField('CurrentConnection', [Reflection.BindingFlags]'Static,NonPublic')
+    $connectionField.SetValue($null, [System.Management.Automation.LanguagePrimitives]::ConvertTo(
+        [scriptblock] { return $null }, $connectionField.FieldType))
     . (Join-Path $PSScriptRoot 'test_aircraft_profiles.ps1')
     Invoke-AircraftProfileTests $plugin $configType $temporary
     Invoke-AircraftProfileUiTests $plugin $configType
 
     $config = Load-Config '{"CoreRuntimePort":14631,"RouterLocalPort":14620,"ManagementPort":14621,"CoreClientCredential":"test-only-credential"}'
-    if ($config.CoreRuntimePort -ne 14631) { throw 'Current runtime endpoint changed.' }
+    if ($config.RouterLocalPort -ne 14620) { throw 'Saved Mission Planner router endpoint changed.' }
     $export = Join-Path $temporary 'export.json'
     $config.ExportToFile($export)
     if ([IO.File]::ReadAllText($export).Contains('test-only-credential')) { throw 'Export leaked client credential.' }
     foreach ($field in @('Payloads','Actuators','RouterMode','RouterEnabled','JoystickCameraTiltEnabled','JoystickZedEnabled','SerialJoystickEnabled','SlamCameraFovDeg')) {
         Assert-ThrowsMessage ('{"' + $field + '":null}') $field
     }
-    Assert-ThrowsMessage '{"CoreRuntimePort":0}' 'ports'
+    Assert-ThrowsMessage '{"RouterLocalPort":0}' 'ports'
     Assert-ThrowsMessage '{"JoystickButtonIndices":[0,1,2,3,4,128]}' 'between 0 and 127'
     Assert-ThrowsMessage '{"JoystickButtonIndices":[0,1,2,3,4,5.5]}' 'integers'
     Assert-ThrowsMessage '{"JoystickTerminationButtonIndex":0,"JoystickKillSwitchEnabled":true,"JoystickSw1UpAction":"a:activate"}' 'disjoint'
@@ -115,6 +120,18 @@ try {
             throw 'Invalid primary load modified operator files.'
         }
     }
+    foreach ($json in @('{"RouterLinks":null}', '{"RouterLinks":[{"Id":"x","Port":1.5}]}',
+        '{"RouterLinks":[{"Id":"x","Enabled":"true"}]}', '{"RouterLinks":[{"Id":"x","port":14750}]}',
+        '{"RouterLinks":[{"Id":"x","Port":14750,"Unexpected":1}]}', '{"RouterPreferredLink":5}')) {
+        $rejected = $false
+        try { Load-Config $json | Out-Null } catch { $rejected = $true }
+        if (-not $rejected) { throw "Invalid router document was accepted: $json" }
+    }
+    $router = Load-Config '{"RouterLocalPort":14700,"RouterPreferredLink":"elrs","RouterLinks":[{"Id":"elrs","Port":14750,"Priority":100},{"Id":"lte","Port":14760,"Priority":50}]}'
+    $routerExport = Join-Path $temporary 'router.json'
+    $router.ExportToFile($routerExport)
+    $routerCopy = $configType.GetMethod('LoadFromFile').Invoke($null, [object[]]@([string]$routerExport))
+    if ($routerCopy.RouterLinks.Count -ne 2 -or $routerCopy.RouterPreferredLink -ne 'elrs') { throw 'Router profile roundtrip lost links.' }
     # Exercise real settings controls without opening a window or saving host configuration.
     $formType = $plugin.GetType('NOMAD.MissionPlanner.NOMADSettingsForm', $true)
     $config.JoystickSwitchDevice = 'selected-unplugged-usb-hid'
@@ -137,52 +154,15 @@ try {
         $setDevice.Invoke($null, [object[]]@($device, 'selected-unplugged-usb-hid')) | Out-Null
         if ($device.SelectedItem -ne 'selected-unplugged-usb-hid') { throw 'Device refresh discarded an explicit HID name.' }
 
-        $actorType = $plugin.GetType('NOMAD.MissionPlanner.Connectivity.NomadActuator', $true)
-        $actionType = $plugin.GetType('NOMAD.MissionPlanner.Connectivity.NomadActuatorAction', $true)
-        $actor = [Activator]::CreateInstance($actorType)
-        $action = [Activator]::CreateInstance($actionType)
-        $actorType.GetProperty('Id').SetValue($actor, 'stable-id', $null)
-        $actorType.GetProperty('Name').SetValue($actor, 'Original name', $null)
-        $actionType.GetProperty('Operation').SetValue($action, 'activate', $null)
-        $actionType.GetProperty('Control').SetValue($action, 'button', $null)
-        $actionType.GetProperty('Label').SetValue($action, 'Original label', $null)
-        $actions = [Array]::CreateInstance($actionType, 1)
-        $actions.SetValue($action, 0)
-        $actorType.GetProperty('Actions').SetValue($actor, $actions, $null)
-        $actors = [Array]::CreateInstance($actorType, 1)
-        $actors.SetValue($actor, 0)
-        $applyArguments = New-Object object[] 1
-        $applyArguments[0] = $actors
-        $apply = $formType.GetMethod('ApplyActuatorActions', $privateFlags)
-        $apply.Invoke($form, $applyArguments) | Out-Null
-        $combo = $formType.GetField('_cmbSw1Up', $privateFlags).GetValue($form)
-        $combo.Text = 'Original name / Original label [stable-id:activate]'
-        $actorType.GetProperty('Name').SetValue($actor, 'Renamed device', $null)
-        $actionType.GetProperty('Label').SetValue($action, 'Renamed action', $null)
-        $apply.Invoke($form, $applyArguments) | Out-Null
-        if ($combo.Text -ne 'Renamed device / Renamed action [stable-id:activate]') {
-            throw 'Backend label refresh did not preserve the stable semantic binding.'
+        $links = $formType.GetField('_txtRouterLinks', $privateFlags).GetValue($form)
+        $links.Text = '[{"Id":"elrs","Name":"Primary","Transport":"UDP","Port":14750,"Priority":100},{"Id":"lte","Name":"Backup","Transport":"UDP","Port":14760,"Priority":50}]'
+        $preferred = $formType.GetField('_txtRouterPreferredLink', $privateFlags).GetValue($form)
+        $preferred.Text = 'elrs'
+        $formType.GetMethod('SaveSettings', $privateFlags).Invoke($form, @()) | Out-Null
+        if ($form.Config.RouterLinks.Count -ne 2 -or $form.Config.RouterPreferredLink -ne 'elrs') {
+            throw 'Saving router settings lost physical links or preferred path.'
         }
-        $positionAction = [Activator]::CreateInstance($actionType)
-        $actionType.GetProperty('Operation').SetValue($positionAction, 'position', $null)
-        $actionType.GetProperty('Control').SetValue($positionAction, 'position', $null)
-        $actionType.GetProperty('Label').SetValue($positionAction, 'Set position', $null)
-        $actionType.GetProperty('ContinuousAxisAllowed').SetValue($positionAction, $false, $null)
-        $actionType.GetProperty('ContinuousAxisBlockedReason').SetValue($positionAction, 'Use discrete UI confirmations.', $null)
-        $eligibilityStore = $plugin.GetType('NOMAD.MissionPlanner.OutputController', $true).GetField('ContinuousAxisActions', [Reflection.BindingFlags]'Static,NonPublic').GetValue($null)
-        $eligibilityStore['stable-id'] = $positionAction
-        $positionId = $formType.GetField('_txtJoyPositionActuatorId', $privateFlags).GetValue($form)
-        $positionId.Text = 'stable-id'
-        $positionEnable = $formType.GetField('_chkJoyPositionEnabled', $privateFlags).GetValue($form)
-        $positionReason = $formType.GetField('_lblJoyPositionEligibility', $privateFlags).GetValue($form)
-        if ($positionEnable.Enabled -or $positionEnable.Checked -or $positionReason.Text -ne 'Use discrete UI confirmations.') {
-            throw 'Unsupported axis binding was not disabled with the backend reason.'
-        }
-        $actionType.GetProperty('ContinuousAxisAllowed').SetValue($positionAction, $true, $null)
-        $formType.GetMethod('UpdatePositionEligibility', $privateFlags).Invoke($form, @()) | Out-Null
-        if (-not $positionEnable.Enabled) { throw 'Backend allowed axis data did not enable the input option.' }
-        $positionId.Text = 'unknown-id'
-        if ($positionEnable.Enabled) { throw 'Unknown axis eligibility did not fail closed.' }
+
     } finally { $form.Dispose() }
     # Exercise preset selection without constructing a view that reads the operator's saved outlines.
     $boundaryViewType = $plugin.GetType('NOMAD.MissionPlanner.NOMADBoundaryView', $true)

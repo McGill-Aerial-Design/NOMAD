@@ -3,8 +3,7 @@
 // ============================================================
 // NOMAD Gimbal Joystick — Floating Dockable Window
 // ============================================================
-// Rate-controlled 2D joystick requests pitch/roll targets through the NOMAD
-// runtime. Mode buttons also use runtime IPC.
+// Rate-controlled joystick requests pitch/roll targets through the selected Mission Planner connection.
 //
 // This is independent from the camera tilt servo (ActuatorControlPanel), which is
 // just a SERVOx output. Angle integration lives in GimbalCommand and the shared
@@ -37,7 +36,7 @@ namespace NOMAD.MissionPlanner
 
         public static void ShowSingleton(NOMADConfig config, IWin32Window owner = null)
         {
-            if (OutputController.CreateCoreClientFor(config) == null)
+            if (!OutputController.IsCurrentProfile(config))
             {
                 return;
             }
@@ -138,7 +137,7 @@ namespace NOMAD.MissionPlanner
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            if ((keyData & Keys.Modifiers) == Keys.None && GimbalArrowKeyFilter.TryHandleKey(keyData))
+            if ((keyData & Keys.Modifiers) == Keys.None && GimbalArrowKeyFilter.TryHandleMessage(ref msg))
                 return true;
             return base.ProcessCmdKey(ref msg, keyData);
         }
@@ -506,13 +505,14 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // Stream loop — integrate stick → target angles, send MAVLink
         // ============================================================
+        private readonly GimbalInputState _gimbalInput = new GimbalInputState();
         private void OnStreamTick(object sender, EventArgs e)
         {
             float dt = 1f / STREAM_HZ;
             float sx = GimbalCommand.ApplyDeadzone(_stickX, STICK_DEADZONE);
             float sy = GimbalCommand.ApplyDeadzone(_stickY, STICK_DEADZONE);
 
-            bool active = sx != 0f || sy != 0f;
+            bool active = _gimbalInput.CanMove(true, sx, sy, OutputController.Generation);
 
             // Share rate-to-target integration with the physical joystick.
             if (active)
@@ -541,7 +541,7 @@ namespace NOMAD.MissionPlanner
 
         // ============================================================
         // Mode preset — apply the selected mode immediately. Target requests wait
-        // for this mode result before they are sent.
+        // for native dispatch; vehicle acceptance remains unverified.
         // ============================================================
         private void SetModePreset(string label, MountMode mode)
         {

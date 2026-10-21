@@ -1,10 +1,9 @@
 # MAVSDK redistribution licenses
 
-This directory accompanies NOMAD distributions that contain statically linked
-MAVSDK. The files are verbatim copies from the exact fetched sources recorded in
-[the dependency inventory](../../docs/mavsdk-dependencies.md). The provenance
-checker validates every license text by its Git blob ID so a missing or changed
-text fails the provenance gate.
+These verbatim license texts are retained from the former MAVSDK implementation.
+Its source/dependency provenance is archived on `MAVSDK-Archive`; the current plugin
+does not build or link MAVSDK. Historical notices are preserved rather than silently
+removed during the product transition.
 
 | File | Component and licence |
 |---|---|
@@ -21,7 +20,3 @@ text fails the provenance gate.
 | `XZ-GPL-2.0.txt` | XZ Utils source-package GPLv2 text |
 | `XZ-GPL-3.0.txt` | XZ Utils source-package GPLv3 text |
 | `XZ-LGPL-2.1.txt` | XZ Utils source-package LGPLv2.1 text |
-
-Recursive checkouts fetch MAVSDK-Proto, but the disabled MAVSDK server means it
-is not compiled or linked into NOMAD. Re-audit this bundle before enabling
-the server, curl support, tests, another plugin, or another dependency set.

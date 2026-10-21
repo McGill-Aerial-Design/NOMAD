@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
 # ============================================================
-# Standalone router and Mission Planner management-client stress tests
+# Plugin-owned router and lifecycle stress tests
 # ============================================================
-# Compiles the standalone routing stack, management client, and Log.cs
+# Compiles the routing stack, plugin owner, and Log.cs
 # together with the test runner using the Roslyn csc bundled
 # with Visual Studio's MSBuild — no .NET SDK or test-framework
 # packages required. The tests run the router against real
@@ -25,9 +25,6 @@ $csc = Find-RoslynCompiler
 # ---- Compile ----
 $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\MAVLinkConnectionManager.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Connectivity\MAVLinkConnectionManager.Standalone.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Connectivity\StandaloneRouterClient.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Connectivity\StandaloneRouterClient.Mapping.cs'),
     (Join-Path $repoRoot 'mission_planner\src\UI\Log.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\router\GroundRouterTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\router\GroundRouterTests.Harness.cs'),
@@ -37,8 +34,8 @@ $sources = @(
 $sources += Get-ChildItem (Join-Path $repoRoot 'infra\transport\ground_router\*.cs') | ForEach-Object FullName
 $sources += Join-Path $repoRoot 'mission_planner/tests/router/MultiLinkTests.cs'
 $sources += Join-Path $repoRoot 'mission_planner/tests/router/RouterReviewTests.cs'
+$sources += Join-Path $repoRoot 'mission_planner/tests/router/PluginRouterOwnerTests.cs'
 $sources += Join-Path $repoRoot 'mission_planner/tests/router/RouterTimingTests.cs'
-$sources += Join-Path $repoRoot 'mission_planner/tests/router/RouterManagementTests.cs'
 $sources += Join-Path $repoRoot 'mission_planner/src/Panels/LinkStatusDisplay.cs'
 $outDir = Join-Path $repoRoot 'mission_planner\tests\router\bin'
 New-Item -ItemType Directory -Force $outDir | Out-Null

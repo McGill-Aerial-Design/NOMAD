@@ -17,7 +17,7 @@ namespace NOMAD.MissionPlanner
         public int? RcFlightModeChannel { get; set; }
         public int GimbalMountMode { get; set; } = (int)MountMode.MavlinkTargeting;
 
-        // Desired definitions travel with the profile; only the runtime can validate and apply them.
+        // Calibrated payload definitions belong to this saved aircraft.
         public JArray ActuatorDefinitions { get; set; }
 
         private static void ValidateAircraftDocument(JObject document)
@@ -46,21 +46,17 @@ namespace NOMAD.MissionPlanner
 
         private static void ValidateActuatorDefinitions(JToken definitions)
         {
-            if (definitions == null || definitions.Type == JTokenType.Null)
-            {
-                return;
-            }
-            if (!(definitions is JArray items))
-            {
-                throw new JsonSerializationException("Actuator definitions must be an array.");
-            }
-            foreach (var item in items)
-            {
-                if (!(item is JObject))
-                {
-                    throw new JsonSerializationException("Each actuator definition must be an object.");
-                }
-            }
+            PayloadDefinition.Parse(definitions);
+        }
+
+        internal bool HasSameOutputSettings(NOMADConfig other)
+        {
+            var candidate = JObject.FromObject(this);
+            var active = JObject.FromObject(other);
+            return candidate.Properties().Where(property => property.Name.StartsWith("Joystick", System.StringComparison.Ordinal) ||
+                property.Name == nameof(ActuatorDefinitions) || property.Name == nameof(GimbalMountMode) ||
+                property.Name == nameof(RcArmingChannel) || property.Name == nameof(RcFlightModeChannel))
+                .All(property => JToken.DeepEquals(property.Value, active[property.Name]));
         }
 
         private void ValidateAircraftSettings()

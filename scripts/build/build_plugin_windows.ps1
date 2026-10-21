@@ -38,12 +38,26 @@ if ($cleanExitCode -ne 0) {
 Write-Host "  Clean complete" -ForegroundColor Green
 Write-Host ""
 
-# Generate deterministic source identity before compiling the plugin.
-$identityPath = Join-Path $RepoRoot 'build/release/package-identity.json'
+# Generate plugin identity without runtime packaging or MAVSDK dependencies.
+$sourceSha = & git -C $RepoRoot rev-parse --verify HEAD
+if ($LASTEXITCODE -ne 0 -or $sourceSha -notmatch '^[0-9a-f]{40}$') { throw 'Plugin source identity is unavailable' }
+$target = (Get-Content (Join-Path $RepoRoot 'scripts/release/mission-planner-target.json') -Raw | ConvertFrom-Json).version
+if ($target -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid reviewed Mission Planner target' }
 $csharpPath = Join-Path $RepoRoot 'build/release/ReleaseIdentity.cs'
-& python (Join-Path $RepoRoot 'scripts/release/identity.py') component --component plugin `
-    --platform windows --architecture any --output $identityPath --csharp $csharpPath --required NOMADPlugin.dll
-if ($LASTEXITCODE -ne 0) { throw 'Plugin release identity generation failed' }
+New-Item -ItemType Directory -Path (Split-Path $csharpPath) -Force | Out-Null
+@"
+// Generated NOMAD plugin identity.
+using System.Reflection;
+[assembly: AssemblyVersion("0.0.0.0")]
+[assembly: AssemblyInformationalVersion("0.0.0-dev+$sourceSha")]
+namespace NOMAD.MissionPlanner {
+    internal static class NomadRelease {
+        public const string Version = "0.0.0-development";
+        public const string SourceSha = "$sourceSha";
+        public const string MissionPlannerTarget = "$target";
+    }
+}
+"@ | Set-Content -LiteralPath $csharpPath -Encoding UTF8
 
 # Step 3: Build project
 Write-Host "[3/4] Building plugin..." -ForegroundColor Yellow

@@ -26,7 +26,7 @@ namespace NOMAD.MissionPlanner
         private Label _lblBattery;
         private Label _lblGeofence;
         private Label _lblLinks;
-        private Label _lblCore;
+        private Label _lblGimbalCommand;
 
         private Panel _videoPreviewPanel;
         private Panel _videoPlaceholder;
@@ -115,7 +115,7 @@ namespace NOMAD.MissionPlanner
                 UpdateFlightCards(cs);
                 UpdateAdvisoryBoundaryCard();
                 UpdateLinksCard();
-                UpdateCoreCard();
+                UpdateGimbalCard();
             }
             catch
             {
@@ -227,11 +227,10 @@ namespace NOMAD.MissionPlanner
             _lblLinks.ForeColor = NOMADTheme.TEXT_PRIMARY;
         }
 
-        private void UpdateCoreCard()
+        private void UpdateGimbalCard()
         {
-            bool configured = OutputController.CreateCoreClient()?.IsConfigured == true;
-            _lblCore.Text = configured ? "IPC configured (unverified)" : "Not configured";
-            _lblCore.ForeColor = configured ? NOMADTheme.TEXT_SECONDARY : NOMADTheme.WARNING;
+            _lblGimbalCommand.Text = GimbalController.LastCommandStatus;
+            _lblGimbalCommand.ForeColor = NOMADTheme.TEXT_SECONDARY;
         }
 
         protected override void Dispose(bool disposing)

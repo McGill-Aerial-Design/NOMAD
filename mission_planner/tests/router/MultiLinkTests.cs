@@ -116,7 +116,6 @@ internal static partial class GroundRouterTests
         rejects(c => c.Consumers[0].ClientPort = c.Consumers[1].RouterPort);
         rejects(c => c.Consumers[0].ClientPort = c.Links[0].Port);
         rejects(c => { c.Links[0].RemoteHost = "127.0.0.1"; c.Links[0].RemotePort = c.Consumers[0].RouterPort; });
-        rejects(c => c.ManagementPort = 0);
     }
 
     private static async Task MultiLinkRouting()
@@ -167,7 +166,7 @@ internal static partial class GroundRouterTests
         var configuredConsumers = new List<ConsumerConfig>
         {
             new ConsumerConfig { Id = "mission_planner", RouterPort = port, AllowOutbound = false },
-            new ConsumerConfig { Id = "nomad_core", RouterPort = port + 5 },
+            new ConsumerConfig { Id = "secondary", RouterPort = port + 5 },
             new ConsumerConfig { Id = "pilot_native", RouterPort = port + 6 }
         };
         config.Consumers = configuredConsumers;
@@ -240,12 +239,12 @@ internal static partial class GroundRouterTests
         }
 
         // Model an explicit software-source revoke by rebuilding the router
-        // with NOMAD's consumer inhibited. This is router evidence only; it
+        // with the secondary consumer inhibited. This is router evidence only; it
         // does not model flight-controller RC/native input selection.
         config.Consumers = new List<ConsumerConfig>
         {
             new ConsumerConfig { Id = "mission_planner", RouterPort = port, AllowOutbound = false },
-            new ConsumerConfig { Id = "nomad_core", RouterPort = port + 5, AllowOutbound = false },
+            new ConsumerConfig { Id = "secondary", RouterPort = port + 5, AllowOutbound = false },
             new ConsumerConfig { Id = "pilot_native", RouterPort = port + 6, AllowOutbound = true }
         };
         using (var router = new GroundLinkRouter(config))
@@ -267,7 +266,7 @@ internal static partial class GroundRouterTests
                 await Task.Delay(150);
                 var afterRevoke = aircraft.Drain();
                 CheckEq(afterRevoke.Count(frame => frame.SequenceEqual(staleCoreCommand)), 0,
-                    "reconfigured router blocks a command from the inhibited NOMAD consumer");
+                    "reconfigured router blocks a command from the inhibited secondary consumer");
 
                 var pilotCommand = MakeArmCommandLong(26);
                 pilotNative.Send(pilotCommand);
@@ -276,7 +275,7 @@ internal static partial class GroundRouterTests
                 {
                     receivedPilotCommands.AddRange(aircraft.Drain());
                     return receivedPilotCommands.Any(frame => frame.SequenceEqual(pilotCommand));
-                }, 1000), "external pilot software consumer passes while NOMAD consumer is inhibited");
+                }, 1000), "external pilot software consumer passes while secondary consumer is inhibited");
                 CheckEq(receivedPilotCommands.Count(frame => frame.SequenceEqual(pilotCommand)), 1,
                     "pilot software command reaches the peer exactly once after NOMAD inhibition");
             }

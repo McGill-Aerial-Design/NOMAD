@@ -161,6 +161,27 @@ namespace NOMAD.MissionPlanner
             return profiles;
         }
 
+        internal bool CheckForConnection(NOMADProfiles active, bool connectionOpen)
+        {
+            if (PayloadController.HasPendingWork)
+            { throw new InvalidOperationException("Wait for the payload command/repeat to finish, or send Safe, before saving settings."); }
+            bool connectionChanged = !string.Equals(SelectedId, active.SelectedId, StringComparison.OrdinalIgnoreCase) ||
+                !Selected.Config.HasSameRouterSettings(active.Selected.Config);
+            bool outputChanged = !Selected.Config.HasSameOutputSettings(active.Selected.Config);
+            if ((connectionChanged || outputChanged) && connectionOpen)
+            {
+                throw new InvalidOperationException("Disconnect Mission Planner before changing aircraft, physical links or output/input calibration.");
+            }
+            return connectionChanged;
+        }
+
+        internal bool SaveForConnection(NOMADProfiles active, bool connectionOpen)
+        {
+            bool connectionChanged = CheckForConnection(active, connectionOpen);
+            Save();
+            return connectionChanged;
+        }
+
         public void Save()
         {
             Validate();

@@ -4,7 +4,7 @@
 // MAVLink Link Status panel
 // ============================================================
 // Real-time UI for the multi-link router. Shows live per-link
-// metrics and the active route controls reported by the standalone host.
+// metrics and the active route controls reported by the plugin-owned router.
 // ============================================================
 
 using System;
@@ -423,7 +423,7 @@ namespace NOMAD.MissionPlanner
 
                 bool running = _provider.IsMonitoring;
                 _lblRouterStatus.Text = LinkStatusDisplay.FormatRouterStatus(
-                    running, _provider.IsRouterAvailable, links);
+                    running, links);
                 _lblRouterStatus.ForeColor = _provider.IsRouterAvailable
                     ? NOMADTheme.TEXT_SECONDARY : NOMADTheme.ERROR;
                 _lblLocalEndpoint.Text = $"Mode: {_provider.RouterMode}   Local: {_provider.LocalMergedEndpoint}   " +

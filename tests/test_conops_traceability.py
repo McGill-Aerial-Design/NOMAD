@@ -42,7 +42,7 @@ def test_requirements_have_source_status_owner_and_evidence():
 
 def test_canonical_requirement_references_resolve():
     requirements = read_requirements()
-    documents = [*sorted((ROOT / "docs").glob("*.md")), ROOT / "TODO.md"]
+    documents = sorted((ROOT / "docs").glob("*.md"))
     for document in documents:
         for requirement in ID_PATTERN.findall(document.read_text(encoding="utf-8")):
             assert requirement in requirements, f"Unknown requirement {requirement} in {document.name}"

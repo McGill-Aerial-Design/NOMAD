@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// Standalone ground-router stress and management-client tests
+// Plugin-owned ground-router tests
 // ============================================================
-// Compiled with infra/transport/ground_router, the management client, and src/UI/Log.cs
+// Compiled with infra/transport/ground_router, the plugin owner, and src/UI/Log.cs
 // by scripts/build/test_ground_router.ps1 (plain csc, no test
 // framework — exits non-zero on failure).
 // Run via `pixi run test-ground-router-logic`.
@@ -49,9 +49,8 @@ internal static partial class GroundRouterTests
 
     private static async Task RunAll()
     {
-        await RunAsync("timing: management polling across UTC jumps", ManagementPollingClockJumps);
+        await RunAsync("owner: native outbound and profile replacement", PluginOwnerLifecycle);
         await RunAsync("timing: learned consumer endpoint across UTC jumps", ConsumerEndpointClockJumps);
-        Run("timing: management freshness across UTC jumps", ManagementClockJumps);
         Run("timing: physical freshness, health and jitter across UTC jumps", PhysicalFreshnessClockJumps);
         Run("timing: periodic stats and rate windows across UTC jumps", StatsClockJumps);
         Run("timing: reconnect boundary across UTC jumps", ReconnectClockJumps);
@@ -65,7 +64,6 @@ internal static partial class GroundRouterTests
         await RunAsync("review: resolved local destination rejected", ResolvedLocalDestination);
         Run("multi-link: configuration rejection", MultiConfigValidation);
         Run("multi-link: explicit Links and Consumers are required", RouterRequiresExplicitTopology);
-        Run("multi-link: unsafe Mission Planner outbound config rejected", MissionPlannerOutboundConfigRejection);
         await RunAsync("multi-link: three links, consumers, pinning and cleanup", MultiLinkRouting);
         await RunAsync("multi-link: receive-only consumer outbound admission", ReadOnlyConsumerOutboundAdmission);
         await RunAsync("multi-link: initial announcement", InitialAnnouncement);
@@ -91,9 +89,6 @@ internal static partial class GroundRouterTests
         await RunAsync("router: stop/restart rebinds cleanly", StopRestart);
         await RunAsync("router: stress — mirrored high-rate, strict no dup/loss", StressMirrored);
         await RunAsync("router: stress — bidirectional concurrent traffic", StressBidirectional);
-        Run("management: one-link status snapshot", RouterManagementSingleLinkStatus);
-        await RunAsync("management: versioned status/control protocol", RouterManagementProtocolChecks);
-        await RunAsync("management: standalone client reconnect and stale state", StandaloneClientReconnects);
     }
 
     // ============================================================

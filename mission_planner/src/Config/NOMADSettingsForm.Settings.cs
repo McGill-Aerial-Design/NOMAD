@@ -14,7 +14,6 @@ namespace NOMAD.MissionPlanner
         private void LoadSettings()
         {
             _loadingAircraft = true;
-            _profileEditRevision++;
             try
             {
                 LoadProfileSettings();
@@ -28,16 +27,14 @@ namespace NOMAD.MissionPlanner
         private void LoadProfileSettings()
         {
             LoadAircraftSettings();
-            _numCoreRuntimePort.Value = ClampValue(_numCoreRuntimePort, Config.CoreRuntimePort);
-            _txtCoreClientCredential.Text = Config.CoreClientCredential ?? "";
-            RuntimeConnectionEdited();
 
             _txtVideoUrl.Text = Config.VideoUrl;
             _chkAutoStartHudVideo.Checked = Config.AutoStartHudVideo;
 
             _chkRouterClientEnabled.Checked = Config.RouterClientEnabled;
             _numRouterLocalPort.Value = ClampValue(_numRouterLocalPort, Config.RouterLocalPort);
-            _numManagementPort.Value = ClampValue(_numManagementPort, Config.ManagementPort);
+            _txtRouterLinks.Text = Newtonsoft.Json.JsonConvert.SerializeObject(Config.RouterLinks, Newtonsoft.Json.Formatting.Indented);
+            _txtRouterPreferredLink.Text = Config.RouterPreferredLink;
 
             _chkDebugMode.Checked = Config.DebugMode;
 
@@ -89,15 +86,14 @@ namespace NOMAD.MissionPlanner
         private void SaveSettings()
         {
             SaveAircraftSettings();
-            Config.CoreRuntimePort = (int)_numCoreRuntimePort.Value;
-            Config.CoreClientCredential = _txtCoreClientCredential.Text.Trim();
 
             Config.VideoUrl = _txtVideoUrl.Text.Trim();
             Config.AutoStartHudVideo = _chkAutoStartHudVideo.Checked;
 
             Config.RouterClientEnabled = _chkRouterClientEnabled.Checked;
             Config.RouterLocalPort = (int)_numRouterLocalPort.Value;
-            Config.ManagementPort = (int)_numManagementPort.Value;
+            Config.RouterLinks = NOMADConfig.ParseRouterLinks(_txtRouterLinks.Text);
+            Config.RouterPreferredLink = _txtRouterPreferredLink.Text.Trim();
 
             Config.DebugMode = _chkDebugMode.Checked;
             Config.AudioAlerts = _chkAudioAlerts.Checked;
@@ -128,12 +124,12 @@ namespace NOMAD.MissionPlanner
             Config.JoystickPositionActuatorId = _txtJoyPositionActuatorId.Text.Trim();
             Config.JoystickButtonIndices = System.Array.ConvertAll(_switchButtons, control => (int)control.Value);
             Config.JoystickSwitchDevice = NormalizeDevice(_cmbSwitchDevice?.SelectedItem?.ToString());
-            Config.JoystickSw1UpAction = ActionIdForLabel(_cmbSw1Up?.Text);
-            Config.JoystickSw1DownAction = ActionIdForLabel(_cmbSw1Down?.Text);
-            Config.JoystickSw2UpAction = ActionIdForLabel(_cmbSw2Up?.Text);
-            Config.JoystickSw2DownAction = ActionIdForLabel(_cmbSw2Down?.Text);
-            Config.JoystickSw3UpAction = ActionIdForLabel(_cmbSw3Up?.Text);
-            Config.JoystickSw3DownAction = ActionIdForLabel(_cmbSw3Down?.Text);
+            Config.JoystickSw1UpAction = (_cmbSw1Up?.Text ?? "None");
+            Config.JoystickSw1DownAction = (_cmbSw1Down?.Text ?? "None");
+            Config.JoystickSw2UpAction = (_cmbSw2Up?.Text ?? "None");
+            Config.JoystickSw2DownAction = (_cmbSw2Down?.Text ?? "None");
+            Config.JoystickSw3UpAction = (_cmbSw3Up?.Text ?? "None");
+            Config.JoystickSw3DownAction = (_cmbSw3Down?.Text ?? "None");
             Config.JoystickKillSwitchEnabled = _chkKillSwitchEnabled.Checked;
             Config.JoystickTerminationButtonIndex = (int)_numTerminationButton.Value;
             Config.ValidateInputBindings();

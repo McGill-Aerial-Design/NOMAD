@@ -12,27 +12,6 @@ using NOMAD.MissionPlanner;
 
 internal static partial class GroundRouterTests
 {
-    private static void MissionPlannerOutboundConfigRejection()
-    {
-        var serializer = new JavaScriptSerializer();
-        const string omittedOutbound =
-            "{\"Links\":[{\"Id\":\"cell\",\"Port\":31101}],"
-            + "\"PreferredLink\":\"cell\","
-            + "\"Consumers\":[{\"Id\":\"mission_planner\",\"RouterPort\":31100}]}";
-        const string enabledOutbound =
-            "{\"Links\":[{\"Id\":\"cell\",\"Port\":31101}],"
-            + "\"PreferredLink\":\"cell\","
-            + "\"Consumers\":[{\"Id\":\"mission_planner\",\"RouterPort\":31100,"
-            + "\"AllowOutbound\":true}]}";
-        var omittedConfig = serializer.Deserialize<GroundLinkRouter.RouterConfig>(omittedOutbound);
-        var enabledConfig = serializer.Deserialize<GroundLinkRouter.RouterConfig>(enabledOutbound);
-
-        Check(omittedConfig.Consumers[0].AllowOutbound,
-            "omitted Mission Planner AllowOutbound resolves to the legacy true default");
-        CheckMissionPlannerOutboundRejected(omittedConfig, "omitted AllowOutbound");
-        CheckMissionPlannerOutboundRejected(enabledConfig, "AllowOutbound true");
-    }
-
     private static void RouterRequiresExplicitTopology()
     {
         var missingLinks = MultiConfig(30900);
@@ -51,16 +30,6 @@ internal static partial class GroundRouterTests
         catch (ArgumentException ex) { error = ex.Message; }
 
         Check(error != null && error.Contains(expected), "missing router topology fails clearly: " + expected);
-    }
-
-    private static void CheckMissionPlannerOutboundRejected(GroundLinkRouter.RouterConfig config, string scenario)
-    {
-        string error = null;
-        try { using (var router = new GroundLinkRouter(config)) { } }
-        catch (ArgumentException ex) { error = ex.Message; }
-
-        Check(error == "The mission_planner consumer is receive-only; set AllowOutbound to false.",
-            "unsafe Mission Planner " + scenario + " is rejected with a clear error");
     }
 
     private static void LocalAddressGuardChecks()
@@ -108,13 +77,10 @@ internal static partial class GroundRouterTests
         var wifi = new[] { new LinkStatistics { Type = "wifi", IsConnected = false } };
         Check(LinkStatusDisplay.FormatRouterStatus(true, wifi) == "Router: running — 0/1 links connected",
             "running does not imply connected");
-        Check(LinkStatusDisplay.FormatRouterStatus(false, false, wifi) == "Router process: unavailable",
-            "management failure is distinct from physical link health");
         wifi[0].IsConnected = true;
         wifi[0].IsStale = true;
-        Check(
-            LinkStatusDisplay.FormatRouterStatus(true, true, wifi) == "Router: connected — Physical links: 0/1 connected",
-            "stale management data is not shown as current");
+        Check(LinkStatusDisplay.FormatRouterStatus(true, wifi) == "Router: running — 0/1 links connected",
+            "stale physical data is not shown as connected");
         Check(LinkStatusDisplay.HasMembershipChanged(wifi, new[] { "WiFi" }), "link IDs remain case sensitive");
         Check(LinkStatusDisplay.HasMembershipChanged(wifi, Array.Empty<string>()), "missing card changes membership");
     }

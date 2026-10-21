@@ -1,83 +1,45 @@
 # Qualification status
 
-Software tests establish only their asserted boundary. Run the retained gates
-below for every release and retain exact source/build/firmware/configuration with
-results. Full physical aircraft qualification remains open. [Safety](safety.md)
-defines obligations; [TODO](../TODO.md) lists implementation work.
+Current evidence applies to the Mission Planner-native product and the exact reviewed
+host target. Historical C++/MAVSDK/runtime/SITL evidence is preserved on
+`MAVSDK-Archive`; it is not evidence that this implementation or a physical aircraft
+passed qualification. Repository source describes checks, not a claim that hosted
+runs completed on a particular commit. PR reports must record actual conclusions.
 
-## Evidence levels
+## Software evidence
 
-1. Unit/fake transport: policy, invalid/boundary input and deterministic fault paths.
-2. Real process/loopback MAVLink: IPC authentication, replay/admission fencing,
-   audit/restart, actual frame delivery and transport ownership.
-3. Pinned ArduPilot SITL: controller acceptance and observed simulator behavior.
-4. Physical bench/flight: actual receiver priority, output/trajectory, RF independence,
-   power failure, takeover and approved operating limits. Levels 1–3 do not imply 4.
+[Development](development.md) lists executable gates. Host doubles exercise native
+command arguments, profile/connection/stream/ID fences, invalid input, mode caching,
+input generations, native helper failures, payload confirmation/neutral rules,
+trim matching, Safe draining, shared repeat lifetime and uncertain outcomes.
+Loopback router tests exercise link routing, deduplication, failover, parameter
+pinning, disposal and replacement. WinForms tests cover isolated controls, profile
+drafts/persistence failures, maps, router status and video lifetime.
 
-## Required software gates
+The actual Release build references Mission Planner's reviewed assemblies; tests
+never install the DLL or rewrite real operator profiles. Test doubles do not verify
+host/controller implementation, aircraft output calibration or physical completion.
+Mission Planner owns its normal command ACKs/retries; pending helpers can finish
+past NOMAD Stop/unload. External MP/mission/RC actions are outside NOMAD's local
+interlocks and may change output state or the controller's shared repeat slot.
 
-| Gate | Coverage and limits |
-|---|---|
-| `test-core` | Fake-transport vehicle policy, command verification, telemetry/watchdogs, fence/velocity, QuadPlane phase/fault paths, authority/concurrency and actuator state |
-| `test-python`, `lint`, `format-check`, `docs-build` | Retained harnesses, release/security/service regressions and repository consistency |
-| `test-runtime-ipc`, `test-runtime-lifecycle` | Authenticated real runtime/CLI, stale/replayed contexts, clean/crash restart with durable history, lost/returning peer and no restored owner |
-| `test-runtime-land` | Installed CLI/runtime LAND, one-hertz heartbeats, shared ACK/observation budget, explicit uncertainty, wire attempts and durable no-replay evidence |
-| `test-mavsdk-connectivity`, `test-mavsdk-transport-qualification`, `test-mavsdk-authority-wire` | Selection, framing, ACK/state checks, session/connection retirement, retries/cancellation and final-send fencing at independent peers |
-| `verify-mavsdk-provenance` | Exact reviewed dependency pins, generator/hash patches and selected-license bundle |
-| Mission Planner tests in development guide | Immutable outcomes, cancellation/freshness/no replay, HID interlocks, advisory geometry, video disposal and host message boundary |
-| `test-ground-router` | Receive-only permissions, physical-link routing/dedup/failover, monotonic timeout/freshness, transaction pinning and process lifecycle |
-| `test-runtime-service-artifacts`, `test-release-lifecycle` | Protected systemd/SCM configuration, versioned archive/stage/activation/rollback and restoration failures; no privileged installation |
-| `verify-core-package`, `verify-core-staged-install` | Exact production contents/identity, executables and legal notices; no test driver, SDK headers or operator state |
+## Aircraft acceptance remains open
 
-Runtime outcome, actuator, router and release checks are essential. Tests for deleted
-migration/conversion and optional adapters are not release gates. Resource baselines
-are removed; release acceptance still requires measured load/deadline behavior on its
-actual target, including memory pressure, disk/audit failure and competing workloads.
+- Copter, Plane and QuadPlane native flight behavior across the chosen firmware,
+  controllers, frames and every intended flight phase.
+- Actual payload mechanisms, trim/calibration, feedback, link/power faults and
+  physical safe state; accepted software commands do not prove physical outcomes.
+- ELRS/LTE takeover, RC handback, loss responses, independent termination and
+  all-mode containment. Native ArduPilot failsafes must remain enabled and reviewed.
+- Official competition server contract, traffic separation, perception, task
+  exports and complete Task 1/2 rehearsals from the [source inventory](conops-requirements.md).
+- Installation/operator acceptance using a reviewed DLL and private deployment data.
 
-## SITL qualification
+Current source CI tests the plugin it ships. Obsolete external C++/MAVSDK/SITL required
+status contexts are not manufactured by replacement jobs. If repository protection
+still requires them, merging remains blocked until separately authorized alignment;
+changing this source does not alter protection.
 
-Maintain the latest stable ArduPilot release for each supported aircraft family.
-As checked on 2026-10-18, the current target is
-[Copter 4.7.2](https://github.com/ArduPilot/ardupilot/releases/tag/Copter-4.7.2) and
-[Plane 4.7.2](https://github.com/ArduPilot/ardupilot/releases/tag/Plane-4.7.2).
-Qualification uses reviewed, pinned revisions rather than a floating latest tag.
-Update those pins deliberately and run the full affected gates before claiming
-coverage of a new release; retain the earlier revision and its results as evidence.
-The SITL baseline below is pinned to 4.7.2. Selecting a profile does not update
-firmware. Conventional Plane operations require evidence beyond the QuadPlane gate.
-
-[sitl.yml](../.github/workflows/sitl.yml) requires full Copter and QuadPlane jobs on
-safety-sensitive changes and scheduled/manual runs. Its scope output is fail-closed.
-The MAVSDK connectivity smoke is a separate limited check and cannot replace them.
-
-Copter coverage includes command/mission, heartbeat cadence, velocity/watchdog,
-geofence/containment, payload, zero delivery, link loss/recovery and runtime authority.
-QuadPlane uses ArduPlane 4.7.2 (`fb773567896014da007bca58358704d4a0d8516f`),
-`quadplane-tilttri`, `Q_ENABLE=2`: identity, VTOL takeoff, forward transition, two-point
-route, recovery, transition back and QLAND. Success requires observed post-command
-state; an ACK alone is never climb or touchdown. The driver/operator establishes
-some setup states, including AUTO. This is not an autonomous Task 1 mission.
-[Scenario instructions](../tests/sitl/README.md) define the runnable gates.
-
-## Open release blockers
-
-No production RC/ELRS channel map, aircraft-wide writer arbitration, physical
-pilot takeover/handback, complete C2-loss policy or independent termination mechanism
-is qualified. Beyond Copter LAND engagement, runtime IPC exposes no QuadPlane mutation or navigation,
-boundary enforcement, VIO submission or mission API. Mission Planner boundary
-outlines are advisory only. Native GCS and RC remain external writers.
-
-Real perception/VIO fusion, competition server/traffic handling, wildlife export,
-tracking/sample mechanisms, physical actuator feedback and full Task 1/2 integration
-remain open. No firmware/board/sensor/compute placement is hardware-qualified.
-Release signing/trusted publisher distribution and privileged systemd/SCM registration
-require separate deployment acceptance. SHA-256 integrity alone does not authenticate
-a publisher. Validate mixed component versions against both IPC and router contracts.
-
-The one-hertz LAND fixture retains raw response latency. Its 3.5-second upper bound
-and unknown-with-ACK 2.85-second lower bound use the same elapsed interval after
-subtracting only the two successful synchronous native audit appends, validated
-after clean runtime exit against the first request's durable intent/outcome ordinals.
-Missing or invalid measurement fails qualification. Lock wait and other overhead
-remain counted; Vehicle's three-second deadline, audit durability and the separate
-SITL CLI wall-time gate remain unchanged. This does not shorten actual response time.
+`config/github-main-protection.json` proposes those two current job names while
+preserving strict checks/reviews/admin controls. It is source data only: existing
+GitHub protection still requires its old contexts until separately authorized application.

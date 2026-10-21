@@ -6,7 +6,6 @@ using System.Linq;
 using System.Windows.Forms;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using NOMAD.MissionPlanner.Connectivity;
 
 namespace NOMAD.MissionPlanner
 {
@@ -16,11 +15,6 @@ namespace NOMAD.MissionPlanner
         private TextBox _txtAircraftName, _txtFlightController, _txtReceiver, _txtAircraftFirmware, _txtAirframe;
         private Button _btnRemoveAircraft;
         private bool _loadingAircraft;
-        private volatile int _profileEditRevision;
-        private volatile bool _runtimeConnectionUnchanged;
-        private readonly string _initialProfileId, _initialCredential;
-        private readonly int _initialRuntimePort;
-        private readonly NomadCoreClient _initialCoreClient;
 
         private TabPage CreateAircraftTab()
         {
@@ -91,11 +85,8 @@ namespace NOMAD.MissionPlanner
             _cmbArmingChannel.SelectedIndex = Config.RcArmingChannel ?? 0;
             _cmbFlightModeChannel.SelectedIndex = Config.RcFlightModeChannel ?? 0;
             _cmbGimbalMountMode.SelectedIndex = Config.GimbalMountMode;
-            ApplyActuatorActions(Array.Empty<NomadActuator>());
             _actuatorJson.Text = Config.ActuatorDefinitions?.ToString(Formatting.Indented) ?? "";
-            _actuatorConfigStatus.Text = Config.ActuatorDefinitions == null ?
-                "No stored definitions. Load them from this aircraft's runtime or enter intended definitions." :
-                "Stored definitions; runtime validation and explicit submission are separate from saving this profile.";
+
         }
 
         private void SaveAircraftSettings()
@@ -178,18 +169,5 @@ namespace NOMAD.MissionPlanner
             LoadSettings();
         }
 
-        private bool SettingsRuntimeIsCurrent()
-        {
-            return string.Equals(Profiles.SelectedId, _initialProfileId, StringComparison.OrdinalIgnoreCase) &&
-                _runtimeConnectionUnchanged &&
-                _initialCoreClient != null && _initialCoreClient == OutputController.CreateCoreClient();
-        }
-
-        private void RuntimeConnectionEdited()
-        {
-            _profileEditRevision++;
-            _runtimeConnectionUnchanged = (int)_numCoreRuntimePort.Value == _initialRuntimePort &&
-                _txtCoreClientCredential.Text.Trim() == _initialCredential;
-        }
     }
 }

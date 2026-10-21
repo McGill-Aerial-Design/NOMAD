@@ -29,11 +29,6 @@ namespace NOMAD.MissionPlanner
             return result;
         }
 
-        private static float ReadAxisNorm(IMyJoystickState state, string name, bool invert, float deadzone)
-        {
-            return TryReadAxisNorm(state, name, invert, deadzone, out var value) ? value : 0;
-        }
-
         internal static bool TryReadAxisNorm(IMyJoystickState state, string name, bool invert,
             float deadzone, out float value)
         {
@@ -66,6 +61,8 @@ namespace NOMAD.MissionPlanner
                 {
                     return false;
                 }
+                // The unsigned axis midpoint falls between these two integer samples.
+                if (raw == 32767 || raw == 32768) { return true; }
                 float normalized = (raw - 32767.5f) / 32767.5f;
                 if (Math.Abs(normalized) < deadzone)
                 {
@@ -81,56 +78,5 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private double? _lastPositionInput;
-        private long _positionGeneration;
-        private string _axisBlockedReason = "";
-        internal void TranslatePositionInput(bool valid, float normalized)
-        {
-            if (!valid)
-            {
-                Interlocked.Increment(ref _positionGeneration);
-                if (_lastPositionInput.HasValue && !string.IsNullOrEmpty(_config.JoystickPositionActuatorId))
-                { SendHid(_config.JoystickPositionActuatorId, "safe", 6); }
-                _lastPositionInput = null;
-                return;
-            }
-            var eligibility = OutputController.GetContinuousAxisMetadata(_config.JoystickPositionActuatorId);
-            if (eligibility == null || !eligibility.ContinuousAxisAllowed)
-            {
-                string reason = eligibility?.ContinuousAxisBlockedReason;
-                if (string.IsNullOrEmpty(reason)) { reason = "Load runtime action metadata and select a supported continuous-axis binding."; }
-                if (_axisBlockedReason != reason) { Log.Warn("Position HID input unavailable: " + reason); }
-                _axisBlockedReason = reason;
-                TranslatePositionInput(false, 0);
-                return;
-            }
-            _axisBlockedReason = "";
-            if (string.IsNullOrWhiteSpace(_config.JoystickPositionActuatorId))
-            {
-                return;
-            }
-            double position = (normalized + 1.0) / 2.0;
-            if (_lastPositionInput.HasValue && Math.Abs(_lastPositionInput.Value - position) < 0.001)
-            {
-                return;
-            }
-            _lastPositionInput = position;
-            long positionGeneration = Interlocked.Increment(ref _positionGeneration);
-            long resetGeneration = Interlocked.Read(ref _inputGeneration);
-            string id = _config.JoystickPositionActuatorId;
-            _ = SendPositionInputAsync(id, position, () => positionGeneration == Interlocked.Read(ref _positionGeneration) &&
-                resetGeneration == Interlocked.Read(ref _inputGeneration) &&
-                OutputController.GetContinuousAxisMetadata(id)?.ContinuousAxisAllowed == true);
-        }
-
-        private async Task SendPositionInputAsync(string id, double position, Func<bool> inputStillCurrent)
-        {
-            try { await OutputController.ActuatorActionAsync(id,
-                "position", "hid", 6, position, inputStillCurrent); }
-            catch (Exception ex)
-            {
-                Log.Error("USB HID position request failed: " + ex.Message);
-            }
-        }
     }
 }

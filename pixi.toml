@@ -1,279 +1,40 @@
-# NOMAD development and qualification tasks; builds never deploy.
-
+# Development checks for the Mission Planner plugin; nothing here installs it.
 [workspace]
 name = "nomad"
 version = "0.2.1"
-description = "NOMAD C++ core and Python tools — development environment"
+description = "Mission Planner plugin development and documentation"
 channels = ["conda-forge"]
-platforms = ["linux-64", "win-64", "osx-64", "osx-arm64"]
+platforms = ["linux-64", "win-64"]
 
-# ==================== Features ====================
-
-[feature.dev.dependencies]
+[dependencies]
 python = "3.13.*"
 pre-commit = ">=3.8"
-shellcheck = ">=0.10"
 
-[feature.dev.pypi-dependencies]
-nomad-tools = { path = ".", editable = true, extras = ["dev", "docs"] }
-
-# ==================== Environments ====================
-
-[environments]
-default = { features = ["dev"] }
-
-# ==================== Tasks ====================
+[pypi-dependencies]
+ruff = "==0.15.16"
+pytest = ">=8.0"
+properdocs = ">=1.6"
+mkdocs-material = ">=9.5"
 
 [tasks]
-
-
-# Production C++ targets. The compiler is intentionally a host prerequisite;
-# the persistent runtime owns the MAVSDK transport. This task builds only the
-# two installed executables, even when test targets are configured.
-build-core = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DBUILD_TESTING=OFF && cmake --build build/core --config Debug --target nomad nomad-runtime"
-build-qualification-cli = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DBUILD_TESTING=OFF && cmake --build build/core --config Debug --target nomad-qualification"
-build-sitl-tools = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DBUILD_TESTING=OFF && cmake --build build/core --config Debug --target nomad nomad-runtime nomad-qualification"
-test-core = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DBUILD_TESTING=ON && cmake --build build/core --config Debug && ctest --test-dir build/core -C Debug --output-on-failure"
-test-runtime-ipc = "pixi run build-core && python scripts/dev/runtime_ipc_smoke.py"
-test-runtime-lifecycle = "pixi run build-core && python scripts/dev/runtime_lifecycle_qualification.py"
-test-runtime-land = { cmd = "python scripts/dev/runtime_land_fixture.py", depends-on = ["build-core"] }
-test-runtime-service-artifacts = "pytest tests/test_runtime_lifecycle.py -q"
-sitl = "pixi run build-core && pixi run dev-up && pixi run sitl-scenario"
-# Builds the non-installed MAVSDK connectivity smoke and records build metrics.
-build-mavsdk-connectivity-smoke = "python scripts/dev/mavsdk_build_metrics.py --build"
-run-mavsdk-sitl-smoke = "pixi run build-mavsdk-connectivity-smoke && python scripts/dev/mavsdk_connectivity_smoke.py"
-build-core-release = "cmake -S . -B build/package -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF && cmake --build build/package --config Release --target nomad nomad-runtime"
-package-core = { cmd = "cpack --config build/package/CPackConfig.cmake -C Release", depends-on = ["build-core-release"] }
-verify-core-package = { cmd = "python scripts/dev/verify_core_package.py build/package", depends-on = ["package-core"] }
-verify-core-staged-install = { cmd = "cmake -E rm -rf build/package/stage && cmake --install build/package --prefix build/package/stage --config Release --component nomad_runtime && python scripts/dev/verify_core_package.py build/package/stage", depends-on = ["build-core-release"] }
-install-core = { cmd = "cmake --install build/package --config Release --component nomad_runtime --prefix {{ prefix }}", args = ["prefix"], depends-on = ["build-core-release"] }
-test-mavsdk-connectivity = "pytest tests/test_mavsdk_connectivity_smoke.py tests/test_mavsdk_provenance.py -q && python scripts/dev/mavsdk_connectivity_peer_fixture.py"
-verify-mavsdk-provenance = "python scripts/dev/check_mavsdk_provenance.py"
-# Build the non-installed direct driver and transport tests for deterministic peers.
-build-mavsdk-transport-qualification = """
-cmake -S . -B build/mavsdk-qualification -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON && cmake --build build/mavsdk-qualification --config Release --target nomad nomad-runtime nomad-qualification nomad_mavsdk_connection_tests nomad_mavsdk_zero_delivery_tests nomad_mavsdk_authority_wire_probe nomad_mavsdk_lifetime_tests nomad_mavsdk_heartbeat_startup_probe
-"""
-test-mavsdk-transport-qualification = "pixi run build-mavsdk-transport-qualification && pytest tests/test_qualification_cli.py tests/test_fence_config_env.py tests/test_mavsdk_heartbeat_startup.py -q && python scripts/dev/mavsdk_connection_fixture.py && python scripts/dev/mavsdk_lifetime_fixture.py"
-test-mavsdk-authority-wire = "python scripts/dev/mavsdk_authority_wire_fixture.py && python scripts/dev/mavsdk_authority_probe_fixture.py"
-test-authority-sitl-harness = "pytest tests/test_authority_sitl.py -q"
-test-copter-land-sitl-harness = "pytest tests/test_copter_land_sitl.py -q"
-
-# Coverage floor is a ratchet set just below the current level so coverage can
-# only trend up; raise it as more of the codebase gets tested.
-# Plain pytest without the coverage gate.
-test-python = "pytest"
-test-release-lifecycle = "pytest tests/test_release_identity.py tests/test_release_lifecycle.py tests/test_release_windows.py tests/test_release_linux.py tests/test_release_storage.py tests/test_release_version_probe.py -q"
-
-# Hardware-free SITL stack (Docker), no Isaac Sim.
-#   pixi run dev-up      # start ArduPilot SITL and the Mission Planner bridge
-#   pixi run dev-down    # stop and remove
-# Mission Planner connects to SITL via TCP 127.0.0.1:5762 (the mp_bridge
-# socat relay — 5760 is single-client and held by the in-container MAVProxy).
-dev-up = "docker compose -f docker/docker-compose.dev.yml --profile sitl up -d --build"
-dev-down = "docker compose -f docker/docker-compose.dev.yml --profile sitl down"
-dev-logs = "docker compose -f docker/docker-compose.dev.yml --profile sitl logs -f"
-dev-ps = "docker compose -f docker/docker-compose.dev.yml --profile sitl ps"
-quadplane-sitl-build = "docker compose -f docker/docker-compose.quadplane.yml build"
-quadplane-sitl-up = "docker compose -f docker/docker-compose.quadplane.yml up -d --build"
-quadplane-sitl-down = "docker compose -f docker/docker-compose.quadplane.yml down"
-quadplane-sitl-logs = "docker compose -f docker/docker-compose.quadplane.yml logs -f"
-quadplane-sitl-ps = "docker compose -f docker/docker-compose.quadplane.yml ps"
-# SITL loop-closure scenario for the safety-critical velocity core (needs the
-# dev+sitl stack up: `pixi run dev-up`). The scenario drives the C++ core CLI
-# on the host (its UDP copy of the stream arrives on NOMAD_CORE_SITL_PORT) and
-# observes the vehicle over the operator link. See tests/sitl/README.md.
-# The C++ telemetry smoke test runs the same way: `pixi run core-sitl-status`.
-# (Declared as a table task with env below, with the other C++ SITL runners.)
-# Geofence containment scenario (SR-FEN-02): the C++ core CLI drives the
-# vehicle (mode/arm/takeoff/goto under the projected fence) against the same
-# host-side SITL UDP copy the other core-sitl-* scenarios use. Declared as a
-# table task with env at the end of this file, with the other C++ SITL runners,
-# because it needs the same development API key they do.
 lint = "ruff check ."
 format = "ruff format ."
 format-check = "ruff format --check ."
-# Documentation preview served on :8001.
+test-python = "pytest"
 docs = "properdocs serve --dev-addr localhost:8001"
 docs-build = "properdocs build --strict"
-
-# Git hooks
 precommit = "pre-commit run --all-files"
-
-# Compile the Mission Planner plugin without touching its installation (Windows only)
 build-plugin-only = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/build_plugin_windows.ps1"
-
-# Current configuration validation and HID settings tests.
-test-plugin-config-validation = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_config_validation.ps1"
-
-# Requires Visual Studio's MSBuild/C# compiler; tests dispatch against a temporary deny-write installation.
-test-plugin-build-only = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_build_plugin_windows.ps1"
-test-plugin-version = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_version.ps1"
-
-# Dead-code lint for the plugin (Windows only) — fails on unused fields/locals,
-# unreachable code, etc. (C# compiler diagnostics promoted to errors).
 lint-plugin = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/lint_plugin_deadcode.ps1"
-
-# Unit tests for local advisory outline geometry (Windows only) — compiles the
-# Mission Planner-free GeoMath/GeofenceTypes with VS's csc and checks polygon
-# inset, visual outline status and the configured altitude display threshold.
-test-plugin-geometry = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_geometry.ps1"
-
-# Unit tests for Mission Planner's gimbal input math (Windows only) — compiles
-# the Mission Planner-free GimbalCommand and checks mode values, stick
-# integration, deadzone, and angle/rate clamping. C++ tests own MAVLink framing.
+test-plugin-build-only = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_build_plugin_windows.ps1"
+test-plugin-config-validation = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_config_validation.ps1"
+test-aircraft-profiles = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_aircraft_profiles.ps1"
 test-plugin-gimbal = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal.ps1"
-
-# STA WinForms interaction/render smoke for the isolated gimbal joystick pad.
+test-plugin-payload = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_payload.ps1"
 test-plugin-gimbal-ui = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal_ui.ps1"
 test-plugin-router-ui = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_router_ui.ps1"
-
-# Hardware-free video lifecycle and isolated WinForms ownership checks (requires plugin build).
 test-plugin-video = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_video.ps1"
-
-# Unit tests for the Mission Planner runtime IPC client (Windows only) — compiles
-# the Mission Planner-free client with VS's csc and covers typed requests,
-# fail-closed validation and authority controls,
-# protocol negotiation and unknown-outcome no-replay behavior.
-test-plugin-core-client = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_core_client.ps1"
-test-plugin-runtime-status = { cmd = "python scripts/dev/mission_planner_status_fixture.py", depends-on = ["build-core", "test-plugin-core-client"] }
-
-# Unit tests for the Airbus-style altitude callouts (Windows only) — compiles the
-# Mission Planner-free AltitudeCallout with VS's csc and asserts the threshold-
-# crossing logic: silent priming, climb/descent callouts, hysteresis deadband,
-# and nearest-threshold selection on a fast multi-band descent.
+test-plugin-geometry = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_geometry.ps1"
 test-plugin-audio = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_audio.ps1"
-
-# Stress/behaviour tests for the standalone multi-link router (Windows only) —
-# compiles the MP-independent routing stack and management client with VS's csc and
-# runs it against real loopback UDP sockets: frame parsing, cross-link dedup,
-# failover + preferred-link recovery, manual override, outbound single-link
-# routing, param-transaction pinning, watchdog socket reopen, and high-rate
-# mirrored stress with strict no-loss/no-duplication assertions.
+test-plugin-version = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_version.ps1"
 test-ground-router-logic = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_ground_router.ps1"
-
-# Standalone ground-router build writes its artifacts to build/ground-router.
-# Release packaging runs in release.yml; test-ground-router runs process checks.
-build-ground-router = "powershell -NoProfile -File scripts/build/build_ground_router.ps1"
-test-ground-router = "pixi run build-ground-router && pixi run test-ground-router-logic && python scripts/dev/ground_router_smoke.py"
-
-# C++ SITL runners use only the non-installed qualification driver. It refuses actuation verbs without NOMAD_API_KEY
-# (SR-SEC-02/03); the key below is the documented development-simulation key
-# from config/nomad.env.example, never a production credential.
-[tasks.core-sitl-status]
-cmd = "python scripts/dev/core_sitl_status.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
-
-[tasks.core-sitl-quadplane-observe]
-cmd = "python scripts/dev/core_sitl_quadplane_observe.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
-
-# Dedicated, guarded native Copter simulator; see tests/sitl/README.md.
-[tasks.core-sitl-runtime-authority]
-cmd = "pixi run build-core && python scripts/dev/core_sitl_authority.py"
-
-# One airborne LAND scenario on the same guarded isolated topology; CI uses three clean instances.
-[tasks.core-sitl-runtime-copter-land]
-cmd = "python scripts/dev/core_sitl_copter_land.py"
-depends-on = ["build-core"]
-
-# Simulator-only, disarmed receiver-injection proof; never airborne qualification.
-[tasks.core-sitl-quadplane-rc-loss-probe]
-cmd = "python scripts/dev/core_sitl_quadplane_rc_loss_probe.py"
-
-[tasks.core-sitl-quadplane-vtol-takeoff]
-cmd = "python scripts/dev/core_sitl_quadplane_vtol_takeoff.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
-
-[tasks.core-sitl-quadplane-transition]
-cmd = "python scripts/dev/core_sitl_quadplane_transition.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
-
-[tasks.core-sitl-quadplane-route]
-cmd = "python scripts/dev/core_sitl_quadplane_route.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
-
-[tasks.core-sitl-quadplane-recovery]
-cmd = "python scripts/dev/core_sitl_quadplane_recovery.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
-
-[tasks.core-sitl-quadplane-transition-back]
-cmd = "python scripts/dev/core_sitl_quadplane_transition_back.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
-
-[tasks.core-sitl-quadplane-vtol-landing]
-cmd = "python scripts/dev/core_sitl_quadplane_landing.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
-
-[tasks.core-sitl-command-flow]
-cmd = "python scripts/dev/core_sitl_command_flow.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
-
-[tasks.core-sitl-mission]
-cmd = "python scripts/dev/core_sitl_mission.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
-
-[tasks.core-sitl-velocity-watchdog]
-cmd = "python scripts/dev/core_sitl_velocity_watchdog.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
-
-[tasks.core-sitl-geofence]
-cmd = "python scripts/dev/core_sitl_geofence.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
-
-[tasks.core-sitl-payload]
-cmd = "python scripts/dev/core_sitl_payload.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
-
-[tasks.core-sitl-link-loss]
-cmd = "python scripts/dev/core_sitl_link_loss.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
-
-[tasks.core-sitl-zero-delivery]
-# Observes the CLI's wire setpoints through a tee relay (the relay binds the
-# always-on 14572 copy as its upstream, like the link-recovery scenario).
-cmd = "python scripts/dev/core_sitl_zero_delivery.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_CORE_SITL_PORT = "14572" }
-
-[tasks.core-sitl-gcs-heartbeat]
-# The relay binds the always-on 14572 copy as its upstream (see
-# docker-compose.dev.yml), like the link-recovery scenario.
-cmd = "python scripts/dev/core_sitl_gcs_heartbeat.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
-
-[tasks.sitl-scenario]
-cmd = "python tests/sitl/velocity_loop_closure.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_SITL_OPERATOR = "tcp:127.0.0.1:5762", NOMAD_API_KEY = "nomad-dev-sitl-key" }
-
-[tasks.core-sitl-link-recovery]
-# The relay binds 14572 as its upstream; the dev stack always forwards a
-# MAVLink copy there (see SITL_UDP_OUTPUT_ADDRESS in docker-compose.dev.yml),
-# so this task works without restarting the stack with special env.
-cmd = "python scripts/dev/core_sitl_link_recovery.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_CORE_SITL_PORT = "14572" }
-
-[tasks.sitl-fence]
-# Geofence containment scenario (SR-FEN-02): the C++ core CLI drives the vehicle
-# (mode/arm/takeoff/goto under the projected fence) against the same host-side
-# SITL UDP copy the other core-sitl-* scenarios use. Every step is an actuation
-# command, so it needs the same development API key the other runners set.
-cmd = "python scripts/dev/core_sitl_containment.py"
-depends-on = ["build-sitl-tools"]
-env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }

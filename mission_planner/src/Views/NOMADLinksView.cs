@@ -63,13 +63,13 @@ namespace NOMAD.MissionPlanner
 
             layout.Controls.Add(new Label
             {
-                Text = (disabled ? "Router status client is disabled in settings.\n\n"
-                                 : "Router status is unavailable.\n\n") +
-                    "When enabled, Mission Planner connects to the separately supervised ground router.\n" +
+                Text = (disabled ? "The plugin router is disabled in settings.\n\n"
+                                 : "The plugin router is unavailable.\n\n") +
+                    "When enabled, Mission Planner owns the router for this aircraft profile.\n" +
                     "The router selects one physical link, supplies telemetry, and reports link health.\n" +
-                    "Mission Planner does not start, stop, or configure the router host.\n\n" +
-                    (disabled ? "Enable the router status client in NOMAD → Settings → Multi-Link."
-                              : "Check the router process and management endpoint in NOMAD → Settings → Multi-Link."),
+                    "Configure physical links here, then connect Mission Planner using the displayed UDPCl endpoint.\n\n" +
+                    (disabled ? "Enable the router in NOMAD → Settings → Multi-Link."
+                              : "Check this profile’s physical links in NOMAD → Settings → Multi-Link."),
                 Font = new Font("Segoe UI", 10),
                 ForeColor = disabled ? NOMADTheme.TEXT_SECONDARY : NOMADTheme.WARNING,
                 AutoSize = true,

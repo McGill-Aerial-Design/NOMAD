@@ -11,22 +11,8 @@ namespace NOMAD.MissionPlanner
         internal static string FormatRouterStatus(bool running, IReadOnlyList<LinkStatistics> links)
         {
             return running
-                ? $"Router: running — {links.Count(link => link.IsConnected)}/{links.Count} links connected"
+                ? $"Router: running — {links.Count(link => link.IsConnected && !link.IsStale)}/{links.Count} links connected"
                 : "Router: stopped";
-        }
-
-        internal static string FormatRouterStatus(
-            bool managementConnected,
-            bool routerAvailable,
-            IReadOnlyList<LinkStatistics> links)
-        {
-            if (!managementConnected || !routerAvailable)
-            {
-                return "Router process: unavailable";
-            }
-
-            int connected = links.Count(link => link.IsConnected && !link.IsStale);
-            return $"Router: connected — Physical links: {connected}/{links.Count} connected";
         }
 
         internal static bool HasMembershipChanged(IReadOnlyList<LinkStatistics> links, ICollection<string> cardIds)

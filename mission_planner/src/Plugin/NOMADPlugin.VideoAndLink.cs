@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// NOMAD Mission Planner Plugin — Video & Standalone Router
+// NOMAD Mission Planner Plugin — Video & Plugin Router
 // ============================================================
 // Target: Mission Planner 1.3.x
 //
-// Video streaming (HUD overlay) and standalone ground router
+// Video streaming (HUD overlay) and plugin-owned ground router
 // management and observation for NOMAD.
 // ============================================================
 
@@ -18,7 +18,7 @@ using MissionPlanner.Utilities;
 namespace NOMAD.MissionPlanner
 {
     /// <summary>
-    /// Video streaming and standalone ground router management for NOMAD.
+    /// Video streaming and plugin-owned ground router management for NOMAD.
     /// </summary>
     public partial class NOMADPlugin
     {
@@ -29,10 +29,11 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Bring the local status client in sync with the saved connection settings.
         /// </summary>
-        private void ApplyRouterClientSettings()
+        private void ApplyRouterClientSettings(bool settingsChanged)
         {
             try
             {
+                if (!settingsChanged) { return; }
                 if (!_config.RouterClientEnabled)
                 {
                     if (_connectionManager != null)
@@ -40,7 +41,7 @@ namespace NOMAD.MissionPlanner
                         _connectionManager.StopMonitoring();
                         _connectionManager.Dispose();
                         _connectionManager = null;
-                        Log.Info("Standalone router status client disabled; router host remains running");
+                        Log.Info("Plugin router stopped");
                     }
                     return;
                 }
@@ -48,13 +49,13 @@ namespace NOMAD.MissionPlanner
                 if (_connectionManager == null)
                 {
                     InitializeConnectionManager();
-                    Log.Info("Standalone router status client started");
+                    Log.Info("Plugin router started");
                     return;
                 }
 
                 _connectionManager.UpdateConfig(BuildLinkConfig());
-                _connectionManager.RestartManagementClient();
-                Log.Info("Standalone router management client reconnected");
+                _connectionManager.StartMonitoring();
+                Log.Info("Plugin router restarted");
             }
             catch (Exception ex)
             {
@@ -197,7 +198,7 @@ namespace NOMAD.MissionPlanner
         }
 
         // ============================================================
-        // Standalone Ground Router Management
+        // Plugin Router
         // ============================================================
 
         /// <summary>
@@ -208,7 +209,8 @@ namespace NOMAD.MissionPlanner
             return new MAVLinkConnectionManager.ConnectionConfig
             {
                 RouterLocalPort = _config.RouterLocalPort,
-                ManagementPort = _config.ManagementPort,
+                Links = _config.RouterLinks,
+                PreferredLink = _config.RouterPreferredLink,
             };
         }
 
@@ -253,6 +255,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         private void ShowLinkHealthPanel()
         {
+            if (!IsActiveSession(_videoShutdown)) { return; }
             if (Host?.MainForm != null && Host.MainForm.InvokeRequired)
             {
                 Host.MainForm.BeginInvoke((MethodInvoker)delegate { ShowLinkHealthPanel(); });
@@ -264,8 +267,8 @@ namespace NOMAD.MissionPlanner
                 if (_connectionManager == null)
                 {
                     CustomMessageBox.Show(
-                        "Standalone router status is not enabled.\n\n" +
-                        "Enable it in NOMAD Settings → Connection → Connect to router status and controls.",
+                        "Plugin router is not enabled.\n\n" +
+                        "Enable it and configure physical links in NOMAD Settings → Multi-Link.",
                         "Link Manager Not Available"
                     );
                     return;

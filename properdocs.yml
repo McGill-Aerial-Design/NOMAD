@@ -1,5 +1,5 @@
 site_name: NOMAD
-site_description: Persistent ArduPilot runtime and local clients
+site_description: Mission Planner profiles, custom controls and link routing
 repo_url: https://github.com/YoussGm3o8/NOMAD
 theme:
   name: material
@@ -16,11 +16,9 @@ nav:
   - Operations: operations.md
   - Safety: safety.md
   - Qualification: qualification.md
-  - Runtime IPC: runtime-ipc.md
   - Product requirements: prd.md
   - CONOPS traceability: conops-requirements.md
   - AEAC integration: aeac-2027.md
-  - Dependencies: mavsdk-dependencies.md
 validation:
   links:
     not_found: info

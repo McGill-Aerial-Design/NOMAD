@@ -12,122 +12,42 @@ namespace NOMAD.MissionPlanner
     {
         private TabPage CreateConnectionTab()
         {
-            var tab = CreateTabPage("Core");
-            int y = 15;
-
-            AddSectionLabel(tab, "Authenticated Runtime Command Boundary", ref y);
-
-            AddLabel(tab, "Runtime IPC port:", 20, y);
-            _numCoreRuntimePort = AddNumericUpDown(tab, 170, y, 90, 1, 65535, 14611);
-            y += 30;
-
-            AddLabel(tab, "Client credential:", 20, y);
-            _txtCoreClientCredential = AddTextBox(tab, 170, y, 360);
-            _txtCoreClientCredential.UseSystemPasswordChar = true;
-            _numCoreRuntimePort.ValueChanged += (sender, args) => RuntimeConnectionEdited();
-            _txtCoreClientCredential.TextChanged += (sender, args) => RuntimeConnectionEdited();
-            y += 35;
-
-            var hint = new Label
-            {
-                Text = "Core command actions use authenticated loopback IPC. The credential identifies " +
-                       "mission-planner; runtime authority admission is still required. A separately supervised " +
-                       "nomad-runtime process must be running; these commands fail closed when it is " +
-                       "unavailable. Copter LAND engagement is available only when the runtime advertises it.",
-                Font = new Font("Segoe UI", 8, FontStyle.Italic),
-                ForeColor = Color.FromArgb(170, 170, 170),
-                Location = new Point(20, y),
-                AutoSize = true,
-                MaximumSize = new Size(560, 0),
-            };
-            tab.Controls.Add(hint);
-            y += 60;
-
-            AddSectionLabel(tab, "Runtime software authority", ref y);
-            AddAuthorityButton(tab, "Admit", 20, y, "admit");
-            AddAuthorityButton(tab, "Revoke", 145, y, "revoke");
-            AddAuthorityButton(tab, "Handback", 270, y, "handback");
-            y += 40;
-            AddLabel(tab, "Save core settings first. Reconnect never admits authority automatically.", 20, y);
-            y += 35;
-            AddSectionLabel(tab, "Copter LAND engagement", ref y);
-            tab.Controls.Add(new LandControlPanel(confirmLand: null, inputStillCurrent: SettingsRuntimeIsCurrent)
-            {
-                Location = new Point(20, y),
-            });
-
+            var tab = CreateTabPage("Connection");
+            AddLabel(tab, "NOMAD uses the live aircraft selected in Mission Planner.", 20, 20);
+            AddLabel(tab, "Use Mission Planner for connection, arming, flight modes, LAND and missions.", 20, 50);
             return tab;
-        }
-
-        private void AddAuthorityButton(TabPage tab, string label, int x, int y, string action)
-        {
-            var button = new Button { Text = label, Location = new Point(x, y), Size = new Size(110, 30) };
-            button.Click += async (sender, args) => await RunAuthorityControlAsync(tab, action);
-            tab.Controls.Add(button);
-        }
-
-        private async Task RunAuthorityControlAsync(TabPage tab, string action)
-        {
-            var client = OutputController.CreateCoreClient();
-            if (!SettingsRuntimeIsCurrent())
-            {
-                MessageBox.Show("Save core settings before changing runtime authority.", "NOMAD Runtime");
-                return;
-            }
-            tab.Enabled = false;
-            int revision = _profileEditRevision;
-            Func<bool> current = () => revision == _profileEditRevision && SettingsRuntimeIsCurrent();
-            Connectivity.NomadCoreRequestResult result;
-            try
-            {
-                result = await (action switch
-                {
-                    "admit" => client.AdmitAuthorityAsync(inputStillCurrent: current),
-                    "revoke" => client.RevokeAuthorityAsync(inputStillCurrent: current),
-                    _ => client.HandbackAuthorityAsync(inputStillCurrent: current)
-                });
-            }
-            finally
-            {
-                if (!IsDisposed) tab.Enabled = true;
-            }
-            if (IsDisposed || !current()) return;
-            var message = result.Succeeded ? "Runtime authority changed." : result.Message;
-            MessageBox.Show(message, "NOMAD Runtime", MessageBoxButtons.OK,
-                            result.Succeeded ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
 
         private TabPage CreateMultiLinkTab()
         {
             var tab = CreateTabPage("Multi-Link");
             int y = 15;
-
-            AddSectionLabel(tab, "Standalone ground router", ref y);
-            _chkRouterClientEnabled = AddCheckBox(tab, "Connect to router status and controls", 20, y, Color.LimeGreen);
+            AddSectionLabel(tab, "Aircraft links", ref y);
+            _chkRouterClientEnabled = AddCheckBox(tab, "Run the router inside Mission Planner", 20, y, Color.LimeGreen);
             y += 40;
-
-            AddLabel(tab, "Mission Planner UDP port:", 20, y);
-            _numRouterLocalPort = AddNumericUpDown(tab, 190, y, 80, 1, 65535, 14600);
+            AddLabel(tab, "Mission Planner UDPCl port:", 20, y);
+            _numRouterLocalPort = AddNumericUpDown(tab, 215, y, 80, 1, 65535, 14600);
             y += 35;
-
-            AddLabel(tab, "Management TCP port:", 20, y);
-            _numManagementPort = AddNumericUpDown(tab, 190, y, 80, 1, 65535, 14610);
-            y += 40;
-
-            var routerHint = new Label
+            AddLabel(tab, "Preferred link ID:", 20, y);
+            _txtRouterPreferredLink = AddTextBox(tab, 215, y, 250);
+            y += 35;
+            AddLabel(tab, "Physical links (JSON array):", 20, y);
+            y += 25;
+            _txtRouterLinks = new TextBox { Location = new Point(20, y), Size = new Size(580, 170),
+                Multiline = true, ScrollBars = ScrollBars.Both, WordWrap = false };
+            tab.Controls.Add(_txtRouterLinks);
+            y += 180;
+            var hint = new Label
             {
-                Text = "Mission Planner never starts or stops the router. Configure physical links, " +
-                       "failover and duplicate suppression in the standalone router JSON, then " +
-                       "supervise that host separately. The host rejects mission_planner " +
-                       "AllowOutbound=true; nomad_core remains command-capable.",
-                Font = new Font("Segoe UI", 8, FontStyle.Italic),
-                ForeColor = Color.FromArgb(150, 150, 150),
-                Location = new Point(40, y),
-                AutoSize = true,
-                MaximumSize = new Size(500, 0),
+                Text = "Save physical links in this aircraft profile; an empty list opens no connections.\n" +
+                    "Each link needs Id, Name, Transport (UDP, TCP or COM) and its endpoint or Device.\n" +
+                    "Use the ELRS link ID as preferred, with a lower Priority for the LTE backup.\n" +
+                    "Connect Mission Planner using UDPCl to 127.0.0.1 and the port above.\n" +
+                    "Changing profiles or link settings stops and replaces the router.",
+                Location = new Point(20, y), AutoSize = true, MaximumSize = new Size(580, 0),
+                ForeColor = Color.Gray
             };
-            tab.Controls.Add(routerHint);
-
+            tab.Controls.Add(hint);
             return tab;
         }
     }

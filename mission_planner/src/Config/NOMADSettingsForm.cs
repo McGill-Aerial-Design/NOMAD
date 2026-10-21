@@ -25,8 +25,6 @@ namespace NOMAD.MissionPlanner
         private TabControl _tabControl;
 
         // Connection Tab
-        private NumericUpDown _numCoreRuntimePort;
-        private TextBox _txtCoreClientCredential;
 
         // Video Tab
         private TextBox _txtVideoUrl;
@@ -35,7 +33,8 @@ namespace NOMAD.MissionPlanner
         // Multi-Link Tab
         private CheckBox _chkRouterClientEnabled;
         private NumericUpDown _numRouterLocalPort;
-        private NumericUpDown _numManagementPort;
+        private TextBox _txtRouterLinks;
+        private TextBox _txtRouterPreferredLink;
 
         // UI Tab
         private CheckBox _chkDebugMode;
@@ -87,10 +86,6 @@ namespace NOMAD.MissionPlanner
         public NOMADSettingsForm(NOMADProfiles profiles)
         {
             Profiles = (profiles ?? new NOMADProfiles(null)).Clone();
-            _initialProfileId = Profiles.SelectedId;
-            _initialRuntimePort = Config.CoreRuntimePort;
-            _initialCredential = Config.CoreClientCredential;
-            _initialCoreClient = OutputController.CreateCoreClient();
             InitializeComponents();
             LoadSettings();
         }
@@ -369,16 +364,8 @@ namespace NOMAD.MissionPlanner
         private void BtnTest_Click(object sender, EventArgs e)
         {
             SaveSettings();
-            bool configured = !string.IsNullOrWhiteSpace(Config.CoreClientCredential)
-                && Config.CoreRuntimePort >= 1 && Config.CoreRuntimePort <= 65535;
-            MessageBox.Show(
-                configured
-                    ? $"Runtime IPC is configured for 127.0.0.1:{Config.CoreRuntimePort}. " +
-                      "The supervised runtime must be running to issue commands."
-                    : "Configure the runtime IPC port and local actuation gate before issuing vehicle commands.",
-                "NOMAD Runtime Configuration",
-                MessageBoxButtons.OK,
-                configured ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+            MessageBox.Show("NOMAD uses Mission Planner's selected connection and this aircraft profile's custom output mappings.",
+                "NOMAD Connection", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
 

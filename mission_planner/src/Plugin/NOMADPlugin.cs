@@ -8,9 +8,9 @@
 // Features:
 // - Full-page NOMAD control interface with tabs
 // - Embedded video streaming
-// - Authenticated runtime command boundary
-// - Standalone ground-router management
-// - Configurable payload controls
+// - Native Mission Planner gimbal controls
+// - Plugin-owned ground router
+// - Saved payload mappings and native controls with local input interlocks
 // ============================================================
 
 using System;
@@ -39,7 +39,7 @@ namespace NOMAD.MissionPlanner
         private NotificationService _notificationService;
         private GeofenceConfig _geofenceConfig;               // Plugin-owned: survives NOMAD screen disposal
         private AdvisoryBoundaryMonitor _advisoryBoundaryMonitor; // Plugin-owned local outline preview
-        private MAVLinkConnectionManager _connectionManager;  // Standalone router management/status client
+        private MAVLinkConnectionManager _connectionManager;  // Plugin-owned router
         private NomadJoystickService _joystickService;        // Physical joysticks → gimbal + camera tilt
         private GimbalArrowKeyFilter _gimbalArrowKeyFilter;    // Mission Planner-wide arrow key nudges
         private Form _popOutForm;                             // Pop-out window for NOMAD screen
@@ -70,10 +70,11 @@ namespace NOMAD.MissionPlanner
                 _config = _profiles.Selected.Config;
                 _geofenceConfig = GeofenceConfig.Load();
 
-                // OutputController builds the loopback runtime client from the
-                // saved port and local actuation gate.
                 GimbalController.ApplyProfile(_config);
                 OutputController.Initialize(_config);
+                PayloadController.ApplyProfile(_config);
+                OutputController.ConnectionChanged += GimbalController.InvalidateInput;
+                if (Host?.MainForm != null) { Host.MainForm.FormClosed += OnHostClosed; }
 
                 // Notification service runs plugin-wide so battery / GPS
                 // alerts (including audio + TTS) fire regardless of which NOMAD tab
@@ -101,7 +102,7 @@ namespace NOMAD.MissionPlanner
                 // Startup chime + spoken welcome (fires once per process).
                 AudioAlerts.PlayWelcomeOnce();
 
-                // Initialize the standalone ground router management client
+                // Initialize the plugin-owned ground router
                 if (_config.RouterClientEnabled)
                 {
                     InitializeConnectionManager();
@@ -137,7 +138,7 @@ namespace NOMAD.MissionPlanner
                             $"NOMAD Plugin v{Version} loaded (debug mode).\n\n" +
                             $"Click NOMAD in the menu bar to open the interface;\n" +
                             $"hover it for tools and settings.\n\n" +
-                            $"C++ runtime IPC port: 127.0.0.1:{_config.CoreRuntimePort}",
+                            "Custom gimbal and payload controls use Mission Planner. Physical completion remains unverified.",
                             "NOMAD"
                         );
                     });
@@ -147,7 +148,7 @@ namespace NOMAD.MissionPlanner
             }
             catch (Exception ex)
             {
-                ShutdownVideo();
+                Exit();
                 CustomMessageBox.Show($"NOMAD Plugin failed to load: {ex.Message}", "Error");
                 return false;
             }
@@ -205,6 +206,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public override bool Loop()
         {
+            OutputController.RefreshConnection();
             if (DateTime.UtcNow >= _nextBoundaryMapBindUtc)
             {
                 _nextBoundaryMapBindUtc = DateTime.UtcNow.AddSeconds(2);
@@ -226,8 +228,12 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Called when plugin is unloaded.
         /// </summary>
+        private void OnHostClosed(object sender, FormClosedEventArgs args) { Exit(); }
+
         public override bool Exit()
         {
+            if (Host?.MainForm != null) { Host.MainForm.FormClosed -= OnHostClosed; }
+            StopCustomControls();
             ShutdownVideo();
             try
             {
@@ -250,12 +256,6 @@ namespace NOMAD.MissionPlanner
                 _connectionManager?.Dispose();
                 _connectionManager = null;
 
-                // Release joystick devices
-                _joystickService?.Dispose();
-                _joystickService = null;
-
-                _gimbalArrowKeyFilter?.Dispose();
-                _gimbalArrowKeyFilter = null;
 
 
                 if (_popOutForm != null && !_popOutForm.IsDisposed)
@@ -278,30 +278,55 @@ namespace NOMAD.MissionPlanner
 
         // Screen registration and pop-out hosting live in NOMADPlugin.Screens.cs.
 
-        private void ShowSettings()
+        private void StopCustomControls()
         {
-            using (var form = new NOMADSettingsForm(_profiles))
-            {
+            try { _gimbalArrowKeyFilter?.Dispose(); }
+            catch (Exception error) { Log.Warn("Keyboard cleanup failed: " + error.Message); }
+            _gimbalArrowKeyFilter = null;
+            try { GimbalJoystickWindow.CloseSingleton(); }
+            catch (Exception error) { Log.Warn("Gimbal window cleanup failed: " + error.Message); }
+            try { _joystickService?.Dispose(); }
+            catch (Exception error) { Log.Warn("Joystick cleanup failed: " + error.Message); }
+            _joystickService = null;
+            OutputController.ConnectionChanged -= GimbalController.InvalidateInput;
+            OutputController.Shutdown();
+            PayloadController.Shutdown();
+        }
 
-                if (form.ShowDialog() == DialogResult.OK)
+        private bool IsActiveSession(System.Threading.CancellationTokenSource session)
+        {
+            return session != null && ReferenceEquals(session, _videoShutdown) && !session.IsCancellationRequested;
+        }
+
+        private bool _savingSettings;
+        private async void ShowSettings()
+        {
+            var session = _videoShutdown;
+            if (!IsActiveSession(session) || _savingSettings) { return; }
+            _savingSettings = true;
+            var previousConfig = _config;
+            var previousService = _joystickService;
+            var previousOwner = PayloadController.Current;
+            bool inputStopped = false;
+            try
+            {
+                using (var form = new NOMADSettingsForm(_profiles))
                 {
+                    if (form.ShowDialog() != DialogResult.OK || !IsActiveSession(session)) { return; }
+                    bool connectionChanged;
                     try
                     {
-                        form.Profiles.Save();
-                    }
-                    catch (Exception error)
-                    {
-                        MessageBox.Show(error.Message, "Aircraft profiles were not saved",
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return;
-                    }
-                    try
-                    {
+                        form.Profiles.CheckForConnection(_profiles, MainV2.comPort?.BaseStream?.IsOpen == true);
                         _joystickService?.Stop();
+                        inputStopped = true;
+                        await (PayloadController.Current?.WaitForPendingAsync() ?? System.Threading.Tasks.Task.CompletedTask);
+                        if (!IsActiveSession(session)) { return; }
+                        connectionChanged = form.Profiles.SaveForConnection(_profiles, MainV2.comPort?.BaseStream?.IsOpen == true);
                     }
                     catch (Exception ex)
                     {
-                        Log.Error($"Joystick stop before output reconfiguration failed — {ex.Message}");
+                        MessageBox.Show(ex.Message, "Aircraft profiles were not saved", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
                     }
                     StopHudVideo();
                     GimbalJoystickWindow.CloseSingleton();
@@ -310,15 +335,27 @@ namespace NOMAD.MissionPlanner
                     _config = _profiles.Selected.Config;
                     GimbalController.ApplyProfile(_config);
                     OutputController.Initialize(_config);
+                    PayloadController.ApplyProfile(_config);
                     _gimbalArrowKeyFilter = new GimbalArrowKeyFilter(_profiles);
                     AudioAlerts.ApplyConfig(_config);
-                    ApplyRouterClientSettings();
+                    ApplyRouterClientSettings(connectionChanged);
                     try
                     {
                         _joystickService?.UpdateConfig(_config);
                     }
                     catch (Exception ex) { Log.Error($"Joystick restart failed — {ex.Message}"); }
                 }
+            }
+            finally
+            {
+                if (inputStopped && IsActiveSession(session) && ReferenceEquals(previousConfig, _config) &&
+                    ReferenceEquals(previousService, _joystickService) && OutputController.IsCurrentProfile(previousConfig) &&
+                    ReferenceEquals(previousOwner, PayloadController.Current))
+                {
+                    try { previousService?.RestartWithConfig(); }
+                    catch (Exception error) { Log.Error("Previous joystick restart failed: " + error.Message); }
+                }
+                _savingSettings = false;
             }
         }
     }

@@ -1,108 +1,72 @@
 # Development
 
-Install Git, Pixi, CMake >=3.22.1 and a C++20 compiler. Linux requires OpenSSL Crypto
-development files; Windows uses BCrypt. Mission Planner/router builds require Windows,
-Visual Studio/MSBuild, .NET Framework 4.8 and the reviewed Mission Planner assemblies.
+The product is a C#/.NET Framework 4.8 DLL for the reviewed Mission Planner host
+in `scripts/release/mission-planner-target.json`. Windows builds require Visual
+Studio/MSBuild, its Roslyn compiler and the .NET Framework targeting pack, plus
+that installed host's reference assemblies. Python/Pixi serves checks/docs only.
+No C++ toolchain, MAVSDK, Docker, backend service or independent CLI is needed.
 
-macOS development targets remain available. Core runtime installation and release
-packages are restricted to Windows/Linux x86-64; other targets reject those operations.
+## Build without installation
 
-```sh
-git submodule update --init --recursive
-pixi install
-pixi run build-core
-pixi run test-core
-pixi run build-qualification-cli
-pixi run test-python
-pixi run test-runtime-ipc
-pixi run test-runtime-land
-pixi run test-runtime-lifecycle
+```powershell
+pixi run build-plugin-only
+```
+
+The script cleans/builds Release, writes source SHA/MP target identity under
+`build/release/` and leaves `mission_planner/src/bin/Release/NOMADPlugin.dll`.
+All host references are non-copy-local. The artifact contains no host/dependency
+binaries and the script never writes an MP installation. Direct IDE builds use
+fallback development metadata if generated identity is absent; record the actual
+checked source and local changes with any artifact. Installation is a separate
+explicit [manual closed-MP operation](operations.md#manual-plugin-installation).
+
+## Product checks
+
+Run the focused check first, then relevant gates once for the final coherent diff.
+The host-dependent gates require the actual reviewed MP assemblies. UI checks use
+isolated Windows/STA fixtures; router checks bind loopback test sockets. Profile
+fixtures use temporary paths and must not touch real operator files.
+
+```powershell
+pixi run test-plugin-build-only
+pixi run build-plugin-only
+pixi run lint-plugin
+pixi run test-plugin-gimbal
+pixi run test-plugin-payload
+pixi run test-plugin-config-validation
+pixi run test-plugin-geometry
+pixi run test-plugin-audio
+pixi run test-plugin-version
+pixi run test-ground-router-logic
+pixi run test-plugin-gimbal-ui
+pixi run test-plugin-router-ui
+pixi run test-plugin-video
+```
+
+Configuration validation includes the aircraft-profile suite; use
+`pixi run test-aircraft-profiles` alone for a focused profile check.
+Gimbal includes native target/stale-input/fault tests. Payload covers native
+mapping/ACK faults, trim matching, pending Safe draining, confirmations, HID edges
+and controller repeat lifetime. Router covers parser, dedup/failover, one MP egress,
+parameter pinning and ownership disposal. Geometry/video/profile tests retain
+concrete failure cases rather than obsolete service/IPC assertions.
+
+## Documentation and tooling
+
+```text
 pixi run lint
 pixi run format-check
+pixi run test-python
 pixi run docs-build
 pixi run precommit
 ```
 
-`pixi.toml` is the task source of truth. `build-core` builds the two production
-executables; the direct qualification driver is explicitly selected and never installed.
-Fake peers exercise real processes and transports without hardware. Run focused tests
-while changing code, then the full checks. Engineering rules live only in [AGENTS](../AGENTS.md).
+Python tests retain document links and source requirement provenance. CI runs the
+actual Windows product gates and uploads only the DLL; Linux runs Python/docs checks.
+Old C++/MAVSDK/SITL/release jobs are removed rather than reporting fabricated success.
+Repository protection is external state: obsolete required contexts must be aligned
+under separate authorization before merge; source edits do not change protection.
 
-## MAVSDK transport and authority checks
-
-```sh
-pixi run verify-mavsdk-provenance
-pixi run test-mavsdk-connectivity
-pixi run test-mavsdk-transport-qualification
-pixi run test-mavsdk-authority-wire
-pixi run test-authority-sitl-harness
-```
-
-These cover selection/telemetry, command framing, freshness, cancellation at the wire,
-connection lifetime and no replay. They do not establish physical control. Deterministic
-fixtures may select a Release build via `NOMAD_QUALIFICATION_BUILD_DIR`.
-
-## Mission Planner and standalone router
-
-```sh
-pixi run build-plugin-only
-pixi run lint-plugin
-pixi run test-plugin-build-only
-pixi run test-plugin-config-validation
-pixi run test-plugin-core-client
-pixi run test-plugin-runtime-status
-pixi run test-plugin-geometry
-pixi run test-plugin-gimbal
-pixi run test-plugin-gimbal-ui
-pixi run test-plugin-router-ui
-pixi run test-plugin-audio
-pixi run test-plugin-video
-pixi run test-plugin-version
-pixi run test-ground-router
-```
-
-Build/test commands do not deploy to Mission Planner. The plugin uses current JSON only;
-unknown fields and invalid saved data fail explicitly. Log analysis uses Mission Planner's
-native tools. The [router README](../infra/transport/ground_router/README.md) defines its
-local protocol; [plugin packaging](../mission_planner/packaging/README.md) defines deployment.
-
-## SITL qualification
-
-Docker is required. The Copter image is `nomad-sitl:copter-4.7.2`; build it using the
-instructions in [Compose](../docker/docker-compose.dev.yml). QuadPlane builds from
-[Dockerfile.sitl-plane](../docker/Dockerfile.sitl-plane), pinned to ArduPlane 4.7.2.
-
-```sh
-pixi run build-sitl-tools
-pixi run dev-up
-pixi run core-sitl-status
-pixi run quadplane-sitl-up
-```
-
-Run the full aircraft scenarios listed in [SITL notes](../tests/sitl/README.md).
-[sitl.yml](../.github/workflows/sitl.yml) retains full Copter and QuadPlane chains for
-safety-sensitive changes, scheduled and manual runs. Its scope gate fails closed for
-unknown outputs. The separate MAVSDK smoke proves connectivity only. Do not run simulator
-actuation against live endpoints. Neither simulator success nor an ACK qualifies hardware.
-
-## Package and release checks
-
-```sh
-pixi run build-core-release
-pixi run package-core
-pixi run verify-core-package
-pixi run verify-core-staged-install
-pixi run test-runtime-service-artifacts
-pixi run test-release-lifecycle
-```
-
-Builds write the build tree. Staged installation is restricted to `build/package/stage`;
-`install-core` requires an explicit prefix. Source archives/fixture identities cannot
-produce a production package. Release fixture A/B activation/rollback checks are in
-[test.yml](../.github/workflows/test.yml). [Operations](operations.md) covers protected
-configuration and explicit deployment.
-
-The branch-protection template is [github-main-protection.json](../config/github-main-protection.json).
-Verify effective protection in GitHub before merging: rulesets and configured bypass actors
-apply independently of this template.
-Do not weaken required safety checks or use admin bypass to clear a failing gate.
+Preserve ignored builds, operator settings and other worktrees. Plans, handoffs and
+run histories belong in ignored `local/`. Use [qualification](qualification.md) to
+separate software checks from hardware/competition acceptance; no build/test deploys.
