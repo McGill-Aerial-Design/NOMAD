@@ -73,14 +73,14 @@ namespace NOMAD.MissionPlanner
 
         private void InitializeVideoIfConfigured()
         {
-            if (string.IsNullOrWhiteSpace(_config.VideoUrl))
+            if (_config.SelectedVideoInput == null)
             {
                 return;
             }
 
             try
             {
-                _videoPlayer = new EmbeddedVideoPlayer("Video Feed", _config.VideoUrl, false,
+                _videoPlayer = new EmbeddedVideoPlayer(_config.SelectedVideoInput.Name, _config.SelectedVideoInput, false,
                     _videoShutdown, _createPipeline)
                 {
                     Dock = DockStyle.Fill,

@@ -151,7 +151,7 @@ namespace NOMAD.MissionPlanner
                     $"Local outline advisory with received-position display,\n" +
                     $"plugin-wide alerts with toast overlays, plugin router\n" +
                     $"management and status, and configurable payload controls.\n\n" +
-                    $"Video: {_config.VideoUrl}\n" +
+                    $"Video: {_config.SelectedVideoInput?.Name ?? "Unconfigured"}\n" +
                     $"Multi-Link: {(_config.RouterClientEnabled ? "Enabled" : "Disabled")}\n" +
                     $"Log: %LOCALAPPDATA%\\Mission Planner\\plugins\\NOMAD\\nomad.log",
                     "About NOMAD"

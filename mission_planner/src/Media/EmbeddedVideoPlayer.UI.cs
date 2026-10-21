@@ -56,63 +56,7 @@ namespace NOMAD.MissionPlanner
             btnFull.Click += (s, e) => ToggleFullscreen();
             btnSnap.Click += (s, e) => TakeSnapshot();
 
-            var lblLatency = new Label
-            {
-                Text = "Latency:",
-                Location = new Point(295, 8),
-                ForeColor = Color.Gray,
-                AutoSize = true,
-                Font = new Font("Segoe UI", 8),
-            };
-            _trkLatency = new TrackBar
-            {
-                Location = new Point(350, 0),
-                Size = new Size(150, 25),
-                Minimum = 20,
-                Maximum = 500,
-                Value = _latencyMs,
-                TickFrequency = 50,
-            };
-            _trkLatency.ValueChanged += (s, e) =>
-            {
-                _lblLatencyValue.Text = $"{_trkLatency.Value}ms";
-            };
-            _lblLatencyValue = new Label
-            {
-                Text = $"{_latencyMs}ms",
-                Location = new Point(505, 8),
-                ForeColor = Color.LightGray,
-                AutoSize = true,
-                Font = new Font("Segoe UI", 8),
-            };
-
-            var btnApplyLatency = CreateButton("Apply", 550, 5, 55, Color.FromArgb(0, 100, 140));
-            btnApplyLatency.Font = new Font("Segoe UI", 7.5f);
-            btnApplyLatency.Click += (s, e) =>
-            {
-                int newLatency = _trkLatency.Value;
-                if (newLatency == _latencyMs && _isPlaying)
-                {
-                    return;
-                }
-
-                _latencyMs = newLatency;
-                if (!_isPlaying)
-                {
-                    _lblStatus.Text = $"Latency set to {_latencyMs}ms (applied on Play)";
-                    _lblStatus.ForeColor = Color.DarkCyan;
-                    return;
-                }
-
-                StopStream();
-                StartStream();
-            };
-
-            ctrlPanel.Controls.AddRange(new Control[]
-            {
-                btnPlay, btnStop, btnFull, btnSnap,
-                lblLatency, _trkLatency, _lblLatencyValue, btnApplyLatency,
-            });
+            ctrlPanel.Controls.AddRange(new Control[] { btnPlay, btnStop, btnFull, btnSnap });
 
             Controls.Add(_videoBox);
             Controls.Add(_lblStatus);
@@ -235,7 +179,7 @@ namespace NOMAD.MissionPlanner
             ValidateUiThread();
             var wasPlaying = _isPlaying;
             StopStream();
-            _streamUrl = newUrl ?? "";
+            _input.Url = newUrl ?? "";
             if (wasPlaying)
             {
                 StartStream();

@@ -9,6 +9,8 @@
 // ============================================================
 
 using System.Collections.Generic;
+using System.Linq;
+using Newtonsoft.Json;
 
 namespace NOMAD.MissionPlanner
 {
@@ -22,10 +24,12 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         /// <summary>
-        /// Video stream URL for the configured camera or video source.
-        /// Supports RTSP URLs and UDP listening ports; empty means no configured source.
+        /// Named receiver inputs belonging to this aircraft. Empty means no configured source.
         /// </summary>
-        public string VideoUrl { get; set; } = "";
+        public List<VideoInputProfile> VideoInputs { get; set; } = new List<VideoInputProfile>();
+        public string SelectedVideoInputName { get; set; } = "";
+        [JsonIgnore] public VideoInputProfile SelectedVideoInput => VideoInputs?.FirstOrDefault(input =>
+            input != null && string.Equals(input.Name, SelectedVideoInputName, System.StringComparison.OrdinalIgnoreCase));
 
         /// <summary>
         /// Auto-start video on Mission Planner's HUD when plugin loads.

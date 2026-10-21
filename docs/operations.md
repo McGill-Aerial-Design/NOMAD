@@ -41,6 +41,28 @@ and missions. Disconnect Mission Planner before applying a different aircraft pr
 or changed physical routes. Saving unrelated settings does not restart those routes.
 Reconnect explicitly and verify the live aircraft before using custom controls.
 
+## Video inputs
+
+Settings → Video stores named inputs for the selected aircraft. Add an input, enter
+its name and source URL, and choose it from the dropdown. Save applies that selection
+to the HUD, Dashboard preview and Video view; Cancel leaves the active configuration
+unchanged. Remove the final input to leave video unconfigured. Existing `VideoUrl`
+settings load as a named Default input without rewriting their file; the next save
+uses the named-input format. Older plugin versions cannot read that new format.
+
+RTSP negotiates the video codec supported by the installed GStreamer decoder. Select
+TCP or UDP transport and a 0..5000 ms jitter buffer. UDP source URLs such as
+`udp://@:5600` listen for RTP/H.264 on the explicit port; RTSP settings do not affect
+those inputs. Camera and MediaMTX URLs, including addresses reachable through
+Tailscale, are ordinary operator inputs; NOMAD does not set up their server or network.
+
+The decoded-frame queue holds 1..120 frames. Drop old frames discards old queue
+frames and bounds RTSP jitter buffering; disabling it lets the decode queue apply
+backpressure. The display and native appsink still keep only the latest frame, so
+this is not lossless recording. These receiver settings do not set end-to-end delay,
+bitrate, resolution or encoded quality; configure those at the camera or encoder.
+URLs can contain credentials: review profile exports before sharing them.
+
 ## ELRS and LTE links
 
 Enable the profile's plugin router only when needed. Configure its physical links

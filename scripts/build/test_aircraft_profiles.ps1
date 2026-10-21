@@ -53,7 +53,7 @@ function Invoke-AircraftProfileTests {
         $restored.RcFlightModeChannel -ne 8) {
         throw 'Restart did not restore the selected aircraft and its hardware/RC values.'
     }
-    if ($restored.RouterLocalPort -ne 14643 -or $restored.VideoUrl -ne 'rtsp://profile-beta.invalid/stream' -or
+    if ($restored.RouterLocalPort -ne 14643 -or $restored.SelectedVideoInput.Url -ne 'rtsp://profile-beta.invalid/stream' -or
         $restored.AutoStartHudVideo -or $restored.JoystickGimbalMaxRateDegSec -ne 80 -or
         $restored.GimbalMountMode -ne 3 -or $restored.JoystickGimbalPitchInvert -or
         $restored.ActuatorDefinitions.Count -ne 1 -or

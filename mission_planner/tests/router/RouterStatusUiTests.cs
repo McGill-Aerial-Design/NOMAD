@@ -99,7 +99,7 @@ internal static class RouterStatusUiTests
     private static void DashboardSummary()
     {
         using (var manager = new MAVLinkConnectionManager())
-        using (var view = new NOMADDashboardView(new NOMADConfig { VideoUrl = "" }, manager))
+        using (var view = new NOMADDashboardView(new NOMADConfig(), manager))
         {
             typeof(NOMADDashboardView).GetMethod("UpdateLinksCard", PrivateInstance).Invoke(view, null);
             var label = (Label)typeof(NOMADDashboardView).GetField("_lblLinks", PrivateInstance).GetValue(view);
@@ -147,7 +147,9 @@ internal static class RouterStatusUiTests
         var beta = new NOMADConfig
         {
             AircraftName = "Beta UI", RouterClientEnabled = false,
-            VideoUrl = "rtsp://profile-beta.invalid/stream",
+            VideoInputs = new System.Collections.Generic.List<VideoInputProfile>
+                { new VideoInputProfile { Name = "Beta video", Url = "rtsp://profile-beta.invalid/stream" } },
+            SelectedVideoInputName = "Beta video",
         };
         NOMADMainScreen.SetStaticConfig(alpha, null, outlines, monitor);
         try

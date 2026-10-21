@@ -51,22 +51,29 @@ namespace NOMAD.MissionPlanner
                 Margin = new Padding(5),
             };
 
-            string rtspUrl = string.IsNullOrWhiteSpace(_config.VideoUrl)
-                ? "rtsp://127.0.0.1:8554/stream"
-                : _config.VideoUrl.Trim();
+            var input = _config.SelectedVideoInput;
             try
             {
-                _videoPlayer = new EmbeddedVideoPlayer("Video Feed", rtspUrl, true, _shutdown, _createPipeline)
+                if (input == null)
                 {
-                    Dock = DockStyle.Fill,
-                };
-                videoPanel.Controls.Add(_videoPlayer);
+                    videoPanel.Controls.Add(new Label
+                    {
+                        Text = "No video input configured. Add an input in Settings → Video.",
+                        ForeColor = TEXT_SECONDARY, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter,
+                    });
+                }
+                else
+                {
+                    _videoPlayer = new EmbeddedVideoPlayer(input.Name, input, true, _shutdown, _createPipeline)
+                    { Dock = DockStyle.Fill };
+                    videoPanel.Controls.Add(_videoPlayer);
+                }
             }
             catch (Exception ex)
             {
                 videoPanel.Controls.Add(new Label
                 {
-                    Text = $"Video player unavailable: {ex.Message}\n\nStream URL: {rtspUrl}",
+                    Text = $"Video player unavailable: {ex.Message}",
                     Font = new Font("Segoe UI", 12),
                     ForeColor = TEXT_SECONDARY,
                     Dock = DockStyle.Fill,

@@ -20,7 +20,7 @@ function Assert-NativeSitlProfileSafe($config) {
             throw "Disable saved profile field $name before simulator startup."
         }
     }
-    if ($config.AutoStartHudVideo -and ![string]::IsNullOrWhiteSpace($config.VideoUrl)) {
+    if ($config.AutoStartHudVideo -and $null -ne $config.SelectedVideoInput) {
         throw 'Disable configured automatic HUD video before simulator startup.'
     }
 }

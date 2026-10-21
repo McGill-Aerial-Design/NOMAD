@@ -64,7 +64,9 @@ internal static partial class VideoLifetimeTests
         using (var shutdown = new CancellationTokenSource())
         {
             var first = new FakeVideoPipeline();
-            var oldView = new NOMADVideoView(new NOMADConfig(), shutdown.Token, () => first);
+            var config = VideoConfig();
+            config.VideoInputs.Add(new VideoInputProfile { Name = "Replacement", Url = "rtsp://replacement.invalid/live" });
+            var oldView = new NOMADVideoView(config, shutdown.Token, () => first);
             var oldPlayer = GetField<EmbeddedVideoPlayer>(oldView, "_videoPlayer");
             oldPlayer.StartStream();
             Wait(first.ReadEntered, "first view stream");
@@ -74,11 +76,13 @@ internal static partial class VideoLifetimeTests
             CheckClean(first);
             Check(!GetField<System.Windows.Forms.Timer>(oldPlayer, "_frameTimer").Enabled, "Old timer remains enabled");
             var second = new FakeVideoPipeline();
-            using (var view = new NOMADVideoView(new NOMADConfig(), shutdown.Token, () => second))
+            config.SelectedVideoInputName = "Replacement";
+            using (var view = new NOMADVideoView(config, shutdown.Token, () => second))
             {
                 var player = GetField<EmbeddedVideoPlayer>(view, "_videoPlayer");
                 player.StartStream();
                 Wait(second.ReadEntered, "reopened stream");
+                Check(second.Pipeline.Contains("replacement.invalid/live"), "Reopened video retained the previous selected source.");
                 var stale = new Bitmap(1, 1);
                 oldSession.PublishFrame(oldGeneration, stale);
                 CheckDisposed(stale);
@@ -186,7 +190,7 @@ internal static partial class VideoLifetimeTests
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static WeakReference CreateDisposedView(CancellationToken token)
     {
-        var view = new NOMADVideoView(new NOMADConfig(), token, () => new FakeVideoPipeline());
+        var view = new NOMADVideoView(VideoConfig(), token, () => new FakeVideoPipeline());
         var weak = new WeakReference(GetField<EmbeddedVideoPlayer>(view, "_videoPlayer"));
         view.Dispose();
         return weak;

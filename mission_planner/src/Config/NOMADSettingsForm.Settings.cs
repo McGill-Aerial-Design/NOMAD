@@ -28,7 +28,7 @@ namespace NOMAD.MissionPlanner
         {
             LoadAircraftSettings();
 
-            _txtVideoUrl.Text = Config.VideoUrl;
+            LoadVideoSettings();
             _chkAutoStartHudVideo.Checked = Config.AutoStartHudVideo;
 
             _chkRouterClientEnabled.Checked = Config.RouterClientEnabled;
@@ -85,7 +85,7 @@ namespace NOMAD.MissionPlanner
         {
             SaveAircraftSettings();
 
-            Config.VideoUrl = _txtVideoUrl.Text.Trim();
+            SaveVideoInput();
             Config.AutoStartHudVideo = _chkAutoStartHudVideo.Checked;
 
             Config.RouterClientEnabled = _chkRouterClientEnabled.Checked;
