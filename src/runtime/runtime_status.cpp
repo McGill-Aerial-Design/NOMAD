@@ -115,6 +115,7 @@ Json Runtime::Implementation::status_snapshot() const {
             {"identity_resolved", identity != telemetry::AircraftClass::Unknown},
             {"aircraft_class", telemetry::aircraft_class_name(identity)},
             {"supported_flight_operations", supported_flight_operations(identity)},
+            {"last_flight_request", last_flight_request_snapshot()},
             {"armed", state.armed},
             {"custom_mode", state.custom_mode},
             {"telemetry",
@@ -135,6 +136,31 @@ Json Runtime::Implementation::status_snapshot() const {
               {"attitude_age_ms", optional_age(age_milliseconds(state.attitude_updated_at))},
               {"battery_valid", state.battery_valid},
               {"battery_age_ms", optional_age(age_milliseconds(state.battery_updated_at))}}}};
+}
+
+Json Runtime::Implementation::last_flight_request_snapshot() const {
+    std::lock_guard lock(cache_mutex_);
+    if (!last_flight_request_) {
+        return nullptr;
+    }
+    const auto &request = *last_flight_request_;
+    const bool pending = in_flight_.contains(request.key);
+    const auto completed = response_cache_.find(request.key);
+    if (!pending && completed == response_cache_.end()) {
+        return nullptr;
+    }
+    const char *phase = "completed";
+    if (pending) {
+        phase = request.observing ? "observing" : "sending";
+    }
+    return {{"request_id", request.id},
+            {"operation", request.operation},
+            {"vehicle_session", request.session},
+            {"authority_generation", request.generation},
+            {"age_ms", optional_age(age_milliseconds(request.started_at))},
+            {"phase", phase},
+            {"acknowledged", request.acknowledged->load()},
+            {"outcome", pending ? Json(nullptr) : completed->second.response.at("outcome")}};
 }
 
 std::uint64_t Runtime::Implementation::current_generation() const {

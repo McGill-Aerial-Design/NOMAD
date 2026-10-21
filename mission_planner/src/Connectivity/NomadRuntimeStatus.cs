@@ -22,6 +22,31 @@ namespace NOMAD.MissionPlanner.Connectivity
         }
     }
 
+    public sealed class NomadFlightRequestStatus
+    {
+        public string RequestId { get; }
+        public string Operation { get; }
+        public ulong VehicleSession { get; }
+        public ulong AuthorityGeneration { get; }
+        public long AgeMilliseconds { get; }
+        public string Phase { get; }
+        public bool Acknowledged { get; }
+        public string Outcome { get; }
+
+        internal NomadFlightRequestStatus(string id, string operation, ulong session, ulong generation,
+            long age, string phase, bool acknowledged, string outcome)
+        {
+            RequestId = id;
+            Operation = operation;
+            VehicleSession = session;
+            AuthorityGeneration = generation;
+            AgeMilliseconds = age;
+            Phase = phase;
+            Acknowledged = acknowledged;
+            Outcome = outcome;
+        }
+    }
+
     /// <summary>One authenticated observation, never a grant of aircraft authority.</summary>
     public sealed class NomadRuntimeStatus
     {
@@ -36,6 +61,7 @@ namespace NOMAD.MissionPlanner.Connectivity
         public string RuntimeVersion { get; private set; }
         public IReadOnlyList<string> ProtocolCapabilities { get; private set; }
         public IReadOnlyList<string> SupportedFlightOperations { get; private set; }
+        public NomadFlightRequestStatus LastFlightRequest { get; private set; }
         public bool? RuntimeReady { get; private set; }
         public string Lifecycle { get; private set; }
         public bool? AuditHealthy { get; private set; }
@@ -94,6 +120,7 @@ namespace NOMAD.MissionPlanner.Connectivity
                 RuntimeVersion = Text(hello, "runtime_version"),
                 ProtocolCapabilities = Strings(hello, "capabilities"),
                 SupportedFlightOperations = Strings(status, "supported_flight_operations"),
+                LastFlightRequest = ReadFlightRequest(Object(status, "last_flight_request")),
                 RuntimeReady = Boolean(status, "runtime_ready"),
                 Lifecycle = Choice(status, "lifecycle", "ready", "degraded", "stopping"),
                 AuditHealthy = Boolean(status, "audit_healthy"),
@@ -115,6 +142,38 @@ namespace NOMAD.MissionPlanner.Connectivity
                 && (owner == null || !string.IsNullOrEmpty(result.AuthorityOwner));
             result.ReadTelemetry(Object(status, "telemetry"));
             return result;
+        }
+
+        private static NomadFlightRequestStatus ReadFlightRequest(Dictionary<string, object> request)
+        {
+            var id = Text(request, "request_id");
+            var operation = Choice(request, "operation", "land");
+            var session = Unsigned(request, "vehicle_session");
+            var generation = Unsigned(request, "authority_generation");
+            var age = Age(request, "age_ms");
+            var phase = Choice(request, "phase", "sending", "observing", "completed");
+            var acknowledged = Boolean(request, "acknowledged");
+            if (string.IsNullOrEmpty(id) || operation == null || session == null || session == 0
+                || generation == null || generation == 0 || age == null || phase == null || acknowledged == null)
+            {
+                return null;
+            }
+            var outcome = Choice(request, "outcome", "success", "failed", "rejected", "unknown", "interrupted");
+            if (phase == "completed")
+            {
+                if (outcome == null || (outcome == "success" || outcome == "failed") && !acknowledged.Value
+                    || outcome == "rejected" && acknowledged.Value)
+                {
+                    return null;
+                }
+            }
+            else if (!request.TryGetValue("outcome", out var rawOutcome) || rawOutcome != null
+                || phase == "observing" && !acknowledged.Value)
+            {
+                return null;
+            }
+            return new NomadFlightRequestStatus(id, operation, session.Value, generation.Value, age.Value,
+                phase, acknowledged.Value, outcome);
         }
 
         private void ReadTelemetry(Dictionary<string, object> telemetry)

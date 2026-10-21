@@ -204,6 +204,7 @@ namespace NOMAD.MissionPlanner
                 _details.Items.Clear();
                 AddRuntimeRows(status);
                 AddVehicleRows(status, age);
+                AddFlightRequestRows(status, age);
                 AddTelemetryRows(status, age);
             }
             finally
@@ -242,6 +243,36 @@ namespace NOMAD.MissionPlanner
                 ? Strings(status.SupportedFlightOperations, "None supported") : null);
             Add("Armed", fresh ? Boolean(status?.Armed) : null);
             Add("Custom mode (numeric)", fresh ? status.CustomMode?.ToString(CultureInfo.InvariantCulture) : null);
+        }
+
+        private void AddFlightRequestRows(NomadRuntimeStatus status, double age)
+        {
+            var request = status?.LastFlightRequest;
+            var phase = request?.Phase switch
+            {
+                "sending" => "Sending LAND request",
+                "observing" => "Awaiting LAND mode result",
+                "completed" => "LAND request finished",
+                _ => null,
+            };
+            if (request != null && (status.VehicleSession != request.VehicleSession
+                || status.AuthorityGeneration != request.AuthorityGeneration))
+            {
+                phase += " (different connection or authority)";
+            }
+            Add("Last flight request", phase);
+            Add("Last flight request ACK", Boolean(request?.Acknowledged));
+            Add("Last flight request age (ms)", request == null ? null
+                : (request.AgeMilliseconds + age).ToString("F0", CultureInfo.InvariantCulture));
+            Add("Last flight request outcome", request == null ? null : request.Outcome switch
+            {
+                "success" => "LAND mode observed; touchdown not verified",
+                "failed" => "Request failed",
+                "rejected" => "Request rejected",
+                "unknown" => "Unknown; inspect fresh telemetry",
+                "interrupted" => "Interrupted; aircraft outcome unknown",
+                _ => "Pending",
+            });
         }
 
         private void AddTelemetryRows(NomadRuntimeStatus status, double age)
