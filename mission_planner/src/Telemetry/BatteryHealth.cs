@@ -14,7 +14,6 @@
 // ============================================================
 
 using System;
-using System.Collections.Generic;
 using MissionPlanner;
 
 namespace NOMAD.MissionPlanner
@@ -136,38 +135,8 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        // BATTn_* params change rarely but Read() runs on every dashboard tick
-        // and notification poll; cache reflection lookups for a few seconds.
-        private static readonly object _paramCacheLock = new object();
-        private static readonly Dictionary<string, (double Value, DateTime ReadUtc)> _paramCache
-            = new Dictionary<string, (double, DateTime)>();
-        private static readonly TimeSpan ParamCacheTtl = TimeSpan.FromSeconds(5);
-
-        /// <summary>
-        /// Read BATTn_XXX (or BATT_XXX when n==1) from MAVLink params, cached
-        /// for a few seconds. Returns 0 if missing.
-        /// </summary>
+        /// <summary>Read the selected aircraft's in-memory battery parameter; return 0 if unavailable.</summary>
         public static double GetBattParam(dynamic mav, int idx, string suffix)
-        {
-            string cacheKey = (idx == 1 ? "BATT_" : $"BATT{idx}_") + suffix;
-            lock (_paramCacheLock)
-            {
-                if (_paramCache.TryGetValue(cacheKey, out var hit)
-                    && DateTime.UtcNow - hit.ReadUtc < ParamCacheTtl)
-                {
-                    return hit.Value;
-                }
-            }
-
-            double value = ReadBattParamUncached(mav, idx, suffix);
-            lock (_paramCacheLock)
-            {
-                _paramCache[cacheKey] = (value, DateTime.UtcNow);
-            }
-            return value;
-        }
-
-        private static double ReadBattParamUncached(dynamic mav, int idx, string suffix)
         {
             try
             {
@@ -185,12 +154,9 @@ namespace NOMAD.MissionPlanner
                 var entry = indexer?.GetValue(param, new object[] { name });
                 if (entry == null) return 0;
                 var valueProp = entry.GetType().GetProperty("Value");
-                if (valueProp != null)
-                {
-                    var raw = valueProp.GetValue(entry);
-                    return Convert.ToDouble(raw);
-                }
-                return Convert.ToDouble(entry);
+                var raw = valueProp != null ? valueProp.GetValue(entry) : entry;
+                double value = Convert.ToDouble(raw);
+                return double.IsNaN(value) || double.IsInfinity(value) ? 0 : value;
             }
             catch
             {

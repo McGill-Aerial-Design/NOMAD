@@ -41,4 +41,13 @@ $result = $LASTEXITCODE
 if ($result -ne 0) {
     Write-Host "Altitude-callout tests FAILED." -ForegroundColor Red
 }
-exit $result
+if ($result -ne 0) { exit $result }
+$batterySources = @(
+    (Join-Path $repoRoot 'mission_planner/src/Telemetry/BatteryHealth.cs'),
+    (Join-Path $repoRoot 'mission_planner/tests/audio/BatteryHealthTests.cs')
+)
+$batteryExe = Join-Path $outDir 'BatteryHealthTests.exe'
+& $csc /nologo /target:exe /langversion:latest /r:Microsoft.CSharp.dll "/out:$batteryExe" @batterySources
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $batteryExe
+exit $LASTEXITCODE
