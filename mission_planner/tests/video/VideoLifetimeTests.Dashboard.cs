@@ -25,7 +25,7 @@ internal static partial class VideoLifetimeTests
 
     private static void CheckDashboardReopen(CancellationTokenSource shutdown)
     {
-        var config = new NOMADConfig { VideoUrl = "fake" };
+        var config = new NOMADConfig { VideoUrl = "rtsp://video.invalid/stream" };
         var first = new FakeVideoPipeline();
         var dashboard = new NOMADDashboardView(config, null, shutdown.Token, () => first);
         var oldPlayer = GetField<EmbeddedVideoPlayer>(dashboard, "_videoPlayer");

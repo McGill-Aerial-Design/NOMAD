@@ -22,12 +22,6 @@ namespace NOMAD.MissionPlanner
             _chkAutoStartHudVideo = AddCheckBox(tab, "Auto-start video on HUD", 20, y);
             y += 35;
 
-            AddSectionLabel(tab, "Nozzle Servo", ref y);
-
-            AddLabel(tab, "Controlled through ArduPilot servo outputs.", 20, y, Color.FromArgb(180, 180, 180));
-            y += 20;
-            AddLabel(tab, "Use the payload servo sliders (Video tab) to adjust live.", 20, y, Color.FromArgb(180, 180, 180));
-
             return tab;
         }
 
@@ -40,7 +34,7 @@ namespace NOMAD.MissionPlanner
 
             AddSectionLabel(tab, "Debug / Advanced", ref y);
 
-            _chkDebugMode = AddCheckBox(tab, "Enable Debug Logging", 20, y);
+            _chkDebugMode = AddCheckBox(tab, "Show startup diagnostics popup", 20, y);
             y += 40;
 
             return tab;

@@ -92,40 +92,13 @@ namespace NOMAD.MissionPlanner
                 {
                     return;
                 }
-                // Preserve the configured HUD pipeline and crop.
                 var streamUrl = _config.VideoUrl;
                 if (string.IsNullOrWhiteSpace(streamUrl))
                 {
                     Log.Info("HUD video: no video URL configured");
                     return;
                 }
-
-                // Build pipeline - matches Mission Planner's proven format for RTSP streams
-                // Key elements: decodebin3 for auto codec detection, queue with leaky for low latency
-                string pipeline;
-                int latency = 50; // Low latency for real-time video
-
-                if (streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
-                {
-                    // UDP RTP stream
-                    var port = ExtractUdpPort(streamUrl);
-                    pipeline = $"udpsrc port={port} buffer-size=90000 ! " +
-                               "application/x-rtp,media=(string)video,clock-rate=(int)90000," +
-                               "encoding-name=(string)H264 ! decodebin3 ! queue " +
-                               "max-size-buffers=1 leaky=2 ! videoconvert ! " +
-                               "video/x-raw,format=BGRA ! appsink name=outsink sync=false";
-                }
-                else
-                {
-                    // RTSP stream - crop to left camera only (left half of 2560x720)
-                    // Add videocrop after decoding to extract left 1280 pixels
-                    pipeline = $"rtspsrc location={streamUrl} latency={latency} " +
-                               "udp-reconnect=1 timeout=0 do-retransmission=false ! " +
-                               "application/x-rtp ! decodebin3 ! queue " +
-                               "max-size-buffers=1 leaky=2 ! videocrop right=1280 ! " +
-                               "videoconvert ! video/x-raw,format=BGRA ! " +
-                               "appsink name=outsink sync=false";
-                }
+                string pipeline = BuildHudVideoPipeline(streamUrl);
 
                 _hudVideo?.Dispose();
                 var hud = global::MissionPlanner.GCSViews.FlightData.myhud;
@@ -177,24 +150,20 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        /// <summary>
-        /// Extract UDP port from URL (udp://@:5600, udp://5600, etc.)
-        /// </summary>
-        private int ExtractUdpPort(string url)
+        private static string BuildHudVideoPipeline(string streamUrl)
         {
-            try
+            if (streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
             {
-                var cleaned = url.Replace("udp://", "").Replace("@", "").TrimStart(':');
-                if (int.TryParse(cleaned, out int port))
-                {
-                    return port;
-                }
+                int port = VideoStreamAddress.UdpPort(streamUrl);
+                return $"udpsrc port={port} buffer-size=90000 ! " +
+                    "application/x-rtp,media=(string)video,clock-rate=(int)90000," +
+                    "encoding-name=(string)H264 ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! " +
+                    "videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
             }
-            catch
-            {
-
-            }
-            return 5600; // Default port
+            return $"rtspsrc location={VideoStreamAddress.QuotedRtspUrl(streamUrl)} latency=50 " +
+                "udp-reconnect=1 timeout=0 do-retransmission=false ! application/x-rtp ! " +
+                "decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! " +
+                "video/x-raw,format=BGRA ! appsink name=outsink sync=false";
         }
 
         // ============================================================

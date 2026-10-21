@@ -66,26 +66,11 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private int ExtractUdpPort(string url)
-        {
-            if (string.IsNullOrEmpty(url))
-            {
-                return 5600;
-            }
-            var cleaned = url;
-            if (cleaned.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
-            {
-                cleaned = cleaned.Substring(6);
-            }
-            cleaned = cleaned.Replace("@", "").TrimStart(':');
-            return int.TryParse(cleaned, out int port) ? port : 5600;
-        }
-
         private void ShutdownVideo()
         {
-            _session.Dispose();
             try
             {
+                _session.Dispose();
             }
             finally
             {

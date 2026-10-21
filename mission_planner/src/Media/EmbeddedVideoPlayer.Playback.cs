@@ -15,7 +15,7 @@ namespace NOMAD.MissionPlanner
 
             if (_streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
             {
-                var port = ExtractUdpPort(_streamUrl);
+                var port = VideoStreamAddress.UdpPort(_streamUrl);
                 return $"udpsrc port={port} buffer-size=90000 ! " +
                        "application/x-rtp,media=(string)video,clock-rate=(int)90000," +
                        "encoding-name=(string)H264 ! decodebin3 ! " +
@@ -24,7 +24,7 @@ namespace NOMAD.MissionPlanner
                        $"appsink name=outsink sync={syncValue}";
             }
 
-            return $"rtspsrc location={_streamUrl} protocols=tcp latency={_latencyMs} " +
+            return $"rtspsrc location={VideoStreamAddress.QuotedRtspUrl(_streamUrl)} protocols=tcp latency={_latencyMs} " +
                    "do-retransmission=false ! " +
                    "application/x-rtp,media=video,encoding-name=H264 ! " +
                    "rtph264depay ! h264parse disable-passthrough=true ! avdec_h264 ! " +
@@ -36,20 +36,28 @@ namespace NOMAD.MissionPlanner
         public void StartStream()
         {
             ValidateUiThread();
-            if (_session.Start(BuildGStreamerPipeline()))
+            try
             {
-                _frameTimer.Start();
-                _lblStatus.Text = "Connecting...";
-                _lblStatus.ForeColor = Color.Yellow;
+                if (_session.Start(BuildGStreamerPipeline()))
+                {
+                    _frameTimer.Start();
+                    _lblStatus.Text = "Connecting...";
+                    _lblStatus.ForeColor = Color.Yellow;
+                }
+            }
+            catch (FormatException error)
+            {
+                _lblStatus.Text = error.Message;
+                _lblStatus.ForeColor = Color.Red;
             }
         }
 
         public void StopStream()
         {
             ValidateUiThread();
-            _session.Stop();
             try
             {
+                _session.Stop();
             }
             finally
             {
