@@ -44,6 +44,10 @@ internal static partial class VideoLifetimeTests
             Run("borrowed native frame lifetime", BorrowedFrameLifetime);
             Run("dashboard preview reopen and shutdown", DashboardShutdown);
             Run("existing view API and UDP URL compatibility", VideoCompatibility);
+            Run("video URL port and property regressions", VideoAddressRegressions);
+            Run("UDP URL short forms, hosts and boundaries", UdpVideoAddresses);
+            Run("RTSP property containment and full HUD frame", RtspVideoAddresses);
+            Run("invalid video URL refuses native startup", InvalidVideoDoesNotStart);
             return 0;
         }
         catch (Exception ex)
