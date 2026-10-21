@@ -1,28 +1,164 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 
+using System;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace NOMAD.MissionPlanner
 {
     public partial class NOMADSettingsForm
     {
+        private ComboBox _cmbVideoInputs, _cmbVideoTransport;
+        private TextBox _txtVideoName;
+        private NumericUpDown _numVideoLatency, _numVideoQueue;
+        private CheckBox _chkVideoDrop;
+        private Button _btnRemoveVideo;
+        private VideoInputProfile _editingVideoInput;
+        private bool _loadingVideo;
+
         private TabPage CreateVideoTab()
         {
             var tab = CreateTabPage("Video");
             int y = 15;
 
-            AddSectionLabel(tab, "Video Stream", ref y);
-
-            AddLabel(tab, "Video URL:", 20, y);
-            _txtVideoUrl = AddTextBox(tab, 130, y, 330);
-            y += 30;
+            AddSectionLabel(tab, "Named video inputs", ref y);
+            _cmbVideoInputs = AddComboBox(tab, 20, y, 330, Array.Empty<string>());
+            _cmbVideoInputs.DisplayMember = nameof(VideoInputProfile.Name);
+            _cmbVideoInputs.SelectedIndexChanged += VideoInputSelectionChanged;
+            var add = new Button { Text = "Add", Location = new Point(365, y), Size = new Size(85, 27) };
+            add.Click += (sender, args) => AddVideoInput();
+            tab.Controls.Add(add);
+            _btnRemoveVideo = new Button { Text = "Remove", Location = new Point(460, y), Size = new Size(85, 27) };
+            _btnRemoveVideo.Click += (sender, args) => RemoveVideoInput();
+            tab.Controls.Add(_btnRemoveVideo);
+            y += 40;
+            AddLabel(tab, "Input name:", 20, y);
+            _txtVideoName = AddTextBox(tab, 180, y, 440);
+            y += 32;
+            AddLabel(tab, "Source URL:", 20, y);
+            _txtVideoUrl = AddTextBox(tab, 180, y, 440);
+            y += 32;
+            AddLabel(tab, "RTSP transport:", 20, y);
+            _cmbVideoTransport = AddComboBox(tab, 180, y, 140, new[] { "TCP", "UDP" });
+            y += 32;
+            AddLabel(tab, "RTSP jitter buffer (ms):", 20, y);
+            _numVideoLatency = AddNumericUpDown(tab, 180, y, 100, 0, 5000, 100);
+            y += 32;
+            AddLabel(tab, "Decode queue (frames):", 20, y);
+            _numVideoQueue = AddNumericUpDown(tab, 180, y, 100, 1, 120, 1);
+            y += 32;
+            _chkVideoDrop = AddCheckBox(tab, "Drop old frames when receiver buffers are full", 20, y);
+            y += 32;
 
             _chkAutoStartHudVideo = AddCheckBox(tab, "Auto-start video on HUD", 20, y);
             y += 35;
+            tab.Controls.Add(new Label
+            {
+                Text = "Save applies the selected input to HUD and NOMAD video views. RTSP negotiates its codec; " +
+                    "UDP listens for RTP/H.264. RTSP transport and jitter settings do not affect UDP inputs.\n" +
+                    "The display always shows the latest available frame. Queue backpressure does not preserve every frame. " +
+                    "Bitrate and encoded quality are set at the camera or encoder.",
+                Location = new Point(20, y), Size = new Size(650, 75), ForeColor = Color.Silver,
+            });
 
             return tab;
+        }
+
+        private void LoadVideoSettings()
+        {
+            _loadingVideo = true;
+            try
+            {
+                _cmbVideoInputs.Items.Clear();
+                _cmbVideoInputs.Items.AddRange(Config.VideoInputs.Cast<object>().ToArray());
+                _cmbVideoInputs.SelectedItem = Config.SelectedVideoInput;
+                LoadVideoInput(Config.SelectedVideoInput);
+            }
+            finally { _loadingVideo = false; }
+        }
+
+        private void LoadVideoInput(VideoInputProfile input)
+        {
+            _editingVideoInput = input;
+            _txtVideoName.Text = input?.Name ?? "";
+            _txtVideoUrl.Text = input?.Url ?? "";
+            _cmbVideoTransport.SelectedItem = input?.RtspTransport ?? "TCP";
+            _numVideoLatency.Value = input?.LatencyMs ?? 100;
+            _numVideoQueue.Value = input?.QueueMaxBuffers ?? 1;
+            _chkVideoDrop.Checked = input?.DropOldFrames ?? true;
+            foreach (var control in new Control[] { _txtVideoName, _txtVideoUrl, _cmbVideoTransport,
+                _numVideoLatency, _numVideoQueue, _chkVideoDrop, _btnRemoveVideo })
+            { control.Enabled = input != null; }
+        }
+
+        private void SaveVideoInput()
+        {
+            if (_editingVideoInput == null) { return; }
+            var input = new VideoInputProfile
+            {
+                Name = _txtVideoName.Text.Trim(), Url = _txtVideoUrl.Text.Trim(),
+                RtspTransport = (string)_cmbVideoTransport.SelectedItem,
+                LatencyMs = (int)_numVideoLatency.Value, QueueMaxBuffers = (int)_numVideoQueue.Value,
+                DropOldFrames = _chkVideoDrop.Checked,
+            };
+            input.Validate();
+            if (Config.VideoInputs.Any(other => !ReferenceEquals(other, _editingVideoInput) &&
+                string.Equals(other.Name, input.Name, StringComparison.OrdinalIgnoreCase)))
+            { throw new Newtonsoft.Json.JsonSerializationException("Video input names must be unique."); }
+            int index = Config.VideoInputs.IndexOf(_editingVideoInput);
+            Config.VideoInputs[index] = input;
+            _editingVideoInput = input;
+            Config.SelectedVideoInputName = input.Name;
+            _loadingVideo = true;
+            try { _cmbVideoInputs.Items[index] = input; }
+            finally { _loadingVideo = false; }
+        }
+
+        private void VideoInputSelectionChanged(object sender, EventArgs args)
+        {
+            if (_loadingVideo || _loadingAircraft) { return; }
+            var next = _cmbVideoInputs.SelectedItem as VideoInputProfile;
+            if (next == null || ReferenceEquals(next, _editingVideoInput)) { return; }
+            try
+            {
+                SaveVideoInput();
+                Config.SelectedVideoInputName = next.Name;
+                LoadVideoInput(next);
+            }
+            catch (Exception error)
+            {
+                _loadingVideo = true;
+                _cmbVideoInputs.SelectedItem = _editingVideoInput;
+                _loadingVideo = false;
+                MessageBox.Show(this, error.Message, "Video input requires review", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        private void AddVideoInput()
+        {
+            try
+            {
+                SaveVideoInput();
+                int number = 1;
+                while (Config.VideoInputs.Any(input => input.Name.Equals("Input " + number, StringComparison.OrdinalIgnoreCase)))
+                { number++; }
+                var added = new VideoInputProfile { Name = "Input " + number };
+                Config.VideoInputs.Add(added);
+                Config.SelectedVideoInputName = added.Name;
+                LoadVideoSettings();
+            }
+            catch (Exception error)
+            { MessageBox.Show(this, error.Message, "Video input requires review", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        }
+
+        private void RemoveVideoInput()
+        {
+            if (_editingVideoInput == null) { return; }
+            Config.VideoInputs.Remove(_editingVideoInput);
+            Config.SelectedVideoInputName = Config.VideoInputs.FirstOrDefault()?.Name ?? "";
+            LoadVideoSettings();
         }
 
         private TabPage CreateUiTab()

@@ -38,7 +38,8 @@ internal static partial class VideoLifetimeTests
         Check(failures.Count == 0, string.Join(" ", failures));
     }
     private static string HudPipeline(string url) => (string)typeof(NOMADPlugin).GetMethod(
-        "BuildHudVideoPipeline", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, new object[] { url });
+        "BuildHudVideoPipeline", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, new object[]
+            { new VideoInputProfile { Name = "Synthetic", Url = url } });
 
     private static string EmbeddedPipeline(string url)
     {
@@ -105,7 +106,7 @@ internal static partial class VideoLifetimeTests
         {
             player.StartStream();
             var status = GetField<Label>(player, "_lblStatus");
-            Check(created == 0 && status.ForeColor == Color.Red && status.Text.Contains("explicit port"),
+            Check(created == 0 && status.ForeColor == Color.Red && status.Text.Contains("UDP listening port"),
                 "Invalid video source started native resources or escaped its UI error state.");
         }
     }

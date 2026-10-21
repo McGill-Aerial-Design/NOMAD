@@ -108,8 +108,8 @@ namespace NOMAD.MissionPlanner
             };
             _lblVideoStatus = new Label
             {
-                Text = string.IsNullOrWhiteSpace(_config.VideoUrl)
-                    ? "Video: configure a direct RTSP URL"
+                Text = _config.SelectedVideoInput == null
+                    ? "No video input configured. Add an input in Settings → Video."
                     : "Video: ready",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = NOMADTheme.TEXT_MUTED,

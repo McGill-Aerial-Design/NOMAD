@@ -53,7 +53,11 @@ try {
         Assert-NativeSitlProfileSafe $config
     }
     $config = New-SafeConfig
-    $config.VideoUrl = 'rtsp://127.0.0.1/synthetic'
+    $inputProfile = [Activator]::CreateInstance($assembly.GetType('NOMAD.MissionPlanner.VideoInputProfile', $true))
+    $inputProfile.Name = 'Synthetic'
+    $inputProfile.Url = 'rtsp://127.0.0.1/synthetic'
+    $config.VideoInputs.Add($inputProfile)
+    $config.SelectedVideoInputName = $inputProfile.Name
     Assert-Rejected $config
     $config.AutoStartHudVideo = $false
     Assert-NativeSitlProfileSafe $config

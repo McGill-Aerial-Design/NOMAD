@@ -128,6 +128,7 @@ namespace NOMAD.MissionPlanner
 
         internal static void ValidateInputDocument(JObject document)
         {
+            ValidateVideoDocument(document);
             // Retired service endpoints are discarded in memory; loading never rewrites operator files.
             document.Remove("CoreRuntimePort");
             document.Remove("CoreClientCredential");
@@ -147,7 +148,7 @@ namespace NOMAD.MissionPlanner
             foreach (var property in document.Properties())
             {
                 // Json.NET's case-insensitive coercion must not bypass raw-token validation below.
-                if (typeof(NOMADConfig).GetProperty(property.Name) == null)
+                if (typeof(NOMADConfig).GetProperty(property.Name)?.CanWrite != true)
                 {
                     throw new JsonSerializationException("Unknown configuration field: " + property.Name);
                 }
@@ -214,6 +215,7 @@ namespace NOMAD.MissionPlanner
 
         internal void Validate()
         {
+            ValidateVideoSettings();
             ValidateAircraftSettings();
             ValidateInputBindings();
             if (RouterLocalPort < 1 || RouterLocalPort > 65535)

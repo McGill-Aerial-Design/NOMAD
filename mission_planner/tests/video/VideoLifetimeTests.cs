@@ -48,6 +48,9 @@ internal static partial class VideoLifetimeTests
             Run("UDP URL short forms, hosts and boundaries", UdpVideoAddresses);
             Run("RTSP property containment and full HUD frame", RtspVideoAddresses);
             Run("invalid video URL refuses native startup", InvalidVideoDoesNotStart);
+            Run("named receiver profile options reach both owners", VideoProfileOptions);
+            Run("empty video profiles start no source", EmptyVideoDoesNotStart);
+            Run("video drafts, rename, selection and aircraft isolation", VideoSettingsDrafts);
             return 0;
         }
         catch (Exception ex)

@@ -122,6 +122,66 @@ try {
     Invoke-AircraftProfileTests $plugin $configType $temporary
     Invoke-AircraftProfileUiTests $plugin $configType
 
+    # Legacy source migration is in-memory only; every current save has one named source of truth.
+    $legacyVideo = Load-Config '{"VideoUrl":"rtsp://synthetic:credential@video.invalid/live"}'
+    if ($legacyVideo.SelectedVideoInputName -ne 'Default' -or $legacyVideo.VideoInputs.Count -ne 1 -or
+        $legacyVideo.SelectedVideoInput.Url -ne 'rtsp://synthetic:credential@video.invalid/live') {
+        throw 'Legacy video URL was lost during named-input migration.'
+    }
+    $videoExport = Join-Path $temporary 'video-export.json'
+    $legacyVideo.ExportToFile($videoExport)
+    if ([IO.File]::ReadAllText($videoExport).Contains('"VideoUrl"')) { throw 'Video export retained two sources of truth.' }
+    $videoCopy = $loadMethod.Invoke($null, [object[]]@([string]$videoExport)).Clone()
+    if ($videoCopy.SelectedVideoInput.Url -ne $legacyVideo.SelectedVideoInput.Url) { throw 'Video save/load/clone lost the source.' }
+    foreach ($json in @('{}', '{"VideoUrl":""}', '{"VideoInputs":[],"SelectedVideoInputName":""}')) {
+        $empty = Load-Config $json
+        if ($null -ne $empty.SelectedVideoInput -or $empty.VideoInputs.Count -ne 0) { throw 'Empty video acquired a source.' }
+    }
+    $videoJson = '{"VideoInputs":[{"Name":"Camera","Url":"rtsp://video.invalid/live","RtspTransport":"UDP",' +
+        '"LatencyMs":5000,"QueueMaxBuffers":120,"DropOldFrames":false}],"SelectedVideoInputName":"Camera"}'
+    $video = Load-Config $videoJson
+    if ($video.SelectedVideoInput.LatencyMs -ne 5000 -or $video.SelectedVideoInput.QueueMaxBuffers -ne 120 -or
+        $video.SelectedVideoInput.DropOldFrames -or $video.SelectedVideoInput.RtspTransport -ne 'UDP') {
+        throw 'Named receiver settings did not retain their boundary values.'
+    }
+    foreach ($json in @('{"VideoUrl":null}', '{"VideoUrl":1}', '{"VideoUrl":"","VideoInputs":[]}',
+        '{"VideoInputs":null}', '{"VideoInputs":{}}', '{"VideoInputs":[null]}',
+        '{"VideoInputs":[{}]}', '{"SelectedVideoInputName":1}', '{"SelectedVideoInput":null}',
+        '{"VideoInputs":[],"SelectedVideoInputName":"missing"}',
+        $videoJson.Replace('"Camera"}', '"missing"}'),
+        $videoJson.Replace('"LatencyMs":5000', '"LatencyMs":"100"'),
+        $videoJson.Replace('"LatencyMs":5000', '"LatencyMs":-1'),
+        $videoJson.Replace('"LatencyMs":5000', '"LatencyMs":5001'),
+        $videoJson.Replace('"QueueMaxBuffers":120', '"QueueMaxBuffers":0'),
+        $videoJson.Replace('"QueueMaxBuffers":120', '"QueueMaxBuffers":121'),
+        $videoJson.Replace('"QueueMaxBuffers":120', '"QueueMaxBuffers":1.5'),
+        $videoJson.Replace('"DropOldFrames":false', '"DropOldFrames":0'),
+        $videoJson.Replace('"RtspTransport":"UDP"', '"RtspTransport":"AUTO"'),
+        $videoJson.Replace('"Url":', '"url":'),
+        $videoJson.Replace('"Name":"Camera"', '"Name":" Camera"'),
+        $videoJson.Replace('"Name":"Camera"', '"Name":""'),
+        $videoJson.Replace('"Url":"rtsp://video.invalid/live"', '"Url":null'),
+        $videoJson.Replace('"Url":"rtsp://video.invalid/live"', '"Url":"http://video.invalid/live"'),
+        '{"VideoInputs":[{"Name":"A","Url":"udp://5600"},{"Name":"a","Url":"udp://5601"}],"SelectedVideoInputName":"A"}')) {
+        $rejected = $false
+        try { Load-Config $json | Out-Null } catch { $rejected = $true }
+        if (!$rejected) { throw 'Malformed named video input was accepted.' }
+    }
+    $profilesType = $plugin.GetType('NOMAD.MissionPlanner.NOMADProfiles', $true)
+    $profileDeserialize = $profilesType.GetMethod('Deserialize', [Reflection.BindingFlags]'Static,NonPublic')
+    $profilePrefix = '{"Aircraft":[{"Id":"00000000000000000000000000000001","Config":'
+    $profileSuffix = '}],"SelectedId":"00000000000000000000000000000001"}'
+    $nestedVideo = $profileDeserialize.Invoke($null, [object[]]@($profilePrefix +
+        '{"AircraftName":"Synthetic","VideoUrl":"udp://5600"}' + $profileSuffix))
+    if ($nestedVideo.Selected.Config.SelectedVideoInput.Url -ne 'udp://5600') { throw 'Aircraft profile missed legacy video migration.' }
+    $rejected = $false
+    try {
+        $profileDeserialize.Invoke($null, [object[]]@($profilePrefix +
+            '{"AircraftName":"Synthetic","VideoInputs":[{"Name":"A","Url":false}]}' + $profileSuffix)) | Out-Null
+    } catch { $rejected = $true }
+    if (!$rejected) { throw 'Aircraft profile bypassed nested video token validation.' }
+    Write-Host 'Named video migration, save/load/clone, strict nested validation and limits passed.'
+
     $config = Load-Config '{"CoreRuntimePort":14631,"RouterLocalPort":14620,"ManagementPort":14621,"CoreClientCredential":"test-only-credential"}'
     if ($config.RouterLocalPort -ne 14620) { throw 'Saved Mission Planner router endpoint changed.' }
     $export = Join-Path $temporary 'export.json'

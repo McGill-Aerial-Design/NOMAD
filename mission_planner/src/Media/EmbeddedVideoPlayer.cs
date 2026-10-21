@@ -9,16 +9,13 @@ namespace NOMAD.MissionPlanner
 {
     public partial class EmbeddedVideoPlayer : UserControl
     {
-        private string _streamUrl;
-        private int _latencyMs = 100;
+        private readonly VideoInputProfile _input;
         private readonly VideoSession _session;
         private readonly System.Windows.Forms.Timer _frameTimer;
         private CancellationTokenRegistration _shutdown;
         private Bitmap _displayFrame;
         private PictureBox _videoBox;
         private Label _lblStatus;
-        private TrackBar _trkLatency;
-        private Label _lblLatencyValue;
         private Form _fullscreenForm;
         private PictureBox _fullscreenBox;
         private readonly bool _showControls;
@@ -30,8 +27,17 @@ namespace NOMAD.MissionPlanner
 
         internal EmbeddedVideoPlayer(string title, string streamUrl, bool showControls,
             CancellationToken shutdown, Func<IVideoPipeline> createPipeline)
+            : this(title, new VideoInputProfile { Name = "Video Feed", Url = streamUrl ?? "" },
+                showControls, shutdown, createPipeline) { }
+
+        internal EmbeddedVideoPlayer(string title, VideoInputProfile input, bool showControls,
+            CancellationToken shutdown, Func<IVideoPipeline> createPipeline)
         {
-            _streamUrl = streamUrl ?? "";
+            _input = new VideoInputProfile
+            {
+                Name = input.Name, Url = input.Url, RtspTransport = input.RtspTransport,
+                LatencyMs = input.LatencyMs, QueueMaxBuffers = input.QueueMaxBuffers, DropOldFrames = input.DropOldFrames,
+            };
             _showControls = showControls;
             _session = new VideoSession(createPipeline);
             _frameTimer = new System.Windows.Forms.Timer { Interval = 33 };

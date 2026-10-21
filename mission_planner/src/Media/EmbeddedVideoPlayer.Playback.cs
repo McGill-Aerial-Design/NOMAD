@@ -9,28 +9,7 @@ namespace NOMAD.MissionPlanner
     {
         private string BuildGStreamerPipeline()
         {
-            int queueBuffers = _latencyMs <= 100 ? 1 : Math.Min(_latencyMs / 50, 10);
-            string leaky = _latencyMs <= 100 ? "leaky=2" : "leaky=0";
-            string syncValue = _latencyMs <= 100 ? "false" : "true";
-
-            if (_streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
-            {
-                var port = VideoStreamAddress.UdpPort(_streamUrl);
-                return $"udpsrc port={port} buffer-size=90000 ! " +
-                       "application/x-rtp,media=(string)video,clock-rate=(int)90000," +
-                       "encoding-name=(string)H264 ! decodebin3 ! " +
-                       $"queue max-size-buffers={queueBuffers} {leaky} ! " +
-                       "videoconvert ! video/x-raw,format=BGRA ! " +
-                       $"appsink name=outsink sync={syncValue}";
-            }
-
-            return $"rtspsrc location={VideoStreamAddress.QuotedRtspUrl(_streamUrl)} protocols=tcp latency={_latencyMs} " +
-                   "do-retransmission=false ! " +
-                   "application/x-rtp,media=video,encoding-name=H264 ! " +
-                   "rtph264depay ! h264parse disable-passthrough=true ! avdec_h264 ! " +
-                   $"queue max-size-buffers={queueBuffers} {leaky} ! " +
-                   "videoconvert ! video/x-raw,format=BGRA ! " +
-                   $"appsink name=outsink sync={syncValue}";
+            return VideoPipeline.Build(_input);
         }
 
         public void StartStream()
@@ -45,7 +24,7 @@ namespace NOMAD.MissionPlanner
                     _lblStatus.ForeColor = Color.Yellow;
                 }
             }
-            catch (FormatException error)
+            catch (Exception error) when (error is FormatException || error is Newtonsoft.Json.JsonSerializationException)
             {
                 _lblStatus.Text = error.Message;
                 _lblStatus.ForeColor = Color.Red;

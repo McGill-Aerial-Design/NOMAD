@@ -92,13 +92,13 @@ namespace NOMAD.MissionPlanner
                 {
                     return;
                 }
-                var streamUrl = _config.VideoUrl;
-                if (string.IsNullOrWhiteSpace(streamUrl))
+                var input = _config.SelectedVideoInput;
+                if (input == null)
                 {
                     Log.Info("HUD video: no video URL configured");
                     return;
                 }
-                string pipeline = BuildHudVideoPipeline(streamUrl);
+                string pipeline = BuildHudVideoPipeline(input);
 
                 _hudVideo?.Dispose();
                 var hud = global::MissionPlanner.GCSViews.FlightData.myhud;
@@ -150,20 +150,9 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private static string BuildHudVideoPipeline(string streamUrl)
+        private static string BuildHudVideoPipeline(VideoInputProfile input)
         {
-            if (streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
-            {
-                int port = VideoStreamAddress.UdpPort(streamUrl);
-                return $"udpsrc port={port} buffer-size=90000 ! " +
-                    "application/x-rtp,media=(string)video,clock-rate=(int)90000," +
-                    "encoding-name=(string)H264 ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! " +
-                    "videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
-            }
-            return $"rtspsrc location={VideoStreamAddress.QuotedRtspUrl(streamUrl)} latency=50 " +
-                "udp-reconnect=1 timeout=0 do-retransmission=false ! application/x-rtp ! " +
-                "decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! " +
-                "video/x-raw,format=BGRA ! appsink name=outsink sync=false";
+            return VideoPipeline.Build(input);
         }
 
         // ============================================================

@@ -187,7 +187,8 @@ namespace NOMAD.MissionPlanner
             }
             try
             {
-                throw new InvalidOperationException(Marshal.PtrToStructure<Gst.GError>(error).message);
+                // Native parse errors can repeat a source URL containing credentials.
+                throw new InvalidOperationException("Video pipeline initialization failed.");
             }
             finally
             {
