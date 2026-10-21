@@ -70,6 +70,7 @@ namespace NOMAD.MissionPlanner
             {
                 DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error,
             });
+            NormalizeLegacyAdvisoryData(document);
             var config = document.ToObject<GeofenceConfig>(JsonSerializer.Create(new JsonSerializerSettings
             {
                 MissingMemberHandling = MissingMemberHandling.Error,
@@ -85,6 +86,32 @@ namespace NOMAD.MissionPlanner
                 throw new JsonSerializationException("Advisory altitude display threshold must be between 0 and 10000 m.");
             }
             return config;
+        }
+
+        private static void NormalizeLegacyAdvisoryData(JObject document)
+        {
+            // Retire old frontend flight policy in memory; preserve the saved advisory geometry.
+            foreach (string name in new[] { "SoftBoundary", "HardBoundary" })
+            {
+                if (!(document[name] is JObject boundary))
+                {
+                    continue;
+                }
+                foreach (string retired in new[] { "BoundaryType", "DisplayColor", "MaxAltitudeAgl", "MinAltitudeAgl" })
+                {
+                    boundary.Remove(retired);
+                }
+            }
+            const string altitude = nameof(AdvisoryAltitudeDisplayThresholdMeters);
+            if (document[altitude] == null && document["MaxAltitudeAglMeters"] != null)
+            {
+                document[altitude] = document["MaxAltitudeAglMeters"].DeepClone();
+            }
+            foreach (string retired in new[] { "MaxAltitudeAglMeters", "ReturnPoint", "Failsafe", "MonitoringEnabled",
+                "TerminationDescentRateMps", "BoundaryViolations" })
+            {
+                document.Remove(retired);
+            }
         }
 
         public bool Save()

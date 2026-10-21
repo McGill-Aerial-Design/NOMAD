@@ -99,9 +99,58 @@ try {
     Assert-ThrowsMessage '{"JoystickButtonIndices":[0,1,2,3,4,5.5]}' 'integers'
     Assert-ThrowsMessage '{"JoystickTerminationButtonIndex":0,"JoystickKillSwitchEnabled":true,"JoystickSw1UpAction":"a:activate"}' 'disjoint'
     Assert-ThrowsMessage '{"CoreRuntimePort":14611,"CoreRuntimePort":14612}' 'already exists'
+    $legacyAdvisoryJson = '{"SoftBoundary":{"Name":"Synthetic inner","BoundaryType":"Soft","DisplayColor":"#808080","MaxAltitudeAgl":90,"MinAltitudeAgl":0,"Vertices":[{"Lat":0,"Lon":1,"Alt":10},{"Lat":2,"Lon":3,"Alt":11},{"Lat":4,"Lon":5,"Alt":12}]},"HardBoundary":{"Name":"Synthetic outer","BoundaryType":"Hard","DisplayColor":"#909090","MaxAltitudeAgl":100,"MinAltitudeAgl":0,"Vertices":[{"Lat":6,"Lon":7,"Alt":20},{"Lat":8,"Lon":9,"Alt":21},{"Lat":10,"Lon":11,"Alt":22}]},"ReturnPoint":null,"MaxAltitudeAglMeters":95,"Failsafe":{"HardBoundaryAction":"Terminate"},"MonitoringEnabled":true,"TerminationDescentRateMps":2,"BoundaryViolations":[]}'
+    $legacyAdvisoryPath = Join-Path $temporary 'legacy-advisory.json'
+    [IO.File]::WriteAllText($legacyAdvisoryPath, $legacyAdvisoryJson)
+    $legacy = $geofenceLoadMethod.Invoke($null, [object[]]@([IO.File]::ReadAllText($legacyAdvisoryPath)))
+    $serialized = [Newtonsoft.Json.Linq.JObject]::FromObject($legacy)
+    $original = [Newtonsoft.Json.Linq.JObject]::Parse($legacyAdvisoryJson)
+    foreach ($name in @('SoftBoundary','HardBoundary')) {
+        $expected = $original[$name]
+        $actual = $legacy.$name
+        if ($actual.Name -cne [string]$expected['Name'] -or $actual.Vertices.Count -ne $expected['Vertices'].Count) {
+            throw 'Legacy advisory loading changed a saved boundary name or vertex count.'
+        }
+        for ($index = 0; $index -lt $actual.Vertices.Count; $index++) {
+            $point = $expected['Vertices'][$index]
+            if ($actual.Vertices[$index].Lat -ne [double]$point['Lat'].Value -or
+                $actual.Vertices[$index].Lon -ne [double]$point['Lon'].Value -or
+                $actual.Vertices[$index].Alt -ne [double]$point['Alt'].Value) {
+                throw 'Legacy advisory loading changed ordered coordinates, zeros or vertex altitudes.'
+            }
+        }
+        foreach ($retired in @('BoundaryType','DisplayColor','MaxAltitudeAgl','MinAltitudeAgl')) {
+            if ($null -ne $serialized[$name][$retired]) { throw 'Current advisory data retained obsolete boundary policy.' }
+        }
+    }
+    foreach ($retired in @('MaxAltitudeAglMeters','ReturnPoint','Failsafe','MonitoringEnabled',
+        'TerminationDescentRateMps','BoundaryViolations')) {
+        if ($null -ne $serialized[$retired]) { throw 'Current advisory data retained retired flight policy/history.' }
+    }
+    if ($legacy.AdvisoryAltitudeDisplayThresholdMeters -ne 95 -or $legacy.AdvisoryPreviewEnabled -or
+        [IO.File]::ReadAllText($legacyAdvisoryPath) -cne $legacyAdvisoryJson) {
+        throw 'Legacy advisory loading lost its display reference, enabled old monitoring or rewrote input.'
+    }
+    $currentWins = $geofenceLoadMethod.Invoke($null, [object[]]@(
+        '{"MaxAltitudeAglMeters":95,"AdvisoryAltitudeDisplayThresholdMeters":120}'))
+    if ($currentWins.AdvisoryAltitudeDisplayThresholdMeters -ne 120) { throw 'Legacy altitude overrode the current field.' }
+    foreach ($json in @('{"MaxAltitudeAglMeters":-1}', '{"MaxAltitudeAglMeters":10001}',
+        '{"MaxAltitudeAglMeters":NaN}', '{"MaxAltitudeAglMeters":Infinity}',
+        '{"AdvisoryAltitudeDisplayThresholdMeters":null,"MaxAltitudeAglMeters":95}',
+        '{"SoftBoundary":null}', '{"HardBoundary":{"Vertices":null}}',
+        '{"UnknownPolicy":true}', '{"SoftBoundary":{"UnknownPolicy":true}}',
+        '{"SoftBoundary":{"Vertices":[{"Lat":1,"Lon":2,"BoundaryType":"Soft"}]}}',
+        '{"SoftBoundary":{"BoundaryType":"Soft","BoundaryType":"Hard"}}',
+        '{"MaxAltitudeAglMeters":95,"MaxAltitudeAglMeters":96}')) {
+        $rejected = $false
+        try { $geofenceLoadMethod.Invoke($null, [object[]]@($json)) | Out-Null } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Legacy normalization weakened duplicate, unknown-field or invalid-value rejection.' }
+    }
+    Write-Host 'Legacy advisory geometry, threshold alias and strict fault checks passed without rewriting input.'
+
     $boundary = $geofenceLoadMethod.Invoke($null, [object[]]@('{"AdvisoryAltitudeDisplayThresholdMeters":100}'))
     if ($boundary.AdvisoryAltitudeDisplayThresholdMeters -ne 100) { throw 'Current advisory threshold changed.' }
-    foreach ($json in @('{"MaxAltitudeAglMeters":100}', '{"HardBoundaryAction":"Return"}', '{"AdvisoryAltitudeDisplayThresholdMeters":-1}')) {
+    foreach ($json in @('{"HardBoundaryAction":"Return"}', '{"AdvisoryAltitudeDisplayThresholdMeters":-1}')) {
         $rejected = $false
         try { $geofenceLoadMethod.Invoke($null, [object[]]@($json)) | Out-Null } catch { $rejected = $true }
         if (-not $rejected) { throw 'Unsupported or invalid boundary data was accepted.' }
