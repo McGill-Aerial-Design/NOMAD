@@ -27,6 +27,9 @@ namespace NOMAD.MissionPlanner.Connectivity
         public bool HasActuatorDefinitions { get; internal set; }
         public IReadOnlyList<NomadActuator> Actuators { get; internal set; } = new List<NomadActuator>();
         public NomadActuatorState ActuatorState { get; internal set; }
+        public string RequestId { get; internal set; } = "";
+        public ulong? VehicleSession { get; internal set; }
+        public ulong? AuthorityGeneration { get; internal set; }
         public ulong RequestSequence { get; internal set; }
         public string RuntimeIncarnation { get; internal set; } = "";
         public bool? ExecutionAttempted { get; internal set; }

@@ -21,6 +21,7 @@ internal static partial class NomadCoreClientTests
         Runtime_LandPreservesErrorEvidence();
         Runtime_LandRejectsMalformedResults();
         Runtime_LandNeverReplaysUnknownOutcome();
+        Runtime_LandBeforeWriteHasNoSentContext();
         LandPanel_Tests();
     }
 
@@ -46,6 +47,12 @@ internal static partial class NomadCoreClientTests
         var engaged = WaitResult(client.LandAsync());
         runtime.Wait();
         Expect(engaged.Succeeded && engaged.Acknowledged == true, "admitted LAND requires positive ACK and success");
+        Expect(engaged.RequestId == runtime.LastCommand["id"].ToString() &&
+            engaged.RuntimeIncarnation == runtime.LastCommand["runtime_incarnation"].ToString() &&
+            engaged.VehicleSession == Convert.ToUInt64(runtime.LastCommand["vehicle_session"]) &&
+            engaged.AuthorityGeneration == Convert.ToUInt64(runtime.LastCommand["authority_generation"]) &&
+            engaged.RequestSequence == Convert.ToUInt64(runtime.LastCommand["sequence"]),
+            "completed LAND result carries the exact transmitted request context");
         Expect(runtime.CommandCount == 3 && runtime.Commands[0]["type"].ToString() == "land" &&
             runtime.Commands[1]["type"].ToString() == "admit_authority" &&
             runtime.Commands[2]["type"].ToString() == "land",
@@ -200,6 +207,8 @@ internal static partial class NomadCoreClientTests
             Expect(result.Outcome == NomadCoreRequestOutcome.UnknownOutcome && result.ErrorCode == "unknown_outcome",
                 "malformed or contradictory LAND response cannot claim engagement");
             Expect(runtime.CommandCount == 1, "malformed LAND response never triggers replay");
+            Expect(result.RequestId == runtime.LastCommand["id"].ToString(),
+                "malformed LAND reply cannot substitute its ID for the transmitted request");
         }
     }
 
@@ -210,7 +219,28 @@ internal static partial class NomadCoreClientTests
         runtime.Wait();
         Expect(result.Outcome == NomadCoreRequestOutcome.UnknownOutcome && runtime.CommandCount == 1,
             "connection loss after LAND send remains unknown without replay");
+        Expect(result.RuntimeIncarnation == runtime.LastCommand["runtime_incarnation"].ToString() &&
+            result.RequestSequence == Convert.ToUInt64(runtime.LastCommand["sequence"]),
+            "unknown LAND result retains its original authenticated runtime and sent sequence");
+        Expect(result.RequestId == runtime.LastCommand["id"].ToString() &&
+            result.VehicleSession == Convert.ToUInt64(runtime.LastCommand["vehicle_session"]) &&
+            result.AuthorityGeneration == Convert.ToUInt64(runtime.LastCommand["authority_generation"]),
+            "unknown LAND result retains its sent ID, vehicle session and authority generation for STATUS correlation");
         Expect(OutputController.DescribeFailure("LAND engagement", result).Contains("Do not retry blindly"),
             "unknown LAND result uses the established no-retry operator wording");
+    }
+
+    private static void Runtime_LandBeforeWriteHasNoSentContext()
+    {
+        using var runtime = new MockRuntime(1, capabilities: LandCapabilities);
+        var checks = 0;
+        var result = WaitResult(new NomadCoreClient("test-key", runtime.Port).LandAsync(
+            inputStillCurrent: () => ++checks == 1));
+        runtime.Wait();
+        Expect(result.Outcome == NomadCoreRequestOutcome.NotAttempted && checks == 2 && runtime.CommandCount == 0,
+            "LAND input can expire after binding but before transmission");
+        Expect(result.RequestId == "" && result.VehicleSession == null && result.AuthorityGeneration == null &&
+            result.RuntimeIncarnation == "" && result.RequestSequence == 0,
+            "prepared but unsent LAND request has no sent-request context");
     }
 }

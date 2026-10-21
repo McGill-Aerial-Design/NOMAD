@@ -216,7 +216,7 @@ namespace NOMAD.MissionPlanner.Connectivity
         private static bool? Boolean(Dictionary<string, object> values, string key) =>
             values != null && values.TryGetValue(key, out var value) && value is bool boolean ? boolean : (bool?)null;
 
-        private static ulong? Unsigned(Dictionary<string, object> values, string key)
+        internal static ulong? Unsigned(Dictionary<string, object> values, string key)
         {
             if (values == null || !values.TryGetValue(key, out var value))
             {

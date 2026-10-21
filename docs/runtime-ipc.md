@@ -262,6 +262,14 @@ Mission Planner's asynchronous request API returns an immutable
 `Acknowledged`; `Succeeded` means only software success. Production callers use
 the result of their own request, including when responses finish out of order.
 
+After mutation transmission begins, the typed client result retains its original request ID,
+authenticated runtime incarnation, vehicle session, authority generation and sequence, including
+an unknown outcome after connection loss. This is the sent request's context, not observed aircraft
+state or new authority. Correlating it with `last_flight_request` requires the exact request ID,
+runtime incarnation, session and generation; a later or different request cannot establish its outcome.
+Requests rejected before transmission carry no sent-request context. Malformed HELLO authority
+metadata fails before mutation; zero session/generation remain representable for runtime policy.
+
 Runtime networking uses .NET Framework 4.8 asynchronous TCP connect, stream
 write and stream read operations. Cancellation closes the request's socket.
 Connect and write deadlines remain 1500 ms and 3000 ms. Each response has a

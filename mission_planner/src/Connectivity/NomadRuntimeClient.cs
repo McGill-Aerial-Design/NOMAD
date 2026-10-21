@@ -139,8 +139,7 @@ namespace NOMAD.MissionPlanner.Connectivity
                     cancellationToken).ConfigureAwait(false);
                 var result = ReadCommandResult(response, command["id"].ToString(), verb,
                     Convert.ToString(command["runtime_incarnation"]));
-                result.RequestSequence = Convert.ToUInt64(command["sequence"], CultureInfo.InvariantCulture);
-                return result;
+                return BindResultToRequest(result, command);
             }
             catch (StaleInputException)
             {
@@ -148,14 +147,26 @@ namespace NOMAD.MissionPlanner.Connectivity
             }
             catch (Exception ex)
             {
-                return new NomadCoreRequestResult(commandWriteStarted
+                var result = new NomadCoreRequestResult(commandWriteStarted
                     ? NomadCoreRequestOutcome.UnknownOutcome : NomadCoreRequestOutcome.FailedBeforeSend,
                     commandWriteStarted ? "unknown_outcome" : "runtime_unavailable",
                     commandWriteStarted
                         ? "The runtime connection ended after request transmission began; "
                             + "the outcome is unknown. Do not retry blindly."
                         : ex.Message);
+                return commandWriteStarted ? BindResultToRequest(result, command) : result;
             }
+        }
+
+        private static NomadCoreRequestResult BindResultToRequest(NomadCoreRequestResult result,
+            Dictionary<string, object> command)
+        {
+            result.RequestId = (string)command["id"];
+            result.RuntimeIncarnation = (string)command["runtime_incarnation"];
+            result.VehicleSession = (ulong)command["vehicle_session"];
+            result.AuthorityGeneration = (ulong)command["authority_generation"];
+            result.RequestSequence = (ulong)command["sequence"];
+            return result;
         }
 
         private sealed class StaleInputException : Exception { }
@@ -233,22 +244,25 @@ namespace NOMAD.MissionPlanner.Connectivity
 
         private bool BindAuthority(Dictionary<string, object> command, Dictionary<string, object> hello)
         {
-            if (!hello.TryGetValue("runtime_incarnation", out var incarnation) ||
+            if (!hello.TryGetValue("runtime_incarnation", out var rawIncarnation) ||
+                !(rawIncarnation is string incarnation) || string.IsNullOrWhiteSpace(incarnation) ||
                 !hello.TryGetValue("authority", out var rawAuthority) ||
-                !(rawAuthority is Dictionary<string, object> authority) ||
-                !authority.TryGetValue("vehicle_session", out var session) ||
-                !authority.TryGetValue("generation", out var generation) ||
-                !authority.TryGetValue("next_sequence", out var rawSequence) ||
-                !ulong.TryParse(Convert.ToString(rawSequence, CultureInfo.InvariantCulture),
-                    NumberStyles.None, CultureInfo.InvariantCulture, out var lowerBound) || lowerBound == 0)
+                !(rawAuthority is Dictionary<string, object> authority))
+            {
+                return false;
+            }
+            var session = NomadRuntimeStatus.Unsigned(authority, "vehicle_session");
+            var generation = NomadRuntimeStatus.Unsigned(authority, "generation");
+            var lowerBound = NomadRuntimeStatus.Unsigned(authority, "next_sequence");
+            if (session == null || generation == null || lowerBound == null || lowerBound == 0)
             {
                 return false;
             }
             command["runtime_incarnation"] = incarnation;
-            command["vehicle_session"] = session;
-            command["authority_generation"] = generation;
+            command["vehicle_session"] = session.Value;
+            command["authority_generation"] = generation.Value;
             command["command_source"] = _clientId;
-            command["sequence"] = AllocateSequence(lowerBound);
+            command["sequence"] = AllocateSequence(lowerBound.Value);
             command["expires_at_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + (IsActuatorType(GetString(command, "type")) ? 5000 : 3000);
             return true;
         }

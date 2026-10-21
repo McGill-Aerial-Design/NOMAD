@@ -29,6 +29,7 @@ internal static partial class NomadCoreClientTests
         Runtime_MockRejectsReversedSequences();
         Runtime_BufferedResponsesPreserveSizeLimit();
         Runtime_InvalidSequenceFloorsFailBeforeMutation();
+        Runtime_InvalidAuthorityContextFailsBeforeMutation();
         Runtime_StaleMutationIsNotRetried();
         Runtime_FreshProcessUsesConsumedSequenceFloor();
         Runtime_RestartRefreshesAuthorityBinding();
@@ -256,7 +257,7 @@ internal static partial class NomadCoreClientTests
     {
         foreach (var floor in new object[]
         {
-            null, 0, -1, 1.5, "invalid", "18446744073709551616"
+            null, 0, -1, 1.5, "1", "invalid", "18446744073709551616"
         }
         )
         {
@@ -266,10 +267,41 @@ internal static partial class NomadCoreClientTests
             };
             var result1 = WaitResult(new NomadCoreClient("test-key", runtime.Port).ServoAsync(8, 1500));
             Expect(result1.Outcome == NomadCoreRequestOutcome.FailedBeforeSend && result1.ErrorCode == "invalid_response",
-                "missing, zero, negative, fractional, malformed or overflowing next_sequence fails before mutation");
+                "missing, zero, negative, fractional, string or overflowing next_sequence fails before mutation");
             runtime.Wait();
             Expect(runtime.Commands.Count == 0, "invalid sequence floor sends no mutation and does not retry");
         }
+    }
+
+    private static void Runtime_InvalidAuthorityContextFailsBeforeMutation()
+    {
+        foreach (var sample in new[]
+        {
+            (Session: -1, Generation: 1, Incarnation: "context-runtime"),
+            (Session: 1, Generation: -1, Incarnation: "context-runtime"),
+            (Session: 1, Generation: 1, Incarnation: (string)null),
+            (Session: 1, Generation: 1, Incarnation: ""),
+            (Session: 1, Generation: 1, Incarnation: " ")
+        })
+        {
+            using var runtime = new AsyncRuntime(1, incarnation: sample.Incarnation,
+                session: sample.Session, generation: sample.Generation);
+            runtime.ReleaseResponses();
+            var result = WaitResult(new NomadCoreClient("test-key", runtime.Port).ServoAsync(8, 1500));
+            runtime.Wait();
+            Expect(result.Outcome == NomadCoreRequestOutcome.FailedBeforeSend && result.ErrorCode == "invalid_response",
+                "invalid authenticated runtime, session or generation fails before mutation");
+            Expect(runtime.Commands.Count == 0, "invalid authority context sends no mutation or retry");
+            Expect(result.RequestId == "" && result.VehicleSession == null && result.AuthorityGeneration == null &&
+                result.RuntimeIncarnation == "" && result.RequestSequence == 0,
+                "rejected HELLO context does not claim a transmitted request");
+        }
+        using var disconnected = new AsyncRuntime(1, session: 0, generation: 0);
+        disconnected.ReleaseResponses();
+        var zero = WaitResult(new NomadCoreClient("test-key", disconnected.Port).ServoAsync(8, 1500));
+        disconnected.Wait();
+        Expect(disconnected.Commands.Count == 1 && zero.VehicleSession == 0 && zero.AuthorityGeneration == 0,
+            "zero session and generation remain encodable; runtime policy decides authority");
     }
 
     private static void Runtime_StaleMutationIsNotRetried()
