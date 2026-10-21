@@ -236,8 +236,22 @@ def case_mode_is_verified(cli: Path) -> None:
     )
 
 
+def case_takeoff_disarmed_is_rejected(cli: Path) -> None:
+    result, observed = run_cli_case(cli, "takeoff", "5", initial_armed=False, initial_mode=4)
+    require(
+        result.returncode != 0 and "takeoff requires an already armed aircraft" in result.stdout,
+        "disarmed takeoff is rejected before transmission",
+        describe(result, observed),
+    )
+    require(
+        find_parameters(observed, COMMAND_NAV_TAKEOFF) is None,
+        "disarmed takeoff sends no NAV_TAKEOFF command",
+        describe(result, observed),
+    )
+
+
 def case_takeoff_is_verified(cli: Path) -> None:
-    result, observed = run_cli_case(cli, "takeoff", "5")
+    result, observed = run_cli_case(cli, "takeoff", "5", initial_armed=True, initial_mode=4)
     parameters = find_parameters(observed, COMMAND_NAV_TAKEOFF)
     require(
         result.returncode == 0 and "takeoff verified" in result.stdout,
@@ -447,6 +461,7 @@ def run_command_cases(cli: Path, probe: Path) -> None:
     case_wrong_system(probe)
     case_unqualified_identity_sends_no_mode_command(cli)
     case_mode_is_verified(cli)
+    case_takeoff_disarmed_is_rejected(cli)
     case_takeoff_is_verified(cli)
     case_quadplane_vtol_takeoff_is_verified(cli)
 

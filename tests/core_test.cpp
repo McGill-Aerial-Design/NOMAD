@@ -83,6 +83,7 @@ void test_takeoff_rejects_invalid_altitude() {
 void test_mode_and_takeoff_are_verified() {
     FakeConnection connection;
     connection.connect();
+    connection.state->armed = true;
     nomad::vehicle::Vehicle vehicle(connection);
     connection.acknowledgement = nomad::mavlink::CommandAck{176, 0};
 

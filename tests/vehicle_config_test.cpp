@@ -98,6 +98,7 @@ void test_vehicle_uses_configured_position_freshness() {
 void test_copter_takeoff_keeps_its_independent_timeout() {
     FakeConnection connection;
     connection.connect();
+    connection.state->armed = true;
     nomad::vehicle::VehicleConfig config{};
     config.timeouts.vtol_takeoff_state = std::chrono::milliseconds::zero();
     nomad::vehicle::Vehicle vehicle(connection, config);

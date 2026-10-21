@@ -211,6 +211,9 @@ CommandResult Vehicle::takeoff(float altitude_m, const std::function<bool()> &st
         !detail::heartbeat_is_fresh(initial, kCommandTimeout, std::chrono::steady_clock::now())) {
         return {false, "takeoff requires a fresh qualified Copter session", false, CommandOutcome::Rejected};
     }
+    if (!initial.armed) {
+        return {false, "takeoff requires an already armed aircraft", false, CommandOutcome::Rejected};
+    }
     if (still_authorized && !still_authorized()) {
         return {false, "takeoff authority unavailable before send", false, CommandOutcome::Rejected};
     }
@@ -218,6 +221,7 @@ CommandResult Vehicle::takeoff(float altitude_m, const std::function<bool()> &st
     const auto send_deadline = std::chrono::steady_clock::now() + kCommandTimeout;
     command.state_admission = [initial, send_deadline](const telemetry::VehicleState &state) {
         return std::chrono::steady_clock::now() < send_deadline && detail::identified_copter_session(state, initial) &&
+               state.armed && state.custom_mode == initial.custom_mode &&
                detail::heartbeat_is_fresh(state, kCommandTimeout, std::chrono::steady_clock::now());
     };
     const auto ack = connection_.send_command(command, initial.session_id, kCommandTimeout);
@@ -505,6 +509,9 @@ CommandResult Vehicle::wait_for_takeoff(float minimum_altitude_m, const telemetr
         -> std::optional<CommandResult> {
         if (!connection_.is_connected() || !state.connected || !detail::identified_copter_session(state, initial)) {
             return CommandResult{false, "takeoff session or identity changed", true, CommandOutcome::Interrupted};
+        }
+        if (!state.armed || state.custom_mode != initial.custom_mode) {
+            return CommandResult{false, "takeoff interrupted by disarm or mode change", true, CommandOutcome::Interrupted};
         }
         if (!state.position_valid) {
             return std::nullopt;

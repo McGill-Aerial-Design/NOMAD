@@ -12,7 +12,7 @@
 namespace {
 using Outcome = nomad::vehicle::CommandOutcome;
 enum class Observation {
-    Fresh, Session, System, Component, Class, Autopilot, VehicleType, Disconnected,
+    Fresh, Session, System, Component, Class, Autopilot, VehicleType, Disconnected, Disarmed, Mode,
     Cached, ZeroPositionTime, FuturePositionTime, StalePositionTime, InvalidPosition,
     ZeroHeartbeatTime, FutureHeartbeatTime, StaleHeartbeatTime, StaleHeartbeatFlag,
     NanAltitude, InfiniteAltitude, BelowTarget
@@ -23,6 +23,7 @@ class TakeoffConnection final : public FakeConnection {
     explicit TakeoffConnection(Observation value) : observation(value) {
         auto_stamp_fresh_fields = false;
         acknowledgement = nomad::mavlink::CommandAck{22, 0};
+        state->armed = true;
         state->position_valid = true;
         state->position.relative_altitude_m = 10.0F;
         state->position_updated_at = std::chrono::steady_clock::now();
@@ -68,6 +69,8 @@ class TakeoffConnection final : public FakeConnection {
         case Observation::Autopilot: ++state->identity.autopilot_type; break;
         case Observation::VehicleType: ++state->identity.vehicle_type; break;
         case Observation::Disconnected: state->connected = false; break;
+        case Observation::Disarmed: state->armed = false; break;
+        case Observation::Mode: ++state->custom_mode; break;
         case Observation::ZeroPositionTime: state->position_updated_at = {}; break;
         case Observation::FuturePositionTime: state->position_updated_at += std::chrono::seconds(10); break;
         case Observation::StalePositionTime: state->position_updated_at -= std::chrono::seconds(10); break;
@@ -200,6 +203,60 @@ void test_takeoff_requires_new_valid_evidence(Observation observation) {
     CHECK(connection.command_history.size() == 1);
 }
 
+void test_takeoff_rejects_disarmed_initial_state() {
+    TakeoffConnection connection(Observation::Fresh);
+    CHECK(connection.connect());
+    connection.state->armed = false;
+    nomad::vehicle::Vehicle vehicle(connection);
+    const auto result = vehicle.takeoff(10.0F);
+    CHECK(!result.success);
+    CHECK(!result.acknowledged);
+    CHECK(result.outcome == Outcome::Rejected);
+    CHECK(connection.command_history.empty());
+    CHECK(connection.polls == 0);
+}
+
+void test_takeoff_rechecks_flight_state_before_transmission(bool change_mode) {
+    TakeoffConnection connection(Observation::Fresh);
+    CHECK(connection.connect());
+    connection.before_command_send = [&] {
+        auto state = connection.get_state();
+        if (change_mode) {
+            ++state.custom_mode;
+        } else {
+            state.armed = false;
+        }
+        connection.set_state(state);
+    };
+    nomad::vehicle::Vehicle vehicle(connection);
+    const auto result = vehicle.takeoff(10.0F);
+    CHECK(connection.command_history.empty());
+    CHECK(!result.success);
+    CHECK(!result.acknowledged);
+    CHECK(result.outcome == Outcome::Interrupted);
+    CHECK(connection.polls == 0);
+}
+
+void test_takeoff_flight_state_loss_requires_explicit_new_operation() {
+    TakeoffConnection connection(Observation::Mode);
+    CHECK(connection.connect());
+    nomad::vehicle::Vehicle vehicle(connection);
+    const auto interrupted = vehicle.takeoff(10.0F);
+    CHECK(!interrupted.success);
+    CHECK(interrupted.acknowledged);
+    CHECK(interrupted.outcome == Outcome::Interrupted);
+    CHECK(connection.command_history.size() == 1);
+    connection.observation = Observation::Fresh;
+    connection.polls = 0;
+    connection.state->custom_mode = 4;
+    const auto fresh = vehicle.takeoff(10.0F);
+    CHECK(fresh.success);
+    CHECK(fresh.acknowledged);
+    CHECK(connection.command_history.size() == 2);
+    CHECK(connection.command_history[0].id == 22);
+    CHECK(connection.command_history[1].id == 22);
+}
+
 void test_takeoff_rechecks_context_before_transmission() {
     TakeoffConnection connection(Observation::Fresh);
     CHECK(connection.connect());
@@ -291,9 +348,10 @@ int main(int argc, char **argv) {
             nomad::test::run_scenario("takeoff_final_send_context", test_takeoff_rechecks_context_before_transmission);
             return;
         }
+        CHECK(argc == 1);
         for (const auto observation : {Observation::Session, Observation::System, Observation::Component,
                                       Observation::Class, Observation::Autopilot, Observation::VehicleType,
-                                      Observation::Disconnected}) {
+                                      Observation::Disconnected, Observation::Disarmed, Observation::Mode}) {
             test_takeoff_rejects_replaced_context(observation);
         }
         for (const auto observation : {Observation::Cached, Observation::ZeroPositionTime,
@@ -305,6 +363,10 @@ int main(int argc, char **argv) {
             test_takeoff_requires_new_valid_evidence(observation);
         }
         test_takeoff_rechecks_context_before_transmission();
+        test_takeoff_rejects_disarmed_initial_state();
+        test_takeoff_rechecks_flight_state_before_transmission(false);
+        test_takeoff_rechecks_flight_state_before_transmission(true);
+        test_takeoff_flight_state_loss_requires_explicit_new_operation();
         test_takeoff_rejects_unusable_initial_context();
         test_takeoff_preserves_command_and_acknowledgement();
         test_takeoff_preserves_negative_missing_and_wrong_ack();

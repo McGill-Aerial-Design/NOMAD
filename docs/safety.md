@@ -42,6 +42,11 @@ LAND mode within one three-second budget; it is not touchdown or termination.
 The [IPC contract](runtime-ipc.md#copter-land-engagement) defines admission and outcomes;
 the traceability below binds success, timeout, final-send and safe-output fault tests.
 
+Copter qualification takeoff requires an already armed aircraft at admission and final send.
+Observation stays bound to the admitted mode and armed state as well as the original identity/session
+and fresh post-ACK heartbeat/position. Disarm or mode change interrupts observation and requires a new
+explicit attempt. Takeoff itself leaves arming and mode selection to the operator's preparation.
+
 ## Competition safety obligations
 
 These source requirements supplement, without renumbering or weakening, the SR

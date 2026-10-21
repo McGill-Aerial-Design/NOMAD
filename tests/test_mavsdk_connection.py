@@ -135,6 +135,11 @@ def test_mode_change_is_verified_from_state() -> None:
 
 
 @requires_mavsdk_build
+def test_takeoff_rejects_disarmed_aircraft_before_transmission() -> None:
+    fixture.case_takeoff_disarmed_is_rejected(CLI)
+
+
+@requires_mavsdk_build
 def test_takeoff_is_verified_from_altitude() -> None:
     fixture.case_takeoff_is_verified(CLI)
 

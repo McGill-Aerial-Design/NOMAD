@@ -234,6 +234,7 @@ void test_vehicle_goto_location_rejects_stale_position() {
 void test_vehicle_takeoff_altitude_rejects_stale_position() {
     FakeConnection connection;
     connection.connect();
+    connection.state->armed = true;
     connection.acknowledgement = nomad::mavlink::CommandAck{22, 0};
     connection.auto_stamp_fresh_fields = false;
     nomad::vehicle::Vehicle vehicle(connection);
