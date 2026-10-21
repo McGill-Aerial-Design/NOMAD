@@ -153,17 +153,6 @@ namespace NOMAD.MissionPlanner
             _cmbSw3Down = AddComboBox(tab, 370, y, 130, actionLabels);
             y += 36;
 
-            AddSectionLabel(tab, "Termination Button", ref y);
-            AddLabel(tab, "Aircraft termination is unavailable in this plugin.",
-                10, y, Color.IndianRed);
-            y += 24;
-            _chkKillSwitchEnabled = AddCheckBox(tab, "Monitor button requests (reports unavailable)",
-                20, y, Color.IndianRed);
-            y += 28;
-            AddLabel(tab, "Termination button index:", 20, y);
-            _numTerminationButton = AddNumericUpDown(tab, 180, y, 65, 0, 127, 6);
-            y += 36;
-
             AddSectionLabel(tab, "Direct USB HID button mapping", ref y);
             var combos = new[] { _cmbSw1Up, _cmbSw1Down, _cmbSw2Up, _cmbSw2Down, _cmbSw3Up, _cmbSw3Down };
             for (int index = 0; index < combos.Length; index++)
@@ -173,8 +162,6 @@ namespace NOMAD.MissionPlanner
                 _switchButtons[index] = AddNumericUpDown(tab, 170, y, 65, 0, 127, index);
                 y += 27;
             }
-            _chkKillSwitchEnabled.Enabled = false;
-            _numTerminationButton.Enabled = false;
             AddLabel(tab, "Use saved payload-id:operation bindings; initial held buttons never activate.", 20, y, Color.Gold);
 
             return tab;
