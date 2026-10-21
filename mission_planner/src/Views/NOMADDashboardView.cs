@@ -111,8 +111,8 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var cs = MainV2.comPort?.MAV?.cs;
-                UpdateFlightCards(cs);
+                var mav = MainV2.comPort?.MAV;
+                UpdateFlightCards(mav);
                 UpdateAdvisoryBoundaryCard();
                 UpdateLinksCard();
                 UpdateGimbalCard();
@@ -122,9 +122,10 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private void UpdateFlightCards(dynamic cs)
+        private void UpdateFlightCards(MAVState mav)
         {
-            bool connected = cs?.connected ?? false;
+            var cs = mav?.cs;
+            bool connected = cs?.connected == true;
             if (!connected)
             {
                 _lblFlightMode.Text = "DISCONNECTED";
@@ -156,10 +157,14 @@ namespace NOMAD.MissionPlanner
                 ? NOMADTheme.SUCCESS
                 : (gpsFix >= 1 ? NOMADTheme.WARNING : NOMADTheme.ERROR);
 
-            var battery = BatteryHealth.Read(1);
+            UpdateBatteryCard(BatteryHealth.Read(mav, 1));
+        }
+
+        private void UpdateBatteryCard(BatteryStatus battery)
+        {
             if (battery == null)
             {
-                _lblBattery.Text = $"{cs.battery_voltage:F1}V";
+                _lblBattery.Text = "Battery unavailable";
                 _lblBattery.ForeColor = NOMADTheme.TEXT_SECONDARY;
                 return;
             }

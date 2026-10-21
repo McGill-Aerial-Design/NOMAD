@@ -115,15 +115,12 @@ namespace NOMAD.MissionPlanner
         private double? ReadCurrentAltitude()
         {
             var state = MainV2.comPort?.MAV?.cs;
-            if (state == null)
+            if (state?.connected != true)
             {
                 return null;
             }
 
-            double altitude = state.alt;
-            return double.IsNaN(altitude) || double.IsInfinity(altitude)
-                ? (double?)null
-                : altitude;
+            return AltitudeUnits.ToMeters(state.alt, CurrentState.multiplieralt);
         }
 
         private void UpdateAdvisoryAltitude(double? altitudeMeters)

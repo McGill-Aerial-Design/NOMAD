@@ -8,18 +8,27 @@ namespace NOMAD.MissionPlanner
 {
     public partial class NotificationService
     {
-        private async void MonitorTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
+        private void MonitorTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
         {
             if (System.Threading.Interlocked.CompareExchange(ref _pollGuard, 1, 0) != 0)
                 return;
 
             try
             {
-                CheckAltitudeCallouts();
-                CheckGPSHealth();
-                CheckBatteryHealth();
-                CheckEKFSource();
-                CheckOpticalFlowHealth();
+                var connection = MainV2.comPort;
+                var mav = connection?.MAV;
+                var state = mav?.cs;
+                if (state?.connected != true)
+                {
+                    ObserveHealthContext(null, null, null);
+                    return;
+                }
+                ObserveHealthContext(connection, mav, state);
+                CheckAltitudeCallouts(state);
+                CheckGPSHealth(state);
+                CheckBatteryHealth(mav);
+                CheckEKFPositionValidity(state.ekfflags);
+                CheckOpticalFlowHealth(state);
             }
             catch (Exception ex)
             {
@@ -30,13 +39,25 @@ namespace NOMAD.MissionPlanner
                 System.Threading.Interlocked.Exchange(ref _pollGuard, 0);
             }
 
-            await System.Threading.Tasks.Task.CompletedTask;
         }
 
-        private void CheckGPSHealth()
+        private void ObserveHealthContext(MAVLinkInterface connection, MAVState mav, CurrentState state)
         {
-            var cs = MainV2.comPort?.MAV?.cs;
-            if (cs == null) return;
+            if (ReferenceEquals(connection, _observedConnection) && ReferenceEquals(mav, _observedMav) &&
+                ReferenceEquals(state, _observedState)) { return; }
+            _observedConnection = connection;
+            _observedMav = mav;
+            _observedState = state;
+            _lastGpsFix = -1;
+            _lastEkfPositionValidity = -1;
+            _altBand = -1;
+            _lastBatterySeverity.Clear();
+            _lastBatterySpeechUtc.Clear();
+            lock (_lock) { _lastNotificationTime.Clear(); }
+        }
+
+        private void CheckGPSHealth(CurrentState cs)
+        {
 
             int satCount = (int)cs.satcount;
             int gpsFix = (int)cs.gpsstatus;
@@ -82,17 +103,15 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private void CheckBatteryHealth()
+        private void CheckBatteryHealth(MAVState mav)
         {
-            var mav = MainV2.comPort?.MAV;
-            if (mav?.cs == null) return;
             for (int idx = 1; idx <= 2; idx++)
                 CheckOneBattery(mav, idx);
         }
 
-        private void CheckOneBattery(dynamic mav, int idx)
+        private void CheckOneBattery(MAVState mav, int idx)
         {
-            var state = BatteryHealth.Read(idx);
+            var state = BatteryHealth.Read(mav, idx);
             if (state == null) return;
 
             string label = $"BATT{idx}";
@@ -148,67 +167,52 @@ namespace NOMAD.MissionPlanner
             return true;
         }
 
-        private void CheckEKFSource()
+        private void CheckEKFPositionValidity(int flags)
         {
-            var cs = MainV2.comPort?.MAV?.cs;
-            if (cs == null) return;
-
-            try
+            int validity = flags & 0x18;
+            if (_lastEkfPositionValidity != -1 && validity != _lastEkfPositionValidity)
             {
-                var ekfFlags = (int)cs.ekfstatus;
-                bool posRelOk = (ekfFlags & 0x08) != 0;
-                bool posAbsOk = (ekfFlags & 0x10) != 0;
-                int currentSource = posAbsOk ? 1 : (posRelOk ? 2 : 0);
-                if (_lastEkfSource != -1 && currentSource != _lastEkfSource)
+                string description = validity switch
                 {
-                    string sourceName = currentSource switch
-                    {
-                        1 => "GPS (Absolute)",
-                        2 => "Relative (VIO/OptFlow)",
-                        _ => "None/Degraded"
-                    };
-                    var severity = currentSource == 0
-                        ? NotificationSeverity.Critical
-                        : NotificationSeverity.Warning;
-                    AddNotification(severity, NotificationCategory.EKF,
-                        "EKF Source Changed", $"Position source: {sourceName}");
-                }
-                _lastEkfSource = currentSource;
+                    0x18 => "Absolute and relative horizontal position valid",
+                    0x10 => "Absolute horizontal position valid",
+                    0x08 => "Relative horizontal position valid",
+                    _ => "No horizontal position validity reported"
+                };
+                AddNotification(validity == 0 ? NotificationSeverity.Critical : NotificationSeverity.Warning,
+                    NotificationCategory.EKF,
+                    validity == 0 ? "EKF Position Unavailable" : "EKF Position Validity Changed", description);
             }
-            catch
-            {
-            }
+            _lastEkfPositionValidity = validity;
         }
 
         private int _altBand = -1;
 
-        private void CheckAltitudeCallouts()
+        private void CheckAltitudeCallouts(CurrentState cs)
         {
-            var cs = MainV2.comPort?.MAV?.cs;
-            if (!AudioAlerts.AltitudeCalloutsEnabled || cs == null || !cs.armed)
+            if (!AudioAlerts.AltitudeCalloutsEnabled || !cs.armed)
             {
                 _altBand = -1;
                 return;
             }
 
-            string phrase = AltitudeCallout.Next((double)cs.alt, ref _altBand);
+            var altitude = AltitudeUnits.ToMeters(cs.alt, CurrentState.multiplieralt);
+            if (!altitude.HasValue) { _altBand = -1; return; }
+            string phrase = AltitudeCallout.Next(altitude.Value, ref _altBand);
             if (phrase != null)
                 AudioAlerts.Speak(phrase, component: "altitude", ignoreRateLimit: true);
         }
 
-        private void CheckOpticalFlowHealth()
+        private void CheckOpticalFlowHealth(CurrentState cs)
         {
-            var cs = MainV2.comPort?.MAV?.cs;
-            if (cs == null) return;
 
             try
             {
-                var rangeFinderDist = cs.sonarrange;
-                bool rangeFinderHealthy = rangeFinderDist > 0 && rangeFinderDist < 100;
-                if (!rangeFinderHealthy && rangeFinderDist > 0)
+                var rangeMeters = AltitudeUnits.ToMeters(cs.sonarrange, CurrentState.multiplieralt);
+                if (rangeMeters.HasValue && rangeMeters.Value >= 100)
                 {
                     AddNotification(NotificationSeverity.Warning, NotificationCategory.OpticalFlow,
-                        "Rangefinder Issue", $"Rangefinder reading abnormal: {rangeFinderDist:F1}m");
+                        "Rangefinder Issue", $"Rangefinder reading abnormal: {rangeMeters.Value:F1}m");
                 }
             }
             catch

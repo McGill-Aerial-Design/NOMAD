@@ -115,6 +115,9 @@ try {
     }
     Write-Host 'Actual Mission Planner event accessors accept, invalidate and remove the native subscriptions.'
 
+    . (Join-Path $PSScriptRoot 'test_health_observation.ps1')
+    Invoke-HealthObservationTests $plugin
+
     . (Join-Path $PSScriptRoot 'test_aircraft_profiles.ps1')
     Invoke-AircraftProfileTests $plugin $configType $temporary
     Invoke-AircraftProfileUiTests $plugin $configType

@@ -8,8 +8,8 @@ using NOMAD.MissionPlanner;
 namespace MissionPlanner
 {
     public static class MainV2 { public static VehicleLink comPort; }
-    public sealed class VehicleLink { public Vehicle MAV; }
-    public sealed class Vehicle
+    public sealed class VehicleLink { public MAVState MAV; }
+    public sealed class MAVState
     {
         public State cs = new State();
         public Dictionary<string, Parameter> param = new Dictionary<string, Parameter>();
@@ -20,9 +20,9 @@ namespace MissionPlanner
 
 internal static class BatteryHealthTests
 {
-    private static MissionPlanner.Vehicle Aircraft(double low, double critical, double capacity)
+    private static MissionPlanner.MAVState Aircraft(double low, double critical, double capacity)
     {
-        var vehicle = new MissionPlanner.Vehicle();
+        var vehicle = new MissionPlanner.MAVState();
         vehicle.param["BATT_MONITOR"] = new MissionPlanner.Parameter { Value = 1 };
         vehicle.param["BATT_LOW_VOLT"] = new MissionPlanner.Parameter { Value = low };
         vehicle.param["BATT_CRT_VOLT"] = new MissionPlanner.Parameter { Value = critical };
@@ -40,11 +40,11 @@ internal static class BatteryHealthTests
         var first = Aircraft(11, 10, 1000);
         var second = Aircraft(14, 12, 2000);
         MissionPlanner.MainV2.comPort = new MissionPlanner.VehicleLink { MAV = first };
-        var initial = BatteryHealth.Read(1);
+        var initial = BatteryHealth.Read(MissionPlanner.MainV2.comPort.MAV, 1);
         Require(initial.LowVoltage == 11 && initial.CapacityMah == 1000 && initial.Severity == 0,
             "Initial aircraft battery state did not use its configured thresholds.");
         MissionPlanner.MainV2.comPort.MAV = second;
-        var selected = BatteryHealth.Read(1);
+        var selected = BatteryHealth.Read(MissionPlanner.MainV2.comPort.MAV, 1);
         Require(selected.LowVoltage == 14 && selected.CriticalVoltage == 12 && selected.CapacityMah == 2000 &&
             selected.Severity == 2, "Aircraft selection reused another aircraft's battery parameters or severity.");
         second.param["BATT_LOW_VOLT"].Value = 15;
@@ -60,8 +60,13 @@ internal static class BatteryHealthTests
             Require(BatteryHealth.GetBattParam(second, 1, "LOW_VOLT") == 0,
                 "Malformed or nonfinite battery parameter was presented as a threshold.");
         }
+        foreach (double invalidVoltage in new[] { 0.0, -1.0, double.NaN, double.PositiveInfinity })
+        {
+            second.cs.battery_voltage = invalidVoltage;
+            Require(BatteryHealth.Read(MissionPlanner.MainV2.comPort.MAV, 1) == null, "Invalid battery voltage produced a healthy battery snapshot.");
+        }
         second.param = null;
-        Require(BatteryHealth.GetBattParam(second, 1, "LOW_VOLT") == 0 && BatteryHealth.Read(1) == null,
+        Require(BatteryHealth.GetBattParam(second, 1, "LOW_VOLT") == 0 && BatteryHealth.Read(MissionPlanner.MainV2.comPort.MAV, 1) == null,
             "Unavailable parameter bag was presented as a configured battery monitor.");
         Require(BatteryHealth.GetBattParam(null, 1, "LOW_VOLT") == 0,
             "Missing aircraft did not return the established unavailable-parameter value.");
