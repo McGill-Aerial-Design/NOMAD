@@ -43,7 +43,7 @@ As checked on 2026-10-18, the current target is
 Qualification uses reviewed, pinned revisions rather than a floating latest tag.
 Update those pins deliberately and run the full affected gates before claiming
 coverage of a new release; retain the earlier revision and its results as evidence.
-The retained SITL baseline below is still 4.7.1. Selecting a profile does not update
+The SITL baseline below is pinned to 4.7.2. Selecting a profile does not update
 firmware. Conventional Plane operations require evidence beyond the QuadPlane gate.
 
 [sitl.yml](../.github/workflows/sitl.yml) requires full Copter and QuadPlane jobs on
@@ -52,7 +52,7 @@ The MAVSDK connectivity smoke is a separate limited check and cannot replace the
 
 Copter coverage includes command/mission, heartbeat cadence, velocity/watchdog,
 geofence/containment, payload, zero delivery, link loss/recovery and runtime authority.
-QuadPlane uses ArduPlane 4.7.1 (`dbe792162d06cab66c3475fd5556bf7a120f119e`),
+QuadPlane uses ArduPlane 4.7.2 (`fb773567896014da007bca58358704d4a0d8516f`),
 `quadplane-tilttri`, `Q_ENABLE=2`: identity, VTOL takeoff, forward transition, two-point
 route, recovery, transition back and QLAND. Success requires observed post-command
 state; an ACK alone is never climb or touchdown. The driver/operator establishes

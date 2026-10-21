@@ -1,6 +1,6 @@
-# NOMAD reference QuadPlane profile for ArduPlane Plane-4.7.1.
+# NOMAD reference QuadPlane profile for ArduPlane Plane-4.7.2.
 # Geometry values mirror ArduPilot's pinned quadplane-tilttri SITL defaults.
-# ArduPlane 4.7.1: value 2 starts AUTO in VTOL AUTO state.
+# ArduPlane 4.7.2: value 2 starts AUTO in VTOL AUTO state.
 Q_ENABLE 2
 Q_FRAME_CLASS 7
 Q_TILT_ENABLE 1

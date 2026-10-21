@@ -12,7 +12,7 @@ from pathlib import Path
 
 from core_sitl_status import find_binary
 
-EXPECTED_ARDUPILOT_REVISION = "dbe792162d06cab66c3475fd5556bf7a120f119e"
+EXPECTED_ARDUPILOT_REVISION = "fb773567896014da007bca58358704d4a0d8516f"
 EXPECTED_IDENTITY = {
     "autopilot_type": "3",
     "vehicle_type": "1",

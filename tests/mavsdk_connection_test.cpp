@@ -381,8 +381,8 @@ int run_qland_probe(int argc, char **argv) {
     std::printf("version=%u.%u.%u hash=%s landed_state=%.*s ack=%d\n", version->major, version->minor,
                 version->patch, version->git_hash.c_str(), static_cast<int>(landed_state_name.size()),
                 landed_state_name.data(), ack ? static_cast<int>(ack->result) : -1);
-    return version->major == 4 && version->minor == 7 && version->patch == 1 &&
-                   version->git_hash == "dbe79216" && state.landed_state == nomad::telemetry::LandedState::OnGround &&
+    return version->major == 4 && version->minor == 7 && version->patch == 2 &&
+                   version->git_hash == "fb773567" && state.landed_state == nomad::telemetry::LandedState::OnGround &&
                    ack && ack->command == 176 && ack->result == 0
                ? 0
                : 1;

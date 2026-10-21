@@ -396,9 +396,9 @@ CommandResult Vehicle::verify_quadplane_profile(const LandingPoint &point, std::
     }
     const auto version_timeout = std::chrono::duration_cast<std::chrono::milliseconds>(kVersionTimeout);
     const auto version = connection_.read_autopilot_version(std::min(version_remaining, version_timeout));
-    if (!version || version->major != 4 || version->minor != 7 || version->patch != 1 ||
-        version->git_hash.rfind("dbe79216", 0) != 0) {
-        return {false, "QuadPlane VTOL landing requires pinned ArduPlane 4.7.1 at dbe792162d06"};
+    if (!version || version->major != 4 || version->minor != 7 || version->patch != 2 ||
+        version->git_hash.rfind("fb773567", 0) != 0) {
+        return {false, "QuadPlane VTOL landing requires pinned ArduPlane 4.7.2 at fb7735678960"};
     }
 
     for (const auto &parameter : kPinnedLandingParameters) {

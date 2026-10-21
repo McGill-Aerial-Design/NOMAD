@@ -38,8 +38,8 @@ class QlandPeer(VehiclePeer):
         self._send_bytes(message.pack(encoder))
 
 
-def encode_autopilot_version(encoder, software_version: int = (4 << 24) | (7 << 16) | (1 << 8)):
-    flight_custom_version = list(b"dbe79216")
+def encode_autopilot_version(encoder, software_version: int = (4 << 24) | (7 << 16) | (2 << 8)):
+    flight_custom_version = list(b"fb773567")
     return encoder.autopilot_version_encode(
         mavlink.MAV_PROTOCOL_CAPABILITY_MISSION_INT,
         software_version,

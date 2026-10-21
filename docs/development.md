@@ -68,9 +68,9 @@ local protocol; [plugin packaging](../mission_planner/packaging/README.md) defin
 
 ## SITL qualification
 
-Docker is required. The Copter image is `nomad-sitl:copter-4.7.1`; build it using the
+Docker is required. The Copter image is `nomad-sitl:copter-4.7.2`; build it using the
 instructions in [Compose](../docker/docker-compose.dev.yml). QuadPlane builds from
-[Dockerfile.sitl-plane](../docker/Dockerfile.sitl-plane), pinned to ArduPlane 4.7.1.
+[Dockerfile.sitl-plane](../docker/Dockerfile.sitl-plane), pinned to ArduPlane 4.7.2.
 
 ```sh
 pixi run build-sitl-tools

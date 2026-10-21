@@ -228,7 +228,7 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
     bool auto_stamp_fresh_fields{true};
     int version_read_count{0};
     std::optional<nomad::mavlink::AutopilotVersion> autopilot_version{
-        nomad::mavlink::AutopilotVersion{4, 7, 1, "dbe79216"},
+        nomad::mavlink::AutopilotVersion{4, 7, 2, "fb773567"},
     };
     std::optional<nomad::telemetry::VehicleState> state{
         nomad::telemetry::VehicleState{true, true, false, 1, 1, 4},

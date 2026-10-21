@@ -286,7 +286,7 @@ def report_landing_qualification(binary, port, observer, evidence):
     state_names = [LANDED_STATE_NAMES.get(value, f"unknown_{value}") for value in states]
     print(
         "Pinned QuadPlane VTOL landing qualification passed: "
-        f"firmware=ArduPlane-4.7.1 sha=dbe792162d06cab66c3475fd5556bf7a120f119e "
+        f"firmware=ArduPlane-4.7.2 sha=fb773567896014da007bca58358704d4a0d8516f "
         f"command=DO_SET_MODE(custom_mode=20/QLAND) start_altitude_m={start_altitude:.2f} "
         f"landing_point_distance_m={landing_distance:.2f} readiness_dwell_s={readiness_dwell:.2f} "
         f"qland_observed={qland_seen} descent_duration_s={descent_seen_at - command_started:.2f} "

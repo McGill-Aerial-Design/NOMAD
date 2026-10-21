@@ -14,8 +14,8 @@ from pathlib import Path
 
 from pymavlink import mavutil
 
-REVISION = "dbe792162d06cab66c3475fd5556bf7a120f119e"
-IMAGE = "nomad-sitl:plane-4.7.1-quadplane-tilttri"
+REVISION = "fb773567896014da007bca58358704d4a0d8516f"
+IMAGE = "nomad-sitl:plane-4.7.2-quadplane-tilttri"
 COMPOSE_PROJECT = "nomad-quadplane-probe"
 CONTAINER = "nomad-quadplane-rc-probe"
 CLIENT_PORT = 14680

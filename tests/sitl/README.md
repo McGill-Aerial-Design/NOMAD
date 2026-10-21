@@ -26,7 +26,7 @@ results for a release. A workflow definition alone is not passed-run evidence.
 - Other core_sitl_* runners cover status, command flow, mission, fence
   upload/readback, payload, link recovery and heartbeat relay behavior.
 - scripts/dev/core_sitl_quadplane_observe.py checks the separately pinned
-  ArduPlane 4.7.1 tilt-tricopter profile: real fixed-wing heartbeat plus the
+  ArduPlane 4.7.2 tilt-tricopter profile: real fixed-wing heartbeat plus the
   pinned `Q_ENABLE=2` classification, fresh position/GPS/attitude, and reported
   GUIDED/QLOITER/QRTL/RTL modes. It does not exercise flight primitives.
 - scripts/dev/core_sitl_quadplane_vtol_takeoff.py drives the qualified NOMAD
