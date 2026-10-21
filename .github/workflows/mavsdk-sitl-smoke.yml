@@ -53,10 +53,10 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: https://github.com/radarku/ardupilot-sitl-docker.git
-          build-args: COPTER_TAG=Copter-4.7.1
+          build-args: COPTER_TAG=Copter-4.7.2
           push: false
           load: true
-          tags: nomad-sitl:copter-4.7.1
+          tags: nomad-sitl:copter-4.7.2
           cache-from: type=gha,scope=sitl
           cache-to: type=gha,mode=max,scope=sitl
 

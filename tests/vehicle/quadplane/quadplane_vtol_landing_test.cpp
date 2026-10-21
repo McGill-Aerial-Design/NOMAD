@@ -264,14 +264,21 @@ void test_unsupported_aircraft_and_wrong_profile_never_send_landing_command() {
 
     FakeConnection incompatible_version;
     configure_landing_ready_state(incompatible_version);
-    incompatible_version.autopilot_version = nomad::mavlink::AutopilotVersion{4, 6, 1, "dbe79216"};
+    incompatible_version.autopilot_version = nomad::mavlink::AutopilotVersion{4, 6, 1, "fb773567"};
     auto version_vehicle = short_vehicle(incompatible_version);
     CHECK(!version_vehicle.quadplane_vtol_land(kLandingPoint).success);
     CHECK(incompatible_version.command_history.empty());
 
+    FakeConnection previous_patch;
+    configure_landing_ready_state(previous_patch);
+    previous_patch.autopilot_version = nomad::mavlink::AutopilotVersion{4, 7, 1, "fb773567"};
+    auto previous_vehicle = short_vehicle(previous_patch);
+    CHECK(!previous_vehicle.quadplane_vtol_land(kLandingPoint).success);
+    CHECK(previous_patch.command_history.empty());
+
     FakeConnection wrong_firmware_hash;
     configure_landing_ready_state(wrong_firmware_hash);
-    wrong_firmware_hash.autopilot_version = nomad::mavlink::AutopilotVersion{4, 7, 1, "00000000"};
+    wrong_firmware_hash.autopilot_version = nomad::mavlink::AutopilotVersion{4, 7, 2, "00000000"};
     auto hash_vehicle = short_vehicle(wrong_firmware_hash);
     CHECK(!hash_vehicle.quadplane_vtol_land(kLandingPoint).success);
     CHECK(wrong_firmware_hash.command_history.empty());

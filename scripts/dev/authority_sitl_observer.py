@@ -14,8 +14,8 @@ from typing import Any
 
 from pymavlink import mavutil
 
-REVISION = "dbe792162d06cab66c3475fd5556bf7a120f119e"
-IMAGE = "nomad-sitl:copter-4.7.1"
+REVISION = "fb773567896014da007bca58358704d4a0d8516f"
+IMAGE = "nomad-sitl:copter-4.7.2"
 PROJECT, CONTAINER = "nomad-authority", "nomad-authority-sitl"
 RELAY_PORT, OBSERVER_PORT = 14690, 14691
 SERVO_FUNCTION = "SERVO5_FUNCTION"

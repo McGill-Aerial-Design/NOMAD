@@ -172,7 +172,7 @@ an ACK or reconnection cannot supply it. These are project requirements, not
 implemented or qualified behavior. A latch in one process alone cannot inhibit
 external RC or native Mission Planner writers.
 
-The [normal Copter 4.7.1 flight-termination handler](https://github.com/ArduPilot/ardupilot/blob/Copter-4.7.1/ArduCopter/GCS_MAVLink_Copter.cpp#L1140-L1152)
+The [normal Copter 4.7.2 flight-termination handler](https://github.com/ArduPilot/ardupilot/blob/Copter-4.7.2/ArduCopter/GCS_MAVLink_Copter.cpp#L1140-L1152)
 disarms motors; it is not a commanded controlled vertical descent. Do not equate
 that command or existing plugin LAND dispatch with AE27-OPS-017 completion.
 Q02 still requires accepted behavior throughout QuadPlane transitions; no
@@ -302,7 +302,7 @@ Missing coverage remains visible in the tables above.
 The table is an audit of the pinned ArduPlane source, not a production parameter
 prescription. Read back the actual controller's complete parameter set for
 every evidence record. Historical `SYSID_*` names must not replace the pinned
-4.7.1 `MAV_*` names.
+4.7.2 `MAV_*` names.
 
 | Mechanism / parameters | Pinned behavior and qualification implication |
 |---|---|
@@ -327,22 +327,22 @@ records its separate `FS_GCS_ENABLE` readback and does not qualify a failsafe
 action; do not apply Plane's `FS_GCS_ENABL` or short/long action rules to Copter.
 
 Pinned implementation references:
-[GCS parameters](https://github.com/ArduPilot/ardupilot/blob/dbe792162d06cab66c3475fd5556bf7a120f119e/libraries/GCS_MAVLink/GCS.cpp#L38-L66),
-[source acceptance](https://github.com/ArduPilot/ardupilot/blob/dbe792162d06cab66c3475fd5556bf7a120f119e/libraries/GCS_MAVLink/GCS_Common.cpp#L7180-L7201),
-[mode handler](https://github.com/ArduPilot/ardupilot/blob/dbe792162d06cab66c3475fd5556bf7a120f119e/libraries/GCS_MAVLink/GCS_Common.cpp#L2878-L2904),
-[override/manual-control handlers](https://github.com/ArduPilot/ardupilot/blob/dbe792162d06cab66c3475fd5556bf7a120f119e/libraries/GCS_MAVLink/GCS_Common.cpp#L4177-L4225),
-[RC parameters](https://github.com/ArduPilot/ardupilot/blob/dbe792162d06cab66c3475fd5556bf7a120f119e/libraries/RC_Channel/RC_Channels_VarInfo.h#L84-L113),
-[RC input selection](https://github.com/ArduPilot/ardupilot/blob/dbe792162d06cab66c3475fd5556bf7a120f119e/libraries/RC_Channel/RC_Channel.cpp#L303-L310),
-[Plane failsafe parameters](https://github.com/ArduPilot/ardupilot/blob/dbe792162d06cab66c3475fd5556bf7a120f119e/ArduPlane/Parameters.cpp#L406-L510),
-and [radio recovery](https://github.com/ArduPilot/ardupilot/blob/dbe792162d06cab66c3475fd5556bf7a120f119e/ArduPlane/events.cpp#L243-L251).
+[GCS parameters](https://github.com/ArduPilot/ardupilot/blob/fb773567896014da007bca58358704d4a0d8516f/libraries/GCS_MAVLink/GCS.cpp#L38-L66),
+[source acceptance](https://github.com/ArduPilot/ardupilot/blob/fb773567896014da007bca58358704d4a0d8516f/libraries/GCS_MAVLink/GCS_Common.cpp#L7180-L7201),
+[mode handler](https://github.com/ArduPilot/ardupilot/blob/fb773567896014da007bca58358704d4a0d8516f/libraries/GCS_MAVLink/GCS_Common.cpp#L2878-L2904),
+[override/manual-control handlers](https://github.com/ArduPilot/ardupilot/blob/fb773567896014da007bca58358704d4a0d8516f/libraries/GCS_MAVLink/GCS_Common.cpp#L4177-L4225),
+[RC parameters](https://github.com/ArduPilot/ardupilot/blob/fb773567896014da007bca58358704d4a0d8516f/libraries/RC_Channel/RC_Channels_VarInfo.h#L84-L113),
+[RC input selection](https://github.com/ArduPilot/ardupilot/blob/fb773567896014da007bca58358704d4a0d8516f/libraries/RC_Channel/RC_Channel.cpp#L303-L310),
+[Plane failsafe parameters](https://github.com/ArduPilot/ardupilot/blob/fb773567896014da007bca58358704d4a0d8516f/ArduPlane/Parameters.cpp#L406-L510),
+and [radio recovery](https://github.com/ArduPilot/ardupilot/blob/fb773567896014da007bca58358704d4a0d8516f/ArduPlane/events.cpp#L243-L251).
 
 The pinned `FS_GCS_ENABL` description specifies monitoring after a first primary
 GCS heartbeat: value 1 monitors heartbeat, 2 also monitors `RADIO_STATUS.remrssi`,
 and 3 monitors heartbeat only in AUTO. Check actual heartbeat identity/range and
 loss behavior; default runtime ID 245 is outside the default GCS ID 255.
 Additional pinned references are
-[channel options](https://github.com/ArduPilot/ardupilot/blob/dbe792162d06cab66c3475fd5556bf7a120f119e/libraries/GCS_MAVLink/GCS_MAVLink_Parameters.cpp#L200-L216)
-and [serial configuration](https://github.com/ArduPilot/ardupilot/blob/dbe792162d06cab66c3475fd5556bf7a120f119e/libraries/AP_SerialManager/AP_SerialManager.cpp#L185-L281).
+[channel options](https://github.com/ArduPilot/ardupilot/blob/fb773567896014da007bca58358704d4a0d8516f/libraries/GCS_MAVLink/GCS_MAVLink_Parameters.cpp#L200-L216)
+and [serial configuration](https://github.com/ArduPilot/ardupilot/blob/fb773567896014da007bca58358704d4a0d8516f/libraries/AP_SerialManager/AP_SerialManager.cpp#L185-L281).
 
 ## Required production RC / ELRS inputs
 
