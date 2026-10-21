@@ -20,6 +20,7 @@ SKIP_DIRECTORIES = {
     "build",
     "dist",
     "node_modules",
+    "local",
     "site",
     "third_party",
 }

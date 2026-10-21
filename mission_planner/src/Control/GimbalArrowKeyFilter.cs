@@ -58,12 +58,20 @@ namespace NOMAD.MissionPlanner
 
         public bool PreFilterMessage(ref Message m)
         {
-            if (!_enabled || (m.Msg != WM_KEYDOWN && m.Msg != WM_SYSKEYDOWN))
+            if (!_enabled || !OutputController.IsCurrentProfile(_config) ||
+                (m.Msg != WM_KEYDOWN && m.Msg != WM_SYSKEYDOWN))
                 return false;
             if (Control.ModifierKeys != Keys.None)
                 return false;
 
-            return TryHandleKey((Keys)m.WParam.ToInt32());
+            return TryHandleMessage(ref m);
+        }
+
+        internal static bool TryHandleMessage(ref Message message)
+        {
+            // Both the application filter and floating window reject held-key repeats.
+            if ((message.LParam.ToInt64() & (1L << 30)) != 0) { return false; }
+            return TryHandleKey((Keys)message.WParam.ToInt32());
         }
 
         internal static bool TryHandleKey(Keys key)

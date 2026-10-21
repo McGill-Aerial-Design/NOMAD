@@ -5,7 +5,7 @@
 // ============================================================
 // Handles plugin configuration persistence.
 // Stored in Mission Planner's config directory.
-// Configures runtime IPC, video, router status, observation, and operator input.
+// Configures saved aircraft settings, video, router status, observation, and operator input.
 // ============================================================
 
 using System;
@@ -23,15 +23,6 @@ namespace NOMAD.MissionPlanner
         // Connection Configuration
         // ============================================================
 
-
-        /// <summary>Loopback TCP port used by the persistent C++ runtime.</summary>
-        public int CoreRuntimePort { get; set; } = Connectivity.NomadCoreClient.DefaultRuntimePort;
-
-        /// <summary>
-        /// Shared secret used for HMAC proofs over loopback IPC, bound to the configured
-        /// mission-planner identity. Deploy it independently of NOMAD_API_KEY.
-        /// </summary>
-        public string CoreClientCredential { get; set; } = "";
 
         // ============================================================
         // Video Streaming Configuration
@@ -54,14 +45,14 @@ namespace NOMAD.MissionPlanner
         public bool AutoStartHudVideo { get; set; } = true;
 
         // ============================================================
-        // Standalone Ground Router Client Configuration
+        // Plugin Router Configuration
         // ============================================================
 
         /// <summary>
-        /// Enable Mission Planner's standalone router status client.
+        /// Run the aircraft profile’s router inside Mission Planner.
         /// </summary>
-        // Enables the standalone router status client only.
-        public bool RouterClientEnabled { get; set; } = true;
+        // Empty RouterLinks opens no physical connections.
+        public bool RouterClientEnabled { get; set; } = false;
 
         /// <summary>
         /// Link monitoring interval in milliseconds.
@@ -69,17 +60,17 @@ namespace NOMAD.MissionPlanner
         public int LinkMonitorInterval { get; set; } = 500;
 
         // ============================================================
-        // Standalone ground-router connection settings
+        // Plugin router connection settings
         // ============================================================
-        // The separately supervised host owns physical links, failover,
+        // The plugin owns physical links, failover,
         // duplicate suppression, and consumer permissions. Mission Planner
-        // only consumes telemetry and uses the loopback management client.
+        // connects as the one bidirectional loopback consumer.
 
         /// <summary>Mission Planner's local UDP client endpoint for router telemetry.</summary>
         public int RouterLocalPort { get; set; } = 14600;
 
-        /// <summary>Loopback TCP destination port for the standalone router management client.</summary>
-        public int ManagementPort { get; set; } = 14610;
+        public List<LinkConfig> RouterLinks { get; set; } = new List<LinkConfig>();
+        public string RouterPreferredLink { get; set; } = "";
 
         // ============================================================
         // UI Configuration
@@ -123,7 +114,7 @@ namespace NOMAD.MissionPlanner
 
 
         // ============================================================
-        // Configured actuator commands use authenticated typed runtime IPC.
+        // Saved actuator mappings bind custom payload controls to this aircraft profile.
         public string JoystickPositionActuatorId { get; set; } = "";
         // ============================================================
         // Joystick Configuration (Mission Planner DirectInput-based)

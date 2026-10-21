@@ -120,10 +120,7 @@
       SDK-style project). obj/ and bin/ are excluded so generated
       AssemblyAttributes and prior build output are never compiled.
     -->
-    <!-- Mission Planner links router config/status contracts and the elapsed clock. The standalone host owns routing. -->
-    <Compile Include="..\..\infra\transport\ground_router\RouterClock.cs" />
-    <Compile Include="..\..\infra\transport\ground_router\RouterConfig.cs" />
-    <Compile Include="..\..\infra\transport\ground_router\RouterManagementProtocol.cs" />
+    <Compile Include="..\..\infra\transport\ground_router\*.cs" />
         <Compile Include="**\*.cs" Exclude="obj\**\*.cs;bin\**\*.cs;Plugin\ReleaseIdentity.cs" />
     <Compile Include="..\..\build\release\ReleaseIdentity.cs" Condition="Exists('..\..\build\release\ReleaseIdentity.cs')" />
     <Compile Include="Plugin\ReleaseIdentity.cs" Condition="!Exists('..\..\build\release\ReleaseIdentity.cs')" />

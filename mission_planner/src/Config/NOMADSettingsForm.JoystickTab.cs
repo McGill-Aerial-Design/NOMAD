@@ -173,60 +173,19 @@ namespace NOMAD.MissionPlanner
                 _switchButtons[index] = AddNumericUpDown(tab, 170, y, 65, 0, 127, index);
                 y += 27;
             }
-            var discover = new Button { Text = "Load runtime action labels", Location = new Point(20, y), Size = new Size(210, 28) };
-            discover.Click += async (s, e) => await LoadActuatorConfigurationAsync();
-            tab.Controls.Add(discover);
+            _chkKillSwitchEnabled.Enabled = false;
+            _numTerminationButton.Enabled = false;
+            AddLabel(tab, "Use saved payload-id:operation bindings; initial held buttons never activate.", 20, y, Color.Gold);
 
             return tab;
         }
 
-        private readonly System.Collections.Generic.Dictionary<string, string> _actionIds =
-            new System.Collections.Generic.Dictionary<string, string>();
-        private void ApplyActuatorActions(System.Collections.Generic.IReadOnlyList<Connectivity.NomadActuator> actuators)
-        {
-            var combos = new[] { _cmbSw1Up, _cmbSw1Down, _cmbSw2Up, _cmbSw2Down, _cmbSw3Up, _cmbSw3Down };
-            var preservedIds = combos.Select(combo => ActionIdForLabel(combo.Text)).ToArray();
-            _actionIds.Clear();
-            _actionIds["None"] = "None";
-            foreach (var actuator in actuators)
-            {
-                foreach (var action in actuator.Actions)
-                {
-                    if (action.Control != "button")
-                    {
-                        continue;
-                    }
-                    string id = actuator.Id + ":" + action.Operation;
-                    _actionIds[actuator.Name + " / " + action.Label + " [" + id + "]"] = id;
-                }
-            }
-            for (int index = 0; index < combos.Length; index++)
-            {
-                var combo = combos[index];
-                string keep = preservedIds[index];
-                combo.Items.Clear();
-                combo.Items.AddRange(_actionIds.Keys.ToArray());
-                combo.Text = _actionIds.FirstOrDefault(entry => entry.Value == keep).Key ?? keep;
-            }
-            UpdatePositionEligibility();
-        }
         private void UpdatePositionEligibility()
         {
-            if (_txtJoyPositionActuatorId == null || _lblJoyPositionEligibility == null) { return; }
-            var metadata = SettingsRuntimeIsCurrent() ?
-                OutputController.GetContinuousAxisMetadata(_txtJoyPositionActuatorId.Text.Trim()) : null;
-            bool allowed = metadata?.ContinuousAxisAllowed == true;
-            _chkJoyPositionEnabled.Enabled = allowed;
-            if (!allowed && !_loadingAircraft && SettingsRuntimeIsCurrent())
-            {
-                _chkJoyPositionEnabled.Checked = false;
-            }
-            _lblJoyPositionEligibility.Text = allowed ? "Runtime supports continuous HID position input for this actuator." :
-                !string.IsNullOrEmpty(metadata?.ContinuousAxisBlockedReason) ? metadata.ContinuousAxisBlockedReason :
-                "Continuous HID binding is unavailable. Load runtime actions and select an eligible actuator; use the UI for discrete confirmations.";
+            if (_lblJoyPositionEligibility == null) { return; }
+            _lblJoyPositionEligibility.Text = "Continuous position requires a nonhazardous ServoPosition with confirmation_count=0. Other outputs use discrete buttons.";
         }
 
-        private string ActionIdForLabel(string label) => _actionIds.TryGetValue(label ?? "", out var id) ? id : label ?? "None";
 
         private static string[] BuildDeviceComboList(System.Collections.Generic.IList<string> devices)
         {

@@ -4,47 +4,11 @@
     "contexts": [],
     "checks": [
       {
-        "context": "Python tools and regression guards",
+        "context": "Mission Planner plugin build and tests (Windows)",
         "app_id": 15368
       },
       {
-        "context": "C++ core (ubuntu-latest)",
-        "app_id": 15368
-      },
-      {
-        "context": "C++ core (windows-latest)",
-        "app_id": 15368
-      },
-      {
-        "context": "Core release qualification (ubuntu-latest)",
-        "app_id": 15368
-      },
-      {
-        "context": "Core release qualification (windows-latest)",
-        "app_id": 15368
-      },
-      {
-        "context": "MAVSDK qualification (ubuntu-latest)",
-        "app_id": 15368
-      },
-      {
-        "context": "MAVSDK qualification (windows-latest)",
-        "app_id": 15368
-      },
-      {
-        "context": "ruff + mypy",
-        "app_id": 15368
-      },
-      {
-        "context": "shellcheck",
-        "app_id": 15368
-      },
-      {
-        "context": "Safety qualification gate",
-        "app_id": 15368
-      },
-      {
-        "context": "Mission Planner and router qualification gate",
+        "context": "Documentation and Python checks",
         "app_id": 15368
       }
     ]

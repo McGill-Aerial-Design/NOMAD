@@ -62,15 +62,15 @@ namespace NOMAD.MissionPlanner
     public class LinkConfig
     {
         internal LinkConfig Snapshot() => (LinkConfig)MemberwiseClone();
-        public string Id { get; set; }
-        public string Name { get; set; }
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
         public bool Enabled { get; set; } = true;
         public string Transport { get; set; } = "UDP";
         public string BindAddress { get; set; } = "0.0.0.0";
         public int Port { get; set; }
         public string RemoteHost { get; set; } = "";
         public int RemotePort { get; set; }
-        public string Device { get; set; } = "COM3";
+        public string Device { get; set; } = "";
         public int BaudRate { get; set; } = 420000;
         public int Priority { get; set; }
         public double ReconnectSeconds { get; set; } = 3;
@@ -78,11 +78,11 @@ namespace NOMAD.MissionPlanner
     public class ConsumerConfig
     {
         internal ConsumerConfig Snapshot() => (ConsumerConfig)MemberwiseClone();
-        public string Id { get; set; }
+        public string Id { get; set; } = "";
         public int RouterPort { get; set; }
         // Zero learns one loopback client's source port; nonzero is a fixed client-owned listener.
         public int ClientPort { get; set; }
-        // Other consumers default to bidirectional; the router reserves mission_planner as receive-only.
+        // The plugin derives its single Mission Planner consumer as bidirectional.
         public bool AllowOutbound { get; set; } = true;
     }
 
@@ -104,9 +104,7 @@ namespace NOMAD.MissionPlanner
             public double HeartbeatTimeoutSec = 3.0;
             public double FailoverCooldownSec = 2.0;
 
-            // The management endpoint is deliberately separate from raw MAVLink
-            // consumer sockets and is always bound to IPv4 loopback.
-            public int ManagementPort = 14610;
+
         }
 
     }

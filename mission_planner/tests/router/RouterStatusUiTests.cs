@@ -8,7 +8,6 @@ using System.IO;
 using System.Reflection;
 using System.Windows.Forms;
 using NOMAD.MissionPlanner;
-using NOMAD.MissionPlanner.Connectivity;
 
 internal static class RouterStatusUiTests
 {
@@ -31,8 +30,8 @@ internal static class RouterStatusUiTests
             return File.Exists(path) ? Assembly.LoadFrom(path) : null;
         };
         Run("dashboard router summary", DashboardSummary);
-        Run("dashboard runtime status entry", DashboardRuntimeStatusEntry);
         Run("Links view availability", LinksViewAvailability);
+        Run("settings save preserves router and unload session", SettingsRouterLifetime);
         Run("aircraft profile retires cached views", AircraftProfileRetiresCachedViews);
         Console.WriteLine($"Router status UI checks: {_checks}; failures: {_failures}");
         return _failures == 0 ? 0 : 1;
@@ -60,57 +59,51 @@ internal static class RouterStatusUiTests
         }
     }
 
-    private static StandaloneRouterClient CreateStatusClient(Func<double> seconds)
+    private static void SettingsRouterLifetime()
     {
-        var config = new MAVLinkConnectionManager.ConnectionConfig();
-        Type clockType = typeof(StandaloneRouterClient).Assembly.GetType("NOMAD.MissionPlanner.RouterClock", true);
-        object clock = Activator.CreateInstance(clockType, PrivateInstance, null, new object[] { seconds, null }, null);
-        return (StandaloneRouterClient)Activator.CreateInstance(typeof(StandaloneRouterClient), PrivateInstance,
-            null, new object[] { config, clock }, null);
-    }
-
-    private static void ApplyStatus(StandaloneRouterClient client)
-    {
-        var status = new RouterStatusSnapshot { Running = true, ActiveLinkId = "cell" };
-        status.Links.Add(new RouterLinkStatusSnapshot
-            { StableId = "cell", Enabled = true, IsOpen = true, IsConnected = true, Health = "Good" });
-        status.Links.Add(new RouterLinkStatusSnapshot { StableId = "wifi", Enabled = true });
-        status.Links.Add(new RouterLinkStatusSnapshot { StableId = "spare", Enabled = false });
-        typeof(StandaloneRouterClient).GetMethod("ApplyStatus", PrivateInstance).Invoke(client, new object[] { status });
+        var plugin = (NOMADPlugin)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(NOMADPlugin));
+        var type = typeof(NOMADPlugin);
+        using (var session = new System.Threading.CancellationTokenSource())
+        using (var replacement = new System.Threading.CancellationTokenSource())
+        using (var manager = new MAVLinkConnectionManager(new MAVLinkConnectionManager.ConnectionConfig
+        {
+            RouterLocalPort = 33200, Links = new List<LinkConfig>
+            { new LinkConfig { Id = "primary", Port = 33201, BindAddress = "127.0.0.1" } }
+        }))
+        {
+            type.GetField("_videoShutdown", PrivateInstance).SetValue(plugin, session);
+            var active = type.GetMethod("IsActiveSession", PrivateInstance);
+            Check((bool)active.Invoke(plugin, new object[] { session }), "current plugin session permits settings");
+            manager.StartMonitoring();
+            type.GetField("_connectionManager", PrivateInstance).SetValue(plugin, manager);
+            type.GetField("_config", PrivateInstance).SetValue(plugin, new NOMADConfig());
+            var routerField = typeof(MAVLinkConnectionManager).GetField("_router", PrivateInstance);
+            object original = routerField.GetValue(manager);
+            type.GetMethod("ApplyRouterClientSettings", PrivateInstance).Invoke(plugin, new object[] { false });
+            Check(manager.IsMonitoring && ReferenceEquals(original, routerField.GetValue(manager)),
+                "unchanged router settings Save preserves the active router and endpoints");
+            type.GetField("_videoShutdown", PrivateInstance).SetValue(plugin, replacement);
+            Check(!(bool)active.Invoke(plugin, new object[] { session }), "dialog from an earlier session cannot apply");
+            replacement.Cancel();
+            Check(!(bool)active.Invoke(plugin, new object[] { replacement }), "cancelled session cannot apply");
+            foreach (string action in new[] { "ShowSettings", "ShowMainScreen", "ShowPopOutWindow", "ShowLinkHealthPanel" })
+            {
+                type.GetMethod(action, PrivateInstance).Invoke(plugin, null);
+            }
+            Check(ReferenceEquals(manager, type.GetField("_connectionManager", PrivateInstance).GetValue(plugin)),
+                "stale menu callbacks cannot recreate plugin owners");
+        }
+        NOMADMainScreen.SetStaticConfig(null);
     }
 
     private static void DashboardSummary()
     {
-        double now = 0;
-        var previousService = NotificationService.Shared;
-        using (var service = new NotificationService())
         using (var manager = new MAVLinkConnectionManager())
+        using (var view = new NOMADDashboardView(new NOMADConfig { VideoUrl = "" }, manager))
         {
-            NotificationService.Shared = service;
-            try
-            {
-                var client = CreateStatusClient(() => now);
-                typeof(MAVLinkConnectionManager).GetField("_standalone", PrivateInstance).SetValue(manager, client);
-                using (var view = new NOMADDashboardView(new NOMADConfig { VideoUrl = "" }, manager))
-                {
-                    var update = typeof(NOMADDashboardView).GetMethod("UpdateLinksCard", PrivateInstance);
-                    var label = (Label)typeof(NOMADDashboardView).GetField("_lblLinks", PrivateInstance).GetValue(view);
-                    ApplyStatus(client);
-                    update.Invoke(view, null);
-                    Check(manager.IsRouterAvailable, "zero-time status is fresh");
-                    Check(label.Text.Contains("1/3"), "dashboard counts arbitrary configured links");
-                    now = 4;
-                    Check(manager.IsStatusStale && manager.ActiveLink == "cell", "aged status retains the active ID");
-                    update.Invoke(view, null);
-                    Check(label.Text.Contains("stale"), "dashboard reports aged management data");
-                    Check(label.ForeColor != NOMADTheme.SUCCESS, "stale dashboard summary must not be green");
-                    client.Stop();
-                    update.Invoke(view, null);
-                    Check(label.Text.Contains("unavailable"), "dashboard reports disconnected management");
-                    Check(label.ForeColor != NOMADTheme.SUCCESS, "unavailable dashboard summary must not be green");
-                }
-            }
-            finally { NotificationService.Shared = previousService; }
+            typeof(NOMADDashboardView).GetMethod("UpdateLinksCard", PrivateInstance).Invoke(view, null);
+            var label = (Label)typeof(NOMADDashboardView).GetField("_lblLinks", PrivateInstance).GetValue(view);
+            Check(label.Text.Contains("stopped"), "dashboard reports an unconfigured router as stopped");
         }
     }
 
@@ -123,80 +116,6 @@ internal static class RouterStatusUiTests
             CheckLinksView(manager, null, false, "failed panel initialization");
             CheckLinksView(manager, new NOMADConfig { RouterClientEnabled = false }, true, "disabled retained client");
         }
-    }
-
-    private static void DashboardRuntimeStatusEntry()
-    {
-        var previousService = NotificationService.Shared;
-        var controller = typeof(NOMADDashboardView).Assembly.GetType("NOMAD.MissionPlanner.OutputController", true);
-        var initialize = controller.GetMethod("Initialize", BindingFlags.Static | BindingFlags.NonPublic);
-        using var service = new NotificationService();
-        NotificationService.Shared = service;
-        try
-        {
-            var cached = new NOMADConfig { CoreClientCredential = "fixture-key", VideoUrl = "" };
-            using var view = new NOMADDashboardView(cached, null);
-            using var host = new Form { ShowInTaskbar = false, Opacity = 0, Width = 900, Height = 650 };
-            view.Dock = DockStyle.Fill;
-            host.Controls.Add(view);
-            host.Show();
-            Application.DoEvents();
-            var update = typeof(NOMADDashboardView).GetMethod("UpdateCoreCard", PrivateInstance);
-            var label = (Label)typeof(NOMADDashboardView).GetField("_lblCore", PrivateInstance).GetValue(view);
-            initialize.Invoke(null, new object[] { cached });
-            update.Invoke(view, null);
-            Check(label.Text.Contains("configured") && label.ForeColor != NOMADTheme.SUCCESS,
-                "dashboard configuration remains distinct from runtime readiness");
-            initialize.Invoke(null, new object[] { null });
-            update.Invoke(view, null);
-            Check(label.Text == "Not configured", "cached dashboard rechecks the current core client");
-            var invalid = new NomadCoreClient("fixture-key", 0);
-            Check(!invalid.IsConfigured && invalid.RuntimePort == 0, "invalid modal fixture port has no default fallback");
-            if (invalid.IsConfigured || invalid.RuntimePort != 0) { return; }
-            initialize.Invoke(null, new object[] { new NOMADConfig { CoreRuntimePort = 0 } });
-            var buttons = view.Controls.Find("ReadRuntimeStatus", true);
-            Check(buttons.Length == 1 && buttons[0] is Button, "dashboard provides its explicit runtime read button");
-            if (buttons.Length != 1) { return; }
-            Check(!buttons[0].Bounds.IntersectsWith(label.Bounds), "runtime read button preserves the core value's space");
-            InspectRuntimeDialog((Button)buttons[0]);
-        }
-        finally
-        {
-            initialize.Invoke(null, new object[] { null });
-            NotificationService.Shared = previousService;
-        }
-    }
-
-    private static void InspectRuntimeDialog(Button button)
-    {
-        bool inspected = false;
-        var watch = Stopwatch.StartNew();
-        using var timer = new System.Windows.Forms.Timer { Interval = 25 };
-        timer.Tick += (sender, args) =>
-        {
-            foreach (Form dialog in Application.OpenForms)
-            {
-                if (!dialog.Modal) { continue; }
-                if (dialog.Text == "NOMAD runtime snapshot")
-                {
-                    var summaries = dialog.Controls.Find("RuntimeStatusSummary", true);
-                    Check(summaries.Length == 1 && summaries[0].Text.Contains("port is invalid"),
-                        "real dashboard click reads the current client and reports its local configuration failure");
-                    inspected = true;
-                    dialog.Close();
-                    return;
-                }
-                if (watch.ElapsedMilliseconds > 5000)
-                {
-                    dialog.Close();
-                    return;
-                }
-            }
-        };
-        timer.Start();
-        button.PerformClick();
-        timer.Stop();
-        Check(inspected, "dashboard runtime dialog completes under its UI test deadline");
     }
 
     private static void CheckLinksView(MAVLinkConnectionManager manager, NOMADConfig config, bool disabled, string name)
@@ -227,7 +146,7 @@ internal static class RouterStatusUiTests
         var alpha = new NOMADConfig { AircraftName = "Alpha UI", RouterClientEnabled = false };
         var beta = new NOMADConfig
         {
-            AircraftName = "Beta UI", RouterClientEnabled = false, CoreRuntimePort = 14652,
+            AircraftName = "Beta UI", RouterClientEnabled = false,
             VideoUrl = "rtsp://profile-beta.invalid/stream",
         };
         NOMADMainScreen.SetStaticConfig(alpha, null, outlines, monitor);

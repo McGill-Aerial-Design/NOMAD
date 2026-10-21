@@ -34,14 +34,14 @@ function Invoke-AircraftProfileTests {
     $alpha.Config.JoystickGimbalMaxRateDegSec = 20
     $alpha.Config.GimbalMountMode = 2
     $alpha.Config.ActuatorDefinitions = [Newtonsoft.Json.Linq.JArray]::Parse(
-        '[{"id":"alpha_output","name":"Alpha Output","behavior":"RelayToggle","channel":0}]')
+        '[{"id":"alpha_output","name":"Alpha Output","behavior":"RelayToggle","channel":0,"safe_pwm":1000}]')
     $beta = Load-Config ('{"AircraftName":"Profile Beta","FlightControllerModel":"Controller Beta",' +
         '"ReceiverType":"Receiver Beta","AircraftFirmware":"fixture-version","Airframe":"fixture-airframe",' +
         '"RcArmingChannel":7,"RcFlightModeChannel":8,"CoreRuntimePort":14642,' +
         '"RouterLocalPort":14643,"ManagementPort":14644,"CoreClientCredential":"fixture-only-beta-key",' +
         '"VideoUrl":"rtsp://profile-beta.invalid/stream","AutoStartHudVideo":false,' +
         '"JoystickGimbalMaxRateDegSec":80,"GimbalMountMode":3,"JoystickGimbalPitchInvert":false,' +
-        '"ActuatorDefinitions":[{"id":"beta_output","name":"Beta Output","behavior":"RelayToggle","channel":1}]}')
+        '"ActuatorDefinitions":[{"id":"beta_output","name":"Beta Output","behavior":"RelayToggle","channel":1,"safe_pwm":1000}]}')
     $added = $profiles.Add($beta)
     $profiles.Save()
     $reopened = Load-Profiles
@@ -53,22 +53,20 @@ function Invoke-AircraftProfileTests {
         $restored.RcFlightModeChannel -ne 8) {
         throw 'Restart did not restore the selected aircraft and its hardware/RC values.'
     }
-    if ($restored.CoreRuntimePort -ne 14642 -or $restored.RouterLocalPort -ne 14643 -or
-        $restored.ManagementPort -ne 14644 -or $restored.VideoUrl -ne 'rtsp://profile-beta.invalid/stream' -or
+    if ($restored.RouterLocalPort -ne 14643 -or $restored.VideoUrl -ne 'rtsp://profile-beta.invalid/stream' -or
         $restored.AutoStartHudVideo -or $restored.JoystickGimbalMaxRateDegSec -ne 80 -or
         $restored.GimbalMountMode -ne 3 -or $restored.JoystickGimbalPitchInvert -or
         $restored.ActuatorDefinitions.Count -ne 1 -or
         $restored.ActuatorDefinitions[0]['id'].ToString() -ne 'beta_output') {
         throw 'Restart mixed another aircraft''s connections, gimbal or actuator definitions into the selected profile.'
     }
-    if ($restored.CoreClientCredential -ne 'fixture-only-beta-key' -or
-        [IO.File]::ReadAllText($legacy) -cne $legacyText) {
-        throw 'Local credentials were lost or legacy configuration was rewritten.'
+    if ([IO.File]::ReadAllText($legacy) -cne $legacyText) {
+        throw 'Loading legacy configuration rewrote operator files.'
     }
     $clone = $reopened.Clone()
     $clone.Selected.Config.ActuatorDefinitions[0]['name'] = [Newtonsoft.Json.Linq.JValue]::new('Edited draft')
-    $clone.Selected.Config.CoreRuntimePort = 14652
-    if ($reopened.Selected.Config.CoreRuntimePort -ne 14642 -or
+    $clone.Selected.Config.RouterLocalPort = 14652
+    if ($reopened.Selected.Config.RouterLocalPort -ne 14643 -or
         $reopened.Selected.Config.ActuatorDefinitions[0]['name'].ToString() -ne 'Beta Output') {
         throw 'Editing a draft profile mutated the live profile collection.'
     }
@@ -80,7 +78,7 @@ function Invoke-AircraftProfileTests {
         throw 'Single-aircraft export leaked credentials or another aircraft configuration.'
     }
     $imported = $ConfigType.GetMethod('LoadFromFile').Invoke($null, [object[]]@([string]$portable))
-    if ($imported.AircraftName -ne 'Profile Beta' -or $imported.CoreClientCredential -ne '' -or
+    if ($imported.AircraftName -ne 'Profile Beta' -or
         $imported.GimbalMountMode -ne 3 -or $imported.RcFlightModeChannel -ne 8 -or
         $imported.ActuatorDefinitions[0]['id'].ToString() -ne 'beta_output') {
         throw 'Portable aircraft configuration did not restore independently of local credentials.'
@@ -89,12 +87,66 @@ function Invoke-AircraftProfileTests {
     $profiles.Save()
     $selectedAlpha = Load-Profiles
     if ($selectedAlpha.Selected.Config.AircraftName -ne 'Profile Alpha' -or
-        $selectedAlpha.Selected.Config.CoreRuntimePort -ne 14641 -or
         $selectedAlpha.Selected.Config.RcArmingChannel -ne 5 -or
         $selectedAlpha.Selected.Config.JoystickGimbalMaxRateDegSec -ne 20 -or
         $selectedAlpha.Selected.Config.ActuatorDefinitions[0]['id'].ToString() -ne 'alpha_output') {
         throw 'Changing persisted selection did not restore the other aircraft independently.'
     }
+    $beforeGuardPrimary = [IO.File]::ReadAllText($primary)
+    $beforeGuardBackup = [IO.File]::ReadAllText($backup)
+    $saveForConnection = $profilesType.GetMethod('SaveForConnection', [Reflection.BindingFlags]'Instance,NonPublic')
+    $draft = $selectedAlpha.Clone()
+    $draft.Selected.Config.AudioAlerts = -not $draft.Selected.Config.AudioAlerts
+    $changed = $saveForConnection.Invoke($draft, [object[]]@($selectedAlpha, $true))
+    if ($changed) { throw 'Audio-only Save requested a router restart.' }
+    $beforeRefusedSave = [IO.File]::ReadAllText($primary)
+    $changedDraft = $draft.Clone()
+    $changedDraft.Selected.Config.RouterLocalPort = 14670
+    $rejected = $false
+    try { $saveForConnection.Invoke($changedDraft, [object[]]@($draft, $true)) | Out-Null } catch { $rejected = $true }
+    if (-not $rejected -or [IO.File]::ReadAllText($primary) -cne $beforeRefusedSave) {
+        throw 'Connected router change persisted a refused aircraft mapping.'
+    }
+    foreach ($setting in @('definition', 'input')) {
+        $outputDraft = $draft.Clone()
+        if ($setting -eq 'definition') {
+            $outputDraft.Selected.Config.ActuatorDefinitions[0]['channel'] = [Newtonsoft.Json.Linq.JValue]::new(2)
+        } else {
+            $outputDraft.Selected.Config.JoystickGimbalDeadzone = 0.2
+        }
+        $rejected = $false
+        try { $saveForConnection.Invoke($outputDraft, [object[]]@($draft, $true)) | Out-Null } catch { $rejected = $true }
+        if (-not $rejected -or [IO.File]::ReadAllText($primary) -cne $beforeRefusedSave) {
+            throw 'Connected output/input calibration change persisted before disconnect.'
+        }
+    }
+    $payloadType = $Plugin.GetType('NOMAD.MissionPlanner.PayloadController', $true)
+    $payloadType.GetMethod('ApplyProfile', [Reflection.BindingFlags]'Static,NonPublic').Invoke($null, [object[]]@($draft.Selected.Config)) | Out-Null
+    $payload = $payloadType.GetProperty('Current', [Reflection.BindingFlags]'Static,NonPublic').GetValue($null)
+    $busyField = $payloadType.GetField('_busy', [Reflection.BindingFlags]'Instance,NonPublic')
+    $busyField.SetValue($payload, $true)
+    try {
+        $rejected = $false
+        try { $saveForConnection.Invoke($draft.Clone(), [object[]]@($draft, $true)) | Out-Null } catch { $rejected = $true }
+        if (-not $rejected -or [IO.File]::ReadAllText($primary) -cne $beforeRefusedSave) {
+            throw 'Settings persisted while a native payload operation could lose its captured Safe target.'
+        }
+    } finally {
+        $busyField.SetValue($payload, $false)
+        $payloadType.GetMethod('Shutdown', [Reflection.BindingFlags]'Static,NonPublic').Invoke($null, @()) | Out-Null
+    }
+    $selectedDraft = $draft.Clone()
+    $selectedDraft.SelectedId = $added.Id
+    $rejected = $false
+    try { $saveForConnection.Invoke($selectedDraft, [object[]]@($draft, $true)) | Out-Null } catch { $rejected = $true }
+    if (-not $rejected -or [IO.File]::ReadAllText($primary) -cne $beforeRefusedSave) {
+        throw 'Connected aircraft selection persisted before disconnect.'
+    }
+    if (-not $saveForConnection.Invoke($changedDraft, [object[]]@($draft, $false))) {
+        throw 'Disconnected router change did not request replacement.'
+    }
+    [IO.File]::WriteAllText($primary, $beforeGuardPrimary)
+    [IO.File]::WriteAllText($backup, $beforeGuardBackup)
     $validPrimary = [IO.File]::ReadAllText($primary)
     $validBackup = [IO.File]::ReadAllText($backup)
     [IO.File]::Move($primary, $primary + '.held')
@@ -191,11 +243,11 @@ function Invoke-AircraftProfileUiTests {
         '"FlightControllerModel":"Beta controller","ReceiverType":"Beta receiver",' +
         '"RcArmingChannel":7,"RcFlightModeChannel":8,"GimbalMountMode":3,"JoystickGimbalMaxRateDegSec":80,' +
         '"JoystickGimbalPitchAxis":"Rz","JoystickPositionEnabled":true,"JoystickPositionActuatorId":"beta",' +
-        '"ActuatorDefinitions":[{"id":"beta"}]}')
+        '"ActuatorDefinitions":[{"id":"beta","name":"Beta","behavior":"RelayToggle","channel":0,"safe_pwm":1000}]}')
     $betaId = $profiles.Add($beta).Id
     $profiles.SelectedId = $alphaId
     $outputType.GetMethod('Initialize', $static).Invoke($null, [object[]]@($alpha)) | Out-Null
-    $initialClient = $outputType.GetMethod('CreateCoreClient', $static).Invoke($null, @())
+    $initialGeneration = $outputType.GetProperty('Generation', $static).GetValue($null)
     $gimbalType.GetMethod('ApplyProfile', $static).Invoke($null, [object[]]@($alpha)) | Out-Null
     $gimbalType.GetMethod('SetTargetAngles').Invoke($null, [object[]]@([single]12, [single]18)) | Out-Null
     $arguments[0] = $profiles
@@ -212,9 +264,7 @@ function Invoke-AircraftProfileUiTests {
             (Profile-Control '_txtReceiver').Text -ne 'Beta receiver' -or
             (Profile-Control '_cmbArmingChannel').SelectedIndex -ne 7 -or
             (Profile-Control '_cmbFlightModeChannel').SelectedIndex -ne 8 -or
-            (Profile-Control '_numCoreRuntimePort').Value -ne 14652 -or
             (Profile-Control '_numRouterLocalPort').Value -ne 14653 -or
-            (Profile-Control '_numManagementPort').Value -ne 14654 -or
             (Profile-Control '_txtVideoUrl').Text -ne 'rtsp://beta-ui.invalid/stream') {
             throw 'Aircraft selection did not restore the selected hardware, RC and connection controls.'
         }
@@ -225,20 +275,9 @@ function Invoke-AircraftProfileUiTests {
             (Profile-Control '_actuatorJson').Text -notmatch '"beta"') {
             throw 'Aircraft selection lost gimbal, actuator or unavailable-backend input settings.'
         }
-        $load = $formType.GetMethod('LoadActuatorConfigurationAsync', $instance).Invoke($form, @())
-        if (-not $load.IsCompleted -or (Profile-Control '_actuatorConfigStatus').Text -notmatch 'Save this aircraft') {
-            throw 'An unsaved selected profile accessed the active aircraft runtime.'
-        }
-        $land = $form.Controls.Find('RequestLand', $true)[0].Parent
-        $landTask = $land.GetType().GetMethod('RequestLandAsync', $instance).Invoke($land, @())
-        if (-not $landTask.IsCompleted -or
-            $land.Controls.Find('LandStatus', $true)[0].Text -notmatch 'Aircraft profile changed') {
-            throw 'The LAND control for an unsaved profile could request the active aircraft.'
-        }
         (Profile-Control '_numJoyGimbalMaxRate').Value = 90
         $selector.SelectedItem = $form.Profiles.Aircraft[0]
         if ((Profile-Control '_txtFlightController').Text -ne 'Alpha draft controller' -or
-            (Profile-Control '_numCoreRuntimePort').Value -ne 14651 -or
             (Profile-Control '_numJoyGimbalMaxRate').Value -ne 30) {
             throw 'Returning to an aircraft did not restore its independent draft.'
         }
@@ -266,10 +305,9 @@ function Invoke-AircraftProfileUiTests {
             $gimbalType.GetProperty('MaxRateDegSec').GetValue($null, $null) -ne 30 -or
             $gimbalType.GetProperty('TargetPitchDeg').GetValue($null, $null) -ne 12 -or
             $gimbalType.GetProperty('TargetRollDeg').GetValue($null, $null) -ne 18 -or
-            -not [object]::ReferenceEquals($initialClient,
-                $outputType.GetMethod('CreateCoreClient', $static).Invoke($null, @()))) {
-            throw 'Draft profile changes affected the live collection, gimbal or runtime connection before Save.'
+            $outputType.GetProperty('Generation', $static).GetValue($null) -ne $initialGeneration) {
+            throw 'Draft profile changes affected the live collection, gimbal or native output generation before Save.'
         }
     } finally { $form.Dispose() }
-    Write-Host 'Real aircraft selector, draft isolation, copy/new/remove, import and runtime guard checks passed.'
+    Write-Host 'Real aircraft selector, draft isolation, copy/new/remove, import and native output isolation checks passed.'
 }

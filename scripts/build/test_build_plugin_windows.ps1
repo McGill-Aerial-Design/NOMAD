@@ -177,13 +177,11 @@ function New-ReleaseIdentityFixture {
     $sourceRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $SourceBuildScript))
     $destination = Join-Path $Fixture.Repo 'scripts\release'
     New-Item -ItemType Directory -Path $destination -Force | Out-Null
-    foreach ($name in @('identity.py', 'manifest.py', 'mission_planner_target.py', 'mission-planner-target.json')) {
+    foreach ($name in @('mission-planner-target.json')) {
         Copy-Item -LiteralPath (Join-Path $sourceRoot "scripts\release\$name") -Destination $destination
     }
     Invoke-FixtureGit $Fixture @('init', '--quiet')
     Invoke-FixtureGit $Fixture @('add', 'scripts', 'mission_planner')
-    $mavsdkFixtureSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-    Invoke-FixtureGit $Fixture @('update-index', '--add', '--cacheinfo', "160000,$mavsdkFixtureSha,third_party/MAVSDK")
     Invoke-FixtureGit $Fixture @('-c', 'user.name=NOMAD qualification fixture', '-c',
         'user.email=fixture@example.invalid', 'commit', '--quiet', '--no-gpg-sign', '-m', 'Synthetic fixture source')
 }
@@ -403,19 +401,18 @@ function Test-BuildOnlySuccess {
     if (-not (Test-Path -LiteralPath $Fixture.Artifact -PathType Leaf)) {
         throw "Build-only did not produce the expected artifact at $($Fixture.Artifact)"
     }
-    $identityPath = Join-Path $Fixture.Repo 'build\release\package-identity.json'
-    $identity = Get-Content -LiteralPath $identityPath -Raw | ConvertFrom-Json
-    Assert-Equal $identity.official $false 'Synthetic development build must not claim a tagged release'
-    Assert-Equal $identity.release_version "dev-$($identity.source_sha)" 'Development identity must bind exact source'
-    Assert-Equal $identity.mavsdk_sha 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'Identity omitted fixture MAVSDK pin'
-    Assert-Equal $identity.name 'plugin' 'Build generated the wrong component identity'
     $targetPath = Join-Path $Fixture.Repo 'scripts/release/mission-planner-target.json'
     $targetVersion = (Get-Content $targetPath -Raw | ConvertFrom-Json).version
-    Assert-Equal $identity.mission_planner_target $targetVersion 'Build generated an incompatible Mission Planner target'
     if (-not (Test-Path -LiteralPath (Join-Path $Fixture.Repo 'build\release\ReleaseIdentity.cs'))) {
         throw 'Plugin build did not generate its C# embedded identity input.'
     }
     $csharp = Get-Content -LiteralPath (Join-Path $Fixture.Repo 'build\release\ReleaseIdentity.cs') -Raw
+    $sourceSha = & git -C $Fixture.Repo rev-parse HEAD
+    Assert-Contains $csharp "SourceSha = `"$sourceSha`"" 'Plugin identity omitted exact source SHA'
+    if (Test-Path (Join-Path $Fixture.Repo 'build/release/package-identity.json')) {
+        throw 'Plugin-only build unexpectedly produced a runtime package identity.'
+    }
+
     Assert-Contains $csharp "MissionPlannerTarget = `"$targetVersion`"" `
         'C# build metadata did not carry the reviewed Mission Planner target'
 }

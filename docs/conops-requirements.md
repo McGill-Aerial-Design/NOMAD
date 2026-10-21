@@ -24,8 +24,8 @@ future acceptance evidence. Current implementation scope is in
 |---|---|
 | G0 | Source requirements and unresolved decisions reconciled |
 | G1 | Reproducible build, tests and repository baseline |
-| G-M | Pinned MAVSDK semantics, provenance and firmware qualification |
-| G2 | Runtime authority, fresh state, truthful outcomes and fault response |
+| G-M | Reviewed native Mission Planner/controller API semantics and aircraft firmware acceptance |
+| G2 | Native host ownership, stale-input fencing, truthful outcomes and fault response |
 | G3 | Actual deployment/compute placement and declared capability qualification |
 | G4 | Official server telemetry, traffic and demonstrated separation |
 | G5 | Task 1 survey evidence, coordination, return and landing |

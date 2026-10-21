@@ -88,30 +88,6 @@ internal static partial class GroundRouterTests
         target.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance).SetValue(target, value);
     }
 
-    private static void ManagementClockJumps()
-    {
-        foreach (var jump in new[] { 48.0, -96.0 })
-        {
-            var clock = new TimingClock();
-            using (var client = new StandaloneRouterClient(
-                new MAVLinkConnectionManager.ConnectionConfig(), clock.Source))
-            {
-                Check(client.IsStatusStale, "no status is stale even at monotonic zero");
-                var status = new RouterStatusSnapshot { Running = true, TimestampUtc = clock.Utc.ToString("O") };
-                TimingCall(client, "ApplyStatus", status);
-                clock.Jump(jump);
-                Check(client.IsRouterAvailable, "UTC jump " + jump + "h does not expire management status");
-                clock.Seconds = 3.5;
-                Check(!client.IsStatusStale, "status remains fresh exactly at 3500ms");
-                clock.Seconds = 3.501;
-                Check(client.IsStatusStale, "status expires above 3500ms despite UTC jump");
-                TimingCall(client, "ApplyStatus", status);
-                clock.Seconds += 1;
-                Check(client.IsRouterAvailable, "new status resets monotonic freshness");
-            }
-        }
-    }
-
     private static void PhysicalFreshnessClockJumps()
     {
         foreach (var jump in new[] { 48.0, -96.0 })
@@ -128,9 +104,8 @@ internal static partial class GroundRouterTests
                 "public heartbeat timestamp follows UTC jump");
             fixture.Clock.Seconds = 2.5;
             fixture.Poll();
-            var status = fixture.Router.GetStatusSnapshot();
-            Check(status.TimestampUtc == fixture.Clock.Utc.ToString("O"), "management timestamp remains UTC");
-            CheckTimingEqual(status.Links[0].LastPacketAgeMs.Value, 1500.0, "management age uses monotonic time");
+            CheckTimingEqual((fixture.Clock.Seconds - fixture.Links[0].LastPacket) * 1000, 1500,
+                "physical freshness uses monotonic time");
             Check(fixture.Links[0].Stats.Health == LinkHealth.Excellent, "heartbeat age exactly 1.5s is Excellent");
             fixture.Clock.Seconds = 2.751;
             fixture.Poll();
@@ -196,7 +171,7 @@ internal static partial class GroundRouterTests
             fixture.Poll();
             Check(link.Stats.IsOpen, "reconnect is eligible exactly at 2s");
             CheckTimingEqual(link.LastAttempt, 2.0, "attempt time is monotonic");
-            Check(fixture.Router.GetStatusSnapshot().Links[0].LastPacketAgeMs == null,
+            Check(fixture.Links[0].LastPacket == RouterClock.Unset,
                 "reopened link has no packet age before receiving");
         }
     }
@@ -316,142 +291,6 @@ internal static partial class GroundRouterTests
                 IPEndPoint sender = null;
                 Check(peer.Receive(ref sender).SequenceEqual(bytes), "only the expired echo reaches physical peer");
             }
-        }
-    }
-
-    private static async Task ManagementPollingClockJumps()
-    {
-        var clock = new TimingClock();
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        int requests = 0;
-        var startup = new Stopwatch();
-        long firstRequestTicks = -1;
-        using (var serverStarted = new ManualResetEventSlim())
-        {
-            var server = StartTimingStatusServer(
-                listener, () =>
-                {
-                    Interlocked.CompareExchange(ref firstRequestTicks, startup.ElapsedTicks, -1);
-                    Interlocked.Increment(ref requests);
-                }, serverStarted);
-            bool serverReady = serverStarted.Wait(2000);
-            Check(serverReady, "blocking status server worker starts before client polling");
-            if (!serverReady)
-            {
-                await StopTimingStatusServer(listener, server);
-                return;
-            }
-
-            var config = new MAVLinkConnectionManager.ConnectionConfig
-                { ManagementPort = ((IPEndPoint)listener.LocalEndpoint).Port };
-            using (var client = new StandaloneRouterClient(config, clock.Source))
-            {
-                try
-                {
-                    startup.Start();
-                    client.Start();
-                    // Cold connect/HELLO has its own bound; the injected polling clock stays at zero.
-                    bool clientReady = await WaitUntil(() => client.IsMonitoring, 3000);
-                    double helloObservedMs = startup.Elapsed.TotalMilliseconds;
-                    Console.WriteLine($"    Cold management HELLO observed at {helloObservedMs:F1} ms; " +
-                        $"ready={clientReady}, requests={Volatile.Read(ref requests)}");
-                    Check(clientReady, "cold management client validates HELLO within 3000ms");
-                    if (!clientReady)
-                    {
-                        return;
-                    }
-                    bool initialPoll = await WaitUntil(() => Volatile.Read(ref requests) == 1, 2000);
-                    long observedTicks = Volatile.Read(ref firstRequestTicks);
-                    string firstRequestMs = observedTicks < 0 ? "not observed"
-                        : (observedTicks * 1000.0 / Stopwatch.Frequency).ToString("F1") + " ms since Start";
-                    Console.WriteLine($"    First peer status request: {firstRequestMs}; " +
-                        $"requests={Volatile.Read(ref requests)}, monitoring={client.IsMonitoring}");
-                    Check(initialPoll, "initial status poll is immediate after validated HELLO");
-                    if (!initialPoll)
-                    {
-                        return;
-                    }
-                    clock.Jump(48);
-                    Check(!await WaitUntil(() => Volatile.Read(ref requests) > 1, 1100),
-                        "forward UTC jump and real-time waits do not advance injected polling clock");
-                    clock.Seconds = .999;
-                    Check(!await WaitUntil(() => Volatile.Read(ref requests) > 1, 350),
-                        "polling waits below 1000ms");
-                    clock.Seconds = 1;
-                    Check(await WaitUntil(() => Volatile.Read(ref requests) == 2, 1000),
-                        "poll occurs at exactly 1000ms");
-                    clock.Jump(-96);
-                    Check(!await WaitUntil(() => Volatile.Read(ref requests) > 2, 350),
-                        "backward UTC jump does not repoll");
-                    clock.Seconds = 2;
-                    Check(await WaitUntil(() => Volatile.Read(ref requests) == 3, 1000),
-                        "polling continues after backward jump");
-                }
-                finally
-                {
-                    client.Stop();
-                    await StopTimingStatusServer(listener, server);
-                }
-            }
-        }
-    }
-
-    private static async Task StopTimingStatusServer(TcpListener listener, Task server)
-    {
-        listener.Stop();
-        bool serverClosed = await WaitUntil(() => server.IsCompleted, 2000);
-        Check(serverClosed, "timing status server closes with client");
-        if (!serverClosed)
-        {
-            return;
-        }
-        try { await server; }
-        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.Interrupted) { }
-    }
-
-    private static Task StartTimingStatusServer(
-        TcpListener listener,
-        Action observedStatus,
-        ManualResetEventSlim started)
-    {
-        return Task.Factory.StartNew(
-            () =>
-            {
-                started.Set();
-                ServeTimingStatus(listener, observedStatus);
-            },
-            CancellationToken.None,
-            TaskCreationOptions.LongRunning,
-            TaskScheduler.Default);
-    }
-
-    private static void ServeTimingStatus(TcpListener listener, Action observedStatus)
-    {
-        using (var peer = listener.AcceptTcpClient())
-        using (var stream = peer.GetStream())
-        {
-            // A failing client cannot leave the fixture blocked indefinitely while reading its peer.
-            stream.ReadTimeout = 5000;
-            try
-            {
-                string line;
-                while ((line = RouterManagementProtocol.ReadLine(stream)) != null)
-                {
-                    var request = RouterManagementProtocol.Parse(line);
-                    var type = RouterManagementProtocol.GetString(request, "type");
-                    var id = RouterManagementProtocol.GetValue(request, "id");
-                    var response = type == "hello" ? RouterManagementProtocol.HelloResponse(id, "timing-test")
-                        : RouterManagementProtocol.StatusResponse(id, new RouterStatusSnapshot { Running = true });
-                    if (type == "get_status")
-                    {
-                        observedStatus();
-                    }
-                    var bytes = RouterManagementProtocol.EncodeLine(response);
-                    stream.Write(bytes, 0, bytes.Length);
-                }
-            }
-            catch (System.IO.IOException) { }
         }
     }
 

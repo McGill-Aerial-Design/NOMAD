@@ -147,9 +147,9 @@ namespace NOMAD.MissionPlanner
                     $"McGill Aerial Design\n\n" +
                     $"Hover the NOMAD menu for tools; click it to open the\n" +
                     $"NOMAD screen (dashboard, local advisory outlines, video,\n" +
-                    $"and standalone router status).\n\n" +
+                    $"and plugin router status).\n\n" +
                     $"Local outline advisory with received-position display,\n" +
-                    $"plugin-wide alerts with toast overlays, standalone-router\n" +
+                    $"plugin-wide alerts with toast overlays, plugin router\n" +
                     $"management and status, and configurable payload controls.\n\n" +
                     $"Video: {_config.VideoUrl}\n" +
                     $"Multi-Link: {(_config.RouterClientEnabled ? "Enabled" : "Disabled")}\n" +

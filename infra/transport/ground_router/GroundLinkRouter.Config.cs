@@ -27,10 +27,6 @@ namespace NOMAD.MissionPlanner
             {
                 throw new ArgumentException("Invalid router timing");
             }
-            if (config.ManagementPort <= 0 || config.ManagementPort > 65535)
-            {
-                throw new ArgumentException("Management endpoint requires a valid port");
-            }
             var ids = new HashSet<string>(StringComparer.Ordinal);
             var ports = new HashSet<int>();
             foreach (var link in links)
@@ -119,11 +115,7 @@ namespace NOMAD.MissionPlanner
                 {
                     throw new ArgumentException("Invalid or colliding consumer endpoint");
                 }
-                if (consumer.Id == "mission_planner" && consumer.AllowOutbound)
-                {
-                    throw new ArgumentException(
-                        "The mission_planner consumer is receive-only; set AllowOutbound to false.");
-                }
+
             }
             foreach (var consumer in consumers)
             {

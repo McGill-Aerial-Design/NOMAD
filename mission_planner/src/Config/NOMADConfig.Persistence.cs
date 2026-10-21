@@ -87,7 +87,6 @@ namespace NOMAD.MissionPlanner
                 Directory.CreateDirectory(directory);
 
             var profile = JObject.FromObject(this);
-            profile.Remove(nameof(CoreClientCredential));
             WriteAtomically(path, profile.ToString(Formatting.Indented));
         }
 
@@ -129,6 +128,10 @@ namespace NOMAD.MissionPlanner
 
         internal static void ValidateInputDocument(JObject document)
         {
+            // Retired service endpoints are discarded in memory; loading never rewrites operator files.
+            document.Remove("CoreRuntimePort");
+            document.Remove("CoreClientCredential");
+            document.Remove("ManagementPort");
             foreach (var property in document.Properties())
             {
                 // Json.NET's case-insensitive coercion must not bypass raw-token validation below.
@@ -138,6 +141,13 @@ namespace NOMAD.MissionPlanner
                 }
             }
             ValidateAircraftDocument(document);
+            if (document[nameof(RouterLinks)] != null) { ValidateRouterLinks(document[nameof(RouterLinks)]); }
+            if (document[nameof(RouterPreferredLink)] != null && document[nameof(RouterPreferredLink)].Type != JTokenType.String)
+            { throw new JsonSerializationException("RouterPreferredLink must be text."); }
+            if (document[nameof(RouterClientEnabled)] != null && document[nameof(RouterClientEnabled)].Type != JTokenType.Boolean)
+            { throw new JsonSerializationException("RouterClientEnabled must be boolean."); }
+            if (document[nameof(RouterLocalPort)] != null && document[nameof(RouterLocalPort)].Type != JTokenType.Integer)
+            { throw new JsonSerializationException("RouterLocalPort must be an integer."); }
             var termination = document["JoystickTerminationButtonIndex"];
             var monitor = document["JoystickKillSwitchEnabled"];
             if ((termination != null && termination.Type != JTokenType.Integer) ||
@@ -158,6 +168,33 @@ namespace NOMAD.MissionPlanner
             }
         }
 
+        internal static System.Collections.Generic.List<LinkConfig> ParseRouterLinks(string json)
+        {
+            var token = ReadToken(json);
+            ValidateRouterLinks(token);
+            return token.ToObject<System.Collections.Generic.List<LinkConfig>>();
+        }
+
+        private static void ValidateRouterLinks(JToken token)
+        {
+            if (!(token is JArray links)) { throw new JsonSerializationException("RouterLinks must be an array."); }
+            foreach (var item in links)
+            {
+                if (!(item is JObject link)) { throw new JsonSerializationException("Each router link must be an object."); }
+                foreach (var field in link.Properties())
+                {
+                    var property = typeof(LinkConfig).GetProperty(field.Name);
+                    var type = property?.PropertyType;
+                    var value = field.Value.Type;
+                    bool valid = type == typeof(string) ? value == JTokenType.String :
+                        type == typeof(int) ? value == JTokenType.Integer :
+                        type == typeof(bool) ? value == JTokenType.Boolean :
+                        type == typeof(double) && (value == JTokenType.Integer || value == JTokenType.Float);
+                    if (!valid) { throw new JsonSerializationException("Invalid router link field: " + field.Name); }
+                }
+            }
+        }
+
         private static void ValidatePhysicalIndex(JToken token, string name)
         {
             if (!int.TryParse(token.ToString(Formatting.None), NumberStyles.Integer, CultureInfo.InvariantCulture,
@@ -165,15 +202,31 @@ namespace NOMAD.MissionPlanner
             { throw new JsonSerializationException(name + " must be an integer between 0 and 127."); }
         }
 
+        internal bool HasSameRouterSettings(NOMADConfig other)
+        {
+            return other != null && RouterClientEnabled == other.RouterClientEnabled &&
+                RouterLocalPort == other.RouterLocalPort && RouterPreferredLink == other.RouterPreferredLink &&
+                JToken.DeepEquals(JArray.FromObject(RouterLinks), JArray.FromObject(other.RouterLinks));
+        }
+
         internal void Validate()
         {
             ValidateAircraftSettings();
             ValidateInputBindings();
-            if (CoreRuntimePort < 1 || CoreRuntimePort > 65535 || RouterLocalPort < 1 || RouterLocalPort > 65535 ||
-                ManagementPort < 1 || ManagementPort > 65535)
+            if (RouterLocalPort < 1 || RouterLocalPort > 65535)
             {
-                throw new JsonSerializationException("Runtime and router ports must be between 1 and 65535.");
+                throw new JsonSerializationException("Router ports must be between 1 and 65535.");
             }
+            if (RouterLinks == null) { throw new JsonSerializationException("RouterLinks cannot be null."); }
+            if (RouterLinks.Count == 0 && !string.IsNullOrEmpty(RouterPreferredLink))
+            { throw new JsonSerializationException("Preferred link requires configured RouterLinks."); }
+            if (RouterLinks.Count > 0)
+            {
+                using (var router = new GroundLinkRouter(MAVLinkConnectionManager.BuildRouterConfig(
+                    new MAVLinkConnectionManager.ConnectionConfig { RouterLocalPort = RouterLocalPort,
+                        Links = RouterLinks, PreferredLink = RouterPreferredLink }))) { }
+            }
+
         }
 
         internal void ValidateInputBindings()

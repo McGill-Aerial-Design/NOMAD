@@ -1,7 +1,12 @@
 # NOMAD documentation
 
-Start with [architecture](architecture.md), [development](development.md),
-[operations](operations.md), [safety](safety.md) and [qualification](qualification.md).
-[PRD](prd.md) defines product direction; [CONOPS inventory](conops-requirements.md)
-retains source traceability. [IPC](runtime-ipc.md), [dependency provenance](mavsdk-dependencies.md)
-and [AEAC integration](aeac-2027.md) contain the detailed contracts.
+NOMAD extends Mission Planner with aircraft-specific profiles, gimbal/payload/HID,
+video, local advisory maps and an optional owned link router. ArduPilot remains the
+autopilot; ordinary flight controls and missions remain Mission Planner-owned.
+
+- [Architecture](architecture.md): current ownership and lifecycle.
+- [Development](development.md): build and meaningful software gates.
+- [Operations](operations.md): manual closed-MP installation, profiles and safe/stop limits.
+- [Safety](safety.md) and [qualification](qualification.md): obligations and evidence limits.
+- [PRD](prd.md), [CONOPS inventory](conops-requirements.md), [AEAC integration](aeac-2027.md):
+  stable requirements, organizer questions and work requiring separate acceptance.

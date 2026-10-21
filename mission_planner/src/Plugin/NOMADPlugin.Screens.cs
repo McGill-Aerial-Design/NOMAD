@@ -90,6 +90,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         private void ShowMainScreen()
         {
+            if (!IsActiveSession(_videoShutdown)) { return; }
             if (Host?.MainForm != null && Host.MainForm.InvokeRequired)
             {
                 Host.MainForm.BeginInvoke((MethodInvoker)delegate { ShowMainScreen(); });
@@ -131,6 +132,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         private void ShowPopOutWindow()
         {
+            if (!IsActiveSession(_videoShutdown)) { return; }
             if (Host?.MainForm != null && Host.MainForm.InvokeRequired)
             {
                 Host.MainForm.BeginInvoke((MethodInvoker)delegate { ShowPopOutWindow(); });

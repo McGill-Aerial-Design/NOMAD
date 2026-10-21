@@ -352,3 +352,6 @@ docs/_templates/
 
 # Claude Code local settings
 .claude/
+
+# Private plans, handoffs and evidence.
+/local/

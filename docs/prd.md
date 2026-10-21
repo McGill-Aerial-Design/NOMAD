@@ -1,10 +1,10 @@
 # Product requirements
 
-NOMAD provides a persistent C++ vehicle/safety runtime, authenticated local clients,
-a standalone ground router and a thin Mission Planner integration. ArduPilot remains
-the autopilot. The [source inventory](conops-requirements.md) retains stable AE27 IDs,
-CONOPS page references, status, owner and evidence gate. Project direction is distinct
-from organizer requirements; partial implementation is not qualification.
+NOMAD is a Mission Planner-only operator plugin. It adds custom profiles, gimbal,
+payload/HID, video, maps and link routing while reusing MP's normal flight functions.
+ArduPilot remains the autopilot. The [source inventory](conops-requirements.md) retains
+stable AE27 IDs, CONOPS page references, owner, status and evidence gates. User product
+direction is distinct from organizer requirements; implementation is not qualification.
 
 ## Unresolved organizer questions
 
@@ -12,7 +12,7 @@ Q01 is resolved by project direction; Q02-Q09 remain questions to prepare for th
 
 | ID | Missing or conflicting information | Consequence / required resolution |
 |---|---|---|
-| Q01 (resolved by project direction, 2026-10-05) | Appendix C labels remain inconsistent as a source note; no separate official soft polygon is needed for our design | Mission Planner stores inner/outer polygons only as local visual advisory outlines. Runtime protocol v1 has no boundary configuration, evaluation or status API, and no boundary crossing dispatches an aircraft action. Any authoritative containment or termination path requires runtime ownership, an approved aircraft mechanism and separate qualification. |
+| Q01 (resolved by project direction, 2026-10-05) | Appendix C labels remain inconsistent as a source note; no separate official soft polygon is needed for our design | Mission Planner stores inner/outer polygons only as local visual advisory outlines. No outline crossing dispatches an aircraft action. Authoritative containment and termination require an approved aircraft mechanism and separate qualification. |
 | Q02 | Fixed-wing full-surface direction/magnitude and QuadPlane transition termination semantics are unspecified; lost-mechanism rapid response has no independent numeric definition | Safety lead obtains aircraft-specific acceptance and proves all flight phases without disabling failsafes |
 | Q03 | Maximum 15 kg versus under 15 kg; Task 2 swaps not expressly permitted | Keep strict under 15 kg; plan Task 2 single-battery until ruling; validate swaps only as conditional recovery |
 | Q04 | Server protocol/paths/token lifecycle, field keys/nulls, timestamp units/clock rules, mode precedence, accuracy interpretation, startup armed/GPS validity, latency penalty, outage/retry/events and Task 2 applicability unresolved | Version and test official contract; do not invent JSON, endpoint paths, disarmed rate or failover permission |
@@ -30,26 +30,21 @@ and a duty to avoid them, not those detailed semantics.
 
 ## Confirmed product direction
 
-Compute-placement rows describe goals; named profiles and optional providers are not shipped.
-
 | ID | Basis | Requirement | Gate |
 |---|---|---|---|
-| U-CORE-01 | U | C++ owns vehicle behavior, safety validation, missions, telemetry models and MAVLink interaction | G2 |
-| U-AP-01 | U | Preserve ArduPilot control, EKF and failsafes; NOMAD does not replace them | G2/G7 |
-| U-AP-02 | U | Support ArduPilot Copter and Plane aircraft across flight-controller models and frames; keep aircraft setup in saved profiles and operation semantics in shared vehicle policy | G2/G7 |
-| U-PY-01 | U | Remove Edge Core and Python-owned vehicle decisions; retain Python for CV/ML/tools/tests | G1/G2 |
-| U-ADAPT-01 | U | Mission Planner and ROS 2 are clients/adapters; no parallel vehicle policy | G2 |
-| U-MOD-01 | U | Keep NOMAD general-purpose: competition/event-specific schemas, credentials, cadence and scoring behavior live in opt-in application modules with no core dependency on those details and no direct vehicle-command path | G2/G4 |
-| U-PROF-01 | U | onboard_companion runs optional ROS 2, VIO, camera/video and perception on a Jetson/SBC aboard | G3/G7 |
-| U-PROF-02 | U | groundstation_gpu runs those optional workloads on a GPU laptop with no Jetson aboard | G3/G7 |
-| U-PROF-03 | U | groundstation_minimal works with runtime IPC and the standalone ground router without companion/perception; missing features are explicit | G3 |
-| U-TEST-01 | U | Important behavior is testable without hardware; safety needs invalid, boundary and failure cases | All |
+| U-CORE-01 | U | Ship one Mission Planner-native C# plugin; MP owns flight APIs and ArduPilot owns execution/failsafes | G2 |
+| U-AP-01 | U | Preserve ArduPilot control, EKF and native failsafes | G2/G7 |
+| U-AP-02 | U | Support Copter/Plane aircraft across controllers/frames through per-aircraft profiles and native MP behavior; qualify actual integrations separately | G2/G7 |
+| U-PY-01 | U | Python is development/documentation tooling; no independent Python flight owner ships | G1/G2 |
+| U-ADAPT-01 | U | Mission Planner is the operator application; no separate UI/CLI/IPC framework | G2 |
+| U-MOD-01 | U | Implement only required custom operator controls; competition integrations need separate reviewed scope and evidence | G2/G4 |
+| U-PROF-01 | U | Optional onboard compute/video/perception remains a hardware choice outside this plugin's implemented flight controls | G3/G7 |
+| U-PROF-02 | U | Optional ground GPU perception/video remains separately integrated and qualified | G3/G7 |
+| U-PROF-03 | U | Plugin operation does not require a companion computer, perception provider or runtime service | G3 |
+| U-TEST-01 | U | Test important behavior without hardware, including invalid/boundary/failure cases; retain physical acceptance separately | All |
 
-Board-independent MAVLink is the design boundary. Operation eligibility depends on
-the connected vehicle family, supported capabilities and fresh state; profile labels
-do not grant support or authority. Copter, conventional Plane and QuadPlane operations
-need their own evidence. [Qualification](qualification.md) records current coverage
-and firmware targets; it does not qualify every board, frame, channel map or transport.
+Hardware/RC/output/input/link/video settings belong in saved aircraft profiles.
+Labels do not establish live aircraft identity, hardware support or safe calibration.
 
 ## User direction recorded during review
 
@@ -69,20 +64,14 @@ and firmware targets; it does not qualify every board, frame, channel map or tra
 - Begin with traffic advisories and explicit action authorization. Revisit
   automatic traffic/payload behavior only after reviewed evidence. CONOPS allows
   manual flight, requires actual traffic separation, and separately rewards autonomy.
-- MAVSDK must be used at competition: early adoption, unit/integration testing
-  and focused reviewable changes are required implementation work (D03 resolved).
-  The pinned MAVSDK fork owns ArduPilot command, mode and telemetry semantics; NOMAD
-  keeps safety policy, validation, verification of outcomes and the client
-  contract — see [dependency provenance](mavsdk-dependencies.md).
-- NOMAD remains general-purpose. AEAC 2027 and future event-specific behavior
-  should be composed as optional modules at narrow generic boundaries rather than
-  spread through the base core; minimize coupling and keep vehicle decisions in
-  the core.
+- Current direction is Mission Planner only. MAVSDK was an implementation choice,
+  not an organizer requirement. Reuse native host flight APIs rather than building
+  a separate command service, CLI or general-purpose frontend framework.
+- Keep custom aircraft profiles, payload/gimbal/HID, video and required link behavior.
+  Native software results and physical completion remain separate.
 
-These are user product directions or explicitly tentative hardware choices,
-not additional organizer rules. ArduPlane/QuadPlane support is necessary for
-the proposed Task 1; Copter evidence cannot establish it.
-
+These are user product directions or explicitly tentative hardware choices, not
+additional organizer rules. Copter evidence cannot establish Plane/QuadPlane safety.
 
 ## C2 and termination direction — 2026-09-27
 
@@ -122,8 +111,9 @@ of the surviving LTE path remains required. Q02 stays open: neither fixed-wing
 to VTOL termination descent nor fixed-wing surface behavior throughout transition
 is approved by this direction. No recovered source may unexpectedly reclaim control.
 
-Jetson-originated aircraft requests pass through core authority/safety policy.
-Flight and robotic-arm/payload authority are separate even when transport is shared.
+No Jetson-originated flight-control path ships in this product. Any later companion
+request needs its own reviewed integration. Flight and payload use remain separate
+operator responsibilities even when transport is shared.
 These decisions do not qualify any aircraft, link, takeover or termination behavior.
 
 
@@ -161,30 +151,23 @@ selected attempt, not silently aggregate attempts.
 
 ## Performance and capability contract
 
-AE27-NET-001 through AE27-NET-014 establish rates and scoring thresholds, not
-engineering safety margins. A scoring penalty threshold is not a safe expiry limit.
-Before implementation acceptance, choose measurable budgets for telemetry age,
-traffic expiry and lookahead, command cancellation, inference latency, video age,
-count/identity accuracy, map error, link capacity and endurance reserve (D07/D08).
-
-Every optional feature reports one of: unconfigured, unavailable, starting,
-ready, degraded, or failed, with reason and observation age. This is an R target
-contract, not an implemented capability service. Readiness requires runtime
-evidence, not GPU discovery or an environment boolean. Minimal operation supports
-eligible non-perception missions; competition task readiness is evaluated
-separately and can legitimately be unavailable.
-
+AE27-NET-001 through AE27-NET-014 establish rates/scoring thresholds, not safety
+margins. Numeric budgets for received-data age, traffic expiry, command/helper waits,
+video latency, map/identity error, link capacity and endurance require D07/D08 evidence.
+A functioning MP connection or a loaded profile is not competition task readiness.
+Features not implemented or qualified must be presented as such; no generic runtime
+capability/authority service ships.
 
 ## Decisions needing team input
 
 Unanswered questions stay pending. Recommendations below may guide prototypes,
-but cannot authorize autonomous actions, runtime changes, or release acceptance.
+but cannot authorize autonomous actions, infrastructure changes, or release acceptance.
 
 | ID | Decision | Recommendation and consequence | Needed before |
 |---|---|---|---|
 | D01 | Exact VTOL/quad firmware, hardware and Task 2 core/Jetson placement | Task 1 ground GPU and two aircraft types now directed; exact integrations remain TBD | G3/G7 |
-| D02 | Core placement and client transport, groundstation OS | Persistent ground core for first integrated release; onboard authority only when required and remotely authenticated | G2/G3 |
-| D03 | MAVSDK cutover before competition | Resolved and executed: MAVSDK is the only transport and the hand-written codec is deleted; the pinned fork owns ArduPilot semantics, and G-M still gates the firmware matrix and release | G-M/G8 |
+| D02 | Product placement and groundstation | Resolved by current direction: Mission Planner plugin on Windows, host-owned connection and ordinary flight controls; optional companion work remains separate | G2/G3 |
+| D03 | Transport choice | Resolved by current direction: native Mission Planner APIs; former MAVSDK implementation archived. MAVSDK is not an organizer mandate | G-M/G8 |
 | D04 | Tracker/tagger/sample hardware and assessment interaction | Select mechanics and feedback before defining autonomous payload behavior; current generic outputs are insufficient | G6 |
 | D05 | Final traffic, approach and payload autonomy level | Retain advisories with demonstrated operator avoidance and explicit authorization; choose Task 2 bonus targets after Q06 | G4/G6 |
 | D06 | Is VIO for mapping/perception or required flight navigation? | GNSS/ArduPilot navigation baseline; external-navigation fusion only after end-to-end timing evidence | G3/G7 |
@@ -194,10 +177,8 @@ but cannot authorize autonomous actions, runtime changes, or release acceptance.
 | D10 | Named engineering, payload, perception, safety and test owners; capacity and dates | Assign accountable people to gates before promising a schedule | G1 |
 | D11 | Evidence storage, retention and team/server credentials | Access-controlled artifacts; sanitized manifests in repository; no private datasets or secrets committed | G4/G8 |
 
-User answers above resolve D03 and the initial D05 scope, establish U-MOD-01, and
-partially resolve D01/D04 and D09. Other entries and Q02-Q09 remain open; the inventory
-records v1.0 provenance, not organizer acceptance of our interpretations. Gate
-ownership still needs named people.
-
-
-Current scope and evidence are in [qualification](qualification.md); genuinely outstanding work is in [TODO](../TODO.md). Optional compute placement remains a product choice, not a shipped ROS/Isaac deployment or generic module SDK.
+D02/D03 now follow the Mission Planner-only decision. D01/D04/D09 hardware details,
+D05 autonomy choices and Q02-Q09 remain open. Stable IDs retain their source history;
+retiring a backend does not resolve organizer acceptance or aircraft qualification.
+Current evidence boundaries are in [qualification](qualification.md). Detailed plans
+and handoffs belong in ignored local notes.

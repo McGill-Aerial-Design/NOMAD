@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// MAVLink Connection Manager — standalone router management client
+// MAVLink Connection Manager — plugin-owned router
 // ============================================================
-// Observes the separately supervised ground router and projects its
+// Owns the ground router and projects its
 // status into the LinkStatistics / event surface used by the plugin.
 // ============================================================
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace NOMAD.MissionPlanner
 {
@@ -63,14 +64,13 @@ namespace NOMAD.MissionPlanner
     }
 
     /// <summary>
-    /// Status and safe link-selection surface for the standalone router.
+    /// Status and safe link-selection surface for the plugin-owned router.
     /// </summary>
     public interface IRouterStatusProvider : IDisposable
     {
         string RouterMode { get; }
         bool IsMonitoring { get; }
         bool IsRouterAvailable { get; }
-        bool IsStatusStale { get; }
         string ActiveLink { get; }
         string ManualOverride { get; }
         string LocalMergedEndpoint { get; }
@@ -85,58 +85,32 @@ namespace NOMAD.MissionPlanner
         event EventHandler<string> LogMessage;
     }
 
-    public partial class MAVLinkConnectionManager : IRouterStatusProvider
+    public sealed class MAVLinkConnectionManager : IRouterStatusProvider
     {
-        // ============================================================
-        // Configuration
-        // ============================================================
-
-        /// <summary>Local Mission Planner client endpoints for the standalone router.</summary>
         public class ConnectionConfig
         {
             public int RouterLocalPort { get; set; } = 14600;
-            public int ManagementPort { get; set; } = 14610;
+            public List<LinkConfig> Links { get; set; } = new List<LinkConfig>();
+            public string PreferredLink { get; set; } = "";
         }
 
-        // ============================================================
-        // State
-        // ============================================================
-
         private ConnectionConfig _config;
-        private StandaloneRouterClient _standalone;
-        private readonly object _lock = new object();
+        private volatile GroundLinkRouter _router;
         private bool _disposed;
-
-        // ============================================================
-        // Events
-        // ============================================================
-
         public event EventHandler<LinkStatusChangedEventArgs> LinkStatusChanged;
         public event EventHandler<FailoverEventArgs> FailoverOccurred;
         public event EventHandler<string> ActiveLinkChanged;
         public event EventHandler<string> LogMessage;
-
-        // ============================================================
-        // Properties
-        // ============================================================
-
-        public string RouterMode => "Standalone";
-        public string ActiveLink => _standalone?.ActiveLink ?? LinkType.None;
-        public string ManualOverride => _standalone?.ManualOverride ?? LinkType.None;
-        public IReadOnlyList<LinkStatistics> LinkStatistics =>
-            _standalone?.LinkStatistics ?? Array.Empty<LinkStatistics>();
-        public bool IsMonitoring => _standalone?.IsMonitoring == true;
-        public bool IsRouterAvailable => _standalone?.IsRouterAvailable == true;
-        public bool IsStatusStale => _standalone?.IsStatusStale == true;
-        public string LocalMergedEndpoint => $"udp://127.0.0.1:{_config.RouterLocalPort}";
-
-        public IReadOnlyCollection<FailoverEventArgs> FailoverLog =>
-            _standalone?.FailoverLog ??
+        public string RouterMode => "Plugin";
+        public bool IsMonitoring => _router?.IsRunning == true;
+        public bool IsRouterAvailable => IsMonitoring;
+        public string ActiveLink => _router?.ActiveLink ?? LinkType.None;
+        public string ManualOverride => _router?.ManualOverride ?? LinkType.None;
+        public string LocalMergedEndpoint => $"UDPCl 127.0.0.1:{_config.RouterLocalPort}";
+        public IReadOnlyList<LinkStatistics> LinkStatistics => _router == null
+            ? Array.Empty<LinkStatistics>() : _router.Links.Select(ToStatistics).ToArray();
+        public IReadOnlyCollection<FailoverEventArgs> FailoverLog => _router?.FailoverLog ??
             (IReadOnlyCollection<FailoverEventArgs>)Array.Empty<FailoverEventArgs>();
-
-        // ============================================================
-        // Construction
-        // ============================================================
 
         public MAVLinkConnectionManager(ConnectionConfig config = null)
         {
@@ -145,65 +119,92 @@ namespace NOMAD.MissionPlanner
 
         public void UpdateConfig(ConnectionConfig config)
         {
-            lock (_lock)
-            {
-                _config = config ?? throw new ArgumentNullException(nameof(config));
-            }
+            StopMonitoring();
+            _config = config ?? throw new ArgumentNullException(nameof(config));
         }
 
-        // ============================================================
-        // Lifecycle
-        // ============================================================
+        internal static GroundLinkRouter.RouterConfig BuildRouterConfig(ConnectionConfig config)
+        {
+            return new GroundLinkRouter.RouterConfig
+            {
+                Links = config.Links?.Select(link => link?.Snapshot()).ToList(),
+                PreferredLink = config.PreferredLink,
+                Consumers = new List<ConsumerConfig>
+                {
+                    new ConsumerConfig { Id = "mission_planner", RouterPort = config.RouterLocalPort,
+                        ClientPort = 0, AllowOutbound = true }
+                }
+            };
+        }
 
         public void StartMonitoring()
         {
-            if (_standalone == null)
-            {
-                StartManagementClient();
-                return;
-            }
-            _standalone.Start();
+            if (_disposed) { throw new ObjectDisposedException(nameof(MAVLinkConnectionManager)); }
+            if (IsMonitoring || _config.Links == null || _config.Links.Count == 0) { return; }
+            var router = new GroundLinkRouter(BuildRouterConfig(_config));
+            router.StatsUpdated += OnStatsUpdated;
+            router.FailoverOccurred += OnFailover;
+            router.ActiveLinkChanged += OnActiveLinkChanged;
+            router.LogMessage += OnLogMessage;
+            _router = router;
+            try { router.Start(); }
+            catch { StopMonitoring(); throw; }
         }
 
         public void StopMonitoring()
         {
-            try { _standalone?.Stop(); } catch { }
+            var router = _router;
+            _router = null;
+            if (router == null) { return; }
+            router.StatsUpdated -= OnStatsUpdated;
+            router.FailoverOccurred -= OnFailover;
+            router.ActiveLinkChanged -= OnActiveLinkChanged;
+            router.LogMessage -= OnLogMessage;
+            router.Dispose();
         }
 
-        /// <summary>
-        /// Reconnect the management client after its local endpoint changes.
-        /// This does not restart the separately supervised router process.
-        /// </summary>
-        public void RestartManagementClient()
+        public bool SwitchToLink(string target) => _router?.SetManualOverride(target) == true;
+        public string GetStatusSummary() => _router?.GetStatusSummary() ?? "Router stopped; configure physical links in this profile";
+        private void OnFailover(object sender, FailoverEventArgs args)
         {
-            StopMonitoring();
-            _standalone?.Dispose();
-            _standalone = null;
-            StartManagementClient();
+            if (sender == _router) { FailoverOccurred?.Invoke(this, args); }
         }
-
-        /// <summary>
-        /// Manual override of the active outbound link. Pass LinkType.None to
-        /// release the override and resume auto-failover.
-        /// </summary>
-        public bool SwitchToLink(string target)
+        private void OnActiveLinkChanged(object sender, string link)
         {
-            return _standalone?.SwitchToLink(target) == true;
+            if (sender == _router) { ActiveLinkChanged?.Invoke(this, link); }
+        }
+        private void OnLogMessage(object sender, string message)
+        {
+            if (sender == _router) { LogMessage?.Invoke(this, message); }
+        }
+        private void OnStatsUpdated(object sender, EventArgs args)
+        {
+            if (sender != _router) { return; }
+            foreach (var stats in LinkStatistics)
+            {
+                if (sender != _router) { return; }
+                LinkStatusChanged?.Invoke(this, new LinkStatusChangedEventArgs
+                { Link = stats.Type, Statistics = stats, IsActive = stats.Type == ActiveLink });
+            }
         }
 
-        public string GetStatusSummary() => _standalone?.GetStatusSummary()
-            ?? "Standalone router management unavailable";
-
-        // ============================================================
-        // IDisposable
-        // ============================================================
+        private static LinkStatistics ToStatistics(LinkSourceStats source) => new LinkStatistics
+        {
+            Type = source.Type, Name = source.Name, Endpoint = source.Endpoint, TransportType = source.Transport,
+            IsEnabled = source.Enabled, IsConnected = source.IsConnected, Health = source.Health,
+            LatencyMs = source.LatencyMs, PacketLossPercent = source.PacketLossPercent,
+            PacketsReceived = source.FramesForwarded, PacketsDuplicate = source.FramesDuplicate,
+            BytesReceived = source.BytesReceived, BytesSent = source.BytesSentOutbound,
+            PacketsSent = source.BytesSentOutbound, LastHeartbeat = source.LastHeartbeatTime,
+            LastPacketTime = source.LastPacketTime, HeartbeatCount = source.HeartbeatCount,
+            DataRateBps = source.DataRateBps, Rssi = source.Rssi, RemRssi = source.RemRssi
+        };
 
         public void Dispose()
         {
-            if (_disposed) return;
+            if (_disposed) { return; }
             _disposed = true;
-            try { _standalone?.Dispose(); } catch { }
-            _standalone = null;
+            StopMonitoring();
         }
     }
 }

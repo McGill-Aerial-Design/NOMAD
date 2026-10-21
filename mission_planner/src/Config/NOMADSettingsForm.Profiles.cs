@@ -57,7 +57,7 @@ namespace NOMAD.MissionPlanner
         private void BtnExportConfig_Click(object sender, EventArgs e)
         {
             var warning = MessageBox.Show(
-                "Export omits the runtime client credential. Review connection URLs and device details before sharing.",
+                "Review connection URLs and device details before sharing.",
                 "Export NOMAD Configuration",
                 MessageBoxButtons.OKCancel,
                 MessageBoxIcon.Warning

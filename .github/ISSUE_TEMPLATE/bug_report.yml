@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a problem with NOMAD (Edge Core, Mission Planner plugin, or deployment).
+description: Report a problem with the NOMAD Mission Planner plugin.
 labels: [bug]
 body:
   - type: markdown
@@ -12,10 +12,9 @@ body:
     attributes:
       label: Component
       options:
-        - Edge Core (Python service)
         - Mission Planner plugin (C#)
-        - Modules (SLAM / perception / payload)
-        - Deployment (Docker / systemd / scripts)
+        - Gimbal / payload / HID
+        - Profiles / video / links
         - Other
     validations:
       required: true
@@ -31,8 +30,8 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. Run `pixi run build-core`
-        2. GET /api/...
+        1. Select the saved aircraft profile in Mission Planner
+        2. Open the affected NOMAD control
         3. See error
     validations:
       required: true
@@ -42,9 +41,9 @@ body:
       label: Environment
       description: How are you running NOMAD?
       placeholder: |
-        - Mode: sim (Docker) / Jetson hardware
+        - Mission Planner version:
         - OS / arch:
-        - Python / pixi version:
+        - Simulator or aircraft/firmware:
         - Commit: `git rev-parse --short HEAD`
     validations:
       required: true

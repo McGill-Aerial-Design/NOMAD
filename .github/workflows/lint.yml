@@ -1,48 +1,24 @@
 name: lint
-
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: lint-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
-  python:
-    # Keep the deployed required-check context until branch protection is updated.
-    name: ruff + mypy
+  docs-and-python:
+    name: Documentation and Python checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          submodules: recursive
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           cache: true
-      - name: Ruff lint
-        run: pixi run lint
-      - name: Strict documentation build
-        run: pixi run docs-build
-      - name: Ruff format check
-        run: |
-          if ! pixi run format-check; then
-            ./.pixi/envs/default/bin/ruff format --diff .
-          fi
-  shell:
-    name: shellcheck
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - uses: ludeeus/action-shellcheck@master
-        with:
-          severity: warning
-          scandir: "."
+      - run: pixi run lint
+      - run: pixi run format-check
+      - run: pixi run test-python
+      - run: pixi run docs-build

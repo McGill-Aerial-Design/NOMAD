@@ -41,4 +41,17 @@ $result = $LASTEXITCODE
 if ($result -ne 0) {
     Write-Host "Gimbal-command tests FAILED." -ForegroundColor Red
 }
-exit $result
+if ($result -ne 0) { exit $result }
+$nativeSources = @(
+    (Join-Path $repoRoot 'mission_planner/src/Control/GimbalCommand.cs'),
+    (Join-Path $repoRoot 'mission_planner/src/Control/GimbalController.cs'),
+    (Join-Path $repoRoot 'mission_planner/src/Input/GimbalInputState.cs'),
+    (Join-Path $repoRoot 'mission_planner/src/Control/GimbalArrowKeyFilter.cs'),
+    (Join-Path $repoRoot 'mission_planner/src/Control/OutputController.cs'),
+    (Join-Path $repoRoot 'mission_planner/tests/gimbal/NativeOutputTests.cs')
+)
+$nativeExe = Join-Path $outDir 'NativeOutputTests.exe'
+& $csc /nologo /target:exe /langversion:latest /r:System.Windows.Forms.dll /r:System.Drawing.dll "/out:$nativeExe" @nativeSources
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $nativeExe
+exit $LASTEXITCODE

@@ -1,30 +1,26 @@
 # NOMAD
 
-NOMAD monitors and controls ArduPilot vehicles through a persistent C++20 runtime.
-Mission Planner and the installed CLI send authenticated typed local requests;
-the runtime owns authority, safety, actuator sequencing, audit and recovery and
-uses one MAVSDK command transport. A standalone router handles physical links.
-ArduPilot retains stabilization, navigation execution and native failsafes.
+NOMAD adds aircraft profiles, custom gimbal and payload controls, USB HID input,
+video, local advisory maps and redundant-link routing to Mission Planner.
+Mission Planner supplies the aircraft connection, setup, normal flight controls
+and missions; ArduPilot flies the aircraft and owns its native failsafes.
 
-The delivered control surface is authority management, validated output/gimbal
-operations and configured actuator actions. Mission Planner adds direct USB HID
-input, live video, link status, advisory map outlines and bounded Copter LAND engagement.
-LAND success means mode observed, not touchdown or termination. Other navigation/QuadPlane,
-fence and velocity implementations remain in the non-installed qualification
-driver; they are not production IPC features. Physical takeover, termination,
-competition integration and full aircraft qualification remain open.
+The product is one .NET Framework 4.8 plugin DLL, built against the reviewed
+Mission Planner target in [target metadata](scripts/release/mission-planner-target.json).
+It supports saved aircraft-specific settings for Copter and Plane integrations;
+board/frame/channel labels do not establish hardware compatibility or safety.
 
-```sh
-git submodule update --init --recursive
-pixi install
-pixi run build-core
-pixi run test-core
-pixi run test-python
-```
+- [Development and checks](docs/development.md)
+- [Installation, profiles and operation](docs/operations.md)
+- [Architecture](docs/architecture.md)
+- [Safety limits](docs/safety.md) and [qualification](docs/qualification.md)
+- [Product requirements](docs/prd.md) and [organizer source inventory](docs/conops-requirements.md)
 
-See [development](docs/development.md) for prerequisites and complete checks,
-[architecture](docs/architecture.md), [operations](docs/operations.md),
-[safety](docs/safety.md), [qualification](docs/qualification.md),
-[requirements](docs/prd.md) and [remaining work](TODO.md).
-Contribution rules live in [AGENTS](AGENTS.md). Never use simulator actuation
-against a live aircraft or interpret software/SITL evidence as flight authorization.
+Builds write artifacts locally and never install them. Close Mission Planner and
+follow the explicit manual installation procedure before copying a reviewed DLL.
+The former C++/MAVSDK runtime, CLI, IPC and qualification implementation is preserved
+on `MAVSDK-Archive`; its evidence does not qualify the native plugin.
+
+Aircraft termination, manual takeover and full competition workflows still need
+approved hardware integration and physical evidence. Command ACKs are software
+evidence, never proof of actuator state, landing or termination.

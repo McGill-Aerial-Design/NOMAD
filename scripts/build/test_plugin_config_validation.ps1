@@ -77,26 +77,113 @@ try {
         throw 'Configuration fixture log path was not installed.'
     }
 
+    # This isolated process has no live Mission Planner connection or selected MAV.
+    $outputType = $plugin.GetType('NOMAD.MissionPlanner.OutputController', $true)
+    $connectionField = $outputType.GetField('CurrentConnection', [Reflection.BindingFlags]'Static,NonPublic')
+    $connectionField.SetValue($null, [System.Management.Automation.LanguagePrimitives]::ConvertTo(
+        [scriptblock] { return $null }, $connectionField.FieldType))
+    # Exercise real MP event add/remove accessors without constructing a stream, reading settings or opening devices.
+    $nativeType = $connectionField.FieldType.GetGenericArguments()[0]
+    $nativeConnection = [Runtime.Serialization.FormatterServices]::GetUninitializedObject($nativeType)
+    [GC]::SuppressFinalize($nativeConnection)
+    $nativeFlags = [Reflection.BindingFlags]'Instance,NonPublic'
+    $initializeNative = $outputType.GetMethod('Initialize', [Reflection.BindingFlags]'Static,NonPublic')
+    $shutdownNative = $outputType.GetMethod('Shutdown', [Reflection.BindingFlags]'Static,NonPublic')
+    $generationField = $outputType.GetField('_generation', [Reflection.BindingFlags]'Static,NonPublic')
+    $connectionField.SetValue($null, [System.Management.Automation.LanguagePrimitives]::ConvertTo(
+        [scriptblock] { return $nativeConnection }, $connectionField.FieldType))
+    try {
+        $initializeNative.Invoke($null, [object[]]@([Activator]::CreateInstance($configType))) | Out-Null
+        foreach ($name in @('_MavChanged','_CommsClose')) {
+            $handlers = $nativeType.GetField($name, $nativeFlags).GetValue($nativeConnection)
+            if ($null -eq $handlers -or $handlers.GetInvocationList().Count -ne 1 -or $null -eq $handlers.Target) {
+                throw 'Native MP connection events require one instance-target subscription.'
+            }
+        }
+        $beforeGeneration = $generationField.GetValue($null)
+        $nativeConnection.sysidcurrent = 42
+        if ($generationField.GetValue($null) -le $beforeGeneration) { throw 'Native selection event did not retire old input.' }
+        $shutdownNative.Invoke($null, @()) | Out-Null
+        foreach ($name in @('_MavChanged','_CommsClose')) {
+            if ($null -ne $nativeType.GetField($name, $nativeFlags).GetValue($nativeConnection)) {
+                throw 'Shutdown retained a native event subscription.'
+            }
+        }
+    } finally {
+        $connectionField.SetValue($null, [System.Management.Automation.LanguagePrimitives]::ConvertTo(
+            [scriptblock] { return $null }, $connectionField.FieldType))
+    }
+    Write-Host 'Actual Mission Planner event accessors accept, invalidate and remove the native subscriptions.'
+
     . (Join-Path $PSScriptRoot 'test_aircraft_profiles.ps1')
     Invoke-AircraftProfileTests $plugin $configType $temporary
     Invoke-AircraftProfileUiTests $plugin $configType
 
     $config = Load-Config '{"CoreRuntimePort":14631,"RouterLocalPort":14620,"ManagementPort":14621,"CoreClientCredential":"test-only-credential"}'
-    if ($config.CoreRuntimePort -ne 14631) { throw 'Current runtime endpoint changed.' }
+    if ($config.RouterLocalPort -ne 14620) { throw 'Saved Mission Planner router endpoint changed.' }
     $export = Join-Path $temporary 'export.json'
     $config.ExportToFile($export)
     if ([IO.File]::ReadAllText($export).Contains('test-only-credential')) { throw 'Export leaked client credential.' }
     foreach ($field in @('Payloads','Actuators','RouterMode','RouterEnabled','JoystickCameraTiltEnabled','JoystickZedEnabled','SerialJoystickEnabled','SlamCameraFovDeg')) {
         Assert-ThrowsMessage ('{"' + $field + '":null}') $field
     }
-    Assert-ThrowsMessage '{"CoreRuntimePort":0}' 'ports'
+    Assert-ThrowsMessage '{"RouterLocalPort":0}' 'ports'
     Assert-ThrowsMessage '{"JoystickButtonIndices":[0,1,2,3,4,128]}' 'between 0 and 127'
     Assert-ThrowsMessage '{"JoystickButtonIndices":[0,1,2,3,4,5.5]}' 'integers'
     Assert-ThrowsMessage '{"JoystickTerminationButtonIndex":0,"JoystickKillSwitchEnabled":true,"JoystickSw1UpAction":"a:activate"}' 'disjoint'
     Assert-ThrowsMessage '{"CoreRuntimePort":14611,"CoreRuntimePort":14612}' 'already exists'
+    $legacyAdvisoryJson = '{"SoftBoundary":{"Name":"Synthetic inner","BoundaryType":"Soft","DisplayColor":"#808080","MaxAltitudeAgl":90,"MinAltitudeAgl":0,"Vertices":[{"Lat":0,"Lon":1,"Alt":10},{"Lat":2,"Lon":3,"Alt":11},{"Lat":4,"Lon":5,"Alt":12}]},"HardBoundary":{"Name":"Synthetic outer","BoundaryType":"Hard","DisplayColor":"#909090","MaxAltitudeAgl":100,"MinAltitudeAgl":0,"Vertices":[{"Lat":6,"Lon":7,"Alt":20},{"Lat":8,"Lon":9,"Alt":21},{"Lat":10,"Lon":11,"Alt":22}]},"ReturnPoint":null,"MaxAltitudeAglMeters":95,"Failsafe":{"HardBoundaryAction":"Terminate"},"MonitoringEnabled":true,"TerminationDescentRateMps":2,"BoundaryViolations":[]}'
+    $legacyAdvisoryPath = Join-Path $temporary 'legacy-advisory.json'
+    [IO.File]::WriteAllText($legacyAdvisoryPath, $legacyAdvisoryJson)
+    $legacy = $geofenceLoadMethod.Invoke($null, [object[]]@([IO.File]::ReadAllText($legacyAdvisoryPath)))
+    $serialized = [Newtonsoft.Json.Linq.JObject]::FromObject($legacy)
+    $original = [Newtonsoft.Json.Linq.JObject]::Parse($legacyAdvisoryJson)
+    foreach ($name in @('SoftBoundary','HardBoundary')) {
+        $expected = $original[$name]
+        $actual = $legacy.$name
+        if ($actual.Name -cne [string]$expected['Name'] -or $actual.Vertices.Count -ne $expected['Vertices'].Count) {
+            throw 'Legacy advisory loading changed a saved boundary name or vertex count.'
+        }
+        for ($index = 0; $index -lt $actual.Vertices.Count; $index++) {
+            $point = $expected['Vertices'][$index]
+            if ($actual.Vertices[$index].Lat -ne [double]$point['Lat'].Value -or
+                $actual.Vertices[$index].Lon -ne [double]$point['Lon'].Value -or
+                $actual.Vertices[$index].Alt -ne [double]$point['Alt'].Value) {
+                throw 'Legacy advisory loading changed ordered coordinates, zeros or vertex altitudes.'
+            }
+        }
+        foreach ($retired in @('BoundaryType','DisplayColor','MaxAltitudeAgl','MinAltitudeAgl')) {
+            if ($null -ne $serialized[$name][$retired]) { throw 'Current advisory data retained obsolete boundary policy.' }
+        }
+    }
+    foreach ($retired in @('MaxAltitudeAglMeters','ReturnPoint','Failsafe','MonitoringEnabled',
+        'TerminationDescentRateMps','BoundaryViolations')) {
+        if ($null -ne $serialized[$retired]) { throw 'Current advisory data retained retired flight policy/history.' }
+    }
+    if ($legacy.AdvisoryAltitudeDisplayThresholdMeters -ne 95 -or $legacy.AdvisoryPreviewEnabled -or
+        [IO.File]::ReadAllText($legacyAdvisoryPath) -cne $legacyAdvisoryJson) {
+        throw 'Legacy advisory loading lost its display reference, enabled old monitoring or rewrote input.'
+    }
+    $currentWins = $geofenceLoadMethod.Invoke($null, [object[]]@(
+        '{"MaxAltitudeAglMeters":95,"AdvisoryAltitudeDisplayThresholdMeters":120}'))
+    if ($currentWins.AdvisoryAltitudeDisplayThresholdMeters -ne 120) { throw 'Legacy altitude overrode the current field.' }
+    foreach ($json in @('{"MaxAltitudeAglMeters":-1}', '{"MaxAltitudeAglMeters":10001}',
+        '{"MaxAltitudeAglMeters":NaN}', '{"MaxAltitudeAglMeters":Infinity}',
+        '{"AdvisoryAltitudeDisplayThresholdMeters":null,"MaxAltitudeAglMeters":95}',
+        '{"SoftBoundary":null}', '{"HardBoundary":{"Vertices":null}}',
+        '{"UnknownPolicy":true}', '{"SoftBoundary":{"UnknownPolicy":true}}',
+        '{"SoftBoundary":{"Vertices":[{"Lat":1,"Lon":2,"BoundaryType":"Soft"}]}}',
+        '{"SoftBoundary":{"BoundaryType":"Soft","BoundaryType":"Hard"}}',
+        '{"MaxAltitudeAglMeters":95,"MaxAltitudeAglMeters":96}')) {
+        $rejected = $false
+        try { $geofenceLoadMethod.Invoke($null, [object[]]@($json)) | Out-Null } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Legacy normalization weakened duplicate, unknown-field or invalid-value rejection.' }
+    }
+    Write-Host 'Legacy advisory geometry, threshold alias and strict fault checks passed without rewriting input.'
+
     $boundary = $geofenceLoadMethod.Invoke($null, [object[]]@('{"AdvisoryAltitudeDisplayThresholdMeters":100}'))
     if ($boundary.AdvisoryAltitudeDisplayThresholdMeters -ne 100) { throw 'Current advisory threshold changed.' }
-    foreach ($json in @('{"MaxAltitudeAglMeters":100}', '{"HardBoundaryAction":"Return"}', '{"AdvisoryAltitudeDisplayThresholdMeters":-1}')) {
+    foreach ($json in @('{"HardBoundaryAction":"Return"}', '{"AdvisoryAltitudeDisplayThresholdMeters":-1}')) {
         $rejected = $false
         try { $geofenceLoadMethod.Invoke($null, [object[]]@($json)) | Out-Null } catch { $rejected = $true }
         if (-not $rejected) { throw 'Unsupported or invalid boundary data was accepted.' }
@@ -115,6 +202,18 @@ try {
             throw 'Invalid primary load modified operator files.'
         }
     }
+    foreach ($json in @('{"RouterLinks":null}', '{"RouterLinks":[{"Id":"x","Port":1.5}]}',
+        '{"RouterLinks":[{"Id":"x","Enabled":"true"}]}', '{"RouterLinks":[{"Id":"x","port":14750}]}',
+        '{"RouterLinks":[{"Id":"x","Port":14750,"Unexpected":1}]}', '{"RouterPreferredLink":5}')) {
+        $rejected = $false
+        try { Load-Config $json | Out-Null } catch { $rejected = $true }
+        if (-not $rejected) { throw "Invalid router document was accepted: $json" }
+    }
+    $router = Load-Config '{"RouterLocalPort":14700,"RouterPreferredLink":"elrs","RouterLinks":[{"Id":"elrs","Port":14750,"Priority":100},{"Id":"lte","Port":14760,"Priority":50}]}'
+    $routerExport = Join-Path $temporary 'router.json'
+    $router.ExportToFile($routerExport)
+    $routerCopy = $configType.GetMethod('LoadFromFile').Invoke($null, [object[]]@([string]$routerExport))
+    if ($routerCopy.RouterLinks.Count -ne 2 -or $routerCopy.RouterPreferredLink -ne 'elrs') { throw 'Router profile roundtrip lost links.' }
     # Exercise real settings controls without opening a window or saving host configuration.
     $formType = $plugin.GetType('NOMAD.MissionPlanner.NOMADSettingsForm', $true)
     $config.JoystickSwitchDevice = 'selected-unplugged-usb-hid'
@@ -137,52 +236,15 @@ try {
         $setDevice.Invoke($null, [object[]]@($device, 'selected-unplugged-usb-hid')) | Out-Null
         if ($device.SelectedItem -ne 'selected-unplugged-usb-hid') { throw 'Device refresh discarded an explicit HID name.' }
 
-        $actorType = $plugin.GetType('NOMAD.MissionPlanner.Connectivity.NomadActuator', $true)
-        $actionType = $plugin.GetType('NOMAD.MissionPlanner.Connectivity.NomadActuatorAction', $true)
-        $actor = [Activator]::CreateInstance($actorType)
-        $action = [Activator]::CreateInstance($actionType)
-        $actorType.GetProperty('Id').SetValue($actor, 'stable-id', $null)
-        $actorType.GetProperty('Name').SetValue($actor, 'Original name', $null)
-        $actionType.GetProperty('Operation').SetValue($action, 'activate', $null)
-        $actionType.GetProperty('Control').SetValue($action, 'button', $null)
-        $actionType.GetProperty('Label').SetValue($action, 'Original label', $null)
-        $actions = [Array]::CreateInstance($actionType, 1)
-        $actions.SetValue($action, 0)
-        $actorType.GetProperty('Actions').SetValue($actor, $actions, $null)
-        $actors = [Array]::CreateInstance($actorType, 1)
-        $actors.SetValue($actor, 0)
-        $applyArguments = New-Object object[] 1
-        $applyArguments[0] = $actors
-        $apply = $formType.GetMethod('ApplyActuatorActions', $privateFlags)
-        $apply.Invoke($form, $applyArguments) | Out-Null
-        $combo = $formType.GetField('_cmbSw1Up', $privateFlags).GetValue($form)
-        $combo.Text = 'Original name / Original label [stable-id:activate]'
-        $actorType.GetProperty('Name').SetValue($actor, 'Renamed device', $null)
-        $actionType.GetProperty('Label').SetValue($action, 'Renamed action', $null)
-        $apply.Invoke($form, $applyArguments) | Out-Null
-        if ($combo.Text -ne 'Renamed device / Renamed action [stable-id:activate]') {
-            throw 'Backend label refresh did not preserve the stable semantic binding.'
+        $links = $formType.GetField('_txtRouterLinks', $privateFlags).GetValue($form)
+        $links.Text = '[{"Id":"elrs","Name":"Primary","Transport":"UDP","Port":14750,"Priority":100},{"Id":"lte","Name":"Backup","Transport":"UDP","Port":14760,"Priority":50}]'
+        $preferred = $formType.GetField('_txtRouterPreferredLink', $privateFlags).GetValue($form)
+        $preferred.Text = 'elrs'
+        $formType.GetMethod('SaveSettings', $privateFlags).Invoke($form, @()) | Out-Null
+        if ($form.Config.RouterLinks.Count -ne 2 -or $form.Config.RouterPreferredLink -ne 'elrs') {
+            throw 'Saving router settings lost physical links or preferred path.'
         }
-        $positionAction = [Activator]::CreateInstance($actionType)
-        $actionType.GetProperty('Operation').SetValue($positionAction, 'position', $null)
-        $actionType.GetProperty('Control').SetValue($positionAction, 'position', $null)
-        $actionType.GetProperty('Label').SetValue($positionAction, 'Set position', $null)
-        $actionType.GetProperty('ContinuousAxisAllowed').SetValue($positionAction, $false, $null)
-        $actionType.GetProperty('ContinuousAxisBlockedReason').SetValue($positionAction, 'Use discrete UI confirmations.', $null)
-        $eligibilityStore = $plugin.GetType('NOMAD.MissionPlanner.OutputController', $true).GetField('ContinuousAxisActions', [Reflection.BindingFlags]'Static,NonPublic').GetValue($null)
-        $eligibilityStore['stable-id'] = $positionAction
-        $positionId = $formType.GetField('_txtJoyPositionActuatorId', $privateFlags).GetValue($form)
-        $positionId.Text = 'stable-id'
-        $positionEnable = $formType.GetField('_chkJoyPositionEnabled', $privateFlags).GetValue($form)
-        $positionReason = $formType.GetField('_lblJoyPositionEligibility', $privateFlags).GetValue($form)
-        if ($positionEnable.Enabled -or $positionEnable.Checked -or $positionReason.Text -ne 'Use discrete UI confirmations.') {
-            throw 'Unsupported axis binding was not disabled with the backend reason.'
-        }
-        $actionType.GetProperty('ContinuousAxisAllowed').SetValue($positionAction, $true, $null)
-        $formType.GetMethod('UpdatePositionEligibility', $privateFlags).Invoke($form, @()) | Out-Null
-        if (-not $positionEnable.Enabled) { throw 'Backend allowed axis data did not enable the input option.' }
-        $positionId.Text = 'unknown-id'
-        if ($positionEnable.Enabled) { throw 'Unknown axis eligibility did not fail closed.' }
+
     } finally { $form.Dispose() }
     # Exercise preset selection without constructing a view that reads the operator's saved outlines.
     $boundaryViewType = $plugin.GetType('NOMAD.MissionPlanner.NOMADBoundaryView', $true)

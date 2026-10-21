@@ -1,49 +1,7 @@
-[build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "nomad-tools"
-version = "0.2.1"
-description = "NOMAD development and qualification tools"
-readme = "README.md"
-requires-python = ">=3.10"
-authors = [{ name = "The NOMAD Authors" }]
-keywords = ["drone", "uav", "mavlink"]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.13",
-    "Topic :: Scientific/Engineering",
-]
-
-# Runtime dependencies
-dependencies = []
-
-[project.optional-dependencies]
-dev = [
-    "pymavlink>=2.4",
-    "psutil>=5.9",
-    "ruff==0.15.16",
-    "pytest>=8.0",
-    "pre-commit>=3.8",
-]
-docs = ["properdocs>=1.6", "mkdocs-material>=9.5"]
-
-[project.urls]
-Homepage = "https://github.com/YoussGm3o8/NOMAD"
-Repository = "https://github.com/YoussGm3o8/NOMAD"
-
-[tool.setuptools]
-packages = []
-
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-# Vendored code (the MAVSDK submodule) is pinned upstream and must not be
-# reformatted or linted by the repository gates.
+# Local environments and archived dependency checkouts are not first-party tooling.
 extend-exclude = [".pixi", "third_party"]
 
 [tool.ruff.lint]
@@ -55,7 +13,6 @@ ignore = []
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["F403", "F405", "E402"]
-"scripts/dev/**" = ["E402", "E501"]
 "__init__.py" = ["F401"]
 
 [tool.pytest.ini_options]
