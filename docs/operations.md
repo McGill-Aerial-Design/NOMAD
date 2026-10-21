@@ -23,8 +23,10 @@ there is no automatic activation, service installation or rollback guarantee.
 ## Saved aircraft profiles
 
 NOMAD stores profiles in `%LOCALAPPDATA%/Mission Planner/plugins/nomad_aircraft_profiles.json`.
-Legacy single-profile loading remains supported; retired runtime port/credential and
-management endpoint fields are discarded in memory. Loading never rewrites the file.
+Current-schema single-profile files at the legacy path remain supported; retired
+runtime port/credential and management endpoint fields are discarded in memory. Older
+schemas with unknown fields are rejected untouched and need explicit reviewed migration.
+Loading never rewrites the file.
 Explicit Save replaces atomically with a `.bak`; cancelled/failed saves preserve the
 previous saved collection. Keep profiles private: connection URLs can contain sensitive
 details even though runtime credentials are no longer stored/exported.

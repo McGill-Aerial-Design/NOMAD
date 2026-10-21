@@ -60,6 +60,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                loopratehz = 1;
                 ShutdownVideo();
                 _videoShutdown = new System.Threading.CancellationTokenSource();
                 NOMADMainScreen.SetVideoShutdown(_videoShutdown.Token);

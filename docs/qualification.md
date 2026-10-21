@@ -35,11 +35,12 @@ interlocks and may change output state or the controller's shared repeat slot.
   exports and complete Task 1/2 rehearsals from the [source inventory](conops-requirements.md).
 - Installation/operator acceptance using a reviewed DLL and private deployment data.
 
-Current source CI tests the plugin it ships. Obsolete external C++/MAVSDK/SITL required
-status contexts are not manufactured by replacement jobs. If repository protection
-still requires them, merging remains blocked until separately authorized alignment;
-changing this source does not alter protection.
+Current source CI tests the plugin it ships. Obsolete external C++/MAVSDK/SITL status
+contexts are not manufactured by replacement jobs. Repository protection is separate
+external state: required names must match the actual product jobs before merge.
+Source edits alone do not apply or establish that protection state.
 
-`config/github-main-protection.json` proposes those two current job names while
-preserving strict checks/reviews/admin controls. It is source data only: existing
-GitHub protection still requires its old contexts until separately authorized application.
+`config/github-main-protection.json` proposes the two current job names while
+preserving strict checks/reviews/admin controls. Applying that template requires
+explicit authorization and live readback; record the actual alignment result with
+the PR rather than treating this document as a live protection snapshot.
