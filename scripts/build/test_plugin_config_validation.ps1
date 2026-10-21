@@ -82,6 +82,39 @@ try {
     $connectionField = $outputType.GetField('CurrentConnection', [Reflection.BindingFlags]'Static,NonPublic')
     $connectionField.SetValue($null, [System.Management.Automation.LanguagePrimitives]::ConvertTo(
         [scriptblock] { return $null }, $connectionField.FieldType))
+    # Exercise real MP event add/remove accessors without constructing a stream, reading settings or opening devices.
+    $nativeType = $connectionField.FieldType.GetGenericArguments()[0]
+    $nativeConnection = [Runtime.Serialization.FormatterServices]::GetUninitializedObject($nativeType)
+    [GC]::SuppressFinalize($nativeConnection)
+    $nativeFlags = [Reflection.BindingFlags]'Instance,NonPublic'
+    $initializeNative = $outputType.GetMethod('Initialize', [Reflection.BindingFlags]'Static,NonPublic')
+    $shutdownNative = $outputType.GetMethod('Shutdown', [Reflection.BindingFlags]'Static,NonPublic')
+    $generationField = $outputType.GetField('_generation', [Reflection.BindingFlags]'Static,NonPublic')
+    $connectionField.SetValue($null, [System.Management.Automation.LanguagePrimitives]::ConvertTo(
+        [scriptblock] { return $nativeConnection }, $connectionField.FieldType))
+    try {
+        $initializeNative.Invoke($null, [object[]]@([Activator]::CreateInstance($configType))) | Out-Null
+        foreach ($name in @('_MavChanged','_CommsClose')) {
+            $handlers = $nativeType.GetField($name, $nativeFlags).GetValue($nativeConnection)
+            if ($null -eq $handlers -or $handlers.GetInvocationList().Count -ne 1 -or $null -eq $handlers.Target) {
+                throw 'Native MP connection events require one instance-target subscription.'
+            }
+        }
+        $beforeGeneration = $generationField.GetValue($null)
+        $nativeConnection.sysidcurrent = 42
+        if ($generationField.GetValue($null) -le $beforeGeneration) { throw 'Native selection event did not retire old input.' }
+        $shutdownNative.Invoke($null, @()) | Out-Null
+        foreach ($name in @('_MavChanged','_CommsClose')) {
+            if ($null -ne $nativeType.GetField($name, $nativeFlags).GetValue($nativeConnection)) {
+                throw 'Shutdown retained a native event subscription.'
+            }
+        }
+    } finally {
+        $connectionField.SetValue($null, [System.Management.Automation.LanguagePrimitives]::ConvertTo(
+            [scriptblock] { return $null }, $connectionField.FieldType))
+    }
+    Write-Host 'Actual Mission Planner event accessors accept, invalidate and remove the native subscriptions.'
+
     . (Join-Path $PSScriptRoot 'test_aircraft_profiles.ps1')
     Invoke-AircraftProfileTests $plugin $configType $temporary
     Invoke-AircraftProfileUiTests $plugin $configType

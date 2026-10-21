@@ -26,6 +26,8 @@ namespace NOMAD.MissionPlanner
     internal static partial class OutputController
     {
         private static readonly object Gate = new object();
+        // MP 1.3.83 event logging dereferences Delegate.Target, so these handlers must have an instance target.
+        private static readonly EventHandler ConnectionChangedHandler = new ConnectionEvents().OnChanged;
         private static NOMADConfig _config;
         private static MAVLinkInterface _connection;
         private static object _stream;
@@ -94,19 +96,22 @@ namespace NOMAD.MissionPlanner
                 _generation++;
                 if (_connection != null)
                 {
-                    _connection.MavChanged += InvalidateConnection;
-                    _connection.CommsClose += InvalidateConnection;
+                    _connection.MavChanged += ConnectionChangedHandler;
+                    _connection.CommsClose += ConnectionChangedHandler;
                 }
             }
             ConnectionChanged?.Invoke();
         }
-        private static void InvalidateConnection(object sender, EventArgs args)
+        private sealed class ConnectionEvents
         {
-            lock (Gate)
+            internal void OnChanged(object sender, EventArgs args)
             {
-                _generation++;
+                lock (Gate)
+                {
+                    _generation++;
+                }
+                ConnectionChanged?.Invoke();
             }
-            ConnectionChanged?.Invoke();
         }
         private static void Unsubscribe()
         {
@@ -114,8 +119,8 @@ namespace NOMAD.MissionPlanner
             {
                 return;
             }
-            _connection.MavChanged -= InvalidateConnection;
-            _connection.CommsClose -= InvalidateConnection;
+            _connection.MavChanged -= ConnectionChangedHandler;
+            _connection.CommsClose -= ConnectionChangedHandler;
         }
         internal static void Shutdown()
         {
