@@ -68,8 +68,9 @@ namespace NOMAD.MissionPlanner
                     "When enabled, Mission Planner owns the router for this aircraft profile.\n" +
                     "The router selects one physical link, supplies telemetry, and reports link health.\n" +
                     "Configure physical links here, then connect Mission Planner using the displayed UDPCl endpoint.\n\n" +
-                    (disabled ? "Enable the router in NOMAD → Settings → Multi-Link."
-                              : "Check this profile’s physical links in NOMAD → Settings → Multi-Link."),
+                    "Mission Planner owns the connection and ordinary flight controls.\n" +
+                    (disabled ? "Enable the router in NOMAD → Settings → Links."
+                              : "Check this profile’s physical links in NOMAD → Settings → Links."),
                 Font = new Font("Segoe UI", 10),
                 ForeColor = disabled ? NOMADTheme.TEXT_SECONDARY : NOMADTheme.WARNING,
                 AutoSize = true,

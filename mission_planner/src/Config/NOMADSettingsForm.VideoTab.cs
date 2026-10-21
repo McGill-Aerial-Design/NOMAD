@@ -27,19 +27,23 @@ namespace NOMAD.MissionPlanner
             _cmbVideoInputs = AddComboBox(tab, 20, y, 330, Array.Empty<string>());
             _cmbVideoInputs.DisplayMember = nameof(VideoInputProfile.Name);
             _cmbVideoInputs.SelectedIndexChanged += VideoInputSelectionChanged;
-            var add = new Button { Text = "Add", Location = new Point(365, y), Size = new Size(85, 27) };
+            var add = ControlFactory.Button("Add", width: 85, height: 27);
+            add.Location = new Point(365, y);
             add.Click += (sender, args) => AddVideoInput();
             tab.Controls.Add(add);
-            _btnRemoveVideo = new Button { Text = "Remove", Location = new Point(460, y), Size = new Size(85, 27) };
+            _btnRemoveVideo = ControlFactory.Button("Remove", width: 85, height: 27);
+            _btnRemoveVideo.Location = new Point(460, y);
             _btnRemoveVideo.Click += (sender, args) => RemoveVideoInput();
             tab.Controls.Add(_btnRemoveVideo);
             y += 40;
+            AddSectionLabel(tab, "Source", ref y);
             AddLabel(tab, "Input name:", 20, y);
             _txtVideoName = AddTextBox(tab, 180, y, 440);
             y += 32;
             AddLabel(tab, "Source URL:", 20, y);
             _txtVideoUrl = AddTextBox(tab, 180, y, 440);
             y += 32;
+            AddSectionLabel(tab, "Receiver tuning", ref y);
             AddLabel(tab, "RTSP transport:", 20, y);
             _cmbVideoTransport = AddComboBox(tab, 180, y, 140, new[] { "TCP", "UDP" });
             y += 32;
@@ -54,14 +58,22 @@ namespace NOMAD.MissionPlanner
 
             _chkAutoStartHudVideo = AddCheckBox(tab, "Auto-start video on HUD", 20, y);
             y += 35;
-            tab.Controls.Add(new Label
-            {
-                Text = "Save applies the selected input to HUD and NOMAD video views. RTSP negotiates its codec; " +
-                    "UDP listens for RTP/H.264. RTSP transport and jitter settings do not affect UDP inputs.\n" +
-                    "The display always shows the latest available frame. Queue backpressure does not preserve every frame. " +
-                    "Bitrate and encoded quality are set at the camera or encoder.",
-                Location = new Point(20, y), Size = new Size(650, 75), ForeColor = Color.Silver,
-            });
+            AddLabel(tab, "Save applies the selected input to HUD and NOMAD video views.", 20, y);
+            y += 32;
+            var info = ControlFactory.Button("Receiver help ⓘ", width: 150, height: 28);
+            info.Location = new Point(20, y);
+            info.AccessibleName = "Video receiver help";
+            string help = "RTSP negotiates its video codec. UDP listens for RTP/H.264 on the explicit port.\n" +
+                "RTSP transport and jitter settings do not affect UDP inputs.\n" +
+                "The display always shows the latest frame; queue backpressure does not preserve every frame.\n" +
+                "Bitrate, resolution and encoded quality are set at the camera or encoder.";
+            _toolTips.SetToolTip(info, help);
+            _toolTips.SetToolTip(_txtVideoUrl, "Absolute RTSP URL or UDP listening port, for example udp://@:5600.");
+            _toolTips.SetToolTip(_numVideoLatency, "RTSP jitter buffering, not end-to-end video delay. Range: 0–5000 ms.");
+            _toolTips.SetToolTip(_numVideoQueue, "Decoded-frame queue: 1–120 frames. The display still shows only the latest frame.");
+            _toolTips.SetToolTip(_chkVideoDrop, "Drop older decode-queue frames and bound RTSP jitter buffering when full.");
+            info.Click += (sender, args) => _toolTips.Show(help, info, 0, info.Height, 15000);
+            tab.Controls.Add(info);
 
             return tab;
         }
@@ -161,28 +173,14 @@ namespace NOMAD.MissionPlanner
             LoadVideoSettings();
         }
 
-        private TabPage CreateUiTab()
+        private TabPage CreatePreferencesTab()
         {
-            var tab = CreateTabPage("UI");
+            var tab = CreateTabPage("Preferences");
             int y = 15;
-
-            AddSectionLabel(tab, "User Interface", ref y);
-
-            AddSectionLabel(tab, "Debug / Advanced", ref y);
-
+            AddSectionLabel(tab, "Startup", ref y);
             _chkDebugMode = AddCheckBox(tab, "Show startup diagnostics popup", 20, y);
             y += 40;
-
-            return tab;
-        }
-
-        private TabPage CreateAlertsTab()
-        {
-            var tab = CreateTabPage("Alerts");
-            int y = 15;
-
-            AddSectionLabel(tab, "Notification Settings", ref y);
-
+            AddSectionLabel(tab, "Alerts", ref y);
             _chkAudioAlerts = AddCheckBox(tab, "Enable audio alerts for critical warnings", 20, y);
             y += 30;
             _chkAltitudeCallouts = AddCheckBox(tab, "Speak altitude callouts in flight (Airbus-style)", 20, y);

@@ -35,6 +35,10 @@ Each profile owns aircraft labels, RC roles, gimbal mode/rate, calibrated payloa
 outputs, HID mappings, links and video. Cube Orange Plus and ELRS CH5 arm/CH6 modes
 are one aircraft's settings, not global defaults. New profiles start without inherited
 payload mappings. Copy/import/export are drafts until Save.
+Open settings from the NOMAD menu or sidebar. The persistent Editing label identifies
+the draft aircraft; Save activates it. Profile actions contains reset, load and export.
+Links, Video, Payloads and Inputs belong to that draft; Preferences contains alerts
+and startup diagnostics.
 
 Use Mission Planner for connection, arm/disarm, flight modes, takeoff, LAND, setup
 and missions. Disconnect Mission Planner before applying a different aircraft profile
@@ -66,7 +70,7 @@ URLs can contain credentials: review profile exports before sharing them.
 ## ELRS and LTE links
 
 Enable the profile's plugin router only when needed. Configure its physical links
-and preferred link ID in the Multi-Link settings, using the reviewed ELRS primary
+and preferred link ID in the Links settings, using the reviewed ELRS primary
 and LTE secondary topology. An empty link list opens no physical connection.
 Connect Mission Planner with UDPCl to `127.0.0.1` and the profile's local router port.
 The plugin owns sockets/serial handles and closes them on profile replacement/unload.

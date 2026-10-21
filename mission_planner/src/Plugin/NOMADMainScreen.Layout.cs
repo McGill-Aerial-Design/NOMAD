@@ -84,19 +84,25 @@ namespace NOMAD.MissionPlanner
             navPanel.Controls.Add(_btnDashboard);
 
             // Separator
-            navPanel.Controls.Add(CreateSeparatorLabel("SAFETY"));
+            navPanel.Controls.Add(CreateSeparatorLabel("ADVISORY"));
 
             // Boundaries button (important for competition)
-            _btnBoundaries = CreateSidebarButton("Flight Boundaries");
+            _btnBoundaries = CreateSidebarButton("Advisory Outlines");
             _btnBoundaries.Click += (s, e) => ShowView("Boundaries");
             navPanel.Controls.Add(_btnBoundaries);
 
-            navPanel.Controls.Add(CreateSeparatorLabel("ANALYSIS"));
+            navPanel.Controls.Add(new Label
+            {
+                Text = "Local advisory only.\nNot sent to the aircraft.", AutoSize = true,
+                MaximumSize = new Size(SIDEBAR_WIDTH - 20, 0), ForeColor = WARNING_COLOR,
+                Margin = new Padding(10, 4, 5, 8), Tag = "AdvisoryWarning",
+            });
 
             navPanel.Controls.Add(CreateSeparatorLabel("TOOLS"));
 
             // Video button
-            _btnVideo = CreateSidebarButton("Video Feed");
+            _btnVideo = CreateSidebarButton("Video & Payloads");
+            _btnVideo.UseMnemonic = false;
             _btnVideo.Click += (s, e) => ShowView("Video");
             navPanel.Controls.Add(_btnVideo);
 
@@ -110,7 +116,14 @@ namespace NOMAD.MissionPlanner
             btnGimbal.Click += (s, e) => GimbalJoystickWindow.ShowSingleton(_config, this.FindForm());
             navPanel.Controls.Add(btnGimbal);
 
-            // Append any module-contributed entries (NOMAD module SDK — see src/Core).
+            navPanel.Controls.Add(CreateSeparatorLabel("PREFERENCES"));
+            var settings = CreateSidebarButton("Settings…");
+            settings.Name = "OpenSettings";
+            settings.Click += (sender, args) =>
+            {
+                if (!_videoShutdown.IsCancellationRequested) { _showSettings?.Invoke(); }
+            };
+            navPanel.Controls.Add(settings);
 
             // IMPORTANT: In Windows Forms, docking order is reverse of Z-order
             // Add navPanel FIRST (will be at back, fills remaining space)

@@ -17,12 +17,19 @@ internal static partial class VideoLifetimeTests
         using (var player = new EmbeddedVideoPlayer("fake", "rtsp://video.invalid/stream", true,
             CancellationToken.None, () => new FakeVideoPipeline()))
         {
-            foreach (var label in new[] { "Play", "Stop", "Full", "Snap" })
+            foreach (var label in new[] { "Play", "Stop", "Full screen", "Take snapshot" })
             {
                 var button = FindVideoButton(player, label);
                 Check(button != null && button.Parent != null && button.Visible,
                     $"Playback control {label} is not visible in the player");
+                Check(!string.IsNullOrWhiteSpace(GetField<ToolTip>(player, "_videoToolTips").GetToolTip(button)),
+                    $"Playback control {label} has no explanatory tooltip");
             }
+            player.Size = new Size(100, 200);
+            player.PerformLayout();
+            var toolbar = player.Controls.Find("VideoToolbar", true)[0];
+            Check(toolbar.Height > 45 && toolbar.Height < player.Height,
+                "Narrow video toolbar failed to wrap its controls into available width");
         }
     }
 
@@ -30,7 +37,7 @@ internal static partial class VideoLifetimeTests
     {
         foreach (Control child in parent.Controls)
         {
-            if (child is Button button && button.Text == label)
+            if (child is Button button && button.AccessibleName == label)
             {
                 return button;
             }

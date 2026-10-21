@@ -32,31 +32,25 @@ namespace NOMAD.MissionPlanner
                 Text = "Ready - Click Play",
                 Dock = DockStyle.Bottom,
                 Height = 22,
-                ForeColor = Color.Gray,
-                BackColor = Color.FromArgb(30, 30, 30),
+                ForeColor = NOMADTheme.TEXT_SECONDARY,
+                BackColor = NOMADTheme.CARD_BG,
                 TextAlign = ContentAlignment.MiddleCenter,
-                Font = new Font("Segoe UI", 8),
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL),
             };
 
-            var ctrlPanel = new Panel
+            var ctrlPanel = new FlowLayoutPanel
             {
-                Dock = DockStyle.Top,
-                Height = 60,
-                BackColor = Color.FromArgb(35, 35, 38),
-                Padding = new Padding(5),
+                Name = "VideoToolbar", Dock = DockStyle.Top, AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true,
+                BackColor = NOMADTheme.CARD_BG, Padding = new Padding(5),
             };
-
-            var btnPlay = CreateButton("Play", 10, 5, 55, Color.FromArgb(60, 120, 60));
-            var btnStop = CreateButton("Stop", 70, 5, 55, Color.FromArgb(120, 60, 60));
-            var btnFull = CreateButton("Full", 130, 5, 50, Color.FromArgb(70, 70, 75));
-            var btnSnap = CreateButton("Snap", 235, 5, 50, Color.FromArgb(80, 80, 120));
-
-            btnPlay.Click += (s, e) => StartStream();
-            btnStop.Click += (s, e) => StopStream();
-            btnFull.Click += (s, e) => ToggleFullscreen();
-            btnSnap.Click += (s, e) => TakeSnapshot();
-
-            ctrlPanel.Controls.AddRange(new Control[] { btnPlay, btnStop, btnFull, btnSnap });
+            ctrlPanel.Controls.AddRange(new Control[]
+            {
+                CreateVideoButton("\uE768", "Play", (sender, args) => StartStream()),
+                CreateVideoButton("\uE71A", "Stop", (sender, args) => StopStream()),
+                CreateVideoButton("\uE740", "Full screen", (sender, args) => ToggleFullscreen()),
+                CreateVideoButton("\uE722", "Take snapshot", (sender, args) => TakeSnapshot()),
+            });
 
             Controls.Add(_videoBox);
             Controls.Add(_lblStatus);
@@ -65,18 +59,14 @@ namespace NOMAD.MissionPlanner
             ctrlPanel.Visible = _showControls;
         }
 
-        private Button CreateButton(string text, int x, int y, int width, Color color)
+        private Button CreateVideoButton(string symbol, string name, EventHandler onClick)
         {
-            return new Button
-            {
-                Text = text,
-                Location = new Point(x, y),
-                Size = new Size(width, 24),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = color,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 8),
-            };
+            var button = ControlFactory.Button(symbol, onClick, width: 36, height: 30);
+            button.AccessibleName = name;
+            button.Font = new Font("Segoe MDL2 Assets", NOMADTheme.SIZE_HEADING);
+            button.Margin = new Padding(0, 0, 4, 4);
+            _videoToolTips.SetToolTip(button, name);
+            return button;
         }
 
         private void OnVideoPaint(object sender, PaintEventArgs e)

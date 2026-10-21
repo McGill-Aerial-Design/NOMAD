@@ -74,6 +74,7 @@ namespace NOMAD.MissionPlanner
 
         // Content views
         private UserControl _currentView;
+        private string _currentViewName = "Dashboard";
         private NOMADDashboardView _dashboardView;
         private NOMADBoundaryView _boundaryView;
         private NOMADVideoView _videoView;
@@ -86,7 +87,12 @@ namespace NOMAD.MissionPlanner
 
         // Static configuration (set by the plugin before this screen is shown)
         private static System.Threading.CancellationToken _videoShutdown;
-        internal static void SetVideoShutdown(System.Threading.CancellationToken token) => _videoShutdown = token;
+        private static Action _showSettings;
+        internal static void SetVideoShutdown(System.Threading.CancellationToken token, Action showSettings = null)
+        {
+            _videoShutdown = token;
+            _showSettings = showSettings;
+        }
         private static NOMADConfig _staticConfig;
         private static MAVLinkConnectionManager _staticConnectionManager;
         private static GeofenceConfig _staticGeofenceConfig;
@@ -168,7 +174,7 @@ namespace NOMAD.MissionPlanner
             QueueThemeReapply();
 
             StartUpdateTimer();
-            ShowView("Dashboard");
+            ShowView(_currentViewName);
         }
 
         /// <summary>
@@ -199,7 +205,8 @@ namespace NOMAD.MissionPlanner
                         else if (c is Label l)
                         {
                             l.BackColor = SIDEBAR_BG;
-                            l.ForeColor = TEXT_SECONDARY;
+                            l.ForeColor = Equals(l.Tag, "AdvisoryWarning") ? WARNING_COLOR :
+                                l.Name == "ActiveAircraft" ? TEXT_PRIMARY : TEXT_SECONDARY;
                         }
                     }
                 }
@@ -214,6 +221,7 @@ namespace NOMAD.MissionPlanner
                     }
                 }
             }
+            UpdateSidebarButtonState(_currentViewName);
         }
 
         private void QueueThemeReapply()
@@ -260,11 +268,9 @@ namespace NOMAD.MissionPlanner
 
         private void ShowView(string viewName)
         {
+            _currentViewName = viewName;
             // Keep the chrome on-theme even if MP's ThemeManager ran since.
             ReapplyNomadTheme();
-
-            // Update sidebar button states (and clear any active module button).
-            UpdateSidebarButtonState(viewName);
 
             // Remove current view
             if (_currentView != null)

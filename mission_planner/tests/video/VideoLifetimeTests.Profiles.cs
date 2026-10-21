@@ -63,6 +63,12 @@ internal static partial class VideoLifetimeTests
                     Check(GetField<EmbeddedVideoPlayer>(video, "_videoPlayer") == null &&
                         GetField<EmbeddedVideoPlayer>(dashboard, "_videoPlayer") == null && created == 0,
                         "An empty video configuration invented a source or created a pipeline.");
+                    var payloads = GetField<ActuatorControlPanel>(video, "_actuatorPanel");
+                    payloads.Size = new Size(200, 250);
+                    payloads.PerformLayout();
+                    var status = GetField<Label>(payloads, "_status");
+                    Check(status.Width <= payloads.ClientSize.Width && status.Height > status.Font.Height,
+                        "Payload command warning did not wrap inside a narrow video-side panel.");
                 }
             }
             finally { NotificationService.Shared = previous; }
@@ -80,6 +86,15 @@ internal static partial class VideoLifetimeTests
         profiles.SelectedId = firstId;
         using (var form = new NOMADSettingsForm(profiles))
         {
+            var tabs = GetField<TabControl>(form, "_tabControl");
+            Check(string.Join(",", System.Linq.Enumerable.Select(
+                System.Linq.Enumerable.Cast<TabPage>(tabs.TabPages), tab => tab.Text)) ==
+                "Aircraft,Links,Video,Payloads,Inputs,Preferences", "Settings lost its six focused sections.");
+            Check(GetField<Label>(form, "_profileContext").Text == "Editing: Alpha",
+                "Settings did not identify the aircraft being edited.");
+            GetField<TextBox>(form, "_txtAircraftName").Text = "Renamed Alpha";
+            Check(GetField<Label>(form, "_profileContext").Text == "Editing: Renamed Alpha",
+                "The persistent Settings context did not track an aircraft rename.");
             var selector = GetField<ComboBox>(form, "_cmbVideoInputs");
             GetField<TextBox>(form, "_txtVideoName").Text = "Renamed";
             GetField<TextBox>(form, "_txtVideoUrl").Text = "rtsp://edited.invalid/live";
@@ -96,9 +111,13 @@ internal static partial class VideoLifetimeTests
                 "Switching video input lost a draft, rename, selection or receiver settings.");
             var aircraft = GetField<ComboBox>(form, "_cmbAircraft");
             aircraft.SelectedIndex = 1;
+            Check(GetField<Label>(form, "_profileContext").Text == "Editing: Beta",
+                "The persistent Settings context retained another aircraft's name.");
             Check(selector.Items.Count == 0 && !GetField<TextBox>(form, "_txtVideoUrl").Enabled,
                 "Another aircraft inherited the previous aircraft's video inputs.");
             aircraft.SelectedIndex = 0;
+            Check(GetField<Label>(form, "_profileContext").Text == "Editing: Renamed Alpha",
+                "Returning to an aircraft lost its edited name in the persistent context.");
             Check(selector.Items.Count == 2 && form.Config.SelectedVideoInputName == "Renamed",
                 "Returning to an aircraft lost its video input list or selection.");
             var flags = BindingFlags.Instance | BindingFlags.NonPublic;

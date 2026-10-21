@@ -10,20 +10,14 @@ namespace NOMAD.MissionPlanner
 {
     public partial class NOMADSettingsForm
     {
-        private TabPage CreateConnectionTab()
-        {
-            var tab = CreateTabPage("Connection");
-            AddLabel(tab, "NOMAD uses the live aircraft selected in Mission Planner.", 20, 20);
-            AddLabel(tab, "Use Mission Planner for connection, arming, flight modes, LAND and missions.", 20, 50);
-            return tab;
-        }
-
         private TabPage CreateMultiLinkTab()
         {
-            var tab = CreateTabPage("Multi-Link");
+            var tab = CreateTabPage("Links");
             int y = 15;
+            AddLabel(tab, "Mission Planner owns the connection and ordinary flight controls.", 20, y);
+            y += 32;
             AddSectionLabel(tab, "Aircraft links", ref y);
-            _chkRouterClientEnabled = AddCheckBox(tab, "Run the router inside Mission Planner", 20, y, Color.LimeGreen);
+            _chkRouterClientEnabled = AddCheckBox(tab, "Run the router inside Mission Planner", 20, y);
             y += 40;
             AddLabel(tab, "Mission Planner UDPCl port:", 20, y);
             _numRouterLocalPort = AddNumericUpDown(tab, 215, y, 80, 1, 65535, 14600);
@@ -34,7 +28,8 @@ namespace NOMAD.MissionPlanner
             AddLabel(tab, "Physical links (JSON array):", 20, y);
             y += 25;
             _txtRouterLinks = new TextBox { Location = new Point(20, y), Size = new Size(580, 170),
-                Multiline = true, ScrollBars = ScrollBars.Both, WordWrap = false };
+                Multiline = true, ScrollBars = ScrollBars.Both, WordWrap = false,
+                BackColor = NOMADTheme.INPUT_BG, ForeColor = NOMADTheme.TEXT_PRIMARY, Font = NOMADTheme.Mono() };
             tab.Controls.Add(_txtRouterLinks);
             y += 180;
             var hint = new Label
@@ -45,7 +40,7 @@ namespace NOMAD.MissionPlanner
                     "Connect Mission Planner using UDPCl to 127.0.0.1 and the port above.\n" +
                     "Changing profiles or link settings stops and replaces the router.",
                 Location = new Point(20, y), AutoSize = true, MaximumSize = new Size(580, 0),
-                ForeColor = Color.Gray
+                ForeColor = NOMADTheme.TEXT_SECONDARY
             };
             tab.Controls.Add(hint);
             return tab;

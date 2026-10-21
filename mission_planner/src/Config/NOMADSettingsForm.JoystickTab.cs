@@ -12,7 +12,7 @@ namespace NOMAD.MissionPlanner
     {
         private TabPage CreateJoystickTab()
         {
-            var tab = CreateTabPage("Joystick");
+            var tab = CreateTabPage("Inputs");
             int y = 10;
 
             AddSectionLabel(tab, "Physical Joystick Routing", ref y);

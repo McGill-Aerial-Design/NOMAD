@@ -33,6 +33,7 @@ internal static class RouterStatusUiTests
         Run("Links view availability", LinksViewAvailability);
         Run("settings save preserves router and unload session", SettingsRouterLifetime);
         Run("aircraft profile retires cached views", AircraftProfileRetiresCachedViews);
+        Run("deferred theme and session-owned Settings", SidebarThemeAndSettings);
         Console.WriteLine($"Router status UI checks: {_checks}; failures: {_failures}");
         return _failures == 0 ? 0 : 1;
     }
@@ -180,6 +181,56 @@ internal static class RouterStatusUiTests
         {
             NOMADMainScreen.SetStaticConfig(null);
             NotificationService.Shared = previousService;
+        }
+    }
+
+    private static void SidebarThemeAndSettings()
+    {
+        var outlines = new GeofenceConfig();
+        using var monitor = new AdvisoryBoundaryMonitor(outlines);
+        using var session = new System.Threading.CancellationTokenSource();
+        var type = typeof(NOMADMainScreen);
+        var setSession = type.GetMethod("SetVideoShutdown", BindingFlags.Static | BindingFlags.NonPublic);
+        int opened = 0;
+        setSession.Invoke(null, new object[] { session.Token, (Action)(() => opened++) });
+        var config = new NOMADConfig { AircraftName = "Synthetic UI" };
+        NOMADMainScreen.SetStaticConfig(config, null, outlines, monitor);
+        try
+        {
+            using var screen = new NOMADMainScreen(config);
+            type.GetMethod("ShowView", PrivateInstance).Invoke(screen, new object[] { "Links" });
+            var handle = screen.Handle;
+            type.GetMethod("QueueThemeReapply", PrivateInstance).Invoke(screen, null);
+            Application.DoEvents();
+            var selected = (Button)type.GetField("_btnLinks", PrivateInstance).GetValue(screen);
+            var dashboard = (Button)type.GetField("_btnDashboard", PrivateInstance).GetValue(screen);
+            Check(selected.BackColor == NOMADTheme.ACCENT && selected.ForeColor == NOMADTheme.TEXT_PRIMARY &&
+                dashboard.BackColor != NOMADTheme.ACCENT,
+                "deferred host theme restoration preserves the selected sidebar button");
+            var sidebar = (Control)type.GetField("_sidebarPanel", PrivateInstance).GetValue(screen);
+            foreach (Control group in sidebar.Controls)
+            foreach (Control child in group.Controls)
+            {
+                if (Equals(child.Tag, "AdvisoryWarning"))
+                { Check(child.ForeColor == NOMADTheme.WARNING, "theme restoration preserves the local-advisory warning"); }
+            }
+            var settings = (Button)screen.Controls.Find("OpenSettings", true)[0];
+            settings.PerformClick();
+            Check(opened == 1, "sidebar Settings uses the current plugin callback");
+            session.Cancel();
+            settings.PerformClick();
+            Check(opened == 1, "a retired plugin session cannot reopen Settings");
+            var plugin = new NOMADPlugin();
+            typeof(NOMADPlugin).GetMethod("ShutdownVideo", PrivateInstance).Invoke(plugin, null);
+            Check(type.GetField("_showSettings", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null) == null,
+                "plugin shutdown releases the Settings callback");
+            settings.PerformClick();
+            Check(opened == 1, "a cached sidebar cannot reopen Settings after plugin shutdown");
+        }
+        finally
+        {
+            setSession.Invoke(null, new object[] { System.Threading.CancellationToken.None, null });
+            NOMADMainScreen.SetStaticConfig(null);
         }
     }
 }
