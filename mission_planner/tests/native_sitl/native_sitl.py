@@ -7,6 +7,8 @@ import traceback
 import clr
 
 clr.AddReference("System.Web.Extensions")
+# Native CLR namespaces must retain execution order across Windows/Linux lint environments.
+# isort: off
 from MissionPlanner import MainV2 as MainType
 from MissionPlanner.Comms import TcpSerial
 from MissionPlanner.Plugin import PluginLoader
@@ -21,6 +23,7 @@ from System.Threading import Monitor, Thread, Timeout, Timer
 from System.Web.Script.Serialization import JavaScriptSerializer
 
 from MAVLink import MAV_CMD, MAVLinkMessage, mavlink_command_ack_t, mavlink_relay_status_t, mavlink_servo_output_raw_t
+# isort: on
 
 HOST = MainV2  # noqa: F821 - injected by the native Mission Planner script host
 STATIC = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic

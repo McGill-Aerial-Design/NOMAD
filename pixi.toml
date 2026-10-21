@@ -41,3 +41,5 @@ test-ground-router-logic = "powershell -NoProfile -ExecutionPolicy Bypass -File 
 
 # Manual installed-host simulator check; requires explicit source and DLL hash arguments.
 test-plugin-native-sitl = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_native_sitl.ps1"
+
+test-plugin-native-preflight = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_native_preflight.ps1"

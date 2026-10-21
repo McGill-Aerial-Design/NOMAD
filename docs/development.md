@@ -33,6 +33,7 @@ pixi run build-plugin-only
 pixi run lint-plugin
 pixi run test-plugin-gimbal
 pixi run test-plugin-payload
+pixi run test-plugin-native-preflight
 pixi run test-plugin-config-validation
 pixi run test-plugin-geometry
 pixi run test-plugin-audio
@@ -54,7 +55,8 @@ concrete failure cases rather than obsolete service/IPC assertions.
 ## Manual native simulator acceptance
 
 With Mission Planner closed, an explicitly installed reviewed DLL, and the active
-saved profile's router, HID and arrow inputs disabled, run:
+saved profile's router, HID, switch bindings, arrow inputs and configured automatic
+HUD video disabled, run:
 
 ```powershell
 pixi run test-plugin-native-sitl -ExpectedSource <installed-source-sha> -ExpectedPluginSha256 <installed-dll-sha256> -Vehicle Copter
@@ -81,9 +83,20 @@ These cached development builds provide simulator evidence, not aircraft qualifi
 Each attempt has fresh simulator state and temporary MP XML under
 `build/tests/native-sitl`. The runner refuses an existing MP process, starts only
 its own simulator/host, uses loopback TCP, and applies synthetic payload settings
-in memory. It preserves existing profiles/advisory files and checks their hashes.
+in memory. Before either process starts, it strictly loads the selected profile through the
+exact installed DLL and rejects those startup owners plus debug popups. No plugin
+Init or Start runs during that preflight. The separate native-preflight gate tests
+the actual guard with synthetic data and all four primary/backup loading candidates.
+Immediately before MP launch, it rechecks the DLL and named preservation set:
+`Documents/Mission Planner/config.xml`, `nomad_aircraft_profiles.json` and its `.bak`,
+`nomad_config.json` and its `.bak`, and `NOMAD/geofence_config.json` under the MP
+local application-data plugin directory. It checks that same set after exit;
+this does not claim all host/cache/log state is unchanged.
 It does not open USB/serial devices, arm, or write real controller parameters.
-Normal host startup/scheduling/close own Init, Loaded, Loop and Exit. The check
+The temporary MP XML disables automatic connections, other plugin files, speech
+and update checks, uses cached maps and directs host logs to the attempt directory.
+Normal host startup/scheduling/close own Init, Loaded, Loop and Exit. Passing also
+requires actual MP process exit code zero. The check
 observes all five payload behaviors, native timed return, explicit Safe and gimbal
 servo outputs using fresh `SERVO_OUTPUT_RAW`/`RELAY_STATUS` plus native command ACKs.
 Gimbal submission is checked separately from observed output. Bidirectional motion

@@ -7,6 +7,24 @@ param(
     [ValidateRange(1, 100)][int]$Instance = 55
 )
 $ErrorActionPreference = 'Stop'
+function Assert-NativeSitlProfileSafe($config) {
+    foreach ($name in @('RouterClientEnabled', 'JoystickGimbalEnabled', 'JoystickPositionEnabled',
+        'GimbalArrowKeysEnabled', 'DebugMode')) {
+        if ($config.$name) {
+            throw "Disable saved profile field $name before simulator startup."
+        }
+    }
+    foreach ($name in @('JoystickSw1UpAction', 'JoystickSw1DownAction', 'JoystickSw2UpAction',
+        'JoystickSw2DownAction', 'JoystickSw3UpAction', 'JoystickSw3DownAction')) {
+        if (![string]::IsNullOrWhiteSpace($config.$name) -and $config.$name -cne 'None') {
+            throw "Disable saved profile field $name before simulator startup."
+        }
+    }
+    if ($config.AutoStartHudVideo -and ![string]::IsNullOrWhiteSpace($config.VideoUrl)) {
+        throw 'Disable configured automatic HUD video before simulator startup.'
+    }
+}
+
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $hostRoot = 'C:\Program Files (x86)\Mission Planner'
 $cache = Join-Path $env:USERPROFILE 'Documents/Mission Planner/sitl'
@@ -56,13 +74,35 @@ Copy-Item -LiteralPath (Join-Path $fixtures 'native_sitl.py') -Destination $atte
 $preserved = @(
     (Join-Path $env:USERPROFILE 'Documents/Mission Planner/config.xml'),
     (Join-Path $env:LOCALAPPDATA 'Mission Planner/plugins/nomad_aircraft_profiles.json'),
+    (Join-Path $env:LOCALAPPDATA 'Mission Planner/plugins/nomad_aircraft_profiles.json.bak'),
     (Join-Path $env:LOCALAPPDATA 'Mission Planner/plugins/nomad_config.json'),
+    (Join-Path $env:LOCALAPPDATA 'Mission Planner/plugins/nomad_config.json.bak'),
     (Join-Path $env:LOCALAPPDATA 'Mission Planner/plugins/NOMAD/geofence_config.json')
 )
 $before = @{}
 foreach ($path in $preserved) {
     $before[$path] = if (Test-Path -LiteralPath $path) { (Get-FileHash -LiteralPath $path).Hash } else { '' }
 }
+# Load only saved data from the exact installed assembly, before either child exists.
+$resolver = [ResolveEventHandler] {
+    param($sender, $eventArgs)
+    if (([Reflection.AssemblyName]$eventArgs.Name).Name -ne 'Newtonsoft.Json') { return $null }
+    return [Reflection.Assembly]::LoadFrom((Join-Path $hostRoot 'Newtonsoft.Json.dll'))
+}
+[AppDomain]::CurrentDomain.add_AssemblyResolve($resolver)
+try {
+    $assembly = [Reflection.Assembly]::LoadFile($plugin)
+    $profilesType = $assembly.GetType('NOMAD.MissionPlanner.NOMADProfiles', $true)
+    try {
+        $profiles = $profilesType.GetMethod('Load').Invoke($null, @())
+    } catch {
+        throw 'Installed profiles could not be validated for simulator startup.'
+    }
+    Assert-NativeSitlProfileSafe $profiles.Selected.Config
+} finally {
+    [AppDomain]::CurrentDomain.remove_AssemblyResolve($resolver)
+}
+
 function Start-Owned($executable, $arguments, $directory, $variables) {
     $info = New-Object System.Diagnostics.ProcessStartInfo
     $info.FileName = $executable
@@ -126,6 +166,11 @@ try {
         CHK_resetapmonconnect = 'False'
         CHK_rtsresetesp32 = 'False'
         CONNECT_TIMEOUT_SECONDS = '10'
+        mapCache = 'CacheOnly'
+        logdirectory = (Join-Path $attempt 'native-logs')
+        speechenable = 'False'
+        beta_updates = 'False'
+        update_check = (Get-Date).ToShortDateString()
     }
     foreach ($name in $settings.Keys) {
         $entry = $xml.CreateElement($name)
@@ -136,6 +181,15 @@ try {
     $xml.Save($configPath)
     $script = Join-Path $attempt 'native_sitl.py'
     $variables = @{ NOMAD_SITL_PORT = [string]$port; NOMAD_SITL_SOURCE = $ExpectedSource }
+    foreach ($path in $preserved) {
+        $current = if (Test-Path -LiteralPath $path) { (Get-FileHash -LiteralPath $path).Hash } else { '' }
+        if ($current -ne $before[$path]) {
+            throw 'A preserved profile/configuration candidate changed before host launch.'
+        }
+    }
+    if ((Get-FileHash -LiteralPath $plugin).Hash -ne $ExpectedPluginSha256) {
+        throw 'Installed DLL changed before host launch.'
+    }
     $mp = Start-Owned (Join-Path $hostRoot 'MissionPlanner.exe') ('-config "' + $configPath + '" -script "' + $script + '"') $hostRoot $variables
     if (!$mp.Process.WaitForExit(110000)) {
         [void]$mp.Process.CloseMainWindow()
@@ -163,6 +217,7 @@ try {
         [void]$mp.Process.WaitForExit(10000)
     }
     $result.owned_host_exited = $mp -and $mp.Process.HasExited
+    $result.host_exit_code = if ($result.owned_host_exited) { $mp.Process.ExitCode } else { $null }
     if ($sim -and !$sim.Process.HasExited) {
         $sim.Process.Kill()
         $sim.Process.WaitForExit()
@@ -175,8 +230,10 @@ try {
             $unchanged = $false
         }
     }
-    $result.operator_files_unchanged = $unchanged
-    $result.passed = $result.passed -and $unchanged -and $result.owned_host_exited -and $result.owned_simulator_exited
+    $result.preserved_files_unchanged = $unchanged
+    $result.preserved_file_set = @('mp-config', 'aircraft-profiles', 'aircraft-profiles-backup',
+        'legacy-profile', 'legacy-profile-backup', 'advisory-config')
+    $result.passed = $result.passed -and $unchanged -and $result.owned_host_exited -and $result.host_exit_code -eq 0 -and $result.owned_simulator_exited
     $result | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $attempt 'result.json') -Encoding UTF8
     $result | ConvertTo-Json -Depth 10
 }
