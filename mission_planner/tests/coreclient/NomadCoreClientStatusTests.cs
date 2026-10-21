@@ -53,6 +53,7 @@ internal static partial class NomadCoreClientTests
     {
         Status_ReadsWithoutAuthorityAndPreservesDistinctFacts();
         Status_ReadsFlightRequestPhases();
+        Status_FlightRequestIdUsesProtocolByteLimit();
         Status_InvalidFlightRequestStaysUnknown();
         Status_RejectsMismatchedEnvelopeAndIncarnation();
         Status_RejectsUnauthenticatedServer();
@@ -107,6 +108,30 @@ internal static partial class NomadCoreClientTests
             Expect(status?.ActuationEnabled == false && status.AuthorityOwner == null
                 && runtime.Requests().Length == 2 && runtime.Requests()[1]["type"].Equals("status"),
                 "flight request history grants no authority and dispatches no mutation");
+        }
+    }
+
+    private static void Status_FlightRequestIdUsesProtocolByteLimit()
+    {
+        var cases = new (string Id, bool Valid)[]
+        {
+            (new string('r', 64), true), (new string('r', 65), false),
+            (new string('\u00E9', 32), true), (new string('\u00E9', 33), false),
+        };
+        foreach (var sample in cases)
+        {
+            using var runtime = new StatusRuntime(changeResponse: response =>
+            {
+                var request = FlightRequestSnapshot();
+                request["request_id"] = sample.Id;
+                ((Dictionary<string, object>)response["status"])["last_flight_request"] = request;
+            });
+            var result = StatusResult(new NomadCoreClient("test-key", runtime.Port).GetStatusAsync());
+            Expect(result.Succeeded && (sample.Valid
+                    ? result.Snapshot.LastFlightRequest?.RequestId == sample.Id
+                    : result.Snapshot.LastFlightRequest == null),
+                sample.Valid ? "flight request ID at the UTF-8 byte limit remains valid"
+                    : "oversized UTF-8 flight request ID stays unknown");
         }
     }
 

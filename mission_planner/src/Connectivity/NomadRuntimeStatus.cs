@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 
 namespace NOMAD.MissionPlanner.Connectivity
 {
@@ -153,7 +154,8 @@ namespace NOMAD.MissionPlanner.Connectivity
             var age = Age(request, "age_ms");
             var phase = Choice(request, "phase", "sending", "observing", "completed");
             var acknowledged = Boolean(request, "acknowledged");
-            if (string.IsNullOrEmpty(id) || operation == null || session == null || session == 0
+            if (string.IsNullOrEmpty(id) || Encoding.UTF8.GetByteCount(id) > 64 || operation == null
+                || session == null || session == 0
                 || generation == null || generation == 0 || age == null || phase == null || acknowledged == null)
             {
                 return null;
