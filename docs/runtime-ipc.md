@@ -264,9 +264,10 @@ the result of their own request, including when responses finish out of order.
 
 Runtime networking uses .NET Framework 4.8 asynchronous TCP connect, stream
 write and stream read operations. Cancellation closes the request's socket.
-Connect, write and read-idle deadlines remain 1500 ms, 3000 ms and 120000 ms.
+Connect and write deadlines remain 1500 ms and 3000 ms. Each response has a
+120000 ms overall read deadline; partial network reads do not renew that budget.
 Buffered reads retain unconsumed bytes between frames and use one cancellation
-source per response, resetting its idle deadline for each network read.
+source per response.
 Cancellation or failure before mutation write begins is `FailedBeforeSend`;
 once write begins it is `UnknownOutcome`. Neither uncertain nor stale mutations
 are retried automatically. UI callers await on the WinForms context, and gimbal
@@ -279,9 +280,9 @@ mutation. Presentation uses backend revisions and retires old runtime incarnatio
 Mission Planner's read-only STATUS request uses authenticated HELLO and matches
 the response protocol, ID, type and nested runtime incarnation. It acquires no
 authority and consumes no mutation sequence. Its five-second overall cancellation
-deadline covers connect, HELLO, write and response reads, including slow-drip data;
-the mutation deadlines above remain unchanged. Invalid configured ports fail
-locally for all client requests instead of selecting the default endpoint.
+deadline covers connect, HELLO, write and response reads, including slow-drip data.
+Invalid configured ports fail locally for all client requests instead of selecting
+the default endpoint.
 
 The dashboard's explicit runtime-status view reports dated snapshots separately
 from native Mission Planner telemetry. Protocol verbs, aircraft operation support,

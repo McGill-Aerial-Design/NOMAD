@@ -35,6 +35,7 @@ internal static partial class NomadCoreClientTests
         Runtime_CancellationBeforeWriteIsNotSent();
         Runtime_CancellationAfterWriteIsUnknown();
         Runtime_ResponseTimeoutAfterWriteIsUnknown();
+        Runtime_PartialResponsesCannotRenewDeadline();
         Runtime_AsyncConnectionAndAuthenticationFailures();
     }
 
@@ -370,6 +371,24 @@ internal static partial class NomadCoreClientTests
         runtime.Wait();
         Expect(runtime.Commands.Count == 1 && runtime.AcceptedConnections == 1,
             "timed out mutation has no automatic retry");
+    }
+
+    private static void Runtime_PartialResponsesCannotRenewDeadline()
+    {
+        foreach (var delay in new[] { 50, 500 })
+        {
+            using var runtime = new AsyncRuntime(2) { ResponseFragmentDelayMilliseconds = delay };
+            var client = new NomadRuntimeClient(runtime.Port, "test-key", "mission-planner", 750);
+            runtime.ReleaseResponses();
+            var result = WaitResult(client.RunAsync("servo", new[] { "8", "1500" }, CancellationToken.None));
+            Expect(delay == 50 ? result.Succeeded : result.Outcome == NomadCoreRequestOutcome.UnknownOutcome,
+                "partial responses preserve valid results within the deadline but cannot renew it after mutation write");
+            runtime.ResponseFragmentDelayMilliseconds = 0;
+            var next = WaitResult(client.RunAsync("servo", new[] { "9", "1500" }, CancellationToken.None));
+            runtime.Wait();
+            Expect(next.Succeeded && runtime.Commands.Count == 2 && runtime.AcceptedConnections == 2,
+                "response completion or timeout releases the local gate; only the explicit next request is sent");
+        }
     }
 
     private static void Runtime_AsyncConnectionAndAuthenticationFailures()

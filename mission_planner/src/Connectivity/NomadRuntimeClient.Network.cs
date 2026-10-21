@@ -69,17 +69,16 @@ namespace NOMAD.MissionPlanner.Connectivity
         {
             using var bytes = new MemoryStream();
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(_responseTimeoutMilliseconds);
             using var cancellation = timeout.Token.Register(client.Close);
             while (true)
             {
                 timeout.Token.ThrowIfCancellationRequested();
                 if (reader.Offset == reader.Count)
                 {
-                    timeout.CancelAfter(_responseTimeoutMilliseconds);
                     reader.Count = await stream.ReadAsync(reader.Bytes, 0, reader.Bytes.Length, timeout.Token)
                         .ConfigureAwait(false);
                     timeout.Token.ThrowIfCancellationRequested();
-                    timeout.CancelAfter(Timeout.Infinite);
                     reader.Offset = 0;
                     if (reader.Count == 0)
                     {
@@ -97,6 +96,7 @@ namespace NOMAD.MissionPlanner.Connectivity
                 if (newline >= 0)
                 {
                     var parsed = serializer.DeserializeObject(Encoding.UTF8.GetString(bytes.ToArray()));
+                    timeout.Token.ThrowIfCancellationRequested();
                     return parsed as Dictionary<string, object>
                         ?? throw new InvalidDataException("Runtime response must be a JSON object.");
                 }

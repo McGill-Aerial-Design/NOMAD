@@ -39,6 +39,7 @@ internal static partial class NomadCoreClientTests
         internal bool OmitSequenceFloor { get; set; }
         internal int StaleRequests { get; private set; }
         internal int ResponseSize { get; set; }
+        internal int ResponseFragmentDelayMilliseconds { get; set; }
         internal int AuthorityGeneration
         {
             get
@@ -142,7 +143,22 @@ internal static partial class NomadCoreClientTests
                             ["code"] = "stale_request", ["message"] = "sequence was already consumed"
                         };
                     }
-                    writer.WriteLine(serializer.Serialize(response));
+                    var serialized = serializer.Serialize(response);
+                    var fragmentDelay = ResponseFragmentDelayMilliseconds;
+                    if (fragmentDelay > 0)
+                    {
+                        for (var index = 0; index < 2; index++)
+                        {
+                            writer.Write(serialized[index]);
+                            writer.Flush();
+                            Thread.Sleep(fragmentDelay);
+                        }
+                        writer.WriteLine(serialized.Substring(2));
+                    }
+                    else
+                    {
+                        writer.WriteLine(serialized);
+                    }
                 }
             }
             catch (IOException)
