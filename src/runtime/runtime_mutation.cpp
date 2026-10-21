@@ -106,6 +106,10 @@ Json Runtime::Implementation::execute_mutating_request(const Request &request) {
     if (request.type == "actuator_action" || request.type == "configure_actuators") {
         return execute_actuator_request(request);
     }
+    std::unique_lock operation_lock(operation_mutex_, std::try_to_lock);
+    if (!operation_lock.owns_lock()) {
+        return error_response(request.id, "busy", "another NOMAD command is still executing");
+    }
     std::unique_lock command_lock(command_mutex_, std::try_to_lock);
     if (!command_lock.owns_lock()) {
         return error_response(request.id, "busy", "another NOMAD command is still executing");
@@ -126,7 +130,7 @@ Json Runtime::Implementation::execute_mutating_request(const Request &request) {
         return audit_error(request);
     }
     ActiveRequest active(request);
-    const auto result = invoke_vehicle(request);
+    const auto result = invoke_vehicle(request, command_lock);
     *request.ack_observed = result.acknowledged;
     *request.observed_success = result.success;
     if (!owns_generation(request)) {
@@ -143,9 +147,13 @@ Json Runtime::Implementation::execute_mutating_request(const Request &request) {
     return finish_operation(request, response, outcome);
 }
 
-vehicle::CommandResult Runtime::Implementation::invoke_vehicle(const Request &request) {
+vehicle::CommandResult Runtime::Implementation::invoke_vehicle(
+    const Request &request, std::unique_lock<std::mutex> &command_lock) {
     if (request.type == "land") {
-        return vehicle_.engage_copter_land([&] { return owns_generation(request); });
+        return vehicle_.engage_copter_land([&] { return owns_generation(request); }, [&] {
+            *request.ack_observed = true;
+            command_lock.unlock();
+        });
     }
     if (request.type == "set_servo") {
         return vehicle_.set_servo(request.channel, request.pwm_microseconds);

@@ -39,7 +39,8 @@ CommandResult validate_land_acknowledgement(const std::optional<mavlink::Command
 
 } // namespace
 
-CommandResult Vehicle::engage_copter_land(const std::function<bool()> &still_authorized) {
+CommandResult Vehicle::engage_copter_land(const std::function<bool()> &still_authorized,
+                                         const std::function<void()> &begin_observation) {
     const auto deadline = Clock::now() + kLandEngagementTimeout;
     const auto initial_state = connection_.get_state();
     if (!connection_.is_connected() || !detail::identified_copter_session(initial_state, initial_state) ||
@@ -68,6 +69,9 @@ CommandResult Vehicle::engage_copter_land(const std::function<bool()> &still_aut
     }
     if (!result.success) {
         return result;
+    }
+    if (begin_observation) {
+        begin_observation();
     }
     return wait_for_copter_land(initial_state, ack_boundary, deadline, still_authorized);
 }

@@ -29,14 +29,16 @@ void test_land_observes_engagement_without_touchdown() {
     connection.state->landed_state = nomad::telemetry::LandedState::InAir;
     connection.state->landed_state_valid = true;
     nomad::vehicle::Vehicle vehicle(connection);
+    int observations = 0;
 
-    const auto result = vehicle.engage_copter_land();
+    const auto result = vehicle.engage_copter_land({}, [&] { ++observations; });
 
     check_result(result, Outcome::Success, true);
     CHECK(result.message == "LAND mode observed; touchdown not verified");
     CHECK(connection.command_count() == 1);
     CHECK(connection.last_command.id == 21);
     CHECK(connection.get_state().landed_state == nomad::telemetry::LandedState::InAir);
+    CHECK(observations == 1);
 }
 
 void test_land_rejects_invalid_initial_state() {
@@ -73,7 +75,10 @@ void test_land_acknowledgement_outcomes() {
             connection.acknowledgement.reset();
         }
         nomad::vehicle::Vehicle vehicle(connection);
-        check_result(vehicle.engage_copter_land(), missing ? Outcome::Unknown : Outcome::Failed, !missing);
+        int observations = 0;
+        check_result(vehicle.engage_copter_land({}, [&] { ++observations; }),
+            missing ? Outcome::Unknown : Outcome::Failed, !missing);
+        CHECK(observations == 0);
         CHECK(connection.command_count() == 1);
     }
 }

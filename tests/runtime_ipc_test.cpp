@@ -408,6 +408,7 @@ void run_runtime_scenarios() {
     run_scenario("land_validation", test_runtime_land_validation);
     run_scenario("land_revoke", test_runtime_land_revoke);
     run_scenario("land_safe_output_budget", test_runtime_land_safe_output_budget);
+    run_scenario("safe_during_land_observation", test_runtime_safe_output_during_land_observation);
     run_scenario("land_expired_safe_output", test_runtime_land_expired_safe_output_is_not_sent);
     run_scenario("land_audit_failure_before_send", [] { test_runtime_land_audit_failure(false); });
     run_scenario("land_audit_failure_after_send", [] { test_runtime_land_audit_failure(true); });
@@ -470,6 +471,11 @@ void run_runtime_scenarios() {
 
 int main(int argc, char **argv) {
     return nomad::test::run_tests([argc, argv] {
+        if (argc == 2 && std::string_view(argv[1]) == "--safe-land-observation") {
+            nomad::test::run_scenario("safe_during_land_observation",
+                test_runtime_safe_output_during_land_observation);
+            return;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--authority-intent-state") {
             run_authority_state_scenarios();
             return;

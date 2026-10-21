@@ -20,10 +20,13 @@ namespace nomad::runtime {
 // Ownership and synchronization:
 // - config_/incarnation_ are fixed after construction; Vehicle borrows connection_.
 // - authority_gate_->mutex protects every gate field: exclusive changes, shared reads/final send.
-// - command_mutex_ serializes Vehicle mutations; revoke/status/session callbacks do not take it.
+// - operation_mutex_ serializes ordinary mutations through observation; safe actuator actions bypass it.
+// - command_mutex_ serializes command stages; LAND releases it after accepted ACK, before observation.
+// - Revoke/status/session callbacks take neither operation nor command mutex.
 // - cache_mutex_ protects response_cache_, cache_order_ and in_flight_; released before execution.
 // - AuditJournal owns its mutex/files; final admission holds gate then journal locks through send.
-// - Nested locks: command OR cache -> gate -> journal; never acquire command/cache under gate.
+// - Nested locks: operation -> command -> gate -> journal, or cache -> gate -> journal.
+//   Never acquire operation/command/cache under gate.
 // - *_locked, valid_context, authority_response, record_authority_response and audit_session_loss
 //   require the caller's gate lock. audit_request releases its gate snapshot lock before append.
 // - MAVSDK callbacks retain a weak gate/shared journal, never this; request evidence is shared atomic.
@@ -65,7 +68,7 @@ struct Runtime::Implementation {
     Json handle_mutating_request(const Request &request);
     Json finish_mutating_response(const Request &request, Json response);
     Json execute_mutating_request(const Request &request);
-    vehicle::CommandResult invoke_vehicle(const Request &request);
+    vehicle::CommandResult invoke_vehicle(const Request &request, std::unique_lock<std::mutex> &command_lock);
     Json execute_actuator_request(const Request &request);
     std::optional<Json> process_actuator_release(const Request &request, bool &safe);
     Json execute_actuator_decision(const Request &request);
@@ -107,6 +110,7 @@ struct Runtime::Implementation {
     std::atomic_bool stopping_{false};
     bool shutdown_recorded_{true};
     std::thread connection_worker_;
+    std::mutex operation_mutex_;
     std::mutex command_mutex_;
     std::mutex cache_mutex_;
     std::unordered_map<std::string, CacheEntry> response_cache_;

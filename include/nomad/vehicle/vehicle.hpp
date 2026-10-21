@@ -105,7 +105,9 @@ class Vehicle {
     safety::WatchdogReason last_velocity_stop_reason() const;
     CommandResult goto_location(const Location &location);
     CommandResult land();
-    CommandResult engage_copter_land(const std::function<bool()> &still_authorized = {});
+    // Hand off the command-send phase only after an accepted LAND acknowledgement.
+    CommandResult engage_copter_land(const std::function<bool()> &still_authorized = {},
+                                     const std::function<void()> &begin_observation = {});
     // Observe a fresh disarmed heartbeat from the original session after monitoring starts.
     // This sends no command and does not establish physical touchdown.
     CommandResult wait_until_disarmed(std::chrono::milliseconds timeout);
