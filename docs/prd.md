@@ -43,7 +43,7 @@ and a duty to avoid them, not those detailed semantics.
 | U-PROF-03 | U | Plugin operation does not require a companion computer, perception provider or runtime service | G3 |
 | U-TEST-01 | U | Test important behavior without hardware, including invalid/boundary/failure cases; retain physical acceptance separately | All |
 
-Hardware/RC/output/input/link/video settings belong in saved aircraft profiles.
+Optional aircraft notes and custom output/input/link/video settings belong in saved aircraft profiles.
 Labels do not establish live aircraft identity, hardware support or safe calibration.
 
 ## User direction recorded during review
@@ -80,8 +80,9 @@ D09 is substantially resolved at the topology/interface level:
 - ELRS is primary C2, carrying normal RC pilot controls and MAVLink telemetry/data.
   The conventional transmitter is the primary manual interface. The owner reports
   Cube Orange Plus, ELRS arming on RC input CH5 and flight modes on CH6 for one
-  aircraft. Store these values in that aircraft's profile; they are not defaults
-  for other aircraft. Exact frame, calibration and FC readbacks remain open.
+  aircraft. These describe that aircraft's native MP/ArduPilot setup, not NOMAD
+  profile settings or defaults for other aircraft. Exact frame, calibration and
+  FC readbacks remain open.
 - LTE/MAVLink is secondary/redundant C2 and data. The intended alternate pilot
   path is ground-station joystick → Mission Planner/NOMAD → LTE → aircraft.
   This is not an independent RC radio or a qualified takeover implementation.

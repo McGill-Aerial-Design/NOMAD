@@ -145,6 +145,18 @@ namespace NOMAD.MissionPlanner
             // The unavailable monitor has no input ownership; accept only its exact typed legacy keys.
             document.Remove("JoystickTerminationButtonIndex");
             document.Remove("JoystickKillSwitchEnabled");
+            // Retired RC-role notes never configured the aircraft; retain their exact legacy input contract.
+            foreach (string name in new[] { "RcArmingChannel", "RcFlightModeChannel" })
+            {
+                var channel = document[name];
+                if (channel != null && channel.Type != JTokenType.Null &&
+                    (channel.Type != JTokenType.Integer || !int.TryParse(channel.ToString(Formatting.None),
+                        NumberStyles.Integer, CultureInfo.InvariantCulture, out int value) || value < 1 || value > 18))
+                {
+                    throw new JsonSerializationException("Retired RC roles must be null or integer channels from 1 to 18.");
+                }
+                document.Remove(name);
+            }
             foreach (var property in document.Properties())
             {
                 // Json.NET's case-insensitive coercion must not bypass raw-token validation below.

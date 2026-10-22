@@ -11,7 +11,7 @@ namespace NOMAD.MissionPlanner
 {
     public partial class NOMADSettingsForm
     {
-        private ComboBox _cmbAircraft, _cmbArmingChannel, _cmbFlightModeChannel, _cmbGimbalMountMode;
+        private ComboBox _cmbAircraft, _cmbGimbalMountMode;
         private TextBox _txtAircraftName, _txtFlightController, _txtReceiver, _txtAircraftFirmware, _txtAirframe;
         private Button _btnRemoveAircraft;
         private bool _loadingAircraft;
@@ -41,6 +41,9 @@ namespace NOMAD.MissionPlanner
             _txtAircraftName = AddTextBox(tab, 180, y, 440);
             _txtAircraftName.TextChanged += (sender, args) => UpdateProfileContext();
             y += 32;
+            AddSectionLabel(tab, "Optional aircraft notes", ref y);
+            AddLabel(tab, "Labels only; these are not live aircraft readbacks.", 20, y);
+            y += 28;
             AddLabel(tab, "Flight controller:", 20, y);
             _txtFlightController = AddTextBox(tab, 180, y, 440);
             y += 32;
@@ -53,14 +56,7 @@ namespace NOMAD.MissionPlanner
             AddLabel(tab, "Airframe:", 20, y);
             _txtAirframe = AddTextBox(tab, 180, y, 440);
             y += 35;
-            var channels = new[] { "Unconfigured" }.Concat(
-                Enumerable.Range(1, 18).Select(channel => channel.ToString())).ToArray();
-            AddLabel(tab, "Arming RC input:", 20, y);
-            _cmbArmingChannel = AddComboBox(tab, 180, y, 140, channels);
-            y += 32;
-            AddLabel(tab, "Flight-mode RC input:", 20, y);
-            _cmbFlightModeChannel = AddComboBox(tab, 180, y, 140, channels);
-            y += 32;
+            AddSectionLabel(tab, "Custom controls", ref y);
             AddLabel(tab, "Gimbal mode preset:", 20, y);
             _cmbGimbalMountMode = AddComboBox(tab, 180, y, 260,
                 new[] { "Retract", "Neutral", "MAVLink targeting", "RC targeting" });
@@ -86,8 +82,6 @@ namespace NOMAD.MissionPlanner
             _txtReceiver.Text = Config.ReceiverType;
             _txtAircraftFirmware.Text = Config.AircraftFirmware;
             _txtAirframe.Text = Config.Airframe;
-            _cmbArmingChannel.SelectedIndex = Config.RcArmingChannel ?? 0;
-            _cmbFlightModeChannel.SelectedIndex = Config.RcFlightModeChannel ?? 0;
             _cmbGimbalMountMode.SelectedIndex = Config.GimbalMountMode;
             LoadPayloadList();
 
@@ -100,9 +94,6 @@ namespace NOMAD.MissionPlanner
             Config.ReceiverType = _txtReceiver.Text.Trim();
             Config.AircraftFirmware = _txtAircraftFirmware.Text.Trim();
             Config.Airframe = _txtAirframe.Text.Trim();
-            Config.RcArmingChannel = _cmbArmingChannel.SelectedIndex > 0 ? (int?)_cmbArmingChannel.SelectedIndex : null;
-            Config.RcFlightModeChannel = _cmbFlightModeChannel.SelectedIndex > 0 ?
-                (int?)_cmbFlightModeChannel.SelectedIndex : null;
             Config.GimbalMountMode = _cmbGimbalMountMode.SelectedIndex;
         }
 

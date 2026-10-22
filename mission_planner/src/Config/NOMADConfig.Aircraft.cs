@@ -13,8 +13,6 @@ namespace NOMAD.MissionPlanner
         public string ReceiverType { get; set; } = "";
         public string AircraftFirmware { get; set; } = "";
         public string Airframe { get; set; } = "";
-        public int? RcArmingChannel { get; set; }
-        public int? RcFlightModeChannel { get; set; }
         public int GimbalMountMode { get; set; } = (int)MountMode.MavlinkTargeting;
 
         // Calibrated payload definitions belong to this saved aircraft.
@@ -31,15 +29,9 @@ namespace NOMAD.MissionPlanner
                     throw new JsonSerializationException(name + " must be text.");
                 }
             }
-            foreach (var name in new[]
-                { nameof(RcArmingChannel), nameof(RcFlightModeChannel), nameof(GimbalMountMode) })
+            if (document[nameof(GimbalMountMode)] != null && document[nameof(GimbalMountMode)].Type != JTokenType.Integer)
             {
-                var value = document[name];
-                if (value != null && value.Type != JTokenType.Integer &&
-                    !(name != nameof(GimbalMountMode) && value.Type == JTokenType.Null))
-                {
-                    throw new JsonSerializationException(name + " must be an integer or an unconfigured RC channel.");
-                }
+                throw new JsonSerializationException("GimbalMountMode must be an integer.");
             }
             ValidateActuatorDefinitions(document[nameof(ActuatorDefinitions)]);
         }
@@ -54,8 +46,7 @@ namespace NOMAD.MissionPlanner
             var candidate = JObject.FromObject(this);
             var active = JObject.FromObject(other);
             return candidate.Properties().Where(property => property.Name.StartsWith("Joystick", System.StringComparison.Ordinal) ||
-                property.Name == nameof(ActuatorDefinitions) || property.Name == nameof(GimbalMountMode) ||
-                property.Name == nameof(RcArmingChannel) || property.Name == nameof(RcFlightModeChannel))
+                property.Name == nameof(ActuatorDefinitions) || property.Name == nameof(GimbalMountMode))
                 .All(property => JToken.DeepEquals(property.Value, active[property.Name]));
         }
 
@@ -79,14 +70,6 @@ namespace NOMAD.MissionPlanner
                 if (float.IsNaN(deadzone) || float.IsInfinity(deadzone) || deadzone < 0 || deadzone > 0.5F)
                 {
                     throw new JsonSerializationException("Joystick deadzones must be between 0 and 0.5.");
-                }
-            }
-            foreach (var channel in new[] { RcArmingChannel, RcFlightModeChannel })
-            {
-                // RC_CHANNELS represents inputs 1 through 18; zero is not a channel.
-                if (channel.HasValue && (channel.Value < 1 || channel.Value > 18))
-                {
-                    throw new JsonSerializationException("RC channels must be between 1 and 18, or unconfigured.");
                 }
             }
             if (GimbalMountMode < (int)MountMode.Retract || GimbalMountMode > (int)MountMode.RcTargeting)
