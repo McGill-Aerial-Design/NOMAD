@@ -63,10 +63,13 @@ Legacy local advisory files are preserved on disk and are no longer loaded.
 The published AEAC 2027 C1 coordinates are sourced from CONOPS v1.0, 2026-09-08,
 Appendix C p31. NOMAD supplies no invented second polygon or boundary response. The
 100 m AGL competition ceiling still needs approved enforcement and datum evidence.
-NOMAD termination is unavailable: LAND, in-air disarm or a parameter recipe is not
-an approved replacement. ELRS/LTE takeover, RC handback, independent transmitter
-termination and all-mode/loss-of-link response remain aircraft-specific acceptance
-work under D09/Q02. Preserve native ArduPilot failsafes and qualify interactions.
+NOMAD leaves normal LAND and QLAND settings unchanged. Competition termination is
+a separate onboard mechanism for the aircraft and flight phase, not a global
+landing-rate change. NOMAD termination is unavailable: LAND, in-air disarm or a
+parameter recipe is not an approved replacement. ELRS/LTE takeover, RC handback,
+independent transmitter termination and all-mode/loss-of-link response remain
+aircraft-specific acceptance work under D09/Q02. Preserve native ArduPilot failsafes
+and qualify interactions.
 
 ## Stable safety requirements
 
