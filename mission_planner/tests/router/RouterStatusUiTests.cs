@@ -34,6 +34,7 @@ internal static class RouterStatusUiTests
         Run("settings save preserves router and unload session", SettingsRouterLifetime);
         Run("aircraft profile retires cached views", AircraftProfileRetiresCachedViews);
         Run("deferred theme and session-owned Settings", SidebarThemeAndSettings);
+        Run("native Fence input survives screen navigation", FenceInputSurvivesNavigation);
         Console.WriteLine($"Router status UI checks: {_checks}; failures: {_failures}");
         return _failures == 0 ? 0 : 1;
     }
@@ -142,8 +143,6 @@ internal static class RouterStatusUiTests
         var previousService = NotificationService.Shared;
         using var service = new NotificationService();
         NotificationService.Shared = service;
-        var outlines = new GeofenceConfig();
-        using var monitor = new AdvisoryBoundaryMonitor(outlines);
         var alpha = new NOMADConfig { AircraftName = "Alpha UI", RouterClientEnabled = false };
         var beta = new NOMADConfig
         {
@@ -152,7 +151,7 @@ internal static class RouterStatusUiTests
                 { new VideoInputProfile { Name = "Beta video", Url = "rtsp://profile-beta.invalid/stream" } },
             SelectedVideoInputName = "Beta video",
         };
-        NOMADMainScreen.SetStaticConfig(alpha, null, outlines, monitor);
+        NOMADMainScreen.SetStaticConfig(alpha, null);
         try
         {
             using var screen = new NOMADMainScreen(alpha);
@@ -162,7 +161,7 @@ internal static class RouterStatusUiTests
             var oldVideo = (Control)type.GetField("_videoView", PrivateInstance).GetValue(screen);
             show.Invoke(screen, new object[] { "Links" });
             var oldLinks = (Control)type.GetField("_linksView", PrivateInstance).GetValue(screen);
-            NOMADMainScreen.SetStaticConfig(beta, null, outlines, monitor);
+            NOMADMainScreen.SetStaticConfig(beta, null);
             type.GetMethod("RefreshConfiguration", PrivateInstance).Invoke(screen, null);
             Check(oldVideo.IsDisposed && oldLinks.IsDisposed,
                 "changing aircraft disposes cached video and router controls");
@@ -186,15 +185,13 @@ internal static class RouterStatusUiTests
 
     private static void SidebarThemeAndSettings()
     {
-        var outlines = new GeofenceConfig();
-        using var monitor = new AdvisoryBoundaryMonitor(outlines);
         using var session = new System.Threading.CancellationTokenSource();
         var type = typeof(NOMADMainScreen);
         var setSession = type.GetMethod("SetVideoShutdown", BindingFlags.Static | BindingFlags.NonPublic);
         int opened = 0;
         setSession.Invoke(null, new object[] { session.Token, (Action)(() => opened++) });
         var config = new NOMADConfig { AircraftName = "Synthetic UI" };
-        NOMADMainScreen.SetStaticConfig(config, null, outlines, monitor);
+        NOMADMainScreen.SetStaticConfig(config, null);
         try
         {
             using var screen = new NOMADMainScreen(config);
@@ -207,13 +204,6 @@ internal static class RouterStatusUiTests
             Check(selected.BackColor == NOMADTheme.ACCENT && selected.ForeColor == NOMADTheme.TEXT_PRIMARY &&
                 dashboard.BackColor != NOMADTheme.ACCENT,
                 "deferred host theme restoration preserves the selected sidebar button");
-            var sidebar = (Control)type.GetField("_sidebarPanel", PrivateInstance).GetValue(screen);
-            foreach (Control group in sidebar.Controls)
-            foreach (Control child in group.Controls)
-            {
-                if (Equals(child.Tag, "AdvisoryWarning"))
-                { Check(child.ForeColor == NOMADTheme.WARNING, "theme restoration preserves the local-advisory warning"); }
-            }
             var settings = (Button)screen.Controls.Find("OpenSettings", true)[0];
             settings.PerformClick();
             Check(opened == 1, "sidebar Settings uses the current plugin callback");
@@ -231,6 +221,46 @@ internal static class RouterStatusUiTests
         {
             setSession.Invoke(null, new object[] { System.Threading.CancellationToken.None, null });
             NOMADMainScreen.SetStaticConfig(null);
+        }
+    }
+
+    private static void FenceInputSurvivesNavigation()
+    {
+        var previousService = NotificationService.Shared;
+        using var service = new NotificationService();
+        NotificationService.Shared = service;
+        var screenType = typeof(NOMADMainScreen);
+        var inputType = screenType.Assembly.GetType("NOMAD.MissionPlanner.FenceSetupInput", true);
+        var input = Activator.CreateInstance(inputType, true);
+        var setInput = screenType.GetMethod("SetFenceSetupInput", BindingFlags.Static | BindingFlags.NonPublic);
+        setInput.Invoke(null, new[] { input });
+        var config = new NOMADConfig { AircraftName = "Synthetic fence navigation" };
+        NOMADMainScreen.SetStaticConfig(config);
+        var show = screenType.GetMethod("ShowView", PrivateInstance);
+        const string coordinates = "1,1\r\n1,2\r\n2,1";
+        try
+        {
+            using (var first = new NOMADMainScreen(config))
+            {
+                show.Invoke(first, new object[] { "Boundaries" });
+                var view = (Control)screenType.GetField("_boundaryView", PrivateInstance).GetValue(first);
+                view.Controls.Find("FenceCoordinates", true)[0].Text = coordinates;
+                ((ComboBox)view.GetType().GetField("_order", PrivateInstance).GetValue(view)).SelectedIndex = 1;
+            }
+            using (var second = new NOMADMainScreen(config))
+            {
+                show.Invoke(second, new object[] { "Boundaries" });
+                var view = (Control)screenType.GetField("_boundaryView", PrivateInstance).GetValue(second);
+                Check(view.Controls.Find("FenceCoordinates", true)[0].Text == coordinates &&
+                    ((ComboBox)view.GetType().GetField("_order", PrivateInstance).GetValue(view)).SelectedIndex == 1,
+                    "disposing and recreating the NOMAD screen preserves session-owned coordinates/order");
+            }
+        }
+        finally
+        {
+            setInput.Invoke(null, new object[] { null });
+            NOMADMainScreen.SetStaticConfig(null);
+            NotificationService.Shared = previousService;
         }
     }
 }

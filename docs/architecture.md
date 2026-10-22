@@ -68,8 +68,12 @@ a saved label does not establish either.
 Ordinary RC arming and flight-mode configuration belongs to Mission Planner and
 ArduPilot. NOMAD has no corresponding channel settings or automatic discovery.
 
-Video uses Mission Planner's installed GStreamer support. Map polygons and received
-positions are local advisory display only: they do not upload fences or command a
-breach response. Alerts/audio and video do not become flight authority. Competition
-server/perception/takeover/termination integrations remain outside the shipped scope;
-requirements and unresolved questions remain in [PRD](prd.md).
+Video uses Mission Planner's installed GStreamer support. Fence setup validates one
+inclusion polygon and stages it in the existing native Plan editor while already in
+Fence mode. Staging never uploads or changes aircraft parameters; native Write/Read
+and configuration screens own aircraft interaction. NOMAD does not switch mission
+type, evaluate local outline crossings or claim containment. Retired local advisory
+config/preset files remain untouched. Unsaved coordinate text/order remain plugin-owned
+in memory across native page navigation and are discarded on plugin unload. Alerts/audio and video do not become flight
+authority. Competition server/perception/takeover/termination integrations remain
+outside the shipped scope; requirements remain in [PRD](prd.md).

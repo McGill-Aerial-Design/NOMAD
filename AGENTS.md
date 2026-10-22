@@ -4,7 +4,7 @@ NOMAD is a C# Mission Planner plugin targeting the reviewed host in
 `scripts/release/mission-planner-target.json`. Mission Planner owns the aircraft
 connection, ordinary flight controls, setup and missions. ArduPilot owns flight
 execution and native failsafes. NOMAD adds saved profiles, custom gimbal/payload/HID,
-video, advisory maps and the plugin-owned link router.
+video, native fence draft setup and the plugin-owned link router.
 
 - Verify HEAD, local changes and applicable instructions. Read the owning symbol,
   callers and closest tests before editing. State a concrete falsifying check.

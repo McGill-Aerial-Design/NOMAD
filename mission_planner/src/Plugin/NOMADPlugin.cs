@@ -37,8 +37,7 @@ namespace NOMAD.MissionPlanner
         private NOMADConfig _config;
         private NOMADProfiles _profiles;
         private NotificationService _notificationService;
-        private GeofenceConfig _geofenceConfig;               // Plugin-owned: survives NOMAD screen disposal
-        private AdvisoryBoundaryMonitor _advisoryBoundaryMonitor; // Plugin-owned local outline preview
+        private FenceSetupInput _fenceSetupInput;
         private MAVLinkConnectionManager _connectionManager;  // Plugin-owned router
         private NomadJoystickService _joystickService;        // Physical joysticks → gimbal + camera tilt
         private GimbalArrowKeyFilter _gimbalArrowKeyFilter;    // Mission Planner-wide arrow key nudges
@@ -47,7 +46,6 @@ namespace NOMAD.MissionPlanner
         private bool _hudVideoStarted => _hudVideo?.IsActive == true;
         private System.Threading.CancellationTokenSource _videoShutdown;
         private bool _screenRegistered = false;               // Track if NOMAD screen is registered with MainSwitcher
-        private DateTime _nextBoundaryMapBindUtc = DateTime.MinValue;
 
         // ============================================================
         // Plugin Lifecycle
@@ -62,6 +60,8 @@ namespace NOMAD.MissionPlanner
             {
                 loopratehz = 1;
                 ShutdownVideo();
+                _fenceSetupInput = new FenceSetupInput();
+                NOMADMainScreen.SetFenceSetupInput(_fenceSetupInput);
                 _videoShutdown = new System.Threading.CancellationTokenSource();
                 NOMADMainScreen.SetVideoShutdown(_videoShutdown.Token, ShowSettings);
                 WarnIfUntestedMissionPlannerVersion();
@@ -69,7 +69,6 @@ namespace NOMAD.MissionPlanner
                 // Load configuration
                 _profiles = NOMADProfiles.Load();
                 _config = _profiles.Selected.Config;
-                _geofenceConfig = GeofenceConfig.Load();
 
                 GimbalController.ApplyProfile(_config);
                 OutputController.Initialize(_config);
@@ -83,15 +82,6 @@ namespace NOMAD.MissionPlanner
                 _notificationService = new NotificationService();
                 NotificationService.Shared = _notificationService;
                 _notificationService.StartMonitoring();
-
-                // Local outline preview lives at plugin level so its advisory
-                // status remains visible across page switches.
-                _advisoryBoundaryMonitor = new AdvisoryBoundaryMonitor(_geofenceConfig);
-                _notificationService.SetAdvisoryBoundaryMonitor(_advisoryBoundaryMonitor);
-                if (_geofenceConfig.AdvisoryPreviewEnabled)
-                {
-                    _advisoryBoundaryMonitor.StartMonitoring();
-                }
 
                 // Toast overlay: warnings pop bottom-right
                 // on every MP page, not just inside the NOMAD screen.
@@ -183,10 +173,6 @@ namespace NOMAD.MissionPlanner
                 // Register NOMAD as a top-level screen (no quick tab - use pop-out instead)
                 RegisterNomadScreen();
 
-                // Boundary visualization comes from the saved plugin config and
-                // does not depend on a connected vehicle or a fence upload.
-                MapOverlayManager.DrawBoundaries(_geofenceConfig);
-
                 // Auto-start HUD video if configured
                 if (_config.AutoStartHudVideo && !_hudVideoStarted)
                 {
@@ -208,21 +194,6 @@ namespace NOMAD.MissionPlanner
         public override bool Loop()
         {
             OutputController.RefreshConnection();
-            if (DateTime.UtcNow >= _nextBoundaryMapBindUtc)
-            {
-                _nextBoundaryMapBindUtc = DateTime.UtcNow.AddSeconds(2);
-                var mainForm = Host?.MainForm;
-                if (mainForm != null && !mainForm.IsDisposed && mainForm.IsHandleCreated)
-                {
-                    UiAsync.RunSync(mainForm, () =>
-                    {
-                        if (MapOverlayManager.BoundaryRenderingConfigured)
-                            MapOverlayManager.EnsureBoundaryMaps();
-                        else
-                            MapOverlayManager.DrawBoundaries(_geofenceConfig);
-                    }, "boundary map binding");
-                }
-            }
             return true;
         }
 
@@ -236,15 +207,12 @@ namespace NOMAD.MissionPlanner
             if (Host?.MainForm != null) { Host.MainForm.FormClosed -= OnHostClosed; }
             StopCustomControls();
             ShutdownVideo();
+            NOMADMainScreen.SetFenceSetupInput(null);
+            _fenceSetupInput = null;
             try
             {
                 // Unhook the toast overlay before the service goes away
                 NotificationToast.Detach();
-                MapOverlayManager.StopBoundaryRendering();
-
-                // Stop local advisory outline preview.
-                _advisoryBoundaryMonitor?.Dispose();
-                _advisoryBoundaryMonitor = null;
 
                 // Stop notification service
                 if (NotificationService.Shared == _notificationService) NotificationService.Shared = null;

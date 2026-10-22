@@ -14,7 +14,7 @@ The source obligations remain binding acceptance work, not implementation claims
 |---|---|---|
 | AE27-OPS-015 through AE27-OPS-020/035 | Aircraft termination is available in every mode independently of ground computer; failure of the termination/C2 path causes self-termination | Remove path/power/ground computer under load in Copter, fixed-wing and transition states; observe actual state/output, five-second activation entry and approved rapid self-termination; G7 |
 | AE27-OPS-016/017 | Fixed-wing motor-off/full surfaces differs from rotary vertical descent of at least 2 m/s to touchdown | Independently observe surface outputs and measured descent/touchdown; LAND dispatch or configured speed is not proof; Q02/G7 |
-| AE27-OPS-005/006/020/037/038 | All-mode containment includes non-convex boundary and 100 m AGL | Approved aircraft boundary and altitude enforcement, validated datum/terrain inputs, actual breach and loss-of-navigation tests; Mission Planner's local outlines are visual advisory data only and do not satisfy this gate; G7 |
+| AE27-OPS-005/006/020/037/038 | All-mode containment includes non-convex boundary and 100 m AGL | Approved aircraft boundary and altitude enforcement, validated datum/terrain inputs, actual breach and loss-of-navigation tests; a staged native Fence draft does not establish an uploaded/enabled aircraft fence or satisfy this gate; G7 |
 | AE27-NET-007/008 | Stay outside supplied traffic cylinders; stale traffic is unknown | Inject delayed/malformed tracks and prove operator response avoids intrusion; settle extent/datum/freshness Q04 before flight; G4/G7 |
 | AE27-T2-005/006 | Exactly one tracker attachment and at least 100 m horizontal offset after withdrawal through rest of window | Wrong/duplicate tracker and target moving toward sampling/return path; prove detection and approved intervention before encroachment; G6/G7 |
 | AE27-OPS-024/031 | Under-15-kg project margin and physical ground propeller inhibit | Independent weighing and props-safe inhibit fault tests; G7 |
@@ -51,15 +51,17 @@ unload only attempts best-effort Safe; helpers already dispatched can finish and
 native onboard repeats retain controller return behavior. No post-unload NOMAD
 command owner or delivery guarantee is claimed.
 
-## Advisory maps, takeover and termination
+## Native fence setup, takeover and termination
 
-Saved inner/outer polygons and altitude colors are local advisory display. Importing
-a cached MP inclusion polygon neither uploads/enables a fence nor proves aircraft
-readback. Unsupported geometry, cancelled selection or failed saves preserve the
-previous outlines. Received-position display expires observations; a recent receipt
-is not navigation readiness, aircraft liveness or containment evidence.
+Fence setup stages a validated inclusion polygon in native Mission Planner Plan,
+only when Fence mode is already selected and the operator confirms replacing that
+editor draft. It preserves aircraft caches and does not upload, enable or read back
+a fence. Native Write and Read are explicit operator actions. Native failsafe
+configuration remains in Mission Planner; no parameter writes occur from this page.
+Legacy local advisory files are preserved on disk and are no longer loaded.
 
-Q01 permits local advisory margins, not termination on an outline crossing. The
+The published AEAC 2027 C1 coordinates are sourced from CONOPS v1.0, 2026-09-08,
+Appendix C p31. NOMAD supplies no invented second polygon or boundary response. The
 100 m AGL competition ceiling still needs approved enforcement and datum evidence.
 NOMAD termination is unavailable: LAND, in-air disarm or a parameter recipe is not
 an approved replacement. ELRS/LTE takeover, RC handback, independent transmitter

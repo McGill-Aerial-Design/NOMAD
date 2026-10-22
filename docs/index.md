@@ -1,7 +1,7 @@
 # NOMAD documentation
 
 NOMAD extends Mission Planner with aircraft-specific profiles, gimbal/payload/HID,
-video, local advisory maps and an optional owned link router. ArduPilot remains the
+video, native fence draft setup and an optional owned link router. ArduPilot remains the
 autopilot; ordinary flight controls and missions remain Mission Planner-owned.
 
 - [Architecture](architecture.md): current ownership and lifecycle.

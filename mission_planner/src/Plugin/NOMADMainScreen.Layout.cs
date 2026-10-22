@@ -84,19 +84,12 @@ namespace NOMAD.MissionPlanner
             navPanel.Controls.Add(_btnDashboard);
 
             // Separator
-            navPanel.Controls.Add(CreateSeparatorLabel("ADVISORY"));
+            navPanel.Controls.Add(CreateSeparatorLabel("SETUP"));
 
             // Boundaries button (important for competition)
-            _btnBoundaries = CreateSidebarButton("Advisory Outlines");
+            _btnBoundaries = CreateSidebarButton("Fence setup");
             _btnBoundaries.Click += (s, e) => ShowView("Boundaries");
             navPanel.Controls.Add(_btnBoundaries);
-
-            navPanel.Controls.Add(new Label
-            {
-                Text = "Local advisory only.\nNot sent to the aircraft.", AutoSize = true,
-                MaximumSize = new Size(SIDEBAR_WIDTH - 20, 0), ForeColor = WARNING_COLOR,
-                Margin = new Padding(10, 4, 5, 8), Tag = "AdvisoryWarning",
-            });
 
             navPanel.Controls.Add(CreateSeparatorLabel("TOOLS"));
 

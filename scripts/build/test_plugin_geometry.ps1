@@ -1,70 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 The NOMAD Authors
-# ============================================================
-# Advisory-outline geometry tests for the Mission Planner plugin
-# ============================================================
-# Compiles advisory geometry and the actual received-position monitor with
-# isolated host spies and the installed real MAVLink packet types, together with the test runner
-# using the Roslyn csc bundled with Visual Studio's MSBuild —
-# no .NET SDK or test-framework packages required.
-#
-# Usage: pixi run test-plugin-geometry
-# Exits non-zero on compile error or test failure.
-# ============================================================
-
+# Validate coordinates and stage native Fence rows without MP startup, files or a live connection.
 $ErrorActionPreference = 'Stop'
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
-
-# ---- Locate csc (next to MSBuild: PATH, then Visual Studio via vswhere) ----
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 . (Join-Path $PSScriptRoot 'windows_build_tools.ps1')
 $csc = Find-RoslynCompiler
-
-# ---- Compile ----
-$sources = @(
-    (Join-Path $repoRoot 'mission_planner\src\Geofence\GeoMath.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Geofence\GeofenceTypes.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Geofence\NativeFenceImport.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Views\NOMADBoundaryView.MPFence.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Views\NOMADBoundaryView.Import.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Views\NOMADBoundaryView.Operations.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\UI\NOMADTheme.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Geofence\AdvisoryPosition.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\Geofence\BoundaryManager.cs'),
-    (Join-Path $repoRoot 'infra\transport\ground_router\RouterClock.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\geometry\AdvisoryPositionHostStubs.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\geometry\AdvisoryPositionTests.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\geometry\NativeFenceImportTests.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\geometry\NativeFenceViewTests.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\geometry\CoordinatePasteTests.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\geometry\NativeFenceDialogProbe.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\geometry\GeoMathTests.cs')
-)
-$mavlink = Join-Path ${env:ProgramFiles(x86)} 'Mission Planner\MAVLink.dll'
-$newtonsoft = Join-Path ${env:ProgramFiles(x86)} 'Mission Planner\Newtonsoft.Json.dll'
-$netstandard = Join-Path ${env:ProgramFiles(x86)} 'Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8\Facades\netstandard.dll'
-if (-not (Test-Path -LiteralPath $mavlink) -or -not (Test-Path -LiteralPath $netstandard)) {
-    throw 'Install the supported Mission Planner and .NET Framework 4.8 targeting pack before geometry tests.'
-}
-$outDir = Join-Path $repoRoot 'mission_planner\tests\geometry\bin'
+$mpDir = Join-Path ${env:ProgramFiles(x86)} 'Mission Planner'
+$outDir = Join-Path $repoRoot 'mission_planner/tests/geometry/bin'
 New-Item -ItemType Directory -Force $outDir | Out-Null
-$exe = Join-Path $outDir 'GeoMathTests.exe'
-
-Write-Host "Compiling geometry tests..." -ForegroundColor Yellow
-& $csc /nologo /target:exe /langversion:latest /r:System.Windows.Forms.dll /r:System.Drawing.dll `
-    /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll `
-    "/reference:$mavlink" "/reference:$netstandard" "/reference:$newtonsoft" "/out:$exe" @sources
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Compile FAILED." -ForegroundColor Red
-    exit 1
+$exe = Join-Path $outDir 'NativeFenceDraftTests.exe'
+$references = @('/r:System.Drawing.dll', '/r:System.Windows.Forms.dll')
+foreach ($name in @('MissionPlanner.exe', 'MissionPlanner.ArduPilot.dll', 'MissionPlanner.Comms.dll',
+    'MissionPlanner.Controls.dll', 'MissionPlanner.Utilities.dll', 'GMap.NET.Core.dll',
+    'GMap.NET.Drawing.dll', 'GMap.NET.WindowsForms.dll', 'MAVLink.dll', 'Interfaces.dll')) {
+    $references += '/r:' + (Join-Path $mpDir $name)
 }
-Copy-Item -LiteralPath $mavlink -Destination (Join-Path $outDir 'MAVLink.dll') -Force
-Copy-Item -LiteralPath $newtonsoft -Destination (Join-Path $outDir 'Newtonsoft.Json.dll') -Force
-
-# ---- Run ----
-Write-Host "Running geometry tests..." -ForegroundColor Yellow
-& $exe
-$result = $LASTEXITCODE
-if ($result -ne 0) {
-    Write-Host "Geometry tests FAILED." -ForegroundColor Red
-}
-exit $result
+$references += '/r:' + (Join-Path ${env:ProgramFiles(x86)} 'Reference Assemblies/Microsoft/Framework/.NETFramework/v4.8/Facades/netstandard.dll')
+& $csc /nologo /nowarn:0436 /target:exe /langversion:latest "/out:$exe" @references `
+    (Join-Path $repoRoot 'mission_planner/src/Geofence/FenceCoordinates.cs') `
+    (Join-Path $repoRoot 'mission_planner/src/Geofence/NativeFenceDraft.cs') `
+    (Join-Path $repoRoot 'mission_planner/tests/geometry/NativeFenceDraftTests.cs')
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $exe $mpDir
+exit $LASTEXITCODE

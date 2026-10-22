@@ -5,7 +5,7 @@
 // ============================================================
 // Centralized notification system for flight-critical warnings.
 // Monitors GPS health, EKF position validity, battery, rangefinder,
-// and local advisory outline position. Non-intrusive timestamped alerts.
+// with non-intrusive timestamped alerts.
 // ============================================================
 
 using System;
@@ -30,7 +30,6 @@ namespace NOMAD.MissionPlanner
         OpticalFlow,
         EKF,
         Battery,
-        Boundary,
         Link,
         System
     }
@@ -81,7 +80,6 @@ namespace NOMAD.MissionPlanner
         private bool _disposed;
         private int _pollGuard;
 
-        private AdvisoryBoundaryMonitor _advisoryBoundaryMonitor;
         private MAVLinkInterface _observedConnection;
         private MAVState _observedMav;
         private CurrentState _observedState;
@@ -90,7 +88,6 @@ namespace NOMAD.MissionPlanner
         private readonly Dictionary<int, int> _lastBatterySeverity = new Dictionary<int, int>();
         private readonly Dictionary<int, DateTime> _lastBatterySpeechUtc = new Dictionary<int, DateTime>();
         private static readonly TimeSpan BatterySpeechInterval = TimeSpan.FromSeconds(10);
-        private AdvisoryOutlineStatus _lastBoundaryStatus = AdvisoryOutlineStatus.NoPosition;
 
         public event EventHandler<NotificationEventArgs> NotificationAdded;
         public event EventHandler NotificationsCleared;
@@ -118,11 +115,6 @@ namespace NOMAD.MissionPlanner
         }
 
         public bool IsMonitoring { get; private set; }
-
-        public NotificationService(AdvisoryBoundaryMonitor boundaryMonitor = null)
-        {
-            SetAdvisoryBoundaryMonitor(boundaryMonitor);
-        }
 
         public void StartMonitoring(int intervalMs = 1000)
         {
@@ -190,50 +182,6 @@ namespace NOMAD.MissionPlanner
             NotificationsCleared?.Invoke(this, EventArgs.Empty);
         }
 
-        public void SetAdvisoryBoundaryMonitor(AdvisoryBoundaryMonitor monitor)
-        {
-            if (_advisoryBoundaryMonitor != null)
-            {
-                _advisoryBoundaryMonitor.StatusChanged -= OnAdvisoryBoundaryStatusChanged;
-            }
-
-            _advisoryBoundaryMonitor = monitor;
-            if (_advisoryBoundaryMonitor != null)
-            {
-                _advisoryBoundaryMonitor.StatusChanged += OnAdvisoryBoundaryStatusChanged;
-            }
-        }
-
-        private void OnAdvisoryBoundaryStatusChanged(object sender, AdvisoryBoundaryStatusEventArgs e)
-        {
-            if (e.Status == _lastBoundaryStatus)
-            {
-                return;
-            }
-
-            if (IsOutsideOutline(e.Status))
-            {
-                AddNotification(NotificationSeverity.Warning, NotificationCategory.Boundary,
-                    "Outside local advisory outline",
-                    $"Mission Planner telemetry is outside {e.OutlineName}. " +
-                    "This outline is not enforced by NOMAD runtime or the aircraft.");
-            }
-            else if (e.Status == AdvisoryOutlineStatus.InsideOutlines && IsOutsideOutline(_lastBoundaryStatus))
-            {
-                AddNotification(NotificationSeverity.Info, NotificationCategory.Boundary,
-                    "Position inside local advisory outlines",
-                    "The saved outlines are visual references and do not report vehicle safety state.");
-            }
-
-            _lastBoundaryStatus = e.Status;
-        }
-
-        private static bool IsOutsideOutline(AdvisoryOutlineStatus status)
-        {
-            return status == AdvisoryOutlineStatus.OutsideInnerOutline ||
-                status == AdvisoryOutlineStatus.OutsideOuterOutline;
-        }
-
         private bool IsOnCooldown(string key)
         {
             lock (_lock)
@@ -263,7 +211,6 @@ namespace NOMAD.MissionPlanner
             if (_disposed) return;
             _disposed = true;
             StopMonitoring();
-            SetAdvisoryBoundaryMonitor(null);
         }
     }
 }
