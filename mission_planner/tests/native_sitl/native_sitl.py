@@ -183,8 +183,26 @@ def action_state():
     return state
 
 
+def wait_for_native_idle(timeout=5.0):
+    end = now() + timeout
+    generation = None
+    while now() < end:
+        if callback_error:
+            raise Exception("packet_decode_failed")
+        state = action_state()
+        if generation is None:
+            generation = state["generation"]
+        if not state["target_valid"] or not state["target_current"] or state["generation"] != generation:
+            raise Exception("native_idle_context_changed")
+        if not state["give_comport"] and not state["payload_busy"]:
+            return state
+        Thread.Sleep(20)
+    raise Exception("native_idle_deadline")
+
+
 def action(identifier, operation, value=None):
-    before = action_state()
+    idle_start = now()
+    before = wait_for_native_idle()
     ack_start = len(snapshot(acks))
     outgoing_start = len(snapshot(outgoing))
     start = now()
@@ -197,6 +215,7 @@ def action(identifier, operation, value=None):
     diagnostic = Dictionary[str, Object]()
     diagnostic["category"] = action_category(text)
     diagnostic["before"] = before
+    diagnostic["idle_wait_seconds"] = float(start - idle_start)
     diagnostic["after"] = action_state()
     diagnostic["acks"] = Array[Object]([Array[Object](row) for row in snapshot(acks)[ack_start:]][-8:])
     diagnostic["outgoing"] = Array[Object]([Array[Object](row) for row in snapshot(outgoing)[outgoing_start:]][-8:])
