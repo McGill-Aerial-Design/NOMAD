@@ -217,6 +217,51 @@ internal static class PayloadTests
             fixture.Connection.Commands[3].System == 4 && fixture.Connection.Commands[3].Second == 1000,
             "A queued Safe was retired before settings finished the original context");
     }
+    private static void SafeRejectionOutcomes()
+    {
+        foreach (bool hostBusy in new[] { true, false })
+        {
+            var fixture = Reset(Definition("winch", "ServoBidirectional", 10, 1500));
+            string activation = Act(fixture.Owner, "winch", "negative");
+            var commands = fixture.Connection.Commands;
+            Check(activation.Contains("accepted command ACK") && commands.Count == 1 &&
+                commands[0].Kind == MAVLink.MAV_CMD.DO_REPEAT_SERVO && commands[0].Second == 1000,
+                "Safe rejection fixture did not establish an accepted negative repeat");
+            Check(SpinWait.SpinUntil(() => !PayloadController.HasPendingWork, 5000),
+                "Native repeat reservation did not expire before the Safe rejection check");
+
+            fixture.Connection.giveComport = hostBusy;
+            fixture.Connection.Send = command => Task.FromResult(false);
+            string rejected = Act(fixture.Owner, "winch", "safe");
+            int expectedCommands = hostBusy ? 1 : 2;
+            Check(commands.Count == expectedCommands &&
+                (hostBusy ? rejected.Contains("Safe outcome is uncertain") && rejected.Contains("busy") :
+                    rejected.Contains("did not confirm Safe acceptance")),
+                "Busy admission and native nonconfirmation did not report distinct truthful Safe outcomes");
+            if (!hostBusy)
+            {
+                Check(commands[1].Kind == MAVLink.MAV_CMD.DO_SET_SERVO && commands[1].First == 10 &&
+                    commands[1].Second == 1500 && commands[1].System == 4 && commands[1].Component == 2 && commands[1].Ack,
+                    "Unconfirmed Safe changed native neutral mapping, target or ACK policy");
+            }
+
+            fixture.Connection.giveComport = false;
+            fixture.Connection.Send = command => Task.FromResult(true);
+            Wait(fixture.Owner.WaitForPendingAsync());
+            Check(commands.Count == expectedCommands && !PayloadController.HasPendingWork,
+                "Clearing native busy/nonconfirmation automatically retried Safe or retained hidden work");
+            Check(Act(fixture.Owner, "winch", "negative").Contains("explicit accepted Safe") &&
+                commands.Count == expectedCommands,
+                "Failed Safe did not retain recovery admission after the repeat window and busy state cleared");
+
+            string accepted = Act(fixture.Owner, "winch", "safe");
+            var neutral = commands.Last();
+            Check(accepted.Contains("Safe command ACK accepted") && commands.Count == expectedCommands + 1 &&
+                neutral.Kind == MAVLink.MAV_CMD.DO_SET_SERVO && neutral.First == 10 && neutral.Second == 1500 &&
+                neutral.System == 4 && neutral.Component == 2 && neutral.Ack,
+                "A new explicit Safe did not send exactly one accepted original-target neutral command");
+        }
+    }
     private static void ConfirmationAndHid()
     {
         var fixture = Reset(Definition("release", "ServoToggle", 8, confirmations: 2));
@@ -334,7 +379,7 @@ internal static class PayloadTests
     }
     private static int Main()
     {
-        InvalidDefinitions(); NativeMappings(); TrimAndTargetFences(); StopAndFaults(); SequentialSafeDrain(); ConfirmationAndHid(); ConflictSafetySurvivesNewInput(); RepeatSurvivesRetirement(); MixedBatchRetiresAcrossAircraftChange();
+        InvalidDefinitions(); NativeMappings(); TrimAndTargetFences(); StopAndFaults(); SequentialSafeDrain(); SafeRejectionOutcomes(); ConfirmationAndHid(); ConflictSafetySurvivesNewInput(); RepeatSurvivesRetirement(); MixedBatchRetiresAcrossAircraftChange();
         Console.WriteLine("Payload tests passed (native mappings, strict calibration, ACK faults, HID edges, stale targets and repeat lifetime).");
         return 0;
     }
