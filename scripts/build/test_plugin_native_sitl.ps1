@@ -7,6 +7,8 @@ param(
     [ValidateRange(1, 100)][int]$Instance = 55
 )
 $ErrorActionPreference = 'Stop'
+# Pixi can retain PowerShell 7 module paths when launching Windows PowerShell 5.1.
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
 function Assert-NativeSitlProfileSafe($config) {
     foreach ($name in @('RouterClientEnabled', 'JoystickGimbalEnabled', 'JoystickPositionEnabled',
         'GimbalArrowKeysEnabled', 'DebugMode')) {
