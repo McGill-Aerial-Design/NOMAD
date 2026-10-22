@@ -26,6 +26,11 @@ Run the focused check first, then relevant gates once for the final coherent dif
 The host-dependent gates require the actual reviewed MP assemblies. UI checks use
 isolated Windows/STA fixtures; router checks bind loopback test sockets. Profile
 fixtures use temporary paths and must not touch real operator files.
+Configuration validation also runs actual native parameter-grid callbacks for both
+Copter landing-rate layouts. It seeds metadata in memory, does not activate/refresh
+the native page, and verifies queue contents, context fencing, partial rejection,
+preserved unrelated drafts and zero outbound transport writes. Run the focused check
+with `powershell -NoProfile -File scripts/build/test_native_land_draft.ps1`.
 Video checks cover named-input migration and strict nested configuration, independent
 aircraft/settings drafts, both receiver pipeline paths, source replacement and stale
 frame disposal. They use fake pipelines and do not open operator camera feeds.

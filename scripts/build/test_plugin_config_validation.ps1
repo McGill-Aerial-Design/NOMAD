@@ -342,6 +342,8 @@ try {
         throw 'Configuration fixture did not retain a working temporary log.'
     }
     Write-Host 'Temporary fixture logging verified.'
+    & (Join-Path $PSScriptRoot 'test_native_land_draft.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Actual native LAND parameter draft checks failed.' }
     Write-Host 'Mission Planner configuration, HID and router validation passed.'
 } finally {
     [AppDomain]::CurrentDomain.remove_AssemblyResolve($dependencyResolver)

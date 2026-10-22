@@ -125,6 +125,9 @@ namespace NOMAD.MissionPlanner
                 _hudVideoMenuItem = new ToolStripMenuItem("Start HUD Video");
                 _hudVideoMenuItem.Click += OnHudVideoMenuClicked;
                 tools.DropDownItems.Add(_hudVideoMenuItem);
+                var landSetup = new ToolStripMenuItem("Stage Copter LAND settings…");
+                landSetup.Click += (sender, args) => StageCopterLandSettings();
+                tools.DropDownItems.Add(landSetup);
 
                 nomadMenu.DropDownItems.Add(new ToolStripSeparator());
 
@@ -152,6 +155,26 @@ namespace NOMAD.MissionPlanner
             catch (Exception ex)
             {
                 Log.Error($"Could not add main menu — {ex.Message}");
+            }
+        }
+
+        private void StageCopterLandSettings()
+        {
+            var session = _videoShutdown;
+            if (!IsActiveSession(session)) { return; }
+            try
+            {
+                var draft = new NativeLandParameterDraft();
+                bool confirmed = MessageBox.Show(Host.MainForm, draft.Preview, "Stage native Copter LAND draft",
+                    MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.OK;
+                if (!IsActiveSession(session)) { return; }
+                draft.TryStage(confirmed, out string message);
+                MessageBox.Show(Host.MainForm, message, "Native parameter draft", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception error)
+            {
+                if (IsActiveSession(session))
+                { MessageBox.Show(Host.MainForm, error.Message, "LAND staging unavailable", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
             }
         }
     }

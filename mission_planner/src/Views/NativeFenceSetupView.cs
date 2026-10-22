@@ -97,10 +97,13 @@ namespace NOMAD.MissionPlanner
             Add(layout, _coordinates);
             Add(layout, Button("Open native Plan (select Fence)", (s, e) => OpenPlan()));
             Add(layout, Button("Stage polygon in native Plan", Stage));
-            Add(layout, Button("Open native configuration (failsafes)", (s, e) =>
+            var configuration = Button("Open native configuration (failsafes)", (s, e) =>
             {
                 if (Active) { MainV2.instance?.MenuConfigTune?.PerformClick(); }
-            }));
+            });
+            _tips.SetToolTip(configuration, "Full Parameter List → NOMAD → Tools → Stage Copter LAND settings. " +
+                "Review the native draft, then use Write Params and Refresh Params.");
+            Add(layout, configuration);
             _status = new Label
             {
                 Name = "FenceSetupStatus", AutoSize = true, MaximumSize = new Size(680, 0),
