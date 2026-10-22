@@ -30,6 +30,7 @@ namespace NOMAD.MissionPlanner
             _createPipeline = createPipeline;
             _shutdown = shutdown;
             _config = config ?? new NOMADConfig();
+            Font = NOMADTheme.Font();
             InitializeUI();
         }
 
@@ -87,10 +88,12 @@ namespace NOMAD.MissionPlanner
             {
                 Dock = DockStyle.Fill,
                 BackColor = CARD_BG,
+                Padding = new Padding(NOMADTheme.PAD),
             };
             try
             {
                 _actuatorPanel = new ActuatorControlPanel(_config) { Dock = DockStyle.Fill };
+                _actuatorPanel.BackColor = CARD_BG;
                 controlsSection.Controls.Add(_actuatorPanel);
             }
             catch (Exception ex)
@@ -105,6 +108,18 @@ namespace NOMAD.MissionPlanner
                     TextAlign = ContentAlignment.MiddleCenter,
                 });
             }
+
+            if (_config.ActuatorDefinitions == null || _config.ActuatorDefinitions.Count == 0)
+            {
+                controlsSection.Controls.Add(new Label
+                {
+                    Text = "No payloads configured. Add mappings in Settings → Payloads.",
+                    ForeColor = TEXT_SECONDARY, Dock = DockStyle.Top, Height = 60,
+                });
+            }
+            var payloadsTitle = ControlFactory.SectionTitle("Payloads");
+            payloadsTitle.Dock = DockStyle.Top;
+            controlsSection.Controls.Add(payloadsTitle);
 
             mainLayout.Controls.Add(controlsSection, 1, 0);
             Controls.Add(mainLayout);

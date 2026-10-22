@@ -226,7 +226,7 @@ namespace NOMAD.MissionPlanner
                 {
                     CustomMessageBox.Show(
                         "Plugin router is not enabled.\n\n" +
-                        "Enable it and configure physical links in NOMAD Settings → Multi-Link.",
+                        "Enable it and configure physical links in NOMAD Settings → Links.",
                         "Link Manager Not Available"
                     );
                     return;

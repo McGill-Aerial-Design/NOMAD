@@ -99,23 +99,12 @@ namespace NOMAD.MissionPlanner
                     menuStrip.Items.Insert(insertIndex, nomadMenu);
                 }
 
-                // Hovering "NOMAD" opens the dropdown so the user can reach the
-                // items without clicking; a deliberate CLICK opens the NOMAD
-                // screen. Splitting hover from click keeps reaching the menu from
-                // navigating away to the dashboard.
-                nomadMenu.MouseEnter += (s, e) =>
-                {
-                    if (!nomadMenu.DropDown.Visible)
-                        nomadMenu.ShowDropDown();
-                };
-                nomadMenu.MouseDown += (s, e) =>
-                {
-                    if (e.Button == MouseButtons.Left)
-                        ShowMainScreen();
-                };
-
                 // Avoid duplicate items if plugin reloads
                 nomadMenu.DropDownItems.Clear();
+
+                var openItem = new ToolStripMenuItem("Open NOMAD");
+                openItem.Click += (s, e) => ShowMainScreen();
+                nomadMenu.DropDownItems.Add(openItem);
 
                 // Pop-out window option (for multi-monitor setups)
                 var popOutItem = new ToolStripMenuItem("Pop Out to Window");
@@ -124,16 +113,18 @@ namespace NOMAD.MissionPlanner
 
                 nomadMenu.DropDownItems.Add(new ToolStripSeparator());
 
+                var tools = new ToolStripMenuItem("Tools");
+                nomadMenu.DropDownItems.Add(tools);
                 // Link Status (Multi-Link Failover)
                 var linkStatusItem = new ToolStripMenuItem("Link Status (Failover)");
                 linkStatusItem.ForeColor = _config.RouterClientEnabled ? Color.LimeGreen : Color.Gray;
                 linkStatusItem.Click += (s, e) => ShowLinkHealthPanel();
-                nomadMenu.DropDownItems.Add(linkStatusItem);
+                tools.DropDownItems.Add(linkStatusItem);
 
                 // HUD Video controls
                 _hudVideoMenuItem = new ToolStripMenuItem("Start HUD Video");
                 _hudVideoMenuItem.Click += OnHudVideoMenuClicked;
-                nomadMenu.DropDownItems.Add(_hudVideoMenuItem);
+                tools.DropDownItems.Add(_hudVideoMenuItem);
 
                 nomadMenu.DropDownItems.Add(new ToolStripSeparator());
 
@@ -145,8 +136,8 @@ namespace NOMAD.MissionPlanner
                 aboutItem.Click += (s, e) => CustomMessageBox.Show(
                     $"NOMAD Plugin v{Version}\n" +
                     $"McGill Aerial Design\n\n" +
-                    $"Hover the NOMAD menu for tools; click it to open the\n" +
-                    $"NOMAD screen (dashboard, local advisory outlines, video,\n" +
+                    $"Choose Open NOMAD for the NOMAD screen\n" +
+                    $"(dashboard, local advisory outlines, video,\n" +
                     $"and plugin router status).\n\n" +
                     $"Local outline advisory with received-position display,\n" +
                     $"plugin-wide alerts with toast overlays, plugin router\n" +

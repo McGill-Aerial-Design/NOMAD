@@ -11,6 +11,7 @@ namespace NOMAD.MissionPlanner
     {
         private readonly VideoInputProfile _input;
         private readonly VideoSession _session;
+        private readonly ToolTip _videoToolTips = new ToolTip();
         private readonly System.Windows.Forms.Timer _frameTimer;
         private CancellationTokenRegistration _shutdown;
         private Bitmap _displayFrame;
@@ -129,6 +130,7 @@ namespace NOMAD.MissionPlanner
                     }
                     finally
                     {
+                        _videoToolTips.Dispose();
                         _fullscreenForm?.Dispose();
                     }
                 }

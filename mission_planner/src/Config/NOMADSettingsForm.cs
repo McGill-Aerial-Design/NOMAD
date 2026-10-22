@@ -65,10 +65,10 @@ namespace NOMAD.MissionPlanner
         // Buttons
         private Button _btnOK;
         private Button _btnCancel;
-        private Button _btnTest;
-        private Button _btnReset;
-        private Button _btnLoadConfig;
-        private Button _btnExportConfig;
+        private Label _profileContext;
+        private readonly ToolTip _toolTips = new ToolTip { AutoPopDelay = 15000 };
+        private readonly ContextMenuStrip _profileActions = new ContextMenuStrip();
+
 
         public NOMADProfiles Profiles { get; private set; }
         public NOMADConfig Config
@@ -94,129 +94,95 @@ namespace NOMAD.MissionPlanner
 
         private void InitializeComponents()
         {
-            this.Text = "NOMAD Settings";
-            this.ClientSize = new Size(760, 610);
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
-            this.MaximizeBox = false;
-            this.MinimizeBox = false;
-            this.StartPosition = FormStartPosition.CenterParent;
-            this.BackColor = Color.FromArgb(45, 45, 48);
-            this.ForeColor = Color.White;
+            Text = "NOMAD Settings";
+            ClientSize = new Size(780, 670);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterParent;
+            BackColor = NOMADTheme.BG_DARK;
+            ForeColor = NOMADTheme.TEXT_PRIMARY;
+            Font = NOMADTheme.Font();
 
-            // Tab Control
             _tabControl = new TabControl
             {
-                Location = new Point(10, 10),
-                Size = new Size(740, 540),
-                BackColor = Color.FromArgb(45, 45, 48),
+                Location = new Point(12, 58), Size = new Size(756, 540), BackColor = NOMADTheme.CARD_BG,
             };
-            this.Controls.Add(_tabControl);
-
-            // Add all tab pages
+            Controls.Add(_tabControl);
             _tabControl.TabPages.Add(CreateAircraftTab());
-            _tabControl.TabPages.Add(CreateConnectionTab());
-            _tabControl.TabPages.Add(CreateVideoTab());
             _tabControl.TabPages.Add(CreateMultiLinkTab());
-            _tabControl.TabPages.Add(CreateUiTab());
-            _tabControl.TabPages.Add(CreateAlertsTab());
+            _tabControl.TabPages.Add(CreateVideoTab());
             _tabControl.TabPages.Add(CreateActuatorsTab());
             _tabControl.TabPages.Add(CreateJoystickTab());
+            _tabControl.TabPages.Add(CreatePreferencesTab());
 
             int clientWidth = CalculateSettingsClientWidth();
-            this.ClientSize = new Size(clientWidth, 610);
-            _tabControl.Width = clientWidth - 20;
-
-            // Buttons at bottom
-            int buttonY = 560;
-
-            _btnTest = new Button
+            ClientSize = new Size(clientWidth, 670);
+            _tabControl.Width = clientWidth - 24;
+            var context = new TableLayoutPanel
             {
-                Text = "Test Connection",
-                Location = new Point(10, buttonY),
-                Size = new Size(120, 35),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NOMADTheme.ACCENT,
-                ForeColor = Color.White
+                Location = new Point(12, 12), Size = new Size(clientWidth - 24, 32), ColumnCount = 2, RowCount = 1,
             };
-            _btnTest.Click += BtnTest_Click;
-            this.Controls.Add(_btnTest);
-
-            _btnReset = new Button
+            context.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            context.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            _profileContext = new Label
             {
-                Text = "Reset Profile",
-                Location = new Point(140, buttonY),
-                Size = new Size(110, 35),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(150, 80, 0),
-                ForeColor = Color.White
+                Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft,
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_BODY, FontStyle.Bold),
             };
-            _btnReset.Click += BtnReset_Click;
-            this.Controls.Add(_btnReset);
+            context.Controls.Add(_profileContext, 0, 0);
+            context.Controls.Add(new Label
+            {
+                Text = "· Save activates this profile", AutoSize = true, Anchor = AnchorStyles.Right,
+                ForeColor = NOMADTheme.TEXT_SECONDARY,
+            }, 1, 0);
+            Controls.Add(context);
 
-            _btnLoadConfig = new Button
-            {
-                Text = "Load Config...",
-                Location = new Point(260, buttonY),
-                Size = new Size(110, 35),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(70, 90, 130),
-                ForeColor = Color.White
-            };
-            _btnLoadConfig.Click += BtnLoadConfig_Click;
-            this.Controls.Add(_btnLoadConfig);
+            var actions = ControlFactory.Button("Profile actions ▾", width: 150, height: 34);
+            actions.Location = new Point(12, 616);
+            _profileActions.Items.Add(new ToolStripMenuItem("Reset profile…", null, BtnReset_Click));
+            _profileActions.Items.Add(new ToolStripSeparator());
+            _profileActions.Items.Add(new ToolStripMenuItem("Load configuration…", null, BtnLoadConfig_Click));
+            _profileActions.Items.Add(new ToolStripMenuItem("Export configuration…", null, BtnExportConfig_Click));
+            actions.Click += (sender, args) => _profileActions.Show(actions, new Point(0, actions.Height));
+            Controls.Add(actions);
 
-            _btnExportConfig = new Button
+            _btnOK = ControlFactory.Button("Save", backColor: NOMADTheme.BTN_PRIMARY, width: 90, height: 34);
+            _btnOK.Location = new Point(clientWidth - 204, 616);
+            _btnOK.Click += (sender, args) =>
             {
-                Text = "Export Config...",
-                Location = new Point(380, buttonY),
-                Size = new Size(120, 35),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(70, 90, 130),
-                ForeColor = Color.White
-            };
-            _btnExportConfig.Click += BtnExportConfig_Click;
-            this.Controls.Add(_btnExportConfig);
-
-            _btnOK = new Button
-            {
-                Text = "Save",
-                Location = new Point(clientWidth - 200, buttonY),
-                Size = new Size(90, 35),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(0, 150, 100),
-                ForeColor = Color.White,
-                DialogResult = DialogResult.None
-            };
-            _btnOK.Click += (s, e) =>
-            {
-                try
-                {
-                    SaveSettings(); DialogResult = DialogResult.OK;
-                }
-                catch (Exception ex)
+                try { SaveSettings(); DialogResult = DialogResult.OK; }
+                catch (Exception error)
                 {
                     DialogResult = DialogResult.None;
-                    MessageBox.Show(this, ex.Message, "Configuration requires review", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show(this, error.Message, "Configuration requires review", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             };
-            this.Controls.Add(_btnOK);
-
-            _btnCancel = new Button
-            {
-                Text = "Cancel",
-                Location = new Point(clientWidth - 100, buttonY),
-                Size = new Size(90, 35),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(100, 100, 100),
-                ForeColor = Color.White,
-                DialogResult = DialogResult.Cancel
-            };
-            this.Controls.Add(_btnCancel);
-
-            this.AcceptButton = _btnOK;
-            this.CancelButton = _btnCancel;
+            Controls.Add(_btnOK);
+            _btnCancel = ControlFactory.Button("Cancel", width: 90, height: 34);
+            _btnCancel.Location = new Point(clientWidth - 102, 616);
+            _btnCancel.DialogResult = DialogResult.Cancel;
+            Controls.Add(_btnCancel);
+            AcceptButton = _btnOK;
+            CancelButton = _btnCancel;
         }
 
+        private void UpdateProfileContext()
+        {
+            string name = string.IsNullOrWhiteSpace(_txtAircraftName.Text) ? "(unnamed aircraft)" : _txtAircraftName.Text.Trim();
+            _profileContext.Text = "Editing: " + name;
+            _toolTips.SetToolTip(_profileContext, _profileContext.Text);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _toolTips.Dispose();
+                _profileActions.Dispose();
+            }
+            base.Dispose(disposing);
+        }
         private int CalculateSettingsClientWidth()
         {
             int widestContent = _tabControl.TabPages
@@ -241,8 +207,8 @@ namespace NOMAD.MissionPlanner
         {
             var tab = new TabPage(text)
             {
-                BackColor = Color.FromArgb(45, 45, 48),
-                ForeColor = Color.White,
+                BackColor = NOMADTheme.CARD_BG,
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
                 AutoScroll = true,
                 Padding = new Padding(5)
             };
@@ -253,11 +219,11 @@ namespace NOMAD.MissionPlanner
         {
             var label = new Label
             {
-                Text = "-- " + text + " --",
+                Text = text,
                 Location = new Point(10, y),
                 AutoSize = true,
-                ForeColor = Color.FromArgb(100, 180, 255),
-                Font = new Font("Segoe UI", 9, FontStyle.Bold)
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_BODY, FontStyle.Bold)
             };
             tab.Controls.Add(label);
             y += 25;
@@ -270,7 +236,7 @@ namespace NOMAD.MissionPlanner
                 Text = text,
                 Location = new Point(x, y + 3),
                 AutoSize = true,
-                ForeColor = color ?? Color.LightGray
+                ForeColor = color ?? NOMADTheme.TEXT_SECONDARY
             };
             tab.Controls.Add(label);
             return label;
@@ -282,8 +248,8 @@ namespace NOMAD.MissionPlanner
             {
                 Location = new Point(x, y),
                 Size = new Size(width, 23),
-                BackColor = Color.FromArgb(30, 30, 30),
-                ForeColor = Color.White
+                BackColor = NOMADTheme.INPUT_BG,
+                ForeColor = NOMADTheme.TEXT_PRIMARY
             };
             tab.Controls.Add(textBox);
             return textBox;
@@ -300,8 +266,8 @@ namespace NOMAD.MissionPlanner
                 Maximum = max,
                 Value = Math.Max(min, Math.Min(max, value)),
                 DecimalPlaces = decimals,
-                BackColor = Color.FromArgb(30, 30, 30),
-                ForeColor = Color.White
+                BackColor = NOMADTheme.INPUT_BG,
+                ForeColor = NOMADTheme.TEXT_PRIMARY
             };
             tab.Controls.Add(num);
             return num;
@@ -314,7 +280,7 @@ namespace NOMAD.MissionPlanner
                 Text = text,
                 Location = new Point(x, y),
                 AutoSize = true,
-                ForeColor = color ?? Color.White
+                ForeColor = color ?? NOMADTheme.TEXT_PRIMARY
             };
             tab.Controls.Add(checkBox);
             return checkBox;
@@ -327,8 +293,8 @@ namespace NOMAD.MissionPlanner
                 Location = new Point(x, y),
                 Size = new Size(width, 23),
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = Color.FromArgb(30, 30, 30),
-                ForeColor = Color.White
+                BackColor = NOMADTheme.INPUT_BG,
+                ForeColor = NOMADTheme.TEXT_PRIMARY
             };
             combo.Items.AddRange(items);
             if (combo.Items.Count > 0)
@@ -358,15 +324,6 @@ namespace NOMAD.MissionPlanner
                 LoadSettings();
             }
         }
-
-        private void BtnTest_Click(object sender, EventArgs e)
-        {
-            SaveSettings();
-            MessageBox.Show("NOMAD uses Mission Planner's selected connection and this aircraft profile's custom output mappings.",
-                "NOMAD Connection", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-
-
 
     }
 }

@@ -28,6 +28,8 @@ namespace NOMAD.MissionPlanner
             _owner = PayloadController.Current;
             var rows = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false,
                 FlowDirection = FlowDirection.TopDown };
+            rows.SizeChanged += (sender, args) => _status.MaximumSize = new Size(
+                Math.Max(1, rows.ClientSize.Width - _status.Margin.Horizontal - SystemInformation.VerticalScrollBarWidth), 0);
             Controls.Add(rows);
             if (_owner != null && _owner.Owns(config))
             {
@@ -50,7 +52,7 @@ namespace NOMAD.MissionPlanner
                 }
                 _owner.Changed += OnChanged;
             }
-            _status.Text = "Native MP ACKs/retries; one timed output at a time. Stop waits for an in-flight host command. Physical state is unverified.";
+            _status.Text = "One timed action at a time. Commands may retry; Stop waits for pending work. Physical state is unverified.";
             rows.Controls.Add(_status);
         }
         private void AddButton(FlowLayoutPanel row, string label, string id, string operation, Func<double?> value)

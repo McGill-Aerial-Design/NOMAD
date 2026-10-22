@@ -240,8 +240,7 @@ namespace NOMAD.MissionPlanner
             };
             var advisory = new Label
             {
-                Text = "VISUAL ADVISORY ONLY — outlines and altitude values are not sent to " +
-                    "NOMAD runtime or the aircraft.",
+                Text = "LOCAL ADVISORY ONLY — outlines and altitude references are not sent to the aircraft.",
                 Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Bold),
                 ForeColor = Color.Gold,
                 AutoSize = true,

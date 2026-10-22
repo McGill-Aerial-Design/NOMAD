@@ -24,18 +24,22 @@ namespace NOMAD.MissionPlanner
             _cmbAircraft = AddComboBox(tab, 20, y, 330, Array.Empty<string>());
             _cmbAircraft.DisplayMember = nameof(AircraftProfile.Name);
             _cmbAircraft.SelectedIndexChanged += AircraftSelectionChanged;
-            var create = new Button { Text = "New", Location = new Point(365, y), Size = new Size(85, 27) };
+            var create = ControlFactory.Button("New", width: 85, height: 27);
+            create.Location = new Point(365, y);
             create.Click += (sender, args) => AddAircraft(false);
             tab.Controls.Add(create);
-            var copy = new Button { Text = "Copy", Location = new Point(460, y), Size = new Size(85, 27) };
+            var copy = ControlFactory.Button("Copy", width: 85, height: 27);
+            copy.Location = new Point(460, y);
             copy.Click += (sender, args) => AddAircraft(true);
             tab.Controls.Add(copy);
-            _btnRemoveAircraft = new Button { Text = "Remove", Location = new Point(555, y), Size = new Size(85, 27) };
+            _btnRemoveAircraft = ControlFactory.Button("Remove", width: 85, height: 27);
+            _btnRemoveAircraft.Location = new Point(555, y);
             _btnRemoveAircraft.Click += (sender, args) => RemoveAircraft();
             tab.Controls.Add(_btnRemoveAircraft);
             y += 45;
             AddLabel(tab, "Aircraft name:", 20, y);
             _txtAircraftName = AddTextBox(tab, 180, y, 440);
+            _txtAircraftName.TextChanged += (sender, args) => UpdateProfileContext();
             y += 32;
             AddLabel(tab, "Flight controller:", 20, y);
             _txtFlightController = AddTextBox(tab, 180, y, 440);
@@ -65,7 +69,7 @@ namespace NOMAD.MissionPlanner
             {
                 Text = "All configuration tabs belong to the selected aircraft. " +
                     "Save makes it active and restores it on restart. " +
-                    "Export omits its client credential. Hardware values still require FC readback and calibration.",
+                    "Review exported connection details before sharing. Hardware values still require FC readback and calibration.",
                 Location = new Point(20, y), Size = new Size(650, 60), ForeColor = Color.Silver,
             });
             return tab;
