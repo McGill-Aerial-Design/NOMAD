@@ -39,6 +39,15 @@ Open settings from the NOMAD menu or sidebar. The persistent Editing label ident
 the draft aircraft; Save activates it. Profile actions contains reset, load and export.
 Links, Video, Payloads and Inputs belong to that draft; Preferences contains alerts
 and startup diagnostics.
+Payloads and Links provide a list with Add, Edit and Remove. Their dialogs validate
+the complete draft before accepting changes; Cancel leaves it untouched. Friendly
+name changes preserve stable IDs and saved input bindings. Payload dialogs show
+calibration, bounded timings and confirmation/neutral interlocks for the selected
+behavior. Link dialogs distinguish UDP local listening ports from TCP remote server
+ports; COM devices are entered explicitly and are never scanned or opened by setup.
+Inputs pairs each of six switch actions with its physical button index. Actions show
+payload names while retaining their IDs. Unavailable saved bindings stay visible for
+correction; continuous position only lists eligible nonhazardous position payloads.
 
 Use Mission Planner for connection, arm/disarm, flight modes, takeoff, LAND, setup
 and missions. Disconnect Mission Planner before applying a different aircraft profile

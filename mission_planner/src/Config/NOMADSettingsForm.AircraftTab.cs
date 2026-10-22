@@ -89,7 +89,7 @@ namespace NOMAD.MissionPlanner
             _cmbArmingChannel.SelectedIndex = Config.RcArmingChannel ?? 0;
             _cmbFlightModeChannel.SelectedIndex = Config.RcFlightModeChannel ?? 0;
             _cmbGimbalMountMode.SelectedIndex = Config.GimbalMountMode;
-            _actuatorJson.Text = Config.ActuatorDefinitions?.ToString(Formatting.Indented) ?? "";
+            LoadPayloadList();
 
         }
 
@@ -104,9 +104,6 @@ namespace NOMAD.MissionPlanner
             Config.RcFlightModeChannel = _cmbFlightModeChannel.SelectedIndex > 0 ?
                 (int?)_cmbFlightModeChannel.SelectedIndex : null;
             Config.GimbalMountMode = _cmbGimbalMountMode.SelectedIndex;
-            Config.ActuatorDefinitions = string.IsNullOrWhiteSpace(_actuatorJson.Text) ? null :
-                NOMADConfig.ReadToken(_actuatorJson.Text) as JArray ??
-                throw new JsonSerializationException("Actuator definitions must be an array.");
         }
 
         private void AircraftSelectionChanged(object sender, EventArgs args)

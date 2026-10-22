@@ -1,22 +1,62 @@
 // SPDX-License-Identifier: Apache-2.0
+using System;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
+using Newtonsoft.Json.Linq;
 namespace NOMAD.MissionPlanner
 {
     public partial class NOMADSettingsForm
     {
-        private TextBox _actuatorJson;
+        private DataGridView _payloadList;
         private TabPage CreateActuatorsTab()
         {
             var tab = CreateTabPage("Payloads");
-            AddLabel(tab, "Edit this aircraft's payload definitions, review calibration, then Save the profile.", 10, 10);
-            AddLabel(tab, "Timed servos require live SERVOx_TRIM = safe/neutral PWM. One native repeat at a time.", 10, 40, NOMADTheme.WARNING);
-            _actuatorJson = new TextBox { Location = new Point(10, 75), Size = new Size(710, 300),
-                Multiline = true, ScrollBars = ScrollBars.Both, WordWrap = false,
-                BackColor = NOMADTheme.INPUT_BG, ForeColor = NOMADTheme.TEXT_PRIMARY, Font = NOMADTheme.Mono() };
-            tab.Controls.Add(_actuatorJson);
-            AddLabel(tab, "Mission Planner owns ACKs/retries; stop waits for an in-flight native command. Physical state is unverified.", 10, 390, NOMADTheme.WARNING);
+            AddLabel(tab, "Configure this aircraft's payloads, then Save the profile to activate them.", 12, 12);
+            _payloadList = CreateDefinitionList("Name", "Type", "Output", "Interlocks");
+            _payloadList.Location = new Point(12, 45); _payloadList.Size = new Size(700, 260);
+            tab.Controls.Add(_payloadList);
+            var add = ControlFactory.Button("Add", (sender, args) => EditPayload(-1));
+            var edit = ControlFactory.Button("Edit", (sender, args) => EditPayload(SelectedRow(_payloadList)));
+            var remove = ControlFactory.Button("Remove", (sender, args) => RemovePayload());
+            var buttons = ControlFactory.ButtonRow(add, edit, remove); buttons.Dock = DockStyle.None;
+            buttons.Location = new Point(12, 320); tab.Controls.Add(buttons);
+            var warning = ControlFactory.Label("Timed servos need live SERVOx_TRIM to match safe / neutral PWM.\n" +
+                "One timed action at a time. Commands may retry; Stop waits for pending work.\nPhysical state is unverified.",
+                foreColor: NOMADTheme.WARNING, fontSize: NOMADTheme.SIZE_BODY);
+            warning.Location = new Point(12, 365); tab.Controls.Add(warning);
+            _payloadList.CellDoubleClick += (sender, args) => { if (args.RowIndex >= 0) { EditPayload(args.RowIndex); } };
             return tab;
+        }
+        private void LoadPayloadList()
+        {
+            _payloadList.Rows.Clear();
+            foreach (var definition in PayloadDefinition.Parse(Config.ActuatorDefinitions))
+            {
+                _payloadList.Rows.Add(definition.Name, PayloadEditorForm.BehaviorChoices.First(type => type.Key == definition.Behavior).Value,
+                    (definition.Relay ? "Relay " : "Servo ") + definition.Channel,
+                    (definition.Hazardous ? "Hazardous · " : "") + definition.Confirmations + " confirmations");
+            }
+        }
+        private void EditPayload(int index)
+        {
+            if (index < -1 || index >= (Config.ActuatorDefinitions?.Count ?? 0)) { return; }
+            using (var editor = CreatePayloadEditor(index))
+            { if (editor.ShowDialog(this) == DialogResult.OK) { ApplyPayloadDefinitions(editor.Definitions); } }
+        }
+        private PayloadEditorForm CreatePayloadEditor(int index) =>
+            new PayloadEditorForm(Config.ActuatorDefinitions, index, "payload_" + Guid.NewGuid().ToString("N"));
+        private void ApplyPayloadDefinitions(JArray candidate)
+        {
+            PayloadDefinition.Parse(candidate);
+            Config.ActuatorDefinitions = (JArray)candidate.DeepClone();
+            LoadPayloadList(); RefreshPayloadBindings(true);
+        }
+        private void RemovePayload()
+        {
+            int index = SelectedRow(_payloadList); if (index < 0) { return; }
+            var candidate = (JArray)Config.ActuatorDefinitions.DeepClone(); candidate.RemoveAt(index);
+            ApplyPayloadDefinitions(candidate);
         }
     }
 }

@@ -33,8 +33,6 @@ namespace NOMAD.MissionPlanner
         // Multi-Link Tab
         private CheckBox _chkRouterClientEnabled;
         private NumericUpDown _numRouterLocalPort;
-        private TextBox _txtRouterLinks;
-        private TextBox _txtRouterPreferredLink;
 
         // UI Tab
         private CheckBox _chkDebugMode;
@@ -53,7 +51,7 @@ namespace NOMAD.MissionPlanner
         private ComboBox _cmbJoyGimbalPitchAxis, _cmbJoyGimbalRollAxis, _cmbJoyPositionAxis;
         private NumericUpDown _numJoyGimbalDeadzone, _numJoyPositionDeadzone;
         private NumericUpDown _numJoyGimbalMaxRate;
-        private TextBox _txtJoyPositionActuatorId;
+        private ComboBox _cmbJoyPositionPayload;
         private readonly NumericUpDown[] _switchButtons = new NumericUpDown[6];
         private Button _btnJoyRefreshDevices;
         private Label _lblJoyStatus;
@@ -213,6 +211,28 @@ namespace NOMAD.MissionPlanner
                 Padding = new Padding(5)
             };
             return tab;
+        }
+
+        private static int SelectedRow(DataGridView list) => list.CurrentRow?.Index ?? -1;
+        private static DataGridView CreateDefinitionList(params string[] columns)
+        {
+            var list = new DataGridView
+            {
+                ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, RowHeadersVisible = false,
+                MultiSelect = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                BackgroundColor = NOMADTheme.INPUT_BG, EnableHeadersVisualStyles = false,
+                DefaultCellStyle = new DataGridViewCellStyle { BackColor = NOMADTheme.INPUT_BG,
+                    ForeColor = NOMADTheme.TEXT_PRIMARY, SelectionBackColor = NOMADTheme.ACCENT },
+                ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle { BackColor = NOMADTheme.BUTTON_BG,
+                    ForeColor = NOMADTheme.TEXT_PRIMARY },
+            };
+            foreach (string column in columns)
+            {
+                list.Columns.Add(column, column);
+                list.Columns[column].SortMode = DataGridViewColumnSortMode.NotSortable;
+            }
+            return list;
         }
 
         private void AddSectionLabel(TabPage tab, string text, ref int y)
