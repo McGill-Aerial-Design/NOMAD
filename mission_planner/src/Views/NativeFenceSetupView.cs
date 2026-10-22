@@ -101,8 +101,7 @@ namespace NOMAD.MissionPlanner
             {
                 if (Active) { MainV2.instance?.MenuConfigTune?.PerformClick(); }
             });
-            _tips.SetToolTip(configuration, "Full Parameter List → NOMAD → Tools → Stage Copter LAND settings. " +
-                "Review the native draft, then use Write Params and Refresh Params.");
+            _tips.SetToolTip(configuration, "Review aircraft-specific fence and failsafe settings in Mission Planner.");
             Add(layout, configuration);
             _status = new Label
             {

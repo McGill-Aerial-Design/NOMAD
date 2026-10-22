@@ -56,38 +56,17 @@ and missions. Disconnect Mission Planner before applying a different aircraft pr
 or changed physical routes. Saving unrelated settings does not restart those routes.
 Reconnect explicitly and verify the live aircraft before using custom controls.
 
-## Native fence and LAND setup
+## Native fence setup
 
 Select Fence in native Plan first; NOMAD does not switch an existing mission draft.
 In NOMAD → Fence Setup, choose the published polygon or paste/review coordinates,
 then Stage. Review the native Plan fence draft, use native Write, then Read to verify
 the aircraft fence. Configure fence enable/type and other failsafes through MP.
 
-For the Copter landing preset, open native Config/Tuning → Full Parameter List and
-clear filters so the required rows are visible. Keep that page active and choose
-NOMAD → Tools → Stage Copter LAND settings. This requires a fresh, disarmed Copter
-context and one complete recognized parameter layout. The preview uses current grid
-values, including existing edits. It queues exactly three values for native review:
-
-| Layout | Fence action | Initial/final landing rates |
-|---|---|---|
-| `LAND_SPD_MS` / `LAND_SPD_HIGH_MS` | `FENCE_ACTION=2` (Copter LAND) | Both `2` m/s |
-| `LAND_SPEED` / `LAND_SPEED_HIGH` | `FENCE_ACTION=2` (Copter LAND) | Both `200` cm/s |
-
-These global rates also affect ordinary landings. New-unit names and conversion are
-documented in [pinned Copter source](https://github.com/ArduPilot/ardupilot/blob/b7ba8bca/ArduCopter/mode_land.cpp);
-the old names/units are in [Copter 4.6.3](https://github.com/ArduPilot/ardupilot/blob/Copter-4.6.3/ArduCopter/Parameters.cpp).
-Mixed/partial layouts, other firmware and incompatible heartbeat types are unavailable.
-The preset does not enable a fence or change its type, radio-loss handling or any
-other setting. It is not a separate termination mode or a compliance claim.
-
-Staging uses MP's native edit callbacks and never writes to the aircraft. All three
-values are queued again even if their display already matches, because MP can retain
-a different queued value after refreshing its table. Other queued changes remain and
-may be included in native Write Params. If an edit is rejected, a partial draft can
-remain; review the reported result and native grid. Use Write Params, then Refresh
-Params to read back aircraft parameter values; Refresh Table only reloads the cache.
-This does not verify physical landing behavior or touchdown.
+NOMAD does not modify normal LAND or QLAND settings. Competition termination needs
+a separate onboard mechanism for the aircraft and flight phase; changing ordinary
+landing rates is not that mechanism. No competition termination implementation or
+qualification is provided by fence draft staging. See [safety](safety.md#native-fence-setup-takeover-and-termination).
 
 ## Video inputs
 
