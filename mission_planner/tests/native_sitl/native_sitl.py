@@ -22,7 +22,15 @@ from System.Reflection import BindingFlags
 from System.Threading import Monitor, Thread, Timeout, Timer
 from System.Web.Script.Serialization import JavaScriptSerializer
 
-from MAVLink import MAV_CMD, MAVLinkMessage, mavlink_command_ack_t, mavlink_relay_status_t, mavlink_servo_output_raw_t
+from MAVLink import (
+    MAV_CMD,
+    MAVLinkMessage,
+    mavlink_command_ack_t,
+    mavlink_command_int_t,
+    mavlink_command_long_t,
+    mavlink_relay_status_t,
+    mavlink_servo_output_raw_t,
+)
 # isort: on
 
 HOST = MainV2  # noqa: F821 - injected by the native Mission Planner script host
@@ -96,7 +104,16 @@ def on_packet(sender, packet):
 
 def on_sent(sender, packet):
     if int(packet.msgid) in [75, 76, 157]:
-        outgoing.append(now())
+        command = 0
+        if int(packet.msgid) == 75:
+            command = int(packet.ToStructure[mavlink_command_int_t]().command)
+        elif int(packet.msgid) == 76:
+            command = int(packet.ToStructure[mavlink_command_long_t]().command)
+        Monitor.Enter(gate)
+        try:
+            outgoing.append((now(), int(packet.msgid), command))
+        finally:
+            Monitor.Exit(gate)
 
 
 def snapshot(rows):
@@ -127,7 +144,48 @@ def record(label, row, value):
     cases.Add(result)
 
 
+def action_category(text):
+    statuses = {
+        "Safe command ACK accepted. Physical state is unverified.": "safe_accepted",
+        "Mission Planner received an accepted command ACK. Physical completion is unverified.": "activation_accepted",
+        "Safe command is already pending.": "safe_pending",
+        "Aircraft or input is unavailable; no command sent.": "unavailable",
+        "Aircraft changed during Safe. Current aircraft safe state is unknown.": "safe_target_changed",
+        "Mission Planner did not confirm Safe acceptance; physical state is unverified.": "safe_not_confirmed",
+        (
+            "Safe outcome is uncertain; inspect aircraft before retrying. "
+            "Mission Planner is busy with a native request."
+        ): "safe_host_busy",
+        (
+            "Safe outcome is uncertain; inspect aircraft before retrying. "
+            "Aircraft or input changed; no new command was sent."
+        ): "safe_target_retired",
+    }
+    if text in statuses:
+        return statuses[text]
+    if text.startswith("Safe outcome is uncertain; inspect aircraft before retrying. "):
+        return "safe_uncertain_other"
+    return "other_status"
+
+
+def action_state():
+    output = assembly.GetType("NOMAD.MissionPlanner.OutputController")
+    target = call_static("OutputController", "CaptureTarget", [config])
+    state = Dictionary[str, Object]()
+    state["give_comport"] = bool(connection.giveComport)
+    state["generation"] = float(output.GetProperty("Generation", STATIC).GetValue(None))
+    state["payload_busy"] = bool(output.GetField("_payloadBusy", STATIC).GetValue(None))
+    state["target_valid"] = target is not None
+    state["target_current"] = target is not None and bool(
+        target.GetType().GetProperty("IsCurrent", INSTANCE).GetValue(target, None)
+    )
+    return state
+
+
 def action(identifier, operation, value=None):
+    before = action_state()
+    ack_start = len(snapshot(acks))
+    outgoing_start = len(snapshot(outgoing))
     start = now()
     task = (
         owner.GetType()
@@ -135,6 +193,24 @@ def action(identifier, operation, value=None):
         .Invoke(owner, Array[Object]([identifier, operation, value, "ui", -1, None]))
     )
     text = str(task.GetAwaiter().GetResult())
+    diagnostic = Dictionary[str, Object]()
+    diagnostic["category"] = action_category(text)
+    diagnostic["before"] = before
+    diagnostic["after"] = action_state()
+    diagnostic["acks"] = Array[Object]([Array[Object](row) for row in snapshot(acks)[ack_start:]][-8:])
+    diagnostic["outgoing"] = Array[Object]([Array[Object](row) for row in snapshot(outgoing)[outgoing_start:]][-8:])
+    if identifier in ["toggle", "position", "motion", "relay", "pulse"] and operation in [
+        "safe",
+        "activate",
+        "position",
+        "positive",
+        "negative",
+    ]:
+        diagnostic["action"] = identifier + "_" + operation
+    if not summary.ContainsKey("action_diagnostics"):
+        summary["action_diagnostics"] = List[Object]()
+    if summary["action_diagnostics"].Count < 32:
+        summary["action_diagnostics"].Add(diagnostic)
     if "accepted" not in text.lower() or "uncertain" in text.lower() or "not confirm" in text.lower():
         raise Exception(identifier + "_" + operation + "_not_accepted")
     wait_for(
