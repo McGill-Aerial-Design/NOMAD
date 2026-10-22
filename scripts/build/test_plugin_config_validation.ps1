@@ -121,6 +121,8 @@ try {
     . (Join-Path $PSScriptRoot 'test_aircraft_profiles.ps1')
     Invoke-AircraftProfileTests $plugin $configType $temporary
     Invoke-AircraftProfileUiTests $plugin $configType
+    . (Join-Path $PSScriptRoot 'test_setup_editors.ps1')
+    Invoke-SetupEditorTests $plugin $configType
 
     # Legacy source migration is in-memory only; every current save has one named source of truth.
     $legacyVideo = Load-Config '{"VideoUrl":"rtsp://synthetic:credential@video.invalid/live"}'
@@ -333,10 +335,8 @@ try {
         $setDevice.Invoke($null, [object[]]@($device, 'selected-unplugged-usb-hid')) | Out-Null
         if ($device.SelectedItem -ne 'selected-unplugged-usb-hid') { throw 'Device refresh discarded an explicit HID name.' }
 
-        $links = $formType.GetField('_txtRouterLinks', $privateFlags).GetValue($form)
-        $links.Text = '[{"Id":"elrs","Name":"Primary","Transport":"UDP","Port":14750,"Priority":100},{"Id":"lte","Name":"Backup","Transport":"UDP","Port":14760,"Priority":50}]'
-        $preferred = $formType.GetField('_txtRouterPreferredLink', $privateFlags).GetValue($form)
-        $preferred.Text = 'elrs'
+        $routerDraft = Load-Config '{"RouterPreferredLink":"elrs","RouterLinks":[{"Id":"elrs","Name":"Primary","Transport":"UDP","Port":14750,"Priority":100},{"Id":"lte","Name":"Backup","Transport":"UDP","Port":14760,"Priority":50}]}'
+        $formType.GetMethod('ApplyRouterDraft', $privateFlags).Invoke($form, [object[]]@($routerDraft)) | Out-Null
         $formType.GetMethod('SaveSettings', $privateFlags).Invoke($form, @()) | Out-Null
         if ($form.Config.RouterLinks.Count -ne 2 -or $form.Config.RouterPreferredLink -ne 'elrs') {
             throw 'Saving router settings lost physical links or preferred path.'

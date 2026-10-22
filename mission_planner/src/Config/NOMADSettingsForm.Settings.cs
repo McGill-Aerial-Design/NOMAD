@@ -33,8 +33,7 @@ namespace NOMAD.MissionPlanner
 
             _chkRouterClientEnabled.Checked = Config.RouterClientEnabled;
             _numRouterLocalPort.Value = ClampValue(_numRouterLocalPort, Config.RouterLocalPort);
-            _txtRouterLinks.Text = Newtonsoft.Json.JsonConvert.SerializeObject(Config.RouterLinks, Newtonsoft.Json.Formatting.Indented);
-            _txtRouterPreferredLink.Text = Config.RouterPreferredLink;
+            LoadRouterLinks();
 
             _chkDebugMode.Checked = Config.DebugMode;
 
@@ -67,14 +66,10 @@ namespace NOMAD.MissionPlanner
             SetComboBoxValue(_cmbJoyPositionAxis, Config.JoystickPositionAxis);
             _chkJoyPositionInvert.Checked = Config.JoystickPositionInvert;
             _numJoyPositionDeadzone.Value = ClampValue(_numJoyPositionDeadzone, Config.JoystickPositionDeadzone);
-            _txtJoyPositionActuatorId.Text = Config.JoystickPositionActuatorId;
+            RefreshPayloadBindings(false);
             SetDeviceComboValue(_cmbSwitchDevice, string.IsNullOrEmpty(Config.JoystickSwitchDevice) ? "(none)" : Config.JoystickSwitchDevice);
-            var actionCombos = new[] { _cmbSw1Up, _cmbSw1Down, _cmbSw2Up, _cmbSw2Down, _cmbSw3Up, _cmbSw3Down };
-            var actionIds = new[] { Config.JoystickSw1UpAction, Config.JoystickSw1DownAction, Config.JoystickSw2UpAction,
-                Config.JoystickSw2DownAction, Config.JoystickSw3UpAction, Config.JoystickSw3DownAction };
-            for (int index = 0; index < actionCombos.Length; index++)
+            for (int index = 0; index < SwitchActions.Length; index++)
             {
-                actionCombos[index].Text = actionIds[index];
                 _switchButtons[index].Value = Config.JoystickButtonIndices[index];
             }
             UpdatePositionEligibility();
@@ -90,8 +85,7 @@ namespace NOMAD.MissionPlanner
 
             Config.RouterClientEnabled = _chkRouterClientEnabled.Checked;
             Config.RouterLocalPort = (int)_numRouterLocalPort.Value;
-            Config.RouterLinks = NOMADConfig.ParseRouterLinks(_txtRouterLinks.Text);
-            Config.RouterPreferredLink = _txtRouterPreferredLink.Text.Trim();
+            Config.RouterPreferredLink = BindingValue(_cmbRouterPreferred);
 
             Config.DebugMode = _chkDebugMode.Checked;
             Config.AudioAlerts = _chkAudioAlerts.Checked;
@@ -119,15 +113,15 @@ namespace NOMAD.MissionPlanner
             Config.JoystickPositionAxis = _cmbJoyPositionAxis.SelectedItem?.ToString() ?? "Y";
             Config.JoystickPositionInvert = _chkJoyPositionInvert.Checked;
             Config.JoystickPositionDeadzone = (float)_numJoyPositionDeadzone.Value;
-            Config.JoystickPositionActuatorId = _txtJoyPositionActuatorId.Text.Trim();
+            Config.JoystickPositionActuatorId = BindingValue(_cmbJoyPositionPayload);
             Config.JoystickButtonIndices = System.Array.ConvertAll(_switchButtons, control => (int)control.Value);
             Config.JoystickSwitchDevice = NormalizeDevice(_cmbSwitchDevice?.SelectedItem?.ToString());
-            Config.JoystickSw1UpAction = (_cmbSw1Up?.Text ?? "None");
-            Config.JoystickSw1DownAction = (_cmbSw1Down?.Text ?? "None");
-            Config.JoystickSw2UpAction = (_cmbSw2Up?.Text ?? "None");
-            Config.JoystickSw2DownAction = (_cmbSw2Down?.Text ?? "None");
-            Config.JoystickSw3UpAction = (_cmbSw3Up?.Text ?? "None");
-            Config.JoystickSw3DownAction = (_cmbSw3Down?.Text ?? "None");
+            Config.JoystickSw1UpAction = BindingValue(_cmbSw1Up);
+            Config.JoystickSw1DownAction = BindingValue(_cmbSw1Down);
+            Config.JoystickSw2UpAction = BindingValue(_cmbSw2Up);
+            Config.JoystickSw2DownAction = BindingValue(_cmbSw2Down);
+            Config.JoystickSw3UpAction = BindingValue(_cmbSw3Up);
+            Config.JoystickSw3DownAction = BindingValue(_cmbSw3Down);
             Config.ValidateInputBindings();
 
         }

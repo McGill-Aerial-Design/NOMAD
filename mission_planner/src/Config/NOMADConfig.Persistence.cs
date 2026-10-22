@@ -172,13 +172,6 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        internal static System.Collections.Generic.List<LinkConfig> ParseRouterLinks(string json)
-        {
-            var token = ReadToken(json);
-            ValidateRouterLinks(token);
-            return token.ToObject<System.Collections.Generic.List<LinkConfig>>();
-        }
-
         private static void ValidateRouterLinks(JToken token)
         {
             if (!(token is JArray links)) { throw new JsonSerializationException("RouterLinks must be an array."); }

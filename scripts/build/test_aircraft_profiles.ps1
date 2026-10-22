@@ -272,7 +272,8 @@ function Invoke-AircraftProfileUiTests {
             (Profile-Control '_numJoyGimbalMaxRate').Value -ne 80 -or
             (Profile-Control '_cmbJoyGimbalPitchAxis').SelectedItem -ne 'Rz' -or
             -not (Profile-Control '_chkJoyPositionEnabled').Checked -or
-            (Profile-Control '_actuatorJson').Text -notmatch '"beta"') {
+            $form.Config.ActuatorDefinitions[0]['id'].ToString() -ne 'beta' -or
+            (Profile-Control '_payloadList').Rows.Count -ne 1) {
             throw 'Aircraft selection lost gimbal, actuator or unavailable-backend input settings.'
         }
         (Profile-Control '_numJoyGimbalMaxRate').Value = 90
