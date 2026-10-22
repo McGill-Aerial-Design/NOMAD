@@ -24,7 +24,6 @@ namespace NOMAD.MissionPlanner
         private Label _lblFlightMode;
         private Label _lblGpsFix;
         private Label _lblBattery;
-        private Label _lblGeofence;
         private Label _lblLinks;
         private Label _lblGimbalCommand;
 
@@ -33,17 +32,10 @@ namespace NOMAD.MissionPlanner
         private Label _lblVideoStatus;
         private EmbeddedVideoPlayer _videoPlayer;
 
-        private AdvisoryBoundaryMonitor _advisoryBoundaryMonitor;
         private NotificationService _notificationService;
         private NotificationPanel _notificationPanel;
 
         public NotificationService NotificationService => _notificationService;
-
-        public void SetAdvisoryBoundaryMonitor(AdvisoryBoundaryMonitor monitor)
-        {
-            _advisoryBoundaryMonitor = monitor;
-            _notificationService?.SetAdvisoryBoundaryMonitor(monitor);
-        }
 
         public NOMADDashboardView(NOMADConfig config, MAVLinkConnectionManager connectionManager = null)
             : this(config, connectionManager, System.Threading.CancellationToken.None) { }
@@ -113,7 +105,6 @@ namespace NOMAD.MissionPlanner
             {
                 var mav = MainV2.comPort?.MAV;
                 UpdateFlightCards(mav);
-                UpdateAdvisoryBoundaryCard();
                 UpdateLinksCard();
                 UpdateGimbalCard();
             }
@@ -175,47 +166,6 @@ namespace NOMAD.MissionPlanner
             _lblBattery.ForeColor = battery.Severity == 2
                 ? NOMADTheme.ERROR
                 : (battery.Severity == 1 ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
-        }
-
-        private void UpdateAdvisoryBoundaryCard()
-        {
-            if (_advisoryBoundaryMonitor == null)
-            {
-                _lblGeofence.Text = "LOCAL ADVISORY OFF";
-                _lblGeofence.ForeColor = NOMADTheme.TEXT_MUTED;
-                return;
-            }
-
-            if (!_advisoryBoundaryMonitor.IsMonitoring)
-            {
-                _lblGeofence.Text = "LOCAL ADVISORY OFF";
-                _lblGeofence.ForeColor = NOMADTheme.TEXT_SECONDARY;
-                return;
-            }
-
-            switch (_advisoryBoundaryMonitor.CurrentStatus)
-            {
-                case AdvisoryOutlineStatus.InsideOutlines:
-                    _lblGeofence.Text = "ADVISORY · INSIDE SAVED OUTLINES";
-                    _lblGeofence.ForeColor = NOMADTheme.TEXT_PRIMARY;
-                    break;
-                case AdvisoryOutlineStatus.OutsideInnerOutline:
-                    _lblGeofence.Text = "ADVISORY · OUTSIDE INNER OUTLINE";
-                    _lblGeofence.ForeColor = NOMADTheme.WARNING;
-                    break;
-                case AdvisoryOutlineStatus.OutsideOuterOutline:
-                    _lblGeofence.Text = "ADVISORY · OUTSIDE OUTER OUTLINE";
-                    _lblGeofence.ForeColor = NOMADTheme.WARNING;
-                    break;
-                case AdvisoryOutlineStatus.NoOutline:
-                    _lblGeofence.Text = "ADVISORY · NO OUTLINE CONFIGURED";
-                    _lblGeofence.ForeColor = NOMADTheme.TEXT_SECONDARY;
-                    break;
-                default:
-                    _lblGeofence.Text = "ADVISORY · WAITING FOR POSITION";
-                    _lblGeofence.ForeColor = NOMADTheme.WARNING;
-                    break;
-            }
         }
 
         private void UpdateLinksCard()

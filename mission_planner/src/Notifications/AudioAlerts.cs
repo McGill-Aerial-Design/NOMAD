@@ -21,8 +21,6 @@ namespace NOMAD.MissionPlanner
 {
     public enum AlertKind
     {
-        BoundarySoft,
-        BoundaryHard,
         BatteryWarning,
         BatteryCritical,
     }
@@ -34,8 +32,6 @@ namespace NOMAD.MissionPlanner
         // Minimum interval (seconds) before the same alert can re-play.
         private static readonly Dictionary<AlertKind, TimeSpan> MinInterval = new Dictionary<AlertKind, TimeSpan>
         {
-            { AlertKind.BoundarySoft,    TimeSpan.FromSeconds(5) },
-            { AlertKind.BoundaryHard,    TimeSpan.FromSeconds(2) },
             { AlertKind.BatteryWarning,  TimeSpan.FromSeconds(30) },
             { AlertKind.BatteryCritical, TimeSpan.FromSeconds(10) },
         };
@@ -119,8 +115,6 @@ namespace NOMAD.MissionPlanner
         {
             switch (kind)
             {
-                case AlertKind.BoundarySoft:    return "Two rising tones (800Hz → 1100Hz) — boundary warning";
-                case AlertKind.BoundaryHard:    return "Three urgent high beeps (1500Hz x3) — hard boundary violation";
                 case AlertKind.BatteryWarning:  return "Two descending tones (900Hz → 600Hz) — low battery";
                 case AlertKind.BatteryCritical: return "Five rapid alarm beeps (1800Hz) — critical battery";
                 default: return "Unknown alert";
@@ -136,12 +130,6 @@ namespace NOMAD.MissionPlanner
 
             switch (kind)
             {
-                case AlertKind.BoundarySoft:
-                    Beep(800, 180); Sleep(60); Beep(1100, 220);
-                    break;
-                case AlertKind.BoundaryHard:
-                    for (int i = 0; i < 3; i++) { Beep(1500, 150); Sleep(80); }
-                    break;
                 case AlertKind.BatteryWarning:
                     Beep(900, 220); Sleep(80); Beep(600, 300);
                     break;

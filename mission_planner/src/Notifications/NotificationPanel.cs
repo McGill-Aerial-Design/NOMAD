@@ -409,7 +409,6 @@ namespace NOMAD.MissionPlanner
                 NotificationCategory.OpticalFlow => Color.FromArgb(0, 188, 212),
                 NotificationCategory.EKF => Color.FromArgb(255, 193, 7),
                 NotificationCategory.Battery => Color.FromArgb(244, 67, 54),
-                NotificationCategory.Boundary => Color.FromArgb(255, 87, 34),
                 NotificationCategory.Link => Color.FromArgb(76, 175, 80),
                 NotificationCategory.System => Color.FromArgb(96, 125, 139),
                 _ => Color.FromArgb(100, 100, 100)
@@ -425,7 +424,6 @@ namespace NOMAD.MissionPlanner
                 NotificationCategory.OpticalFlow => "OPT",
                 NotificationCategory.EKF => "EKF",
                 NotificationCategory.Battery => "BAT",
-                NotificationCategory.Boundary => "BND",
                 NotificationCategory.Link => "LNK",
                 NotificationCategory.System => "SYS",
                 _ => "???"

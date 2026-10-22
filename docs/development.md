@@ -38,7 +38,7 @@ pixi run test-plugin-gimbal
 pixi run test-plugin-payload
 pixi run test-plugin-native-preflight
 pixi run test-plugin-config-validation
-pixi run test-plugin-geometry
+pixi run test-plugin-geometry # coordinate validation and actual native Fence AddCommand staging
 pixi run test-plugin-audio
 pixi run test-plugin-version
 pixi run test-ground-router-logic
@@ -92,8 +92,8 @@ Init or Start runs during that preflight. The separate native-preflight gate tes
 the actual guard with synthetic data and all four primary/backup loading candidates.
 Immediately before MP launch, it rechecks the DLL and named preservation set:
 `Documents/Mission Planner/config.xml`, `nomad_aircraft_profiles.json` and its `.bak`,
-`nomad_config.json` and its `.bak`, and `NOMAD/geofence_config.json` under the MP
-local application-data plugin directory. It checks that same set after exit;
+`nomad_config.json` and its `.bak`, and the retired `NOMAD/geofence_config.json`
+under the MP local application-data plugin directory. It checks that same set after exit;
 this does not claim all host/cache/log state is unchanged.
 It does not open USB/serial devices, arm, or write real controller parameters.
 The temporary MP XML disables automatic connections, other plugin files, speech
@@ -130,3 +130,5 @@ under separate authorization before merge; source edits do not change protection
 Preserve ignored builds, operator settings and other worktrees. Plans, handoffs and
 run histories belong in ignored `local/`. Use [qualification](qualification.md) to
 separate software checks from hardware/competition acceptance; no build/test deploys.
+
+Native Fence draft tests skip host constructors and use real MP editor methods and grid types; only the selected-port global and output generation are isolated. They assert zero transport writes and cache preservation. Retired `geofence_config.json` and `boundary_presets/` files are neither loaded nor modified.

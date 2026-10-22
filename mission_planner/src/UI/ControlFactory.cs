@@ -344,46 +344,5 @@ namespace NOMAD.MissionPlanner
             };
         }
 
-        /// <summary>
-        /// Dark themed two-column lat/lon grid (the boundary editors' grid skin).
-        /// Columns auto-fill so the grid reflows with its card.
-        /// </summary>
-        public static DataGridView BoundaryGrid()
-        {
-            var dgv = new DataGridView
-            {
-                Dock = DockStyle.Fill,
-                AllowUserToAddRows = false,
-                AllowUserToDeleteRows = true,
-                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
-                BackgroundColor = Color.FromArgb(30, 30, 30),
-                BorderStyle = BorderStyle.None,
-                CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal,
-                ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
-                DefaultCellStyle = new DataGridViewCellStyle
-                {
-                    BackColor = Color.FromArgb(40, 40, 43),
-                    ForeColor = NOMADTheme.TEXT_PRIMARY,
-                    SelectionBackColor = NOMADTheme.ACCENT,
-                    SelectionForeColor = NOMADTheme.TEXT_PRIMARY,
-                },
-                EnableHeadersVisualStyles = false,
-                GridColor = Color.FromArgb(60, 60, 63),
-                RowHeadersVisible = false,
-                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-            };
-
-            dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "Lat", HeaderText = "Latitude", FillWeight = 50 });
-            dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "Lon", HeaderText = "Longitude", FillWeight = 50 });
-
-            dgv.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
-            {
-                BackColor = NOMADTheme.CONTROL_BG,
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Font = NOMADTheme.Font(NOMADTheme.SIZE_BODY, FontStyle.Bold),
-            };
-
-            return dgv;
-        }
     }
 }

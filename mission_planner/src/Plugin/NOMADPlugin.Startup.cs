@@ -137,9 +137,9 @@ namespace NOMAD.MissionPlanner
                     $"NOMAD Plugin v{Version}\n" +
                     $"McGill Aerial Design\n\n" +
                     $"Choose Open NOMAD for the NOMAD screen\n" +
-                    $"(dashboard, local advisory outlines, video,\n" +
+                    $"(dashboard, native fence setup, video,\n" +
                     $"and plugin router status).\n\n" +
-                    $"Local outline advisory with received-position display,\n" +
+                    $"Native Plan fence draft staging,\n" +
                     $"plugin-wide alerts with toast overlays, plugin router\n" +
                     $"management and status, and configurable payload controls.\n\n" +
                     $"Video: {_config.SelectedVideoInput?.Name ?? "Unconfigured"}\n" +

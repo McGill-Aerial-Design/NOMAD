@@ -9,11 +9,12 @@ import clr
 clr.AddReference("System.Web.Extensions")
 # Native CLR namespaces must retain execution order across Windows/Linux lint environments.
 # isort: off
+from MissionPlanner import MAVLinkInterface
 from MissionPlanner import MainV2 as MainType
 from MissionPlanner.Comms import TcpSerial
 from MissionPlanner.Plugin import PluginLoader
 from Newtonsoft.Json.Linq import JArray
-from System import Action, Activator, Array, Byte, Double, Environment, EventHandler, Int64, Object, Single
+from System import Action, Activator, Array, Byte, Double, Environment, EventHandler, Func, Int64, Object, Single
 from System.Collections.Generic import Dictionary, List
 from System.Diagnostics import Stopwatch
 from System.IO import File, Path
@@ -307,7 +308,6 @@ try:
     if connection.BaseStream.IsOpen or any(item.BaseStream.IsOpen for item in MainType.Comports):
         raise Exception("unexpected_open_connection")
     next_run = plugin.NextRun
-    bind_time = plugin.GetType().GetField("_nextBoundaryMapBindUtc", INSTANCE).GetValue(plugin)
     tcp = TcpSerial()
     tcp.Host = "127.0.0.1"
     tcp.Port = Environment.GetEnvironmentVariable("NOMAD_SITL_PORT")
@@ -447,10 +447,22 @@ try:
     summary["stale_generation_no_command"] = True
     summary["readonly_no_command"] = True
     connection.ReadOnly = False
+    # Observe the surviving Loop body during a quiet interval, not the retired map-bind timer.
+    connection_field = assembly.GetType("NOMAD.MissionPlanner.OutputController").GetField("CurrentConnection", STATIC)
+    original_connection = connection_field.GetValue(None)
+    loop_samples = [0]
+
+    def sample_loop_connection():
+        loop_samples[0] += 1
+        return connection
+
+    connection_field.SetValue(None, Func[MAVLinkInterface](sample_loop_connection))
+    try:
+        Thread.Sleep(2200)
+        summary["loop_body_advanced"] = loop_samples[0] > 0
+    finally:
+        connection_field.SetValue(None, original_connection)
     summary["scheduler_advanced"] = plugin.NextRun > next_run
-    summary["loop_body_advanced"] = (
-        plugin.GetType().GetField("_nextBoundaryMapBindUtc", INSTANCE).GetValue(plugin) > bind_time
-    )
     summary["no_raw_telemetry_logs"] = connection.logfile is None and connection.rawlogfile is None
     summary["passed"] = bool(
         summary["scheduler_advanced"] and summary["loop_body_advanced"] and summary["no_raw_telemetry_logs"]

@@ -5,7 +5,7 @@ function Invoke-HealthObservationTests {
     param([Reflection.Assembly]$Plugin)
     $private = [Reflection.BindingFlags]'Instance,NonPublic'
     $serviceType = $Plugin.GetType('NOMAD.MissionPlanner.NotificationService', $true)
-    $service = [Activator]::CreateInstance($serviceType, [object[]]@($null))
+    $service = [Activator]::CreateInstance($serviceType)
     try {
         $ekf = $serviceType.GetMethod('CheckEKFPositionValidity', $private)
         $ekf.Invoke($service, [object[]]@([int]0x10)) | Out-Null
@@ -20,7 +20,7 @@ function Invoke-HealthObservationTests {
         }
     } finally { $service.Dispose() }
 
-    $service = [Activator]::CreateInstance($serviceType, [object[]]@($null))
+    $service = [Activator]::CreateInstance($serviceType)
     try {
         $context = $serviceType.GetMethod('ObserveHealthContext', $private)
         $first = New-Object object[] 3
@@ -79,13 +79,6 @@ function Invoke-HealthObservationTests {
     $scale = $stateType.GetField('multiplieralt')
     $originalScale = $scale.GetValue($null)
     $configType = $Plugin.GetType('NOMAD.MissionPlanner.NOMADConfig', $true)
-    $boundaryType = $Plugin.GetType('NOMAD.MissionPlanner.NOMADBoundaryView', $true)
-    $boundary = [Runtime.Serialization.FormatterServices]::GetUninitializedObject($boundaryType)
-    $altitudeLabel = New-Object System.Windows.Forms.Label
-    $boundaryType.GetField('_lblAltitude', $private).SetValue($boundary, $altitudeLabel)
-    $outlines = [Activator]::CreateInstance($Plugin.GetType('NOMAD.MissionPlanner.GeofenceConfig', $true))
-    $outlines.AdvisoryAltitudeDisplayThresholdMeters = 100
-    $boundaryType.GetField('_missionConfig', $private).SetValue($boundary, $outlines)
     try {
         foreach ($multiplier in @([single]1, [single]3.28084)) {
             $scale.SetValue($null, $multiplier)
@@ -93,15 +86,8 @@ function Invoke-HealthObservationTests {
                 $state.alt = $physicalMeters
                 $meters = $units.Invoke($null, [object[]]@([single]$state.alt, [single]$multiplier))
                 if ($meters -ne $physicalMeters) { throw 'Native float display units moved an exact meter boundary.' }
-                $outlines.AdvisoryAltitudeDisplayThresholdMeters = $physicalMeters
-                $boundaryType.GetMethod('UpdateAdvisoryAltitude', $private).Invoke(
-                    $boundary, [object[]]@($meters)) | Out-Null
-                if ($altitudeLabel.Text -notmatch ('{0}[.,]0m / {0}m' -f [int]$physicalMeters) -or
-                    $altitudeLabel.ForeColor -ne [Drawing.Color]::White) {
-                    throw 'Host display units changed an exact advisory meter boundary or threshold verdict.'
-                }
             }
-            $service = [Activator]::CreateInstance($serviceType, [object[]]@($null))
+            $service = [Activator]::CreateInstance($serviceType)
             try {
                 $state.sonarrange = [single]50
                 $rangeCheck.Invoke($service, [object[]]@($state)) | Out-Null
@@ -113,12 +99,12 @@ function Invoke-HealthObservationTests {
                 }
             } finally { $service.Dispose() }
         }
-    } finally { $scale.SetValue($null, $originalScale); $altitudeLabel.Dispose() }
+    } finally { $scale.SetValue($null, $originalScale) }
 
     $dashboardType = $Plugin.GetType('NOMAD.MissionPlanner.NOMADDashboardView', $true)
     $shared = $serviceType.GetProperty('Shared')
     $previousShared = $shared.GetValue($null)
-    $service = [Activator]::CreateInstance($serviceType, [object[]]@($null))
+    $service = [Activator]::CreateInstance($serviceType)
     $shared.SetValue($null, $service)
     $view = $null
     try {

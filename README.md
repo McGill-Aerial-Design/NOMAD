@@ -1,7 +1,7 @@
 # NOMAD
 
 NOMAD adds aircraft profiles, custom gimbal and payload controls, USB HID input,
-video, local advisory maps and redundant-link routing to Mission Planner.
+video, native fence draft setup and redundant-link routing to Mission Planner.
 Mission Planner supplies the aircraft connection, setup, normal flight controls
 and missions; ArduPilot flies the aircraft and owns its native failsafes.
 
