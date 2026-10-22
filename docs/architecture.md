@@ -59,12 +59,14 @@ host helper or onboard repeat can finish under native host/controller behavior.
 
 ## Profiles and presentation
 
-Profiles own aircraft hardware labels, RC roles, calibrated payload/gimbal settings,
+Profiles own optional aircraft notes, calibrated payload/gimbal settings,
 HID devices/mappings, physical links and video settings. Draft/copy/import/export
 changes stay isolated until explicit Save. Loading strips retired service credentials
 in memory and never rewrites operator files. Atomic replacement keeps a backup on
 explicit Save. Native host state and physical aircraft identity require observation;
 a saved label does not establish either.
+Ordinary RC arming and flight-mode configuration belongs to Mission Planner and
+ArduPilot. NOMAD has no corresponding channel settings or automatic discovery.
 
 Video uses Mission Planner's installed GStreamer support. Map polygons and received
 positions are local advisory display only: they do not upload fences or command a

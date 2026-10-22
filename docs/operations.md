@@ -31,10 +31,12 @@ Explicit Save replaces atomically with a `.bak`; cancelled/failed saves preserve
 previous saved collection. Keep profiles private: connection URLs can contain sensitive
 details even though runtime credentials are no longer stored/exported.
 
-Each profile owns aircraft labels, RC roles, gimbal mode/rate, calibrated payload
-outputs, HID mappings, links and video. Cube Orange Plus and ELRS CH5 arm/CH6 modes
-are one aircraft's settings, not global defaults. New profiles start without inherited
-payload mappings. Copy/import/export are drafts until Save.
+Each profile owns optional aircraft notes, gimbal mode/rate, calibrated payload
+outputs, HID mappings, links and video. Aircraft notes are operator labels, not live
+readbacks. Configure ordinary RC arming and flight modes through Mission Planner and
+ArduPilot. Retired NOMAD RC-role fields load and validate in memory but are omitted
+on the next explicit save/export; loading does not rewrite their source. New profiles
+start without inherited payload mappings. Copy/import/export are drafts until Save.
 Open settings from the NOMAD menu or sidebar. The persistent Editing label identifies
 the draft aircraft; Save activates it. Profile actions contains reset, load and export.
 Links, Video, Payloads and Inputs belong to that draft; Preferences contains alerts
