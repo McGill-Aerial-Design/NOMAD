@@ -123,6 +123,7 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Borderless click-to-dismiss popup; never steals focus from the GCS.
         /// </summary>
+        [global::MissionPlanner.Utilities.PreventTheming]
         private sealed class ToastForm : Form
         {
             private readonly Timer _dismissTimer;

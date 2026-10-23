@@ -51,6 +51,9 @@ internal static partial class VideoLifetimeTests
             Run("named receiver profile options reach both owners", VideoProfileOptions);
             Run("empty video profiles start no source", EmptyVideoDoesNotStart);
             Run("video drafts, rename, selection and aircraft isolation", VideoSettingsDrafts);
+            Run("active input replacement, cached views and stopped state", ActiveVideoInput);
+            Run("active input save ownership, rollback and HUD replacement", ActiveVideoInputSave);
+            Run("definition editing preserves active selection", VideoDefinitionSelection);
             return 0;
         }
         catch (Exception ex)

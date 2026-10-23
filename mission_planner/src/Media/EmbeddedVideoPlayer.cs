@@ -9,7 +9,7 @@ namespace NOMAD.MissionPlanner
 {
     public partial class EmbeddedVideoPlayer : UserControl
     {
-        private readonly VideoInputProfile _input;
+        private VideoInputProfile _input;
         private readonly VideoSession _session;
         private readonly ToolTip _videoToolTips = new ToolTip();
         private readonly System.Windows.Forms.Timer _frameTimer;
@@ -23,7 +23,7 @@ namespace NOMAD.MissionPlanner
         private readonly int _uiThread = Thread.CurrentThread.ManagedThreadId;
         private bool _isPlaying => _session.IsActive;
 
-        internal EmbeddedVideoPlayer(string title, VideoInputProfile input, bool showControls,
+        internal EmbeddedVideoPlayer(VideoInputProfile input, bool showControls,
             CancellationToken shutdown, Func<IVideoPipeline> createPipeline)
         {
             _input = new VideoInputProfile

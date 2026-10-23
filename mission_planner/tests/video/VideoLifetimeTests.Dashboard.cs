@@ -28,7 +28,7 @@ internal static partial class VideoLifetimeTests
         var config = VideoConfig();
         var first = new FakeVideoPipeline();
         var dashboard = new NOMADDashboardView(config, null, shutdown.Token, () => first);
-        var oldPlayer = GetField<EmbeddedVideoPlayer>(dashboard, "_videoPlayer");
+        var oldPlayer = GetField<VideoInputPlayer>(dashboard, "_videoHost").Player;
         var handle = oldPlayer.Handle;
         Wait(first.ReadEntered, "dashboard automatic preview");
         dashboard.Dispose();
@@ -37,7 +37,7 @@ internal static partial class VideoLifetimeTests
         var second = new FakeVideoPipeline();
         using (var reopened = new NOMADDashboardView(config, null, shutdown.Token, () => second))
         {
-            var player = GetField<EmbeddedVideoPlayer>(reopened, "_videoPlayer");
+            var player = GetField<VideoInputPlayer>(reopened, "_videoHost").Player;
             handle = player.Handle;
             Wait(second.ReadEntered, "reopened dashboard preview");
             var plugin = new NOMADPlugin();

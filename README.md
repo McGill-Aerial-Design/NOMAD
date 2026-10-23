@@ -57,8 +57,9 @@ outcomes, use the [operator guide](docs/operations.md).
 
 ## Named video inputs
 
-In **Settings → Video**, add an input, name it, enter its source URL, and choose
-the input for that aircraft. RTSP supports TCP/UDP transport and jitter buffering;
+In **Settings → Video**, add an input, name it, enter its source URL, and save.
+Choose the aircraft's active input at the top-right of the Dashboard or Video player.
+RTSP supports TCP/UDP transport and jitter buffering;
 the decode queue and old-frame dropping bound receiver buffering. Bitrate,
 resolution and encoded quality are configured at the camera or encoder.
 
@@ -70,7 +71,7 @@ the actual RTSP URL. Network access and encoder configuration remain external.*
 
 ## Native fence setup
 
-Open **NOMAD → Open NOMAD → Fence setup** to load the published AEAC polygon or
+Open **NOMAD → Fence setup** to load the published AEAC polygon or
 paste GPS points. Review the coordinate order and stage the complete polygon in
 native Plan with **Fence** selected. Staging changes the editor draft only; use
 Mission Planner's native **Write**, then **Read**, to transfer and verify it.

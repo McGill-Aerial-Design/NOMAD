@@ -43,6 +43,23 @@ namespace NOMAD.MissionPlanner
             }
         }
 
+        internal void UpdateInput(string pipeline)
+        {
+            if (_disposed) { return; }
+            bool wasPlaying = IsActive;
+            _session.Stop();
+            _timer.Stop();
+            ClearDisplay();
+            if (wasPlaying) { Start(pipeline); }
+        }
+
+        private void ClearDisplay()
+        {
+            if (!_hud.IsDisposed && ReferenceEquals(_getFrame(), _display)) { _setFrame(null); }
+            _display?.Dispose();
+            _display = null;
+        }
+
         private void OnFrameTick(object sender, EventArgs e)
         {
             if (_disposed)
@@ -81,12 +98,7 @@ namespace NOMAD.MissionPlanner
             _timer.Tick -= OnFrameTick;
             _timer.Dispose();
             _hud.Disposed -= OnHudDisposed;
-            if (!_hud.IsDisposed && ReferenceEquals(_getFrame(), _display))
-            {
-                _setFrame(null);
-            }
-            _display?.Dispose();
-            _display = null;
+            ClearDisplay();
         }
     }
 }

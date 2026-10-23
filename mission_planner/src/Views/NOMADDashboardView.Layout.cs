@@ -44,6 +44,10 @@ namespace NOMAD.MissionPlanner
             mainLayout.Controls.Add(CreateStatusCard("Gimbal command", "Unverified", out _lblGimbalCommand,
                 NOMADTheme.TEXT_SECONDARY, fontSize: 10), 1, 1);
 
+            _terminationWidget = new TerminationWidget(NOMADMainScreen.Termination, _videoShutdown)
+            { Dock = DockStyle.Fill, Margin = new Padding(4) };
+            mainLayout.Controls.Add(_terminationWidget, 2, 1);
+
             _notificationPanel = new NotificationPanel(_notificationService)
             {
                 Dock = DockStyle.Fill,
@@ -100,24 +104,9 @@ namespace NOMAD.MissionPlanner
                     e.Graphics.DrawRectangle(pen, 0, 0, panel.Width - 1, panel.Height - 1);
             };
 
-            _videoPlaceholder = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.Black,
-            };
-            _lblVideoStatus = new Label
-            {
-                Text = _config.SelectedVideoInput == null
-                    ? "No video input configured. Add an input in Settings → Video."
-                    : "Video: ready",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = NOMADTheme.TEXT_MUTED,
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleCenter,
-                BackColor = Color.Black,
-            };
-            _videoPlaceholder.Controls.Add(_lblVideoStatus);
-            panel.Controls.Add(_videoPlaceholder);
+            _videoHost = new VideoInputPlayer(_config, false, _videoShutdown, _createPipeline,
+                NOMADMainScreen.SelectVideoInput);
+            panel.Controls.Add(_videoHost);
             return panel;
         }
     }

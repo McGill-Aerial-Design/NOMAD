@@ -16,6 +16,7 @@ using System.Windows.Forms;
 
 namespace NOMAD.MissionPlanner
 {
+    [global::MissionPlanner.Utilities.PreventTheming]
     public partial class NOMADSettingsForm : Form
     {
         // ============================================================

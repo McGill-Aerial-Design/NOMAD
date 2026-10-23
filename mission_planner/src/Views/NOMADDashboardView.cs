@@ -28,9 +28,8 @@ namespace NOMAD.MissionPlanner
         private Label _lblGimbalCommand;
 
         private Panel _videoPreviewPanel;
-        private Panel _videoPlaceholder;
-        private Label _lblVideoStatus;
-        private EmbeddedVideoPlayer _videoPlayer;
+        private VideoInputPlayer _videoHost;
+        private TerminationWidget _terminationWidget;
 
         private NotificationService _notificationService;
         private NotificationPanel _notificationPanel;
@@ -57,37 +56,9 @@ namespace NOMAD.MissionPlanner
             }
 
             InitializeUI();
-            InitializeVideoIfConfigured();
         }
 
-        private void InitializeVideoIfConfigured()
-        {
-            if (_config.SelectedVideoInput == null)
-            {
-                return;
-            }
-
-            try
-            {
-                _videoPlayer = new EmbeddedVideoPlayer(_config.SelectedVideoInput.Name, _config.SelectedVideoInput, false,
-                    _videoShutdown, _createPipeline)
-                {
-                    Dock = DockStyle.Fill,
-                };
-                _videoPlaceholder.Controls.Add(_videoPlayer);
-                _lblVideoStatus.Visible = false;
-                _videoPlayer.BringToFront();
-                _lblVideoStatus.Text = "Video: connecting";
-            }
-            catch (Exception ex)
-            {
-                _videoPlayer?.Dispose();
-                _videoPlayer = null;
-                _lblVideoStatus.Visible = true;
-                _lblVideoStatus.Text = $"Video unavailable: {ex.Message}";
-                _lblVideoStatus.ForeColor = NOMADTheme.ERROR;
-            }
-        }
+        internal void RefreshVideoInput() { _videoHost?.RefreshInput(); }
 
         public void UpdateData()
         {
@@ -104,6 +75,8 @@ namespace NOMAD.MissionPlanner
                 UpdateFlightCards(mav);
                 UpdateLinksCard();
                 UpdateGimbalCard();
+                RefreshVideoInput();
+                _terminationWidget?.RefreshStatus();
             }
             catch
             {
@@ -195,8 +168,8 @@ namespace NOMAD.MissionPlanner
                     _notificationService.Dispose();
                 }
                 _notificationService = null;
-                _videoPlayer?.Dispose();
-                _videoPlayer = null;
+                _videoHost?.Dispose();
+                _terminationWidget?.Dispose();
             }
             base.Dispose(disposing);
         }

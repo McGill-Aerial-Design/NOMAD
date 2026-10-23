@@ -29,6 +29,7 @@ namespace NOMAD.MissionPlanner
     /// This is the main screen that appears when clicking NOMAD in the top navigation.
     /// Inherits from MyUserControl to integrate with Mission Planner's MainSwitcher system.
     /// </summary>
+    [global::MissionPlanner.Utilities.PreventTheming]
     public partial class NOMADMainScreen : MyUserControl, IActivate, IDeactivate
     {
         // ============================================================
@@ -80,11 +81,18 @@ namespace NOMAD.MissionPlanner
 
         // Update timer
         private System.Windows.Forms.Timer _updateTimer;
-        private bool _themeReapplyPending;
 
         // Static configuration (set by the plugin before this screen is shown)
         private static System.Threading.CancellationToken _videoShutdown;
         private static Action _showSettings;
+        private static Func<NOMADConfig, string, bool> _selectVideoInput;
+        internal static Func<NOMADConfig, string, bool> SelectVideoInput => _selectVideoInput == null
+            ? null : (Func<NOMADConfig, string, bool>)SelectCurrentVideoInput;
+        private static bool SelectCurrentVideoInput(NOMADConfig config, string name) =>
+            _selectVideoInput?.Invoke(config, name) == true;
+        internal static void SetVideoInputSelection(Func<NOMADConfig, string, bool> selectInput)
+        { _selectVideoInput = selectInput; }
+        internal static TerminationController Termination => _staticTermination;
         internal static void SetVideoShutdown(System.Threading.CancellationToken token, Action showSettings = null)
         {
             _videoShutdown = token;
@@ -151,88 +159,10 @@ namespace NOMAD.MissionPlanner
         public void Activate()
         {
             RefreshConfiguration();
-            // Mission Planner's ThemeManager restyles this screen around
-            // MainSwitcher.ShowScreen (recursively overwriting Back/ForeColor),
-            // so the NOMAD palette only survived until MP's pass ran. Re-assert
-            // now and once more after the current UI batch, whichever order MP
-            // applies its theme in.
-            ReapplyNomadTheme();
-            QueueThemeReapply();
-
             StartUpdateTimer();
             ShowView(_currentViewName);
-        }
-
-        /// <summary>
-        /// Restore the NOMAD chrome colors (sidebar, logo strip, content area)
-        /// after Mission Planner's ThemeManager repaints the control tree.
-        /// View internals are built after MP's pass and keep their own colors.
-        /// </summary>
-        private void ReapplyNomadTheme()
-        {
-            BackColor = CONTENT_BG;
-            if (_contentPanel != null) _contentPanel.BackColor = CONTENT_BG;
-            if (_viewContainer != null) _viewContainer.BackColor = CONTENT_BG;
-            if (_sidebarPanel == null) return;
-
-            _sidebarPanel.BackColor = SIDEBAR_BG;
-            foreach (Control child in _sidebarPanel.Controls)
-            {
-                if (child is FlowLayoutPanel nav)
-                {
-                    nav.BackColor = SIDEBAR_BG;
-                    foreach (Control c in nav.Controls)
-                    {
-                        if (c is Button b)
-                        {
-                            b.BackColor = SIDEBAR_BG;
-                            b.ForeColor = TEXT_SECONDARY;
-                        }
-                        else if (c is Label l)
-                        {
-                            l.BackColor = SIDEBAR_BG;
-                            l.ForeColor = l.Name == "ActiveAircraft" ? TEXT_PRIMARY : TEXT_SECONDARY;
-                        }
-                    }
-                }
-                else
-                {
-                    // Logo strip
-                    child.BackColor = Color.FromArgb(8, 8, 10);
-                    foreach (Control c in child.Controls)
-                    {
-                        c.BackColor = Color.FromArgb(8, 8, 10);
-                        c.ForeColor = ACCENT_COLOR;
-                    }
-                }
-            }
-            UpdateSidebarButtonState(_currentViewName);
-        }
-
-        private void QueueThemeReapply()
-        {
-            if (IsDisposed)
-                return;
-
-            if (!IsHandleCreated)
-            {
-                _themeReapplyPending = true;
-                return;
-            }
-
-            _themeReapplyPending = false;
-            BeginInvoke((MethodInvoker)(() =>
-            {
-                if (!IsDisposed)
-                    ReapplyNomadTheme();
-            }));
-        }
-
-        protected override void OnHandleCreated(EventArgs e)
-        {
-            base.OnHandleCreated(e);
-            if (_themeReapplyPending)
-                QueueThemeReapply();
+            _dashboardView?.RefreshVideoInput();
+            _videoView?.UpdateData();
         }
 
         /// <summary>
@@ -254,8 +184,7 @@ namespace NOMAD.MissionPlanner
         private void ShowView(string viewName)
         {
             _currentViewName = viewName;
-            // Keep the chrome on-theme even if MP's ThemeManager ran since.
-            ReapplyNomadTheme();
+            UpdateSidebarButtonState(viewName);
 
             // Remove current view
             if (_currentView != null)
@@ -362,6 +291,8 @@ namespace NOMAD.MissionPlanner
         private void UpdateTimer_Tick(object sender, EventArgs e)
         {
             RefreshConfiguration();
+            _dashboardView?.RefreshVideoInput();
+            _videoView?.UpdateData();
             // Update the current view if it supports updates
             if (_currentView is IUpdatableView updatable)
             {

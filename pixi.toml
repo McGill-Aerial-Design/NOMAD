@@ -34,6 +34,7 @@ test-aircraft-profiles = "powershell -NoProfile -ExecutionPolicy Bypass -File sc
 test-plugin-gimbal = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal.ps1"
 test-plugin-payload = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_payload.ps1"
 test-plugin-gimbal-ui = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal_ui.ps1"
+test-plugin-ui = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_ui.ps1"
 test-plugin-router-ui = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_router_ui.ps1"
 test-plugin-video = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_video.ps1"
 

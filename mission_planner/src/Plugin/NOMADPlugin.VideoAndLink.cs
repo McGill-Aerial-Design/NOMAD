@@ -150,6 +150,25 @@ namespace NOMAD.MissionPlanner
             }
         }
 
+        private bool SelectActiveVideoInput(NOMADConfig config, string name)
+        {
+            if (!IsActiveSession(_videoShutdown) || _savingSettings || !ReferenceEquals(config, _config) ||
+                !config.VideoInputs.Exists(input => string.Equals(input.Name, name, StringComparison.OrdinalIgnoreCase)))
+            { return false; }
+            string previous = config.SelectedVideoInputName;
+            config.SelectedVideoInputName = name;
+            try { _profiles.Save(); }
+            catch (Exception error)
+            {
+                config.SelectedVideoInputName = previous;
+                Log.Error("Active video input was not saved: " + error.Message);
+                return false;
+            }
+            try { _hudVideo?.UpdateInput(BuildHudVideoPipeline(config.SelectedVideoInput)); }
+            catch (Exception error) { Log.Error("Video selection saved; HUD source change failed: " + error.Message); }
+            return true;
+        }
+
         private static string BuildHudVideoPipeline(VideoInputProfile input)
         {
             return VideoPipeline.Build(input);
@@ -224,7 +243,7 @@ namespace NOMAD.MissionPlanner
             {
                 if (_connectionManager == null)
                 {
-                    CustomMessageBox.Show(
+                    MessageBox.Show(Host.MainForm,
                         "Plugin router is not enabled.\n\n" +
                         "Enable it and configure physical links in NOMAD Settings → Links.",
                         "Link Manager Not Available"
@@ -232,7 +251,7 @@ namespace NOMAD.MissionPlanner
                     return;
                 }
 
-                var form = new Form
+                var form = new NOMADForm
                 {
                     Text = "NOMAD MAVLink Link Status",
                     Size = new Size(550, 650),

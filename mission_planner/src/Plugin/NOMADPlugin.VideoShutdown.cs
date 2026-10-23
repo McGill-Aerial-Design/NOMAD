@@ -25,6 +25,7 @@ namespace NOMAD.MissionPlanner
             var shutdown = _videoShutdown;
             _videoShutdown = null;
             NOMADMainScreen.SetVideoShutdown(new System.Threading.CancellationToken(true));
+            NOMADMainScreen.SetVideoInputSelection(null);
             try
             {
                 shutdown?.Cancel();

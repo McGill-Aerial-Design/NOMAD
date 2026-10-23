@@ -33,7 +33,7 @@ internal static class RouterStatusUiTests
         Run("Links view availability", LinksViewAvailability);
         Run("settings save preserves router and unload session", SettingsRouterLifetime);
         Run("aircraft profile retires cached views", AircraftProfileRetiresCachedViews);
-        Run("deferred theme and session-owned Settings", SidebarThemeAndSettings);
+        Run("host theme opt-out and session-owned Settings", SidebarThemeAndSettings);
         Run("native Fence input survives screen navigation", FenceInputSurvivesNavigation);
         Console.WriteLine($"Router status UI checks: {_checks}; failures: {_failures}");
         return _failures == 0 ? 0 : 1;
@@ -197,13 +197,13 @@ internal static class RouterStatusUiTests
             using var screen = new NOMADMainScreen(config);
             type.GetMethod("ShowView", PrivateInstance).Invoke(screen, new object[] { "Links" });
             var handle = screen.Handle;
-            type.GetMethod("QueueThemeReapply", PrivateInstance).Invoke(screen, null);
+            global::MissionPlanner.Utilities.ThemeManager.ApplyThemeTo(screen);
             Application.DoEvents();
             var selected = (Button)type.GetField("_btnLinks", PrivateInstance).GetValue(screen);
             var dashboard = (Button)type.GetField("_btnDashboard", PrivateInstance).GetValue(screen);
             Check(selected.BackColor == NOMADTheme.ACCENT && selected.ForeColor == NOMADTheme.TEXT_PRIMARY &&
                 dashboard.BackColor != NOMADTheme.ACCENT,
-                "deferred host theme restoration preserves the selected sidebar button");
+                "host theme opt-out preserves the selected sidebar button");
             var settings = (Button)screen.Controls.Find("OpenSettings", true)[0];
             settings.PerformClick();
             Check(opened == 1, "sidebar Settings uses the current plugin callback");

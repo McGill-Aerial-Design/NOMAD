@@ -27,7 +27,7 @@ internal static partial class VideoLifetimeTests
         string hud = (string)typeof(NOMADPlugin).GetMethod("BuildHudVideoPipeline",
             BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, new object[] { input });
         var fake = new FakeVideoPipeline();
-        using (var player = new EmbeddedVideoPlayer(input.Name, input, true, CancellationToken.None, () => fake))
+        using (var player = new EmbeddedVideoPlayer(input, true, CancellationToken.None, () => fake))
         {
             player.StartStream();
             Wait(fake.ReadEntered, "alternate receiver profile");
@@ -60,8 +60,8 @@ internal static partial class VideoLifetimeTests
                 using (var dashboard = new NOMADDashboardView(new NOMADConfig(), null, shutdown.Token,
                     () => { created++; return new FakeVideoPipeline(); }))
                 {
-                    Check(GetField<EmbeddedVideoPlayer>(video, "_videoPlayer") == null &&
-                        GetField<EmbeddedVideoPlayer>(dashboard, "_videoPlayer") == null && created == 0,
+                    Check(GetField<VideoInputPlayer>(video, "_videoHost").Player == null &&
+                        GetField<VideoInputPlayer>(dashboard, "_videoHost").Player == null && created == 0,
                         "An empty video configuration invented a source or created a pipeline.");
                     var payloads = GetField<ActuatorControlPanel>(video, "_actuatorPanel");
                     payloads.Size = new Size(200, 250);

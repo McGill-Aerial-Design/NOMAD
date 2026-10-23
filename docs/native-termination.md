@@ -55,7 +55,7 @@ written before enabling AFS, and each value is independently read back. Enabling
 requires controlled action/rate, both RC/fence trigger parameters present and enabled,
 and a present valid RC timeout. A failed or uncertain write stops subsequent changes
 and requires another Read, preserving
-earlier writes. The menu must check support again before a subsequent TERMINATE request.
+earlier writes. The Dashboard action checks support again before a subsequent TERMINATE request.
 
 | Native setting | Action-44 commissioning requirement |
 |---|---|
@@ -81,11 +81,18 @@ show private values numerically; use Full Parameter List and explicit write/read
 
 ## Ground operation
 
-Select the live aircraft, then **NOMAD → TERMINATE**. NOMAD requests a selectable
-native `TERMINATE` advertisement and freshly reads `AFS_ENABLE`, `AFS_TERM_ACTION`
-and `AFS_TERM_RATE`. A fresh armed heartbeat and the same connection, stream,
-aircraft IDs and profile generation are required. Confirmation names the aircraft
-and defaults to Cancel. Aircraft entry checks remain onboard.
+Select the live aircraft and open **NOMAD → Dashboard**. The TERMINATE widget's
+**Check** button verifies the selectable native `TERMINATE` advertisement and
+freshly reads `AFS_ENABLE`, `AFS_TERM_ACTION` and `AFS_TERM_RATE`. Hover over the
+widget with the NOMAD window in the foreground, release both Shift keys, then
+press left and right Shift within 750 ms of one another. Both must be down together.
+The widget rechecks support; keep the pointer over it and the window focused, then
+release both Shift keys to open the aircraft confirmation. Leaving the widget or
+losing focus before that dialog cancels the review. Held keys cannot repeat it.
+
+Confirmation names the captured aircraft and defaults to Cancel. Only explicit OK
+requests the mode. A fresh armed heartbeat and the same connection, stream,
+aircraft IDs and profile generation are required. Aircraft entry checks remain onboard.
 
 The action uses MP's native `DO_SET_MODE` helper with the advertised numeric ID.
 It has no command-185/disarm fallback or application retry. MP retains normal ACK
@@ -93,7 +100,7 @@ waits/retries; a dispatched helper can finish after profile change or unload.
 Inspect an uncertain outcome before another deliberate request.
 
 ACK acceptance and observed mode are separate. NOMAD names TERMINATE only after
-a fresh matching heartbeat; the menu then shows the latch/reboot requirement.
+a fresh matching heartbeat; the Dashboard widget then shows the latch/reboot requirement.
 Neither proves descent, touchdown, stopped motors or physical safe state. The
 radio path works without MP/NOMAD. USB ground-controller button integration,
 transmitter mixing and wiring remain separate aircraft integration work.
