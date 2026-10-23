@@ -677,16 +677,17 @@ try:
     connection.MAV.cs.raterc = 10
     for message in (33, 36, 65, 245):
         command(MAV_CMD.SET_MESSAGE_INTERVAL, [message, 100000, 0, 0, 0, 0, 0])
-    upload_survey()
     ui(menu)
     player_box = []
     ui(lambda: player_box.append(open_video()))
     player = player_box[0]
     wait_for(lambda: camera_frame(player) is not None, 20, "NOMAD did not decode the actual RTSP feed")
     state["native_video_observed"] = True
+    stage("wait_native_startup")
+    wait_for(lambda: observed["boot_ms"] >= 45000 and observed.get("lat", 0) != 0, 60, "GPS/EKF settling deadline")
+    upload_survey()
     stage("ready")
     if CHECK:
-        wait_for(lambda: observed["boot_ms"] >= 45000 and observed.get("lat", 0) != 0, 60, "GPS/EKF settling deadline")
         stage("termination_commissioning")
         verify_commissioning()
         state["controller_boot_count_before"] = read_parameter("STAT_BOOTCNT")
