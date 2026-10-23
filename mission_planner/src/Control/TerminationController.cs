@@ -120,10 +120,10 @@ namespace NOMAD.MissionPlanner
                     if (_disposed || _target == null) { return "No live writable aircraft."; }
                     if (!Fresh) { return "No fresh aircraft heartbeat."; }
                     if (ObservedNow)
-                    { return "TERMINATE observed; physical outcome unverified. Reboot required to leave."; }
-                    if (_supported && !_armed) { return "Native TERMINATE supported; aircraft is not armed."; }
-                    return _outcome ?? (_supported ? "Native TERMINATE supported; entry checks remain onboard."
-                        : "Check native TERMINATE support.");
+                    { return "TERMINATE observed. Reboot required."; }
+                    if (_supported && !_armed) { return "TERMINATE supported; aircraft is not armed."; }
+                    return _outcome ?? (_supported ? "TERMINATE supported."
+                        : "Check TERMINATE support.");
                 }
             }
         }
@@ -154,7 +154,7 @@ namespace NOMAD.MissionPlanner
             lock (_gate)
             {
                 _supported = false;
-                _outcome = "Termination settings changed; check native support again before requesting TERMINATE.";
+                _outcome = "Termination settings changed; check support again before requesting TERMINATE.";
             }
         }
 
@@ -172,13 +172,13 @@ namespace NOMAD.MissionPlanner
                 _configurationSupported = false;
                 _selectable = false;
                 discovery = _discovery = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                _outcome = "Checking native support...";
+                _outcome = "Checking support...";
             }
             try
             {
                 // Index zero requests all modes. Their records may arrive before or after the request ACK.
                 if (!await target.SendAsync(MAVLink.MAV_CMD.REQUEST_MESSAGE, 435, 0).ConfigureAwait(false))
-                { return SetOutcome(target, "Native mode discovery was not accepted."); }
+                { return SetOutcome(target, "Mode discovery was not accepted."); }
                 float enabled = await target.ReadParameterAsync("AFS_ENABLE").ConfigureAwait(false);
                 float action = await target.ReadParameterAsync("AFS_TERM_ACTION").ConfigureAwait(false);
                 float rate = await target.ReadParameterAsync("AFS_TERM_RATE").ConfigureAwait(false);
@@ -192,11 +192,11 @@ namespace NOMAD.MissionPlanner
                         !float.IsNaN(rate) && !float.IsInfinity(rate) && rate >= 2;
                     _configurationSupported = advertised && _selectable && !_ambiguous &&
                         target.Connection.MAVlist[target.System, target.Component].param.ContainsKey("AFS_TERM_RATE");
-                    _outcome = _supported ? null : "Native controlled termination is not configured or selectable.";
+                    _outcome = _supported ? null : "Termination is not configured or selectable.";
                     return requireConfigured ? _supported : _configurationSupported;
                 }
             }
-            catch (Exception) { return SetOutcome(target, "Native support could not be verified. No termination sent."); }
+            catch (Exception) { return SetOutcome(target, "Support could not be verified. No termination sent."); }
             finally { lock (_gate) { if (ReferenceEquals(_target, target)) { _busy = false; } } }
         }
 
@@ -228,7 +228,7 @@ namespace NOMAD.MissionPlanner
                 if (_busy || !ReferenceEquals(_target, target) || target.Generation != generation || !CanSend(target, mode))
                 { return "Aircraft, support or input changed; no termination sent."; }
                 _busy = true;
-                _outcome = "Termination request pending; physical outcome unverified.";
+                _outcome = "Termination request pending.";
             }
             try
             {
@@ -237,8 +237,8 @@ namespace NOMAD.MissionPlanner
                     current: () => { lock (_gate) { return CanSend(target, mode); } }).ConfigureAwait(false);
                 bool current = target.IsCurrent;
                 string outcome = !current ? "Aircraft changed; original request outcome is uncertain. Do not replay." :
-                    accepted ? "Command ACK accepted; await a fresh TERMINATE heartbeat. Physical outcome unverified." :
-                    "Native termination request was not accepted.";
+                    accepted ? "Command accepted; waiting for TERMINATE." :
+                    "Termination request was not accepted.";
                 SetOutcome(target, outcome);
                 return outcome;
             }

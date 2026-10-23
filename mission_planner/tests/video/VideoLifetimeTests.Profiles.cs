@@ -67,8 +67,12 @@ internal static partial class VideoLifetimeTests
                     payloads.Size = new Size(200, 250);
                     payloads.PerformLayout();
                     var status = GetField<Label>(payloads, "_status");
+                    Check(status.Text == "" && !status.Visible, "Idle payload controls displayed a permanent warning paragraph.");
+                    status.Text = "Safe not confirmed. Check payload wiring and the connection before retrying.";
+                    status.Visible = true;
+                    payloads.PerformLayout();
                     Check(status.Width <= payloads.ClientSize.Width && status.Height > status.Font.Height,
-                        "Payload command warning did not wrap inside a narrow video-side panel.");
+                        "Payload action status did not wrap inside a narrow video-side panel.");
                 }
             }
             finally { NotificationService.Shared = previous; }

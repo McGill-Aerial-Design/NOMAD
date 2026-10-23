@@ -100,7 +100,7 @@ internal static class NativeTerminationTests
                     "Native rejection was retried by the application or claimed accepted");
                 peer.Accept = true;
                 string accepted = peer.Request();
-                Require(accepted.Contains("ACK accepted") && peer.ModeCommands == 2 &&
+                Require(accepted.Contains("Command accepted") && peer.ModeCommands == 2 &&
                     !peer.Status.Contains("TERMINATE observed"), "ACK alone became observed mode or completion");
                 Require(peer.LastCommandMode == 29 && peer.LastCommandFlags == 1 && peer.FlightTerminationCommands == 0,
                     "Numeric discovery/DO_SET_MODE changed or stock flight-termination fallback was sent");

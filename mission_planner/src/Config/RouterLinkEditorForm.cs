@@ -20,7 +20,8 @@ namespace NOMAD.MissionPlanner
         private readonly TextBox _reconnect;
         private readonly CheckBox _enabled;
         private readonly Control _bindRow, _hostRow, _portRow, _remotePortRow, _deviceRow, _baudRow;
-        private readonly Label _portLabel, _hint, _error;
+        private readonly Label _portLabel, _error;
+        private readonly ToolTip _tips = new ToolTip();
         internal NOMADConfig Candidate { get; private set; }
 
         internal RouterLinkEditorForm(NOMADConfig draft, int index, string newId)
@@ -33,10 +34,8 @@ namespace NOMAD.MissionPlanner
             var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(12) };
             var body = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
             body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); scroll.Controls.Add(body); Controls.Add(scroll);
-            Add(body, "Stable ID", new TextBox { Text = _original.Id, ReadOnly = true,
-                BackColor = NOMADTheme.INPUT_BG, ForeColor = NOMADTheme.TEXT_SECONDARY });
             _name = TextInput(_original.Name); Add(body, "Name", _name);
-            _enabled = ControlFactory.CheckBox("Enable this physical link", _original.Enabled); Add(body, "Availability", _enabled);
+            _enabled = ControlFactory.CheckBox("Enabled", _original.Enabled); Add(body, "Availability", _enabled);
             _transport = ControlFactory.Combo(new[] { "UDP", "TCP", "COM" }); _transport.SelectedItem = _original.Transport;
             Add(body, "Transport", _transport);
             _priority = ControlFactory.Numeric(int.MinValue, int.MaxValue, _original.Priority); Add(body, "Priority (higher wins)", _priority);
@@ -45,15 +44,13 @@ namespace NOMAD.MissionPlanner
             _port = ControlFactory.Numeric(0, 65535, _original.Port); _portRow = Add(body, "Local listening port", _port);
             _portLabel = (Label)_portRow.Controls[0];
             _remotePort = ControlFactory.Numeric(0, 65535, _original.RemotePort); _remotePortRow = Add(body, "Remote UDP port (0 if learning)", _remotePort);
-            _device = TextInput(_original.Device); _deviceRow = Add(body, "COM device (explicit)", _device);
+            _device = TextInput(_original.Device); _deviceRow = Add(body, "Device", _device);
             _baud = ControlFactory.Combo(new[] { "9600", "57600", "115200", "230400", "420000", "460800", "921600" });
             _baud.DropDownStyle = ComboBoxStyle.DropDown;
             _baud.Text = _original.BaudRate.ToString(CultureInfo.InvariantCulture);
-            _baudRow = Add(body, "Baud (common or custom)", _baud);
+            _baudRow = Add(body, "Baud rate", _baud);
             _reconnect = TextInput(_original.ReconnectSeconds.ToString("R", CultureInfo.InvariantCulture));
             Add(body, "Reconnect interval (seconds)", _reconnect);
-            _hint = ControlFactory.Label("", foreColor: NOMADTheme.TEXT_SECONDARY, fontSize: NOMADTheme.SIZE_SMALL);
-            _hint.MaximumSize = new Size(590, 0); body.Controls.Add(_hint);
             var footer = new Panel { Dock = DockStyle.Bottom, Height = 100, Padding = new Padding(12) };
             _error = new Label { Dock = DockStyle.Fill, ForeColor = NOMADTheme.WARNING };
             var save = ControlFactory.Button("Use link", width: 100, height: 32);
@@ -80,9 +77,15 @@ namespace NOMAD.MissionPlanner
             _hostRow.Visible = _portRow.Visible = transport != "COM";
             _deviceRow.Visible = _baudRow.Visible = transport == "COM";
             _portLabel.Text = transport == "TCP" ? "Remote server port" : "Local listening port";
-            _hint.Text = transport == "UDP" ? "Leave remote host empty to learn the sender. A fixed peer needs host and port." :
+            _tips.SetToolTip(_transport, transport == "UDP" ? "Leave remote host empty to learn the sender. A fixed peer needs host and port." :
                 transport == "TCP" ? "Connects to the remote server. The saved remote UDP port is not used for TCP." :
-                "Enter a device explicitly; this dialog never scans or opens serial ports. Example baud rates: 57600, 115200, 420000.";
+                "Enter the device and baud rate.");
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { _tips.Dispose(); }
+            base.Dispose(disposing);
         }
 
         internal NOMADConfig BuildCandidate()

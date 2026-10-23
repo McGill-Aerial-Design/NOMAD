@@ -91,7 +91,7 @@ internal static class NativeOutputTests
     {
         var connection = Reset();
         var result = Send();
-        Require(result.Submitted && result.Message.Contains("unverified"), "Submission claimed vehicle acceptance");
+        Require(result.Submitted && result.Message.Contains("not confirmed"), "Submission claimed vehicle acceptance");
         Require(connection.Modes == 1 && connection.Targets == 1 && connection.LastSystem == 4 &&
             connection.LastComponent == 2 && connection.Pitch == -1200 && connection.Roll == 700 &&
             !connection.AcknowledgementRequested, "Host target IDs/centidegrees/ACK policy changed");

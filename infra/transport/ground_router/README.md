@@ -4,10 +4,7 @@ The NOMAD plugin runs this C# router inside Mission Planner. It combines configu
 physical telemetry links into one bidirectional loopback connection for the host.
 Physical links and the preferred link are saved per aircraft profile.
 
-![NOMAD Links settings with example ELRS and LTE endpoints](../../../docs/images/router-settings.png)
-
-*Actual Links settings with synthetic endpoints. The router is stopped; enabled
-rows describe the draft configuration, not established connections.*
+![NOMAD Links settings with ELRS and LTE links](../../../docs/images/router-settings.png)
 
 ## Configure a route
 
@@ -15,7 +12,7 @@ rows describe the draft configuration, not established connections.*
 2. Open **NOMAD → Settings → Links**. Add the reviewed UDP, TCP or serial physical
    links and select the preferred enabled link. The dialogs distinguish local UDP
    listening ports, remote TCP server ports and explicit COM devices.
-3. Enable **Run the router inside Mission Planner**, review the local UDPCl port,
+3. Enable **Enable**, review the local UDPCl port,
    then Save. An empty physical-link list opens no connections.
 4. Connect Mission Planner using **UDPCl**, host `127.0.0.1`, and that profile's
    `RouterLocalPort`. The plugin creates one bidirectional consumer named

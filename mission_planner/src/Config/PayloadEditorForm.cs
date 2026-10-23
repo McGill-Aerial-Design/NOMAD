@@ -29,7 +29,8 @@ namespace NOMAD.MissionPlanner
         private readonly CheckBox _reversed, _hazardous, _requireNeutral;
         private readonly Control _minimumRow, _maximumRow, _neutralRow, _safeRow, _reversedRow, _holdRow, _pulseRow;
         private readonly Control _primaryRow, _safeLabelRow, _negativeRow, _neutralLabelRow, _positiveRow;
-        private readonly Label _channelLabel, _timedHint, _error;
+        private readonly Label _channelLabel, _error;
+        private readonly ToolTip _tips = new ToolTip();
         internal JArray Definitions { get; private set; }
 
         internal PayloadEditorForm(JArray definitions, int index, string newId)
@@ -47,8 +48,6 @@ namespace NOMAD.MissionPlanner
             _body = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
             _body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             scroll.Controls.Add(_body); Controls.Add(scroll);
-            Add("Stable ID", new TextBox { Text = _original.Id, ReadOnly = true, BackColor = NOMADTheme.INPUT_BG,
-                ForeColor = NOMADTheme.TEXT_SECONDARY });
             _name = TextInput(_original.Name); Add("Name", _name);
             _behavior = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, BackColor = NOMADTheme.INPUT_BG,
                 ForeColor = NOMADTheme.TEXT_PRIMARY, DisplayMember = "Value" };
@@ -60,22 +59,18 @@ namespace NOMAD.MissionPlanner
             _channelLabel = (Label)channelRow.Controls[0];
             _minimum = ControlFactory.Numeric(500, 2500, _original.Minimum); _minimumRow = Add("Minimum PWM", _minimum);
             _maximum = ControlFactory.Numeric(500, 2500, _original.Maximum); _maximumRow = Add("Maximum PWM", _maximum);
-            _neutral = ControlFactory.Numeric(500, 2500, _original.Neutral); _neutralRow = Add("Neutral PWM (saved calibration)", _neutral);
+            _neutral = ControlFactory.Numeric(500, 2500, _original.Neutral); _neutralRow = Add("Neutral PWM", _neutral);
             _safe = ControlFactory.Numeric(500, 2500, _original.Safe); _safeRow = Add("Safe PWM", _safe);
             _reversed = ControlFactory.CheckBox("Reversed (inactive at maximum)", _original.Reversed);
             _reversedRow = Add("Toggle direction", _reversed);
             _hold = ControlFactory.Numeric(50, 1500, _original.HoldMs); _holdRow = Add("Motion hold (ms)", _hold);
             _pulse = ControlFactory.Numeric(50, 1500, _original.PulseMs); _pulseRow = Add("Relay pulse (ms)", _pulse);
-            _timedHint = ControlFactory.Label("", foreColor: NOMADTheme.WARNING, fontSize: NOMADTheme.SIZE_SMALL);
-            _timedHint.MaximumSize = new Size(590, 0); _body.Controls.Add(_timedHint);
             _hazardous = ControlFactory.CheckBox("Hazardous output", _original.Hazardous); Add("Interlocks", _hazardous);
             _count = ControlFactory.Numeric(0, 3, _original.Confirmations); Add("Distinct confirmations (0–3)", _count);
             _window = ControlFactory.Numeric(500, 5000, _original.WindowMs); Add("Confirmation window (ms)", _window);
             _requireNeutral = ControlFactory.CheckBox("Require neutral before activation", _original.RequireNeutral);
             Add("Neutral interlock", _requireNeutral);
-            var interlockHint = ControlFactory.Label("Hazardous outputs require at least two confirmations and neutral. " +
-                "Changing behavior never reduces these interlocks.", foreColor: NOMADTheme.WARNING, fontSize: NOMADTheme.SIZE_SMALL);
-            interlockHint.MaximumSize = new Size(590, 0); _body.Controls.Add(interlockHint);
+            _tips.SetToolTip(_hazardous, "Requires at least two confirmations and a return to neutral.");
             _primary = TextInput(_original.PrimaryLabel); _primaryRow = Add("Action label", _primary);
             _safeLabel = TextInput(_original.SafeLabel); _safeLabelRow = Add("Safe label", _safeLabel);
             _negative = TextInput(_original.NegativeLabel); _negativeRow = Add("Negative direction label", _negative);
@@ -114,9 +109,15 @@ namespace NOMAD.MissionPlanner
             _holdRow.Visible = motion; _pulseRow.Visible = behavior == "RelayPulse";
             _primaryRow.Visible = _safeLabelRow.Visible = !motion;
             _negativeRow.Visible = _neutralLabelRow.Visible = _positiveRow.Visible = motion;
-            _timedHint.Text = motion ? "Safe equals neutral. Live SERVOx_TRIM must match before motion; hold is bounded." :
+            _tips.SetToolTip(_behavior, motion ? "Safe equals neutral. Live SERVOx_TRIM must match before motion; hold is bounded." :
                 behavior == "ServoToggle" ? "Safe is the inactive endpoint: minimum, or maximum when reversed." :
-                behavior == "RelayPulse" ? "Relay pulse is bounded; explicit Safe turns the relay off." : "";
+                behavior == "RelayPulse" ? "Relay pulse is bounded; explicit Safe turns the relay off." : "");
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { _tips.Dispose(); }
+            base.Dispose(disposing);
         }
 
         internal JArray BuildCandidate()

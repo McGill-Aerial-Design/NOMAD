@@ -49,6 +49,8 @@ internal static class PluginUiTests
         Menu();
         SameScreen();
         Theme(directory);
+        SettingsInputPause();
+        InputEditorInterpretation(directory);
         using (var form = new NOMADForm())
         using (var widget = new TerminationWidget(null, CancellationToken.None))
         {
@@ -62,6 +64,71 @@ internal static class PluginUiTests
 
     private static void Check(bool condition, string message)
     { if (!condition) { throw new InvalidOperationException(message); } }
+
+    private static void InputEditorInterpretation(string directory)
+    {
+        foreach (string source in InputBinding.Sources)
+        {
+            var config = new NOMADConfig { ActuatorDefinitions = JArray.Parse("[{\"id\":\"payload\",\"name\":\"Example payload\",\"behavior\":\"ServoToggle\",\"channel\":1,\"safe_pwm\":1000}]") };
+            config.Inputs.Add(JObject.FromObject(new InputBinding { Id = "stable", Name = "Named control", Device = "missing device",
+                Source = source, Action = source == "Axis" ? "gimbal:pitch" : "payload:safe" }));
+            using var editor = new InputBindingEditorForm(config, 0);
+            var sourceChoice = (ComboBox)typeof(InputBindingEditorForm).GetField("_source", Hidden).GetValue(editor);
+            var selected = (KeyValuePair<string, string>)sourceChoice.SelectedItem;
+            Check(selected.Key == source && selected.Value == InputBindingEditorForm.SourceLabel(source), "Friendly source label changed persisted source identity.");
+            var candidate = (JArray)typeof(InputBindingEditorForm).GetMethod("BuildCandidate", Hidden).Invoke(editor, null);
+            Check(candidate[0]["Id"].Value<string>() == "stable" && candidate[0]["Source"].Value<string>() == source,
+                "Input editor roundtrip changed source or stable identity.");
+            var device = (ComboBox)typeof(InputBindingEditorForm).GetField("_device", Hidden).GetValue(editor);
+            Check(((KeyValuePair<string, string>)device.SelectedItem).Value.StartsWith("Unavailable:"), "Missing device was not visibly unavailable.");
+            var axisDetection = new InputListenState(DateTime.UtcNow);
+            typeof(InputListenState).GetProperty("Axis", Hidden).SetValue(axisDetection, "Y");
+            typeof(InputBindingEditorForm).GetMethod("ApplyDetection", Hidden).Invoke(editor, new object[] { axisDetection, source == "ButtonPair" });
+            string interpreted = ((KeyValuePair<string, string>)sourceChoice.SelectedItem).Key;
+            Check(interpreted == (source == "Button" ? "Axis" : source), "Listen changed an explicit switch interpretation or a paired endpoint.");
+            var listenField = typeof(InputBindingEditorForm).GetField("_listen", Hidden);
+            var pending = new InputListenState(DateTime.UtcNow); listenField.SetValue(editor, pending);
+            sourceChoice.SelectedItem = InputBindingEditorForm.SourceChoices[interpreted == "Button" ? 2 : 0];
+            Check(!pending.Active && listenField.GetValue(editor) == null &&
+                !((Button)typeof(InputBindingEditorForm).GetField("_stopListen", Hidden).GetValue(editor)).Enabled,
+                "Changing input type did not cancel and clean up Listen.");
+            pending = new InputListenState(DateTime.UtcNow); listenField.SetValue(editor, pending);
+            device.Items.Add(new KeyValuePair<string, string>("another missing", "Unavailable: another missing"));
+            device.SelectedIndex = device.Items.Count - 1;
+            Check(!pending.Active && listenField.GetValue(editor) == null, "Changing device did not retire Listen.");
+            typeof(InputBindingEditorForm).GetMethod("SetSource", Hidden).Invoke(editor, new object[] { source });
+            typeof(InputBindingEditorForm).GetMethod("UpdateSource", Hidden).Invoke(editor,
+                new object[] { source == "Axis" ? "gimbal:pitch" : "payload:safe", "" });
+            Capture(editor, directory, "input-" + source + ".png", editor.Size);
+            editor.Scale(new SizeF(1.5f, 1.5f));
+            Capture(editor, directory, "input-" + source + "-150.png", editor.Size);
+        }
+    }
+
+    private static void SettingsInputPause()
+    {
+        var assembly = typeof(NOMADConfig).Assembly;
+        var output = assembly.GetType("NOMAD.MissionPlanner.OutputController", true);
+        var config = new NOMADConfig { AircraftName = "Pause fixture", GimbalArrowKeysEnabled = true };
+        var profiles = new NOMADProfiles(config);
+        config = profiles.Selected.Config;
+        output.GetMethod("Initialize", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, new object[] { config });
+        var filterType = assembly.GetType("NOMAD.MissionPlanner.GimbalArrowKeyFilter", true);
+        var filter = (IDisposable)Activator.CreateInstance(filterType, new object[] { profiles });
+        var pluginType = assembly.GetType("NOMAD.MissionPlanner.NOMADPlugin", true);
+        var plugin = System.Runtime.Serialization.FormatterServices.GetUninitializedObject(pluginType);
+        pluginType.GetField("_gimbalArrowKeyFilter", Hidden).SetValue(plugin, filter);
+        pluginType.GetField("_joystickService", Hidden).SetValue(plugin, new NomadJoystickService(config));
+        GimbalController.SetTargetAngles(0, 0);
+        pluginType.GetMethod("PauseCustomInputs", Hidden).Invoke(plugin, null);
+        using var list = new ComboBox(); list.Items.AddRange(new object[] { "First", "Second" }); list.SelectedIndex = 0;
+        var down = Message.Create(list.Handle, 0x0100, (IntPtr)Keys.Down, IntPtr.Zero);
+        Check(!Application.FilterMessage(ref down), "Settings pause still intercepted list navigation.");
+        list.SelectedIndex = 1;
+        Check(GimbalController.TargetPitchDeg == 0 && GimbalController.TargetRollDeg == 0 && config.GimbalArrowKeysEnabled,
+            "Settings list navigation moved gimbal or changed saved arrow preference.");
+        output.GetMethod("Shutdown", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, null);
+    }
 
     private static void Gesture()
     {
@@ -222,12 +289,17 @@ internal static class PluginUiTests
             using var settings = new NOMADSettingsForm(new NOMADProfiles(config));
             using var payload = new PayloadEditorForm(new JArray(), -1, "synthetic");
             using var router = new RouterLinkEditorForm(config, -1, "synthetic");
+            using var input = new InputBindingEditorForm(config, -1);
+            using var payloadControls = new ActuatorControlPanel(config);
+            var payloadStatus = (Label)typeof(ActuatorControlPanel).GetField("_status", Hidden).GetValue(payloadControls);
+            Check(payloadStatus.Text == "" && !payloadStatus.Visible, "Idle payload controls displayed boilerplate instead of action status.");
             using var form = new NOMADForm { BackColor = NOMADTheme.BG_DARK };
             form.Controls.Add(ControlFactory.Button("Save", backColor: NOMADTheme.BTN_PRIMARY));
-            foreach (var root in new Control[] { screen, settings, payload, router, form }) { RetainsTheme(root); }
+            foreach (var root in new Control[] { screen, settings, payload, router, input, form }) { RetainsTheme(root); }
             typeof(NOMADMainScreen).GetMethod("ShowView", Hidden).Invoke(screen, new object[] { "Dashboard" });
             Capture(screen, directory, "dashboard.png", new Size(1180, 760));
             Capture(settings, directory, "settings.png", settings.Size);
+            Capture(input, directory, "input-editor.png", input.Size);
             config.VideoInputs.Add(new VideoInputProfile { Name = "Example receiver", Url = "rtsp://camera.invalid/live" });
             config.VideoInputs.Add(new VideoInputProfile { Name = "Alternate receiver", Url = "rtsp://alternate.invalid/live" });
             config.SelectedVideoInputName = "Example receiver";

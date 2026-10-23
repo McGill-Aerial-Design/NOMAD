@@ -14,7 +14,6 @@ namespace NOMAD.MissionPlanner
         private TabPage CreateMultiLinkTab()
         {
             var tab = CreateTabPage("Links"); int y = 15;
-            AddLabel(tab, "Mission Planner owns the connection and ordinary flight controls.", 20, y); y += 32;
             _chkRouterClientEnabled = AddCheckBox(tab, "Enable", 20, y); y += 38;
             AddLabel(tab, "Mission Planner UDPCl port:", 20, y);
             _numRouterLocalPort = AddNumericUpDown(tab, 235, y, 90, 1, 65535, 14600); y += 35;
@@ -27,9 +26,7 @@ namespace NOMAD.MissionPlanner
             var remove = ControlFactory.Button("Remove", (sender, args) => RemoveRouterLink());
             var buttons = ControlFactory.ButtonRow(add, edit, remove); buttons.Dock = DockStyle.None;
             buttons.Location = new Point(20, y); tab.Controls.Add(buttons); y += 42;
-            AddLabel(tab, "Higher priority wins after the preferred link. Connect MP using UDPCl to 127.0.0.1 and the port above.", 20, y);
-            y += 25; AddLabel(tab, "These drafts open no ports. Save applies changes; an empty list opens no connections.", 20, y);
-            _linkError = new Label { Location = new Point(20, y + 28), Size = new Size(690, 45), ForeColor = NOMADTheme.WARNING };
+            _linkError = new Label { Location = new Point(20, y), Size = new Size(690, 45), ForeColor = NOMADTheme.WARNING };
             tab.Controls.Add(_linkError);
             _linkList.CellDoubleClick += (sender, args) => { if (args.RowIndex >= 0) { EditRouterLink(args.RowIndex); } };
             return tab;

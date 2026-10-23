@@ -21,7 +21,7 @@ namespace NOMAD.MissionPlanner
     {
         private readonly NOMADConfig _config;
         private readonly PayloadController _owner;
-        private readonly Label _status = new Label { AutoSize = true, MaximumSize = new Size(650, 0), ForeColor = Color.Gold };
+        private readonly Label _status = new Label { Visible = false, AutoSize = true, MaximumSize = new Size(650, 0), ForeColor = Color.Gold };
         public ActuatorControlPanel(NOMADConfig config)
         {
             _config = config;
@@ -52,7 +52,6 @@ namespace NOMAD.MissionPlanner
                 }
                 _owner.Changed += OnChanged;
             }
-            _status.Text = "One timed action at a time. Commands may retry; Stop waits for pending work. Physical state is unverified.";
             rows.Controls.Add(_status);
         }
         private void AddButton(FlowLayoutPanel row, string label, string id, string operation, Func<double?> value)
@@ -66,12 +65,12 @@ namespace NOMAD.MissionPlanner
             if (IsDisposed || _owner?.Owns(_config) != true) { return; }
             string status = await _owner.ActAsync(id, operation, value,
                 inputStillCurrent: () => !IsDisposed && _owner.Owns(_config));
-            if (!IsDisposed && _owner.Owns(_config)) { _status.Text = status; }
+            if (!IsDisposed && _owner.Owns(_config)) { _status.Text = status; _status.Visible = !string.IsNullOrWhiteSpace(status); }
         }
         private void OnChanged(string id)
         {
             if (!IsDisposed && _owner.Owns(_config))
-            { UiAsync.RunSync(this, () => { if (!IsDisposed) { _status.Text = _owner.Status(id); } }, "Payload state"); }
+            { UiAsync.RunSync(this, () => { if (!IsDisposed) { _status.Text = _owner.Status(id); _status.Visible = !string.IsNullOrWhiteSpace(_status.Text); } }, "Payload state"); }
         }
         protected override void Dispose(bool disposing)
         { if (disposing && _owner != null) { _owner.Changed -= OnChanged; } base.Dispose(disposing); }

@@ -42,8 +42,6 @@ namespace NOMAD.MissionPlanner
             _txtAircraftName.TextChanged += (sender, args) => UpdateProfileContext();
             y += 32;
             AddSectionLabel(tab, "Optional aircraft notes", ref y);
-            AddLabel(tab, "Labels only; these are not live aircraft readbacks.", 20, y);
-            y += 28;
             AddLabel(tab, "Flight controller:", 20, y);
             _txtFlightController = AddTextBox(tab, 180, y, 440);
             y += 32;
@@ -60,14 +58,6 @@ namespace NOMAD.MissionPlanner
             AddLabel(tab, "Gimbal mode preset:", 20, y);
             _cmbGimbalMountMode = AddComboBox(tab, 180, y, 260,
                 new[] { "Retract", "Neutral", "MAVLink targeting", "RC targeting" });
-            y += 45;
-            tab.Controls.Add(new Label
-            {
-                Text = "All configuration tabs belong to the selected aircraft. " +
-                    "Save makes it active and restores it on restart. " +
-                    "Review exported connection details before sharing. Hardware values still require FC readback and calibration.",
-                Location = new Point(20, y), Size = new Size(650, 60), ForeColor = Color.Silver,
-            });
             return tab;
         }
 

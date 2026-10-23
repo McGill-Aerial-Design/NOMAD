@@ -58,7 +58,7 @@ namespace NOMAD.MissionPlanner
 
         public bool PreFilterMessage(ref Message m)
         {
-            if (!_enabled || !OutputController.IsCurrentProfile(_config) ||
+            if (_disposed || !_enabled || !OutputController.IsCurrentProfile(_config) ||
                 (m.Msg != WM_KEYDOWN && m.Msg != WM_SYSKEYDOWN))
                 return false;
             if (Control.ModifierKeys != Keys.None)

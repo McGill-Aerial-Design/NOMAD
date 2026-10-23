@@ -88,28 +88,8 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public bool AltitudeCallouts { get; set; } = true;
 
-        // Saved actuator mappings bind custom payload controls to this aircraft profile.
-        public string JoystickPositionActuatorId { get; set; } = "";
-        // ============================================================
-        // Joystick Configuration (Mission Planner DirectInput-based)
-        // ============================================================
-        // Gimbal input produces angle targets; position input produces normalized
-        // values for an explicitly configured payload ID.
-        // DirectInput axes: X, Y, Z, Rx, Ry, Rz, Slider1, Slider2.
+        public Newtonsoft.Json.Linq.JArray Inputs { get; set; } = new Newtonsoft.Json.Linq.JArray();
 
-        /// <summary>Enable the gimbal joystick channel.</summary>
-        public bool JoystickGimbalEnabled { get; set; } = false;
-        /// <summary>DirectInput device name (must match one of MP's enumerated devices).</summary>
-        public string JoystickGimbalDevice { get; set; } = "";
-        /// <summary>Axis driving gimbal pitch (X / Y / Z / Rx / Ry / Rz / Slider1 / Slider2).</summary>
-        public string JoystickGimbalPitchAxis { get; set; } = "Y";
-        /// <summary>Invert pitch axis (stick forward = pitch up when invert=true on most flight sticks).</summary>
-        public bool JoystickGimbalPitchInvert { get; set; } = true;
-        /// <summary>Axis driving gimbal roll.</summary>
-        public string JoystickGimbalRollAxis { get; set; } = "X";
-        public bool JoystickGimbalRollInvert { get; set; } = false;
-        /// <summary>Deadzone fraction [0..1] applied per axis.</summary>
-        public float JoystickGimbalDeadzone { get; set; } = 0.08f;
         /// <summary>
         /// Persisted max integrated angle rate (deg/s) at full stick deflection.
         /// At runtime, <see cref="GimbalController.MaxRateDegSec"/> is the
@@ -125,27 +105,6 @@ namespace NOMAD.MissionPlanner
         /// handles arrow keys while it is active.
         /// </summary>
         public bool GimbalArrowKeysEnabled { get; set; } = false;
-
-        /// <summary>Enable the configured position input.</summary>
-        public bool JoystickPositionEnabled { get; set; } = false;
-        /// <summary>DirectInput device name. May be the same device as gimbal (different axes).</summary>
-        public string JoystickPositionDevice { get; set; } = "";
-        /// <summary>Axis producing a normalized position input.</summary>
-        public string JoystickPositionAxis { get; set; } = "Y";
-        public bool JoystickPositionInvert { get; set; } = true;
-        public float JoystickPositionDeadzone { get; set; } = 0.08f;
-
-        // Each physical switch uses configurable UP/DOWN DirectInput button indices.
-        // Bindings carry saved payload IDs and operation strings.
-        public int[] JoystickButtonIndices { get; set; } = new[] { 0, 1, 2, 3, 4, 5 };
-        public string JoystickSwitchDevice  { get; set; } = "";
-
-        public string JoystickSw1UpAction   { get; set; } = "None";
-        public string JoystickSw1DownAction { get; set; } = "None";
-        public string JoystickSw2UpAction   { get; set; } = "None";
-        public string JoystickSw2DownAction { get; set; } = "None";
-        public string JoystickSw3UpAction   { get; set; } = "None";
-        public string JoystickSw3DownAction { get; set; } = "None";
 
     }
 }

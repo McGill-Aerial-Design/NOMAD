@@ -108,7 +108,7 @@ try {
                 $bitmap.Save((Join-Path $fenceRenderDir ('fence-setup-' + $scale + '.png')))
             } finally { $bitmap.Dispose() }
             $text = $fenceView.Controls.Find('FenceSetupStatus', $true)[0].Text
-            if ($text -notmatch 'Staging.*Nothing is uploaded') { throw 'Fence setup lost truthful initial transfer status.' }
+            if ($text -ne '') { throw 'Idle Fence setup displayed a stale action status.' }
             if ($fenceView.Controls.Find('FenceCoordinates', $true).Count -ne 1) { throw 'Fence coordinate editor missing.' }
         } finally { $fenceForm.Dispose() }
     }
@@ -242,14 +242,26 @@ try {
     $videoCopy = $loadMethod.Invoke($null, [object[]]@([string]$videoExport)).Clone()
     if ($videoCopy.SelectedVideoInput.Url -ne $video.SelectedVideoInput.Url) { throw 'Video export/load/clone lost the source.' }
     Assert-ThrowsMessage '{"RouterLocalPort":0}' 'ports'
-    Assert-ThrowsMessage '{"JoystickButtonIndices":[0,1,2,3,4,128]}' 'between 0 and 127'
-    Assert-ThrowsMessage '{"JoystickButtonIndices":[0,1,2,3,4,5.5]}' 'integers'
+    $input = '{"Id":"one","Name":"Control","Device":"test","Source":"Button","Action":"a:activate","Enabled":true,"Button":0}'
     foreach ($button in @(0, 127)) {
-        $mapped = Load-Config ('{"JoystickButtonIndices":[' + $button +
-            ',1,2,3,4,5],"JoystickSw1UpAction":"a:activate"}')
-        if ($mapped.JoystickButtonIndices[0] -ne $button) { throw 'HID button boundary was changed.' }
+        $mapped = Load-Config ('{"Inputs":[' + $input.Replace('"Button":0', '"Button":' + $button) + ']}')
+        if ($mapped.Inputs[0]['Button'].Value -ne $button) { throw 'HID button boundary was changed.' }
     }
-    Assert-ThrowsMessage '{"JoystickButtonIndices":[0,0,2,3,4,5],"JoystickSw1UpAction":"a:activate","JoystickSw1DownAction":"b:activate"}' 'unique'
+    foreach ($invalid in @($input.Replace('"Button":0', '"Button":128'),
+        $input.Replace('"Button":0', '"Button":0.5'), $input.Replace('"Enabled":true', '"Enabled":"true"'),
+        $input.Replace('"Source":"Button"', '"Source":"POV"'), $input.Replace('"Action":"a:activate"', '"Action":"a:arm"'),
+        $input.Replace('"Button":0', '"button":0'), $input.Replace('"Button":0', '"Deadzone":0.51'),
+        $input.Replace('"Action":"a:activate"', '"Action":"gimbal:pitch"'))) {
+        $rejected = $false
+        try { Load-Config ('{"Inputs":[' + $invalid + ']}') | Out-Null } catch { $rejected = $true }
+        if (!$rejected) { throw 'Invalid nested input was accepted.' }
+    }
+    Assert-ThrowsMessage ('{"Inputs":[' + $input + ',' + $input.Replace('"Id":"one"','"Id":"two"') + ']}') 'unique physical'
+    Assert-ThrowsMessage ('{"Inputs":[' + $input + ',' + $input + ']}') 'identities'
+    Assert-ThrowsMessage '{"Inputs":null}' 'array'
+    Assert-ThrowsMessage '{"Inputs":{}}' 'array'
+    $optional = Load-Config ('{"Inputs":[' + $input.Replace('"Source":"Button"', '"Source":"ButtonPair"') + ']}')
+    if ($optional.Inputs.Count -ne 1) { throw 'Single mapped switch endpoint was rejected.' }
     Assert-ThrowsMessage '{"RouterLocalPort":14611,"RouterLocalPort":14612}' 'already exists'
     foreach ($json in @('{"RouterLinks":null}', '{"RouterLinks":[{"Id":"x","Port":1.5}]}',
         '{"RouterLinks":[{"Id":"x","Enabled":"true"}]}', '{"RouterLinks":[{"Id":"x","port":14750}]}',
@@ -265,7 +277,7 @@ try {
     if ($routerCopy.RouterLinks.Count -ne 2 -or $routerCopy.RouterPreferredLink -ne 'elrs') { throw 'Router profile roundtrip lost links.' }
     # Exercise real settings controls without opening a window or saving host configuration.
     $formType = $plugin.GetType('NOMAD.MissionPlanner.NOMADSettingsForm', $true)
-    $config.JoystickSwitchDevice = 'selected-unplugged-usb-hid'
+    $config.Inputs = [Newtonsoft.Json.Linq.JArray]::Parse('[' + $input.Replace('"Device":"test"', '"Device":"selected-unplugged-usb-hid"') + ']')
     $formArguments = New-Object object[] 1
     $formArguments[0] = $config
     $profilesType = $plugin.GetType('NOMAD.MissionPlanner.NOMADProfiles', $true)
@@ -277,13 +289,14 @@ try {
     $form = $formType.GetConstructor([type[]]@($profilesType)).Invoke($formArguments)
     try {
         $privateFlags = [Reflection.BindingFlags]'Instance,NonPublic'
-        $device = $formType.GetField('_cmbSwitchDevice', $privateFlags).GetValue($form)
-        if ($device.SelectedItem -ne 'selected-unplugged-usb-hid') { throw 'Unplugged selected HID name was discarded.' }
-        $device.Items.Clear()
-        $device.Items.Add('(none)') | Out-Null
-        $setDevice = $formType.GetMethod('SetDeviceComboValue', [Reflection.BindingFlags]'Static,NonPublic')
-        $setDevice.Invoke($null, [object[]]@($device, 'selected-unplugged-usb-hid')) | Out-Null
-        if ($device.SelectedItem -ne 'selected-unplugged-usb-hid') { throw 'Device refresh discarded an explicit HID name.' }
+        $editorType = $plugin.GetType('NOMAD.MissionPlanner.InputBindingEditorForm', $true)
+        $editor = $editorType.GetConstructors([Reflection.BindingFlags]'Instance,NonPublic')[0].Invoke([object[]]@($form.Config, [int]0))
+        try {
+            $device = $editorType.GetField('_device', $privateFlags).GetValue($editor)
+            if ($device.SelectedItem.Key -ne 'selected-unplugged-usb-hid') { throw 'Unplugged selected HID name was discarded.' }
+            $editorType.GetMethod('RefreshDevices', $privateFlags).Invoke($editor, @()) | Out-Null
+            if ($device.SelectedItem.Key -ne 'selected-unplugged-usb-hid') { throw 'Device refresh discarded an explicit HID name.' }
+        } finally { $editor.Dispose() }
 
         $routerDraft = Load-Config '{"RouterPreferredLink":"elrs","RouterLinks":[{"Id":"elrs","Name":"Primary","Transport":"UDP","Port":14750,"Priority":100},{"Id":"lte","Name":"Backup","Transport":"UDP","Port":14760,"Priority":50}]}'
         $formType.GetMethod('ApplyRouterDraft', $privateFlags).Invoke($form, [object[]]@($routerDraft)) | Out-Null

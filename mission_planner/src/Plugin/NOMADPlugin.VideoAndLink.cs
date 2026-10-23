@@ -244,9 +244,8 @@ namespace NOMAD.MissionPlanner
                 if (_connectionManager == null)
                 {
                     MessageBox.Show(Host.MainForm,
-                        "Plugin router is not enabled.\n\n" +
-                        "Enable it and configure physical links in NOMAD Settings → Links.",
-                        "Link Manager Not Available"
+                        "Router disabled. Enable it in Settings → Links.",
+                        "Links unavailable"
                     );
                     return;
                 }

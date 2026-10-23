@@ -103,33 +103,56 @@ function Invoke-SetupEditorTests($Plugin, $ConfigType) {
         (Field $form '_bind').Text = '0.0.0.0'; (Field $form '_host').Text = 'bad host'; Reject-Editor $form
     } finally { $form.Dispose() }
 
-    $config = Load-Config ('{"AircraftName":"Draft","JoystickSw1UpAction":"removed:activate","JoystickPositionActuatorId":"toggle",' +
+    $config = Load-Config ('{"AircraftName":"Draft","Inputs":[' +
+        '{"Id":"button","Name":"Button","Device":"missing","Source":"Button","Action":"removed:activate"},' +
+        '{"Id":"axis","Name":"Axis","Device":"missing","Source":"Axis","Action":"toggle:position"}],' +
         '"ActuatorDefinitions":[{"id":"position","name":"Friendly position","behavior":"ServoPosition","channel":1,"safe_pwm":1500,' +
         '"hazardous":false,"confirmation_count":0},{"id":"toggle","name":"Friendly toggle","behavior":"ServoToggle","channel":2,"safe_pwm":1000}]}')
     $profilesType = $Plugin.GetType('NOMAD.MissionPlanner.NOMADProfiles', $true)
     $profiles = $profilesType.GetConstructor([type[]]@($ConfigType)).Invoke([object[]]@($config))
     $formType = $Plugin.GetType('NOMAD.MissionPlanner.NOMADSettingsForm', $true)
+    $inputType = $Plugin.GetType('NOMAD.MissionPlanner.InputBindingEditorForm', $true)
+    function Input-Editor($Config, [int]$Index) {
+        return $inputType.GetConstructors($constructors)[0].Invoke([object[]]@($Config, $Index))
+    }
     $form = $formType.GetConstructor([type[]]@($profilesType)).Invoke([object[]]@($profiles))
     try {
-        $actions = Field $form '_cmbSw1Up'; $position = Field $form '_cmbJoyPositionPayload'
-        Require (@($actions.Items | Where-Object { $_.Key -eq 'position:position' }).Count -eq 0) 'Button choices offered position without a value.'
-        Require (@($actions.Items | Where-Object { $_.Key -eq 'position:safe' }).Count -eq 1) 'Explicit Safe was missing from payload choices.'
-        Require ($actions.SelectedItem.Key -eq 'removed:activate' -and $actions.SelectedItem.Value.StartsWith('Unavailable:')) 'Unresolved saved button action was silently replaced.'
-        Require ($position.SelectedItem.Key -eq 'toggle' -and $position.SelectedItem.Value.StartsWith('Unavailable:') -and
-            @($position.Items | Where-Object { $_.Key -eq 'position' }).Count -eq 1) 'Continuous eligibility or unavailable binding was incorrect.'
+        $form.Config.Inputs.Add([Newtonsoft.Json.Linq.JObject]::Parse('{"Id":"switch","Name":"Switch","Device":"missing","Source":"AxisSwitch3","Action":"toggle:safe"}'))
+        $formType.GetMethod('LoadInputList', $private).Invoke($form, @()) | Out-Null
+        $inputRow = (Field $form '_inputList').Rows[2]
+        Require ($inputRow.Cells[1].Value.Contains('3-position switch') -and $inputRow.Cells[1].Value.Contains('Unavailable: missing') -and
+            $form.Config.Inputs[2]['Device'].Value -eq 'missing' -and $form.Config.Inputs[2]['Source'].Value -eq 'AxisSwitch3') 'Input list lost friendly/missing labels or changed raw source identity.'
+        $form.Config.Inputs.RemoveAt(2)
+        $editor = Input-Editor $form.Config 0
+        try {
+            $actions = Field $editor '_action'
+            Require (@($actions.Items | Where-Object { $_.Key -eq 'position:position' }).Count -eq 0) 'Button offered position without a value.'
+            Require (@($actions.Items | Where-Object { $_.Key -eq 'position:safe' }).Count -eq 1) 'Explicit Safe was missing.'
+            Require ($actions.SelectedItem.Key -eq 'removed:activate' -and $actions.SelectedItem.Value.StartsWith('Unavailable:')) 'Missing saved action was replaced.'
+            $candidate = Candidate $editor
+            Require ($candidate[0]['Action'].Value -eq 'removed:activate') 'Saving changed unresolved input action.'
+        } finally { $editor.Dispose() }
+        $editor = Input-Editor $form.Config 1
+        try {
+            $actions = Field $editor '_action'
+            Require ($actions.SelectedItem.Key -eq 'toggle:position' -and $actions.SelectedItem.Value.StartsWith('Unavailable:') -and
+                @($actions.Items | Where-Object { $_.Key -eq 'position:position' }).Count -eq 1) 'Continuous eligibility/unavailable action was incorrect.'
+            Require (@($actions.Items | Where-Object { $_.Key -eq 'gimbal:pitch' }).Count -eq 1) 'Gimbal movement was missing from continuous inputs.'
+        } finally { $editor.Dispose() }
         $edited = [Newtonsoft.Json.Linq.JArray]$form.Config.ActuatorDefinitions.DeepClone()
         $edited[1]['name'] = [Newtonsoft.Json.Linq.JValue]::new('Renamed friendly toggle')
         $applyArguments = New-Object object[] 1; $applyArguments[0] = $edited
         $formType.GetMethod('ApplyPayloadDefinitions', $private).Invoke($form, $applyArguments) | Out-Null
-        Require (@($actions.Items | Where-Object { $_.Key -eq 'toggle:activate' -and
-            $_.Value.StartsWith('Servo 2 ') -and $_.Value.Contains('Activate') -and
-            $_.Value.Contains('Renamed friendly toggle') }).Count -eq 1) 'Payload edits lost output, action or draft binding names.'
-        $formType.GetMethod('SaveSettings', $private).Invoke($form, @()) | Out-Null
-        Require ($form.Config.JoystickSw1UpAction -eq 'removed:activate' -and $form.Config.JoystickPositionActuatorId -eq 'toggle') 'Saving friendly choices changed exact unresolved IDs.'
-        Require ($config.ActuatorDefinitions[1]['name'].ToString() -eq 'Friendly toggle') 'Unaccepted settings changed the active payload source.'
-        # Removing a bound output must not let Add inherit that old ID and resurrect its inputs.
-        $form.Config.JoystickSw1UpAction = 'position:safe'; $form.Config.JoystickPositionActuatorId = 'position'
-        $formType.GetMethod('LoadSettings', $private).Invoke($form, @()) | Out-Null
+        $form.Config.Inputs[0]['Action'] = [Newtonsoft.Json.Linq.JValue]::new('toggle:activate')
+        $editor = Input-Editor $form.Config 0
+        try {
+            Require ((Field $editor '_action').SelectedItem.Value.Contains('Renamed friendly toggle')) 'Payload edits lost friendly input action names.'
+            $candidate = Candidate $editor
+            Require ($candidate[0]['Id'].Value -eq 'button') 'Editing changed stable input identity.'
+        } finally { $editor.Dispose() }
+        Require ($config.ActuatorDefinitions[1]['name'].Value -eq 'Friendly toggle' -and $config.Inputs[0]['Action'].Value -eq 'removed:activate') 'Canceled draft changed active source.'
+        $form.Config.Inputs[0]['Action'] = [Newtonsoft.Json.Linq.JValue]::new('position:safe')
+        $form.Config.Inputs[1]['Action'] = [Newtonsoft.Json.Linq.JValue]::new('position:position')
         $remaining = [Newtonsoft.Json.Linq.JArray]$form.Config.ActuatorDefinitions.DeepClone(); $remaining.RemoveAt(0)
         $applyArguments[0] = $remaining
         $formType.GetMethod('ApplyPayloadDefinitions', $private).Invoke($form, $applyArguments) | Out-Null
@@ -137,26 +160,29 @@ function Invoke-SetupEditorTests($Plugin, $ConfigType) {
         try {
             (Field $newEditor '_channel').Value = 1
             $added = Candidate $newEditor
-            $newId = $added[1]['id'].ToString()
-            Require ($newId -ne 'position' -and $newId.StartsWith('payload_') -and $newId.Length -eq 40) 'New output reused an old bound identity.'
+            $newId = $added[1]['id'].Value
+            Require ($newId -ne 'position' -and $newId.StartsWith('payload_') -and $newId.Length -eq 40) 'New output reused old identity.'
             $applyArguments[0] = $added
             $formType.GetMethod('ApplyPayloadDefinitions', $private).Invoke($form, $applyArguments) | Out-Null
-            Require ($actions.SelectedItem.Key -eq 'position:safe' -and $actions.SelectedItem.Value.StartsWith('Unavailable:') -and
-                $position.SelectedItem.Key -eq 'position' -and $position.SelectedItem.Value.StartsWith('Unavailable:')) 'Adding an output resurrected a removed discrete or continuous binding.'
+            foreach ($index in 0..1) {
+                $editor = Input-Editor $form.Config $index
+                try { Require ((Field $editor '_action').SelectedItem.Value.StartsWith('Unavailable:')) 'Adding a payload resurrected removed input target.' }
+                finally { $editor.Dispose() }
+            }
         } finally { $newEditor.Dispose() }
-        # A failed top-level save must leave router actions controlled and previous links intact.
-        $form.Config.JoystickSw1DownAction = 'position:safe'
-        $formType.GetMethod('LoadSettings', $private).Invoke($form, @()) | Out-Null
-        $buttons = Field $form '_switchButtons'; $buttons[1].Value = $buttons[0].Value
+        # Failed top-level validation must leave router drafts controlled.
+        $validInputs = $form.Config.Inputs.DeepClone()
+        $duplicate = $form.Config.Inputs[0].DeepClone(); $form.Config.Inputs.Add($duplicate)
         $failed = $false
         try { $formType.GetMethod('SaveSettings', $private).Invoke($form, @()) | Out-Null } catch { $failed = $true }
-        Require $failed 'Fixture did not establish a failed save with duplicate active HID indices.'
+        Require $failed 'Duplicate input did not establish failed save.'
         $linksBefore = [Newtonsoft.Json.JsonConvert]::SerializeObject($form.Config.RouterLinks)
         $formType.GetMethod('EditRouterLink', $private).Invoke($form, [object[]]@([int]-1)) | Out-Null
         Require ((Field $form '_linkError').Text.Length -gt 0 -and
-            [Newtonsoft.Json.JsonConvert]::SerializeObject($form.Config.RouterLinks) -ceq $linksBefore) 'Router action after failed Save escaped controlled validation or changed links.'
+            [Newtonsoft.Json.JsonConvert]::SerializeObject($form.Config.RouterLinks) -ceq $linksBefore) 'Router action after failed Save escaped validation or changed links.'
+        $form.Config.Inputs = $validInputs
         $formType.GetMethod('LoadSettings', $private).Invoke($form, @()) | Out-Null
-        Require ((Field $form '_linkError').Text -eq '') 'Reloading a profile retained an old link validation error.'
+        Require ((Field $form '_linkError').Text -eq '') 'Reload retained old link validation error.'
     } finally { $form.Dispose() }
-    Write-Host 'Payload/link editors passed all behaviors/transports, inactive-field roundtrips, interlocks, faults and friendly draft bindings.'
+    Write-Host 'Payload/link/input editors passed current source choices, interlocks, unavailable bindings and independent drafts.'
 }

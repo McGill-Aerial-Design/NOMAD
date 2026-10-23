@@ -74,7 +74,12 @@ installing the plugin or launching MP. It checks native capability discovery, re
 fresh heartbeat naming and target retirement; it does not qualify aircraft termination or touchdown.
 Gimbal includes native target/stale-input/fault tests. Payload covers native
 mapping/ACK faults, trim matching, pending Safe draining, confirmations, HID edges
-and controller repeat lifetime. Router covers parser, dedup/failover, one MP egress,
+and controller repeat lifetime. Named input checks cover button/pair and two/three-position
+axis decoding, fresh centered gimbal/position input, stable binding authorization,
+neutral-separated confirmations across list reorder, conflicting input Safe and
+retired asynchronous batches. Listen checks use synthetic snapshots for fresh
+button/axis detection, held/noisy baseline rejection, timeout, loss and connection
+opening; they do not acquire an operator device. Router covers parser, dedup/failover, one MP egress,
 parameter pinning and ownership disposal. Geometry/video/profile tests retain
 invalid-input and lifecycle fault cases.
 
@@ -87,25 +92,28 @@ process. No computer-use automation or desktop capture is needed:
 powershell -STA -NoProfile -ExecutionPolicy Bypass -File scripts/docs/capture_screenshots.ps1
 ```
 
-The script writes five PNGs to `docs/images/` and capture metadata/DLL/image checksums under
+The script writes the Dashboard, Fence, settings, input editor and Video PNGs to `docs/images/`
+and capture metadata/DLL/image checksums under
 ignored `build/screenshots/`. It uses explicit example profiles, reserved `.invalid`
 URLs and an unstarted notification service. The dashboard has no video input;
 settings are drafts and the router remains stopped. It neither starts the plugin
 nor opens an aircraft/camera connection or saves operator settings. The settings
 constructor enumerates HID device names but does not acquire or start them.
-Captures are WinForms control renders, not a connected Mission Planner session.
+Captures use one shared offscreen WinForms render host that cannot activate; each render
+checks the foreground window is unchanged. Only captured files enter the image manifest.
+These are control renders, not a connected Mission Planner session.
 Review them visually and retain those distinctions in captions.
 
 To render the setup window without invoking installation:
 
 ```powershell
-powershell -STA -NoProfile -File scripts/docs/capture_installer_screenshot.ps1 -InstallerPath build/installer/NOMAD-0.3.1-Setup.exe
+powershell -STA -NoProfile -File scripts/docs/capture_installer_screenshot.ps1 -InstallerPath build/installer/NOMAD-0.4.0-Setup.exe
 ```
 
 ## Manual native simulator acceptance
 
 With Mission Planner closed, an explicitly installed reviewed DLL, and the active
-saved profile's router, HID, switch bindings, arrow inputs and configured automatic
+saved profile's router, enabled input bindings, arrow inputs and configured automatic
 HUD video disabled, run:
 
 ```powershell
@@ -168,7 +176,7 @@ pixi run precommit
 ```
 
 Python tests retain document links and source requirement provenance. CI runs the
-actual Windows product gates and uploads only the DLL; Linux runs Python/docs checks.
+actual Windows product gates and uploads the DLL and offline setup; Linux runs Python/docs checks.
 The separate [firmware workflow](../.github/workflows/firmware.yml) runs native
 qualification and prepares source-bound CubeOrangePlus packages. Its focused
 packager integrity tests are included in `test-python`; those unit tests do not

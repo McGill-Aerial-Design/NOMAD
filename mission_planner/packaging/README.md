@@ -5,8 +5,6 @@ into the reviewed Mission Planner host. A standalone DLL and ZIP remain availabl
 
 ![NOMAD Windows setup with the detected Mission Planner folder](../../docs/images/windows-installer.png)
 
-*Actual setup controls rendered by command. Installation was not invoked by this capture.*
-
 ## Build the artifact
 
 From the repository root:

@@ -47,6 +47,9 @@ Only the current profile collection schema is accepted. Unknown or invalid field
 are rejected; loading never converts or rewrites the file. If the primary file is
 absent, its current-format `.bak` can be loaded. With neither file present, NOMAD
 starts with a fresh profile.
+To start fresh after a validation error, close Mission Planner and move both the
+named file and its `.bak` to a private backup folder, then reopen the host. Setup
+preserves these files; it does not convert or repair invalid profiles.
 Explicit Save replaces atomically with a `.bak`; cancelled/failed saves preserve the
 previous saved collection. Keep profiles private: connection URLs can contain sensitive
 details even though runtime credentials are no longer stored/exported.
@@ -60,15 +63,36 @@ Open settings from the NOMAD menu or sidebar. The persistent Editing label ident
 the draft aircraft; Save activates it. Profile actions contains reset, load and export.
 Links, Video, Payloads and Inputs belong to that draft; Preferences contains alerts
 and startup diagnostics.
-Payloads and Links provide a list with Add, Edit and Remove. Their dialogs validate
+Payloads, Links and Inputs provide a list with Add, Edit and Remove. Their dialogs validate
 the complete draft before accepting changes; Cancel leaves it untouched. Friendly
 name changes preserve stable IDs and saved input bindings. Payload dialogs show
 calibration, bounded timings and confirmation/neutral interlocks for the selected
 behavior. Link dialogs distinguish UDP local listening ports from TCP remote server
 ports; COM devices are entered explicitly and are never scanned or opened by setup.
-Inputs pairs each of six switch actions with its physical button index. Actions show
-payload names while retaining their IDs. Unavailable saved bindings stay visible for
-correction; continuous position only lists eligible nonhazardous position payloads.
+Inputs adds named controls bound to an explicit input device. Choose a button,
+paired buttons, a continuous axis, or a two/three-position axis switch, then select
+payload actions. Continuous axes also support gimbal pitch/roll movement; digital
+gimbal controls are not offered. Actions show payload names and retain stable IDs.
+Unavailable saved bindings remain visible for correction. Continuous position only
+lists nonhazardous position payloads without confirmation requirements.
+
+Disconnect the aircraft before Listen, select one device, then move a button,
+toggle or axis. Listen detects both button edges and axis movement. For an axis,
+choose continuous or two/three-position interpretation; for paired buttons, listen
+for each endpoint. Listen stops on timeout, device loss, cancellation or connection
+opening. It sends no commands and does not change Mission Planner's native joystick
+settings. Opening Settings pauses NOMAD HID and arrow inputs and waits for admitted
+Safe work; Cancel restores the same live profile with fresh neutral/center required.
+
+![Named control editor with a three-position switch and payload actions](images/input-editor.png)
+
+
+A two-position axis switch uses one endpoint as inactive neutral and the other as
+its action; Invert swaps them. Returning inactive does not turn a latched payload
+off. Bind Safe explicitly where needed. Three-position switches require a sampled
+center between opposite endpoints. Simultaneous opposing buttons request Safe for
+both mapped payloads. Button labels start at 1; saved/host indices start at 0.
+`Inputs` is the current configuration schema; there is no legacy input conversion.
 
 Use Mission Planner for connection, arm/disarm, flight modes, takeoff, LAND, setup
 and missions. Disconnect Mission Planner before applying a different aircraft profile
@@ -115,6 +139,9 @@ Renaming the active definition preserves its selection; removing it chooses the
 first remaining input. Remove the final input to leave video unconfigured. Profiles use
 `VideoInputs` and `SelectedVideoInputName`; imports must use that same current schema.
 
+![Video page with active input selection beside playback controls](images/video-page.png)
+
+
 RTSP negotiates the video codec supported by the installed GStreamer decoder. Select
 TCP or UDP transport and a 0..5000 ms jitter buffer. UDP source URLs such as
 `udp://@:5600` listen for RTP/H.264 on the explicit port; RTSP settings do not affect
@@ -139,7 +166,7 @@ Aircraft-side telemetry endpoints and video/network services are commissioned se
 
 ## Gimbal, payload and input
 
-Select explicit HID devices; missing devices are never replaced by unrelated ones.
+Select explicit HID devices; missing or ambiguously named devices are never substituted.
 After reconnect/input loss, center analog controls and release buttons before fresh
 activation. Payload hazardous actions require their configured distinct confirmations
 and neutral edges. Safe/Stop remains explicit. Review the chosen channel, PWM bounds,

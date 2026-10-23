@@ -34,24 +34,17 @@ try {
         if (!$rejected) { throw 'Unsafe preflight configuration was accepted.' }
     }
     Assert-NativeSitlProfileSafe (New-SafeConfig)
-    foreach ($name in @('RouterClientEnabled', 'JoystickGimbalEnabled', 'JoystickPositionEnabled',
+    foreach ($name in @('RouterClientEnabled',
         'GimbalArrowKeysEnabled', 'DebugMode')) {
         $config = New-SafeConfig
         $config.$name = $true
         Assert-Rejected $config
     }
-    foreach ($name in @('JoystickSw1UpAction', 'JoystickSw1DownAction', 'JoystickSw2UpAction',
-        'JoystickSw2DownAction', 'JoystickSw3UpAction', 'JoystickSw3DownAction')) {
-        $config = New-SafeConfig
-        $config.$name = 'synthetic:activate'
-        Assert-Rejected $config
-        $config.$name = 'none'
-        Assert-Rejected $config
-        $config.$name = ' '
-        Assert-NativeSitlProfileSafe $config
-        $config.$name = 'None'
-        Assert-NativeSitlProfileSafe $config
-    }
+    $config = New-SafeConfig
+    $config.Inputs = [Newtonsoft.Json.Linq.JArray]::Parse('[{"Id":"synthetic","Name":"Synthetic","Device":"test","Source":"Button","Action":"payload:activate","Enabled":true}]')
+    Assert-Rejected $config
+    $config.Inputs[0]['Enabled'] = [Newtonsoft.Json.Linq.JValue]::new($false)
+    Assert-NativeSitlProfileSafe $config
     $config = New-SafeConfig
     $inputProfile = [Activator]::CreateInstance($assembly.GetType('NOMAD.MissionPlanner.VideoInputProfile', $true))
     $inputProfile.Name = 'Synthetic'
@@ -80,7 +73,7 @@ try {
         if ([IO.File]::ReadAllText($paths[$index]) -cne $json) { throw 'Preflight loading rewrote a fixture.' }
         Remove-Item -LiteralPath $paths[$index]
     }
-    Write-Host 'Native preflight passed: disabled settings, every startup owner, six bindings and two profile candidates.'
+    Write-Host 'Native preflight passed: disabled settings, every startup owner, named input bindings and two profile candidates.'
     Write-Host 'No plugin Init/Start, child process or operator file writes were performed.'
 } finally {
     [AppDomain]::CurrentDomain.remove_AssemblyResolve($resolver)

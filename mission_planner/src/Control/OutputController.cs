@@ -172,7 +172,7 @@ namespace NOMAD.MissionPlanner
                 catch (Exception error)
                 {
                     return Result(GimbalRequestOutcome.Unknown,
-                        "Gimbal outcome is unknown; do not retry blindly. " + error.Message);
+                        "Gimbal not confirmed. Check before retrying. " + error.Message);
                 }
             }
             try
@@ -204,11 +204,11 @@ namespace NOMAD.MissionPlanner
                     }
                 }
                 return Result(GimbalRequestOutcome.Submitted,
-                    "Gimbal command submitted to Mission Planner. Vehicle acceptance and physical state are unverified.");
+                    "Command sent; acceptance not confirmed.");
             }
             catch (Exception error)
             {
-                return Result(GimbalRequestOutcome.Unknown, "Gimbal outcome is unknown; do not retry blindly. " + error.Message);
+                return Result(GimbalRequestOutcome.Unknown, "Gimbal not confirmed. Check before retrying. " + error.Message);
             }
         }
         private static bool Finite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);

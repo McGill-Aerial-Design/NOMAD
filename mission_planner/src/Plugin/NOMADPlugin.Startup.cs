@@ -124,15 +124,8 @@ namespace NOMAD.MissionPlanner
                 aboutItem.Click += (s, e) => MessageBox.Show(Host.MainForm,
                     $"NOMAD Plugin v{Version}\n" +
                     $"McGill Aerial Design\n\n" +
-                    $"Click NOMAD for the NOMAD screen\n" +
-                    $"(dashboard, native fence setup, video,\n" +
-                    $"and plugin router status).\n\n" +
-                    $"Native Plan fence draft staging,\n" +
-                    $"plugin-wide alerts with toast overlays, plugin router\n" +
-                    $"management and status, and configurable payload controls.\n\n" +
                     $"Video: {_config.SelectedVideoInput?.Name ?? "Unconfigured"}\n" +
-                    $"Multi-Link: {(_config.RouterClientEnabled ? "Enabled" : "Disabled")}\n" +
-                    $"Log: %LOCALAPPDATA%\\Mission Planner\\plugins\\NOMAD\\nomad.log",
+                    $"Router: {(_config.RouterClientEnabled ? "Enabled" : "Disabled")}",
                     "About NOMAD"
                 );
                 nomadMenu.DropDownItems.Add(aboutItem);
