@@ -43,7 +43,7 @@ internal static partial class VideoLifetimeTests
             Run("already cancelled plugin token", AlreadyCancelledShutdown);
             Run("borrowed native frame lifetime", BorrowedFrameLifetime);
             Run("dashboard preview reopen and shutdown", DashboardShutdown);
-            Run("existing view API and UDP URL compatibility", VideoCompatibility);
+            Run("UDP input pipeline", VideoUdpInput);
             Run("video URL port and property regressions", VideoAddressRegressions);
             Run("UDP URL short forms, hosts and boundaries", UdpVideoAddresses);
             Run("RTSP property containment and full HUD frame", RtspVideoAddresses);

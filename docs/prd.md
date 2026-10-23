@@ -64,28 +64,33 @@ Labels do not establish live aircraft identity, hardware support or safe calibra
 - Begin with traffic advisories and explicit action authorization. Revisit
   automatic traffic/payload behavior only after reviewed evidence. CONOPS allows
   manual flight, requires actual traffic separation, and separately rewards autonomy.
-- Current direction is Mission Planner only. MAVSDK was an implementation choice,
-  not an organizer requirement. Reuse native host flight APIs rather than building
-  a separate command service, CLI or general-purpose frontend framework.
+- Use Mission Planner as the operator application and its native flight APIs.
 - Keep custom aircraft profiles, payload/gimbal/HID, video and required link behavior.
   Native software results and physical completion remain separate.
 
 These are user product directions or explicitly tentative hardware choices, not
 additional organizer rules. Copter evidence cannot establish Plane/QuadPlane safety.
 
-## C2 and termination direction — 2026-09-27
+## C2 and termination direction
 
-D09 is substantially resolved at the topology/interface level:
+D09 uses physical RC as primary control. RC loss, or loss of the dedicated
+termination input, must trigger the onboard response in every flight mode.
+Mission Planner/GCS loss alone must not divert or terminate an aircraft with
+healthy physical RC and FPV. The [native implementation](native-termination.md)
+provides the separate controller policy; aircraft acceptance remains required.
 
 - ELRS is primary C2, carrying normal RC pilot controls and MAVLink telemetry/data.
   The conventional transmitter is the primary manual interface. The owner reports
   Cube Orange Plus, ELRS arming on RC input CH5 and flight modes on CH6 for one
   aircraft. These describe that aircraft's native MP/ArduPilot setup, not NOMAD
-  profile settings or defaults for other aircraft. Exact frame, calibration and
-  FC readbacks remain open.
+  profile settings or defaults for other aircraft. The QuadPlane is a tricopter
+  tiltrotor with its front two motors tilting forward. Calibration and actual FC
+  readbacks remain open.
 - LTE/MAVLink is secondary/redundant C2 and data. The intended alternate pilot
   path is ground-station joystick → Mission Planner/NOMAD → LTE → aircraft.
   This is not an independent RC radio or a qualified takeover implementation.
+  The current action-44 configuration ignores flight RC overrides; the alternate
+  joystick flight path needs a separately approved design.
 - FPV uses a separate radio and provides awareness, not command authority.
 - The Arduino USB HID ground controller provides the joystick and a physical
   red termination button. Its termination request should attempt every approved
@@ -101,14 +106,13 @@ neither an ACK nor a mode dispatch proves termination. Once valid termination
 is accepted it is latched for the current flight: autonomous/manual motion,
 stale requests and reconnect must not override it. The reviewed aircraft
 mechanism must define an explicit safe reset; reconnection is not that reset.
-Do not select generic `MAV_CMD_DO_FLIGHTTERMINATION` or in-air disarm as a
+Do not select stock `MAV_CMD_DO_FLIGHTTERMINATION` or in-air disarm as a
 substitute for the required controlled rotary descent.
 
-Source priority, takeover signal/mode, cancellation and explicit handback,
-complete-C2-loss detection, exact termination mapping/mechanism and common-mode
-failures remain D09 engineering work. LTE availability alone does not prove
-valid pilot input or surviving termination authority. Safety/organizer acceptance
-of the surviving LTE path remains required. Q02 stays open: neither fixed-wing
+Transmitter mixing, USB ground-controller integration, takeover signal/mode,
+explicit handback and physical/common-mode fault qualification remain D09 work.
+LTE availability alone does not prove valid pilot input or surviving termination
+authority. Safety/organizer acceptance remains required. Q02 stays open: neither fixed-wing
 to VTOL termination descent nor fixed-wing surface behavior throughout transition
 is approved by this direction. No recovered source may unexpectedly reclaim control.
 
@@ -166,20 +170,19 @@ but cannot authorize autonomous actions, infrastructure changes, or release acce
 
 | ID | Decision | Recommendation and consequence | Needed before |
 |---|---|---|---|
-| D01 | Exact VTOL/quad firmware, hardware and Task 2 core/Jetson placement | Task 1 ground GPU and two aircraft types now directed; exact integrations remain TBD | G3/G7 |
+| D01 | Exact VTOL/quad firmware, hardware and companion/perception placement | Task 1 ground GPU and two aircraft types now directed; exact integrations remain TBD | G3/G7 |
 | D02 | Product placement and groundstation | Resolved by current direction: Mission Planner plugin on Windows, host-owned connection and ordinary flight controls; optional companion work remains separate | G2/G3 |
-| D03 | Transport choice | Resolved by current direction: native Mission Planner APIs; former MAVSDK implementation archived. MAVSDK is not an organizer mandate | G-M/G8 |
+| D03 | Transport choice | Native Mission Planner APIs and its active aircraft connection | G-M/G8 |
 | D04 | Tracker/tagger/sample hardware and assessment interaction | Select mechanics and feedback before defining autonomous payload behavior; current generic outputs are insufficient | G6 |
 | D05 | Final traffic, approach and payload autonomy level | Retain advisories with demonstrated operator avoidance and explicit authorization; choose Task 2 bonus targets after Q06 | G4/G6 |
 | D06 | Is VIO for mapping/perception or required flight navigation? | GNSS/ArduPilot navigation baseline; external-navigation fusion only after end-to-end timing evidence | G3/G7 |
 | D07 | Official server wire contract and traffic semantics (Q04) | Transcribe/version the official portal contract first; model confirmed fields/cylinders in isolated fixtures; no invented events | G4 |
 | D08 | Accuracy, latency, stale-data, reserve and operating-environment budgets | Agree numeric acceptance thresholds before collecting gate evidence | G3–G7 |
-| D09 | C2, manual authority and termination | Topology/interfaces directed on 2026-09-27: primary ELRS, redundant LTE/MAVLink, separate FPV, RC and ground joystick, red button and independent transmitter chord. Arbitration, handback, exact RC/ArduPilot mapping, automatic loss response, common-mode analysis and qualification remain open | G2/G3/G7 |
+| D09 | C2, manual authority and termination | Physical RC/termination-input loss requires onboard termination; GCS loss alone does not. Native controller and ground entry are implemented; transmitter mix, USB ground-controller integration, takeover/handback and physical/common-mode qualification remain open | G2/G3/G7 |
 | D10 | Named engineering, payload, perception, safety and test owners; capacity and dates | Assign accountable people to gates before promising a schedule | G1 |
 | D11 | Evidence storage, retention and team/server credentials | Access-controlled artifacts; sanitized manifests in repository; no private datasets or secrets committed | G4/G8 |
 
 D02/D03 now follow the Mission Planner-only decision. D01/D04/D09 hardware details,
-D05 autonomy choices and Q02-Q09 remain open. Stable IDs retain their source history;
-retiring a backend does not resolve organizer acceptance or aircraft qualification.
+D05 autonomy choices and Q02-Q09 remain open. Organizer acceptance and aircraft qualification remain separate from software implementation.
 Current evidence boundaries are in [qualification](qualification.md). Detailed plans
 and handoffs belong in ignored local notes.

@@ -109,8 +109,8 @@ function Invoke-HealthObservationTests {
     $view = $null
     try {
         $view = $dashboardType.GetConstructor([type[]]@($configType,
-            $Plugin.GetType('NOMAD.MissionPlanner.MAVLinkConnectionManager'))).Invoke(
-                [object[]]@([Activator]::CreateInstance($configType), $null))
+            $Plugin.GetType('NOMAD.MissionPlanner.MAVLinkConnectionManager'), [Threading.CancellationToken])).Invoke(
+                [object[]]@([Activator]::CreateInstance($configType), $null, [Threading.CancellationToken]::None))
         $dashboardType.GetMethod('UpdateBatteryCard', $private).Invoke($view, [object[]]@($null)) | Out-Null
         $label = $dashboardType.GetField('_lblBattery', $private).GetValue($view)
         $neutral = $Plugin.GetType('NOMAD.MissionPlanner.NOMADTheme').GetField('TEXT_SECONDARY').GetValue($null)

@@ -19,7 +19,6 @@ __pycache__/
 build/
 build-core/
 !scripts/build/
-!scripts/build/*.sh
 
 # MkDocs site output (pixi run docs-build)
 /site/
@@ -29,8 +28,6 @@ downloads/
 eggs/
 .eggs/
 lib/
-!scripts/lib/
-!scripts/lib/*.sh
 lib64/
 parts/
 sdist/
@@ -136,7 +133,6 @@ mission_planner/src/obj/
 mission_planner/plugins-dist/*.dll
 mission_planner/plugins-dist/*.pdb
 mission_planner/packaging/libvlc-windows/
-!mission_planner/packaging/libvlc-windows/README.md
 
 # User config (contains Tailscale IPs, etc.)
 mission_planner/nomad_config.json
@@ -147,7 +143,6 @@ mission_planner/nomad_config.json
 
 # Mission logs (large JSON files)
 data/mission_logs/*.json
-!data/mission_logs/README.md
 
 # Video recordings
 recordings/
@@ -169,11 +164,9 @@ recordings/
 !.env.example
 !*.env.example
 
-# NOMAD runtime config (holds real secrets + host paths). Commit only the
-# scrubbed template config/nomad.env.example.
+# Private local environment configuration and backups.
 config/nomad.env
-!config/nomad.env.example
-# Timestamped backups written by the profile loader (e.g. nomad.env.bak.2026...)
+# Preserve ignored local backup files.
 config/nomad.env.bak.*
 config/*.env.bak.*
 
@@ -264,12 +257,6 @@ nul
 # Logs
 *.log
 logs/
-!mission_planner/src/Logs/
-!mission_planner/src/Logs/*.cs
-!mission_planner/tests/logs/
-!mission_planner/tests/logs/*.cs
-!mission_planner/tests/logs/fixtures/
-!mission_planner/tests/logs/fixtures/*.log
 
 # Test outputs
 test_output/
@@ -281,7 +268,6 @@ test_output/
 
 # MCP Server Data (AI assistant memory/cache)
 .mcp/
-!.mcp/README.md
 
 # Local development overrides
 local_config.json
@@ -300,7 +286,6 @@ dev_settings.json
 models/*.pt
 models/*.onnx
 models/*.tflite
-!models/README.md
 
 # Jetson-specific
 /opt/nomad/

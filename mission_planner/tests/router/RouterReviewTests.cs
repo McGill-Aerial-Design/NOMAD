@@ -16,7 +16,7 @@ internal static partial class GroundRouterTests
     {
         var missingLinks = MultiConfig(30900);
         missingLinks.Links = null;
-        CheckConfigurationRejected(missingLinks, "Router Links are required");
+        CheckConfigurationRejected(missingLinks, "At least one enabled router link is required.");
 
         var missingConsumers = MultiConfig(30900);
         missingConsumers.Consumers = null;

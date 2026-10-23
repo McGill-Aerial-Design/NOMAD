@@ -4,7 +4,7 @@ The product is a C#/.NET Framework 4.8 DLL for the reviewed Mission Planner host
 in `scripts/release/mission-planner-target.json`. Windows builds require Visual
 Studio/MSBuild, its Roslyn compiler and the .NET Framework targeting pack, plus
 that installed host's reference assemblies. Python/Pixi serves checks/docs only.
-No C++ toolchain, MAVSDK, Docker, backend service or independent CLI is needed.
+The optional aircraft firmware has separate [native build/check instructions](native-termination.md).
 
 ## Build without installation
 
@@ -26,7 +26,7 @@ Run the focused check first, then relevant gates once for the final coherent dif
 The host-dependent gates require the actual reviewed MP assemblies. UI checks use
 isolated Windows/STA fixtures; router checks bind loopback test sockets. Profile
 fixtures use temporary paths and must not touch real operator files.
-Video checks cover named-input migration and strict nested configuration, independent
+Video checks cover named-input round trips and strict nested configuration, independent
 aircraft/settings drafts, both receiver pipeline paths, source replacement and stale
 frame disposal. They use fake pipelines and do not open operator camera feeds.
 
@@ -45,15 +45,37 @@ pixi run test-ground-router-logic
 pixi run test-plugin-gimbal-ui
 pixi run test-plugin-router-ui
 pixi run test-plugin-video
+pixi run test-plugin-termination
 ```
 
 Configuration validation includes the aircraft-profile suite; use
 `pixi run test-aircraft-profiles` alone for a focused profile check.
+Termination uses the built DLL and actual MP assemblies with an owned synthetic loopback peer, without
+installing the plugin or launching MP. It checks native capability discovery, readbacks, command ACKs,
+fresh heartbeat naming and target retirement; it does not qualify aircraft termination or touchdown.
 Gimbal includes native target/stale-input/fault tests. Payload covers native
 mapping/ACK faults, trim matching, pending Safe draining, confirmations, HID edges
 and controller repeat lifetime. Router covers parser, dedup/failover, one MP egress,
 parameter pinning and ownership disposal. Geometry/video/profile tests retain
-concrete failure cases rather than obsolete service/IPC assertions.
+invalid-input and lifecycle fault cases.
+
+## Documentation screenshots
+
+Build the plugin, then render its actual controls from a fresh Windows PowerShell
+process. No computer-use automation or desktop capture is needed:
+
+```powershell
+powershell -STA -NoProfile -ExecutionPolicy Bypass -File scripts/docs/capture_screenshots.ps1
+```
+
+The script writes five PNGs to `docs/images/` and capture metadata/DLL/image checksums under
+ignored `build/screenshots/`. It uses explicit example profiles, reserved `.invalid`
+URLs and an unstarted notification service. The dashboard has no video input;
+settings are drafts and the router remains stopped. It neither starts the plugin
+nor opens an aircraft/camera connection or saves operator settings. The settings
+constructor enumerates HID device names but does not acquire or start them.
+Captures are WinForms control renders, not a connected Mission Planner session.
+Review them visually and retain those distinctions in captions.
 
 ## Manual native simulator acceptance
 
@@ -89,10 +111,9 @@ its own simulator/host, uses loopback TCP, and applies synthetic payload setting
 in memory. Before either process starts, it strictly loads the selected profile through the
 exact installed DLL and rejects those startup owners plus debug popups. No plugin
 Init or Start runs during that preflight. The separate native-preflight gate tests
-the actual guard with synthetic data and all four primary/backup loading candidates.
+the actual guard with synthetic data and both current collection loading candidates.
 Immediately before MP launch, it rechecks the DLL and named preservation set:
-`Documents/Mission Planner/config.xml`, `nomad_aircraft_profiles.json` and its `.bak`,
-`nomad_config.json` and its `.bak`, and the retired `NOMAD/geofence_config.json`
+`Documents/Mission Planner/config.xml`, and `nomad_aircraft_profiles.json` and its `.bak`
 under the MP local application-data plugin directory. It checks that same set after exit;
 this does not claim all host/cache/log state is unchanged.
 It does not open USB/serial devices, arm, or write real controller parameters.
@@ -123,12 +144,15 @@ pixi run precommit
 
 Python tests retain document links and source requirement provenance. CI runs the
 actual Windows product gates and uploads only the DLL; Linux runs Python/docs checks.
-Old C++/MAVSDK/SITL/release jobs are removed rather than reporting fabricated success.
-Repository protection is external state: obsolete required contexts must be aligned
-under separate authorization before merge; source edits do not change protection.
+The separate [firmware workflow](../.github/workflows/firmware.yml) runs native
+qualification and prepares source-bound CubeOrangePlus packages. Its focused
+packager integrity tests are included in `test-python`; those unit tests do not
+substitute for the full [native build/release procedure](native-termination.md#build-and-release-automation).
+Repository protection is external state; required checks and reviews must be
+verified on the actual pull request before merge.
 
 Preserve ignored builds, operator settings and other worktrees. Plans, handoffs and
 run histories belong in ignored `local/`. Use [qualification](qualification.md) to
 separate software checks from hardware/competition acceptance; no build/test deploys.
 
-Native Fence draft tests skip host constructors and use real MP editor methods and grid types; only the selected-port global and output generation are isolated. They assert zero transport writes and cache preservation. Retired `geofence_config.json` and `boundary_presets/` files are neither loaded nor modified.
+Native Fence draft tests skip host constructors and use real MP editor methods and grid types; only the selected-port global and output generation are isolated. They assert zero transport writes and cache preservation.

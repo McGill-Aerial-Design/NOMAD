@@ -30,9 +30,6 @@ namespace NOMAD.MissionPlanner
         public IPEndPoint LocalEndpoint => new IPEndPoint(IPAddress.Loopback, _consumers[0].Config.RouterPort);
         public IReadOnlyList<LinkSourceStats> Links
         { get { lock (_gate) { return _links.Select(l => CopyStats(l.Stats)).ToList(); } } }
-        // Compatibility projections; all routing operates on _links.
-        public LinkSourceStats Lte => GetStats(LinkType.LTE);
-        public LinkSourceStats Radio => GetStats(LinkType.RadioMaster);
         public IReadOnlyCollection<FailoverEventArgs> FailoverLog
         { get { lock (_gate) { return _failovers.ToArray(); } } }
         public event EventHandler<string> ActiveLinkChanged;
@@ -46,7 +43,7 @@ namespace NOMAD.MissionPlanner
         {
             _clock = clock;
             _cfg = config ?? throw new ArgumentNullException(nameof(config));
-            var links = TranslateLinks(config);
+            var links = config.Links;
             var consumers = config.Consumers;
             Validate(config, links, consumers);
             var localPorts = new HashSet<int>(links.Where(l => l.Enabled && l.Transport == "UDP")
@@ -56,9 +53,6 @@ namespace NOMAD.MissionPlanner
             _consumers = consumers.Select(c => new LocalConsumer(c.Snapshot(), _clock)).ToList();
         }
 
-        private LinkSourceStats GetStats(string id)
-        { lock (_gate) { return CopyStats(_links.FirstOrDefault(l => l.Config.Id == id)?.Stats ??
-            new LinkSourceStats { Type = id }); } }
         private static LinkSourceStats CopyStats(LinkSourceStats stats) => stats.Snapshot();
 
         public void Start()

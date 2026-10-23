@@ -312,19 +312,12 @@ namespace NOMAD.MissionPlanner
             EnqueueSpeech(new SpeechItem { Text = text, Component = component });
         }
 
-        // Back-compat overload for existing 2-arg callers: Speak(text, ignoreRateLimit: true)
-        public static void Speak(string text, bool ignoreRateLimit) =>
-            Speak(text, component: null, ignoreRateLimit: ignoreRateLimit);
-
         /// <summary>Convenience: play the beep pattern and speak a description.</summary>
         public static void PlayAndSpeak(AlertKind kind, string spokenText, string component = null, bool ignoreRateLimit = false)
         {
             Play(kind, ignoreRateLimit);
             Speak(spokenText, component, ignoreRateLimit);
         }
-
-        public static void PlayAndSpeak(AlertKind kind, string spokenText, bool ignoreRateLimit) =>
-            PlayAndSpeak(kind, spokenText, component: null, ignoreRateLimit: ignoreRateLimit);
 
         private static void EnqueueSpeech(SpeechItem item)
         {

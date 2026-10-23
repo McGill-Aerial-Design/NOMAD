@@ -42,11 +42,10 @@ namespace NOMAD.MissionPlanner
         public static NOMADProfiles Load()
         {
             var path = Path.Combine(DirectoryPath, "nomad_aircraft_profiles.json");
-            var legacy = Path.Combine(DirectoryPath, "nomad_config.json");
-            return LoadFromPaths(path, path + ".bak", legacy, legacy + ".bak");
+            return LoadFromPaths(path, path + ".bak");
         }
 
-        internal static NOMADProfiles LoadFromPaths(string primary, string backup, string legacy, string legacyBackup)
+        internal static NOMADProfiles LoadFromPaths(string primary, string backup)
         {
             NOMADProfiles profiles;
             if (File.Exists(primary))
@@ -59,7 +58,7 @@ namespace NOMAD.MissionPlanner
             }
             else
             {
-                profiles = new NOMADProfiles(NOMADConfig.LoadFromPaths(legacy, legacyBackup));
+                profiles = new NOMADProfiles(new NOMADConfig());
             }
             profiles._path = primary;
             return profiles;

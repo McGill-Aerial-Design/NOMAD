@@ -77,7 +77,7 @@ internal static partial class GroundRouterTests
     {
         return new GroundLinkRouter.RouterConfig
         {
-            PreferredLink = "cell", HeartbeatTimeoutSec = .6, StatsTickMs = 20,
+            PreferredLink = "cell", PacketTimeoutSec = .6, StatsTickMs = 20,
             FailoverCooldownSec = .1, PreferredLinkReconnectDelaySec = 1,
             Links = new List<LinkConfig>
             {
@@ -110,7 +110,7 @@ internal static partial class GroundRouterTests
         rejects(c => c.Links[1].Port = c.Links[0].Port);
         rejects(c => c.Links[0].Transport = "BOGUS");
         rejects(c => c.Links[0].Port = 65536);
-        rejects(c => c.HeartbeatTimeoutSec = double.NaN);
+        rejects(c => c.PacketTimeoutSec = double.NaN);
         rejects(c => c.PreferredLink = "disabled");
         rejects(c => c.Consumers[0].RouterPort = c.Links[0].Port);
         rejects(c => c.Consumers[0].ClientPort = c.Consumers[1].RouterPort);
@@ -281,8 +281,8 @@ internal static partial class GroundRouterTests
             }
         }
 
-        Check(new ConsumerConfig { Id = "legacy", RouterPort = port }.AllowOutbound,
-            "omitting AllowOutbound preserves the existing bidirectional default");
+        Check(new ConsumerConfig { Id = "mission_planner", RouterPort = port }.AllowOutbound,
+            "Mission Planner consumers default to bidirectional routing");
     }
 
     private static bool HasLearnedConsumerEndpoint(GroundLinkRouter router, string consumerId)

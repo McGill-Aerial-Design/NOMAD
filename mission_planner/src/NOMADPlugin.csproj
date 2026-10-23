@@ -4,7 +4,7 @@
   Target: Mission Planner 1.3.x / .NET Framework 4.8
 
   Generate source identity with scripts/build/build_plugin_windows.ps1.
-  Use the verified versioned packaging installer for deployment; see
+  Use the reviewed manual installation procedure; see
   mission_planner/packaging/README.md. Direct IDE builds are development inputs.
 -->
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">

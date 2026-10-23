@@ -40,10 +40,10 @@ internal static partial class GroundRouterTests
             DrainMarkers(bed.Mp, got);
             CheckEq(got.Count, N, "MP received frame count");
             CheckEq(got.Distinct().Count(), N, "unique marker count");
-            CheckEq(bed.Router.Lte.FramesReceived, N, "router LTE FramesReceived");
-            CheckEq(bed.Router.Lte.FramesForwarded, N, "router LTE FramesForwarded");
-            CheckEq(bed.Router.Lte.FramesDuplicate, 0, "no duplicates recorded");
-            Check(bed.Router.ActiveLink == LinkType.LTE, "active link stays LTE");
+            CheckEq(bed.Router.Links.Single(link => link.Type == "LTE").FramesReceived, N, "router LTE FramesReceived");
+            CheckEq(bed.Router.Links.Single(link => link.Type == "LTE").FramesForwarded, N, "router LTE FramesForwarded");
+            CheckEq(bed.Router.Links.Single(link => link.Type == "LTE").FramesDuplicate, 0, "no duplicates recorded");
+            Check(bed.Router.ActiveLink == "LTE", "active link stays LTE");
             if (TestFailedSoFar) bed.DumpLogs("single link");
         }
     }
@@ -57,7 +57,7 @@ internal static partial class GroundRouterTests
             // legitimately double-deliver in-flight twins; that path is
             // exercised separately in the failover test).
             bed.SendLte(Frames.Heartbeat(1, 9, 0));
-            await WaitUntil(() => bed.Router.Lte.IsConnected, 2000);
+            await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").IsConnected, 2000);
 
             const int N = 400;
             var rng = new Random(1234);
@@ -74,8 +74,10 @@ internal static partial class GroundRouterTests
             DrainMarkers(bed.Mp, got);
             CheckEq(got.Count, N, "MP received exactly one copy of each mirrored frame");
             CheckEq(got.Distinct().Count(), N, "all unique markers present (no loss)");
-            CheckEq(bed.Router.Lte.FramesReceived + bed.Router.Radio.FramesReceived, 2L * N + 1, "both links ingested the full stream");
-            Check(bed.Router.Lte.FramesDuplicate + bed.Router.Radio.FramesDuplicate > 0, "cross-link duplicates were detected and counted");
+            CheckEq(bed.Router.Links.Single(link => link.Type == "LTE").FramesReceived +
+                bed.Router.Links.Single(link => link.Type == "RadioMaster").FramesReceived, 2L * N + 1, "both links ingested the full stream");
+            Check(bed.Router.Links.Single(link => link.Type == "LTE").FramesDuplicate +
+                bed.Router.Links.Single(link => link.Type == "RadioMaster").FramesDuplicate > 0, "cross-link duplicates were detected and counted");
             if (TestFailedSoFar) bed.DumpLogs("dedup mirrored");
         }
     }
@@ -91,15 +93,15 @@ internal static partial class GroundRouterTests
                 bed.SendLte(Frames.Heartbeat(1, 1, i));
                 bed.SendLte(Frames.Heartbeat(1, 191, i));
             }
-            await WaitUntil(() => bed.Router.Lte.FramesReceived >= 100, 3000);
-            Check(bed.Router.Lte.PacketLossPercent < 0.5,
-                $"interleaved components report ~0% loss (got {bed.Router.Lte.PacketLossPercent:F1}%)");
+            await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").FramesReceived >= 100, 3000);
+            Check(bed.Router.Links.Single(link => link.Type == "LTE").PacketLossPercent < 0.5,
+                $"interleaved components report ~0% loss (got {bed.Router.Links.Single(link => link.Type == "LTE").PacketLossPercent:F1}%)");
 
             // Real gaps on one component must register as loss.
             for (int i = 0; i < 40; i++) bed.SendLte(Frames.Heartbeat(1, 1, (byte)(50 + i * 2)));
-            await WaitUntil(() => bed.Router.Lte.PacketLossPercent > 5, 3000);
-            Check(bed.Router.Lte.PacketLossPercent > 5,
-                $"gappy stream reports loss (got {bed.Router.Lte.PacketLossPercent:F1}%)");
+            await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").PacketLossPercent > 5, 3000);
+            Check(bed.Router.Links.Single(link => link.Type == "LTE").PacketLossPercent > 5,
+                $"gappy stream reports loss (got {bed.Router.Links.Single(link => link.Type == "LTE").PacketLossPercent:F1}%)");
             if (TestFailedSoFar) bed.DumpLogs("seq loss");
         }
     }
@@ -116,18 +118,18 @@ internal static partial class GroundRouterTests
             Pump radioPump = null;
             try
             {
-                Check(await WaitUntil(() => bed.Router.Lte.IsConnected, 2000), "LTE comes up");
+                Check(await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").IsConnected, 2000), "LTE comes up");
                 radioPump = new Pump(f => bed.SendRadio(f), 10, 1, 2);
-                Check(await WaitUntil(() => bed.Router.Radio.IsConnected, 3000), "radio comes up");
-                Check(bed.Router.ActiveLink == LinkType.LTE, "starts on preferred LTE");
+                Check(await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "RadioMaster").IsConnected, 3000), "radio comes up");
+                Check(bed.Router.ActiveLink == "LTE", "starts on preferred LTE");
 
                 ltePump.Dispose(); // LTE goes silent mid-flight
-                Check(await WaitUntil(() => bed.Router.ActiveLink == LinkType.RadioMaster, 5000), "fails over to RadioMaster");
+                Check(await WaitUntil(() => bed.Router.ActiveLink == "RadioMaster", 5000), "fails over to RadioMaster");
                 Check(await WaitUntil(() =>
                 {
                     lock (bed.Failovers)
                     {
-                        return bed.Failovers.Any(e => e.FromLink == LinkType.LTE && e.ToLink == LinkType.RadioMaster);
+                        return bed.Failovers.Any(e => e.FromLink == "LTE" && e.ToLink == "RadioMaster");
                     }
                 }, 1000), "failover event recorded LTE to Radio");
 
@@ -143,15 +145,15 @@ internal static partial class GroundRouterTests
 
                 // Preferred link recovers → router returns to it after the hold-down.
                 ltePump = new Pump(f => bed.SendLte(f), 10, 1, 1);
-                Check(await WaitUntil(() => bed.Router.Lte.IsConnected, 1000), "preferred link receives again");
+                Check(await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").IsConnected, 1000), "preferred link receives again");
                 await Task.Delay(250);
-                Check(bed.Router.ActiveLink == LinkType.RadioMaster, "brief recovery does not immediately flap");
-                Check(await WaitUntil(() => bed.Router.ActiveLink == LinkType.LTE, 8000), "returns to preferred LTE after recovery");
+                Check(bed.Router.ActiveLink == "RadioMaster", "brief recovery does not immediately flap");
+                Check(await WaitUntil(() => bed.Router.ActiveLink == "LTE", 8000), "returns to preferred LTE after recovery");
                 Check(await WaitUntil(() =>
                 {
                     lock (bed.Failovers)
                     {
-                        return bed.Failovers.Any(e => e.ToLink == LinkType.LTE && e.Reason.Contains("preferred"));
+                        return bed.Failovers.Any(e => e.ToLink == "LTE" && e.Reason.Contains("preferred"));
                     }
                 }, 1000), "preferred-recovery event recorded");
                 Check(bed.Router.FailoverLog.Count >= 2, "failover log retains events");
@@ -168,15 +170,15 @@ internal static partial class GroundRouterTests
             await bed.LatchMp();
             using (var ltePump = new Pump(f => bed.SendLte(f), 10, 1, 1))
             {
-                Check(await WaitUntil(() => bed.Router.Lte.IsConnected, 2000), "LTE up first");
+                Check(await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").IsConnected, 2000), "LTE up first");
             using (var radioPump = new Pump(f => bed.SendRadio(f), 10, 1, 2))
             {
-                Check(await WaitUntil(() => bed.Router.Radio.IsConnected && bed.Router.ActiveLink == LinkType.LTE, 5000),
+                Check(await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "RadioMaster").IsConnected && bed.Router.ActiveLink == "LTE", 5000),
                     "both links up, active on preferred LTE");
 
-                bed.Router.SetManualOverride(LinkType.RadioMaster);
-                Check(bed.Router.ActiveLink == LinkType.RadioMaster, "override switches active link immediately");
-                Check(bed.Router.ManualOverride == LinkType.RadioMaster, "override recorded");
+                bed.Router.SetManualOverride("RadioMaster");
+                Check(bed.Router.ActiveLink == "RadioMaster", "override switches active link immediately");
+                Check(bed.Router.ManualOverride == "RadioMaster", "override recorded");
 
                 bed.Mp.Drain();
                 for (int i = 0; i < 10; i++)
@@ -204,7 +206,7 @@ internal static partial class GroundRouterTests
 
                 bed.Router.SetManualOverride(LinkType.None);
                 Check(bed.Router.ManualOverride == LinkType.None, "override released");
-                Check(await WaitUntil(() => bed.Router.ActiveLink == LinkType.LTE, 8000),
+                Check(await WaitUntil(() => bed.Router.ActiveLink == "LTE", 8000),
                     "auto-failover resumes and returns to preferred link");
             }
             }
@@ -219,10 +221,10 @@ internal static partial class GroundRouterTests
             await bed.LatchMp();
             using (var ltePump = new Pump(f => bed.SendLte(f), 10, 1, 1))
             {
-                Check(await WaitUntil(() => bed.Router.Lte.IsConnected, 2000), "LTE up first");
+                Check(await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").IsConnected, 2000), "LTE up first");
                 using (var radioPump = new Pump(f => bed.SendRadio(f), 10, 1, 2))
                 {
-                    Check(await WaitUntil(() => bed.Router.Radio.IsConnected && bed.Router.ActiveLink == LinkType.LTE, 5000),
+                    Check(await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "RadioMaster").IsConnected && bed.Router.ActiveLink == "LTE", 5000),
                         "both links up, active on LTE");
 
                     bed.LteSrc.Drain(); bed.RadioSrc.Drain();
@@ -251,7 +253,7 @@ internal static partial class GroundRouterTests
             await bed.LatchMp();
             using (var ltePump = new Pump(f => bed.SendLte(f), 10))
             {
-                Check(await WaitUntil(() => bed.Router.Lte.IsConnected, 3000), "LTE up");
+                Check(await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").IsConnected, 3000), "LTE up");
                 bed.LteSrc.Drain();
 
                 var f = Frames.Marker(4500, 7, 255, 190);
@@ -282,12 +284,12 @@ internal static partial class GroundRouterTests
         {
             using (var bed = new Bed(null, basePort))
             {
-                Check(!bed.Router.Lte.IsOpen, "LTE bind fails while port is occupied");
-                Check(bed.Router.Radio.IsOpen, "radio still binds");
+                Check(!bed.Router.Links.Single(link => link.Type == "LTE").IsOpen, "LTE bind fails while port is occupied");
+                Check(bed.Router.Links.Single(link => link.Type == "RadioMaster").IsOpen, "radio still binds");
                 await bed.LatchMp();
                 using (var radioPump = new Pump(f => bed.SendRadio(f), 10, 1, 2))
                 {
-                    Check(await WaitUntil(() => bed.Router.ActiveLink == LinkType.RadioMaster, 4000),
+                    Check(await WaitUntil(() => bed.Router.ActiveLink == "RadioMaster", 4000),
                         "router promotes the only receiving link");
 
                     bed.Mp.Drain();
@@ -304,11 +306,12 @@ internal static partial class GroundRouterTests
 
                     // Free the port: the watchdog must reopen LTE within its backoff.
                     blocker.Close();
-                    Check(await WaitUntil(() => bed.Router.Lte.IsOpen, 8000), "watchdog reopens LTE after the port is freed");
+                    Check(await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").IsOpen, 8000),
+                        "watchdog reopens LTE after the port is freed");
                     using (var ltePump = new Pump(f => bed.SendLte(f), 10, 1, 1))
                     {
-                        Check(await WaitUntil(() => bed.Router.Lte.IsConnected, 3000), "LTE carries traffic after reopen");
-                        Check(await WaitUntil(() => bed.Router.ActiveLink == LinkType.LTE, 8000), "preferred link resumes after recovery");
+                        Check(await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").IsConnected, 3000), "LTE carries traffic after reopen");
+                        Check(await WaitUntil(() => bed.Router.ActiveLink == "LTE", 8000), "preferred link resumes after recovery");
                     }
                 }
                 if (TestFailedSoFar) bed.DumpLogs("bind failure watchdog");
@@ -327,8 +330,9 @@ internal static partial class GroundRouterTests
             {
                 try
                 {
-                    Check(await WaitUntil(() => bed.Router.Lte.IsConnected && bed.Router.Radio.IsConnected
-                        && bed.Router.ActiveLink == LinkType.LTE, 5000), "both links up, active on LTE");
+                    Check(await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").IsConnected &&
+                        bed.Router.Links.Single(link => link.Type == "RadioMaster").IsConnected
+                        && bed.Router.ActiveLink == "LTE", 5000), "both links up, active on LTE");
                     bed.LteSrc.Drain(); bed.RadioSrc.Drain();
 
                     // A parameter download request must go out on exactly one link —
@@ -370,7 +374,7 @@ internal static partial class GroundRouterTests
                     // Pinned link dies mid-download: after the 4 s transaction
                     // timeout, parameter traffic must re-pin to the survivor.
                     ltePump.Dispose();
-                    Check(await WaitUntil(() => bed.Router.ActiveLink == LinkType.RadioMaster, 5000),
+                    Check(await WaitUntil(() => bed.Router.ActiveLink == "RadioMaster", 5000),
                         "failover after pinned link death");
                     await Task.Delay(4300); // PARAM_TRANSACTION_TIMEOUT must expire
 
@@ -397,12 +401,12 @@ internal static partial class GroundRouterTests
             await bed.LatchMp();
             using (var ltePump = new Pump(f => bed.SendLte(f), 10))
             {
-                Check(await WaitUntil(() => bed.Router.Lte.IsConnected, 3000), "link up before restart");
+                Check(await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").IsConnected, 3000), "link up before restart");
                 Check(bed.Router.IsRunning, "router running");
 
                 bed.Router.Stop();
                 Check(!bed.Router.IsRunning, "router stopped");
-                Check(bed.Router.Lte.Health == LinkHealth.Disconnected, "links marked disconnected on stop");
+                Check(bed.Router.Links.Single(link => link.Type == "LTE").Health == LinkHealth.Disconnected, "links marked disconnected on stop");
                 await Task.Delay(200);
 
                 bed.Router.Start();

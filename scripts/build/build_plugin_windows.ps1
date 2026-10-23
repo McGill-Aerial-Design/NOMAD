@@ -38,7 +38,7 @@ if ($cleanExitCode -ne 0) {
 Write-Host "  Clean complete" -ForegroundColor Green
 Write-Host ""
 
-# Generate plugin identity without runtime packaging or MAVSDK dependencies.
+# Embed the version, source revision and reviewed host identity.
 $sourceSha = & git -C $RepoRoot rev-parse --verify HEAD
 if ($LASTEXITCODE -ne 0 -or $sourceSha -notmatch '^[0-9a-f]{40}$') { throw 'Plugin source identity is unavailable' }
 $target = (Get-Content (Join-Path $RepoRoot 'scripts/release/mission-planner-target.json') -Raw | ConvertFrom-Json).version

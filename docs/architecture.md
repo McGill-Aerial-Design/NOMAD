@@ -2,23 +2,33 @@
 
 NOMAD runs inside Mission Planner as one C#/.NET Framework 4.8 plugin.
 The reviewed host version is stored in `scripts/release/mission-planner-target.json`.
-The former C++ runtime, independent CLI, authenticated IPC and MAVSDK command owner
-are archived on `MAVSDK-Archive` and are not active product components.
 
 ```mermaid
 flowchart LR
-  HID[Custom HID and NOMAD UI] --> Controls[Profile-bound gimbal and payload controls]
-  Controls --> MP[Mission Planner native connection and APIs]
-  Flight[Mission Planner flight UI and missions] --> MP
-  MP <--> Router[Optional plugin-owned link router]
-  Router <--> Links[ELRS primary and LTE secondary links]
-  Links <--> AP[ArduPilot]
+  subgraph Ground[Mission Planner process]
+    HID[NOMAD UI and custom HID] --> Controls[Profile-bound controllers]
+    Controls --> MP[Native Mission Planner APIs and active connection]
+    Flight[Native flight UI and missions] --> MP
+    MP <-->|UDPCl when enabled| Router[Optional in-process link router]
+  end
+  MP <-->|Direct USB or telemetry| AP[ArduPilot on the Cube: flight controllers and native failsafes]
+  Router <-->|Configured physical links| AP
+  RC[Physical RC and termination input] --> AP
+  AP --- Terminate[Optional native TERMINATE firmware extension]
 ```
 
 Mission Planner owns opening/closing the selected aircraft connection, its protocol
 reader, ordinary flight UI, firmware setup and mission execution requests. ArduPilot
 owns stabilization, navigation execution and native failsafes. NOMAD never starts
 Mission Planner's HID RC override loop merely to read custom input devices.
+
+`NOMADPlugin` owns the host lifecycle and registers the menus/screens. `Config/`,
+`Control/`, `Input/`, `Media/` and `Views/` are logical source groups compiled into
+that same DLL, not separately running services. The C# router sources under
+`infra/transport/ground_router/` are also compiled into the plugin. `OutputController`
+is the internal guard for dispatch through the current host target.
+The separate GPL source carrier under `firmware/ardupilot/` builds aircraft firmware;
+its flight policy runs on the Cube, independently of the ground plugin.
 
 ## Custom controls
 
@@ -41,16 +51,10 @@ See [safety](safety.md) for trim checks, uncertain outcomes and unload limitatio
 
 The optional `MAVLinkConnectionManager` owns the existing C# router engine and its
 physical UDP/TCP/COM links. It exposes exactly one bidirectional loopback consumer:
-Mission Planner, connected using UDPCl. No separate router service or backend command
-consumer ships. The router forwards each command to one selected link, retains
+Mission Planner, connected using UDPCl. The router forwards each command to one selected link, retains
 parameter-transaction pinning, deduplication and failover, and disposes old workers
 and sockets before replacement. Unchanged link settings do not restart links.
 Profile/physical-link changes require the live MP connection to be disconnected.
-
-Aircraft-side UART fan-out remains a separate deployment concern. The
-[serial router template](../infra/transport/mavlink_router/main.conf) and
-[systemd template](../infra/systemd/nomad-mavlink-router.service) are retained data;
-the ground plugin neither deploys nor replaces that daemon.
 
 Plugin unload closes input/windows, invalidates control ownership and disposes the
 router/video workers. Existing menu callbacks are fenced by the plugin session.
@@ -61,8 +65,8 @@ host helper or onboard repeat can finish under native host/controller behavior.
 
 Profiles own optional aircraft notes, calibrated payload/gimbal settings,
 HID devices/mappings, physical links and video settings. Draft/copy/import/export
-changes stay isolated until explicit Save. Loading strips retired service credentials
-in memory and never rewrites operator files. Atomic replacement keeps a backup on
+changes stay isolated until explicit Save. Loading validates the current schema
+without rewriting operator files. Unknown fields are rejected. Atomic replacement keeps a backup on
 explicit Save. Native host state and physical aircraft identity require observation;
 a saved label does not establish either.
 Ordinary RC arming and flight-mode configuration belongs to Mission Planner and
@@ -72,8 +76,9 @@ Video uses Mission Planner's installed GStreamer support. Fence setup validates 
 inclusion polygon and stages it in the existing native Plan editor while already in
 Fence mode. Staging never uploads or changes aircraft parameters; native Write/Read
 and configuration screens own aircraft interaction. NOMAD does not switch mission
-type, evaluate local outline crossings or claim containment. Retired local advisory
-config/preset files remain untouched. Unsaved coordinate text/order remain plugin-owned
+type, evaluate local outline crossings or claim containment. Unsaved coordinate text/order remain plugin-owned
 in memory across native page navigation and are discarded on plugin unload. Alerts/audio and video do not become flight
-authority. Competition server/perception/takeover/termination integrations remain
-outside the shipped scope; requirements remain in [PRD](prd.md).
+authority. The optional [native termination](native-termination.md) entry uses the
+same captured host target and an advertised aircraft mode; policy/execution remain
+onboard. Competition server, perception and takeover integrations remain outside
+this implementation; requirements remain in [PRD](prd.md).

@@ -37,10 +37,7 @@ namespace NOMAD.MissionPlanner
 
         public NotificationService NotificationService => _notificationService;
 
-        public NOMADDashboardView(NOMADConfig config, MAVLinkConnectionManager connectionManager = null)
-            : this(config, connectionManager, System.Threading.CancellationToken.None) { }
-
-        internal NOMADDashboardView(NOMADConfig config, MAVLinkConnectionManager connectionManager,
+        public NOMADDashboardView(NOMADConfig config, MAVLinkConnectionManager connectionManager,
             System.Threading.CancellationToken videoShutdown)
             : this(config, connectionManager, videoShutdown, () => new GStreamerVideoPipeline()) { }
 

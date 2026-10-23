@@ -10,15 +10,10 @@ function Invoke-AircraftProfileTests {
     New-Item -ItemType Directory -Path $directory | Out-Null
     $primary = Join-Path $directory 'profiles.json'
     $backup = $primary + '.bak'
-    $legacy = Join-Path $directory 'legacy.json'
-    $legacyText = '{"CoreRuntimePort":14641,"CoreClientCredential":"fixture-only-alpha-key"}'
-    [IO.File]::WriteAllText($legacy, $legacyText)
     function Load-Profiles {
-        $loadArguments = New-Object object[] 4
+        $loadArguments = New-Object object[] 2
         $loadArguments[0] = [string]$primary
         $loadArguments[1] = [string]$backup
-        $loadArguments[2] = [string]$legacy
-        $loadArguments[3] = [string]($legacy + '.bak')
         return $loadProfiles.Invoke($null, $loadArguments)
     }
     $profiles = Load-Profiles
@@ -35,9 +30,8 @@ function Invoke-AircraftProfileTests {
         '[{"id":"alpha_output","name":"Alpha Output","behavior":"RelayToggle","channel":0,"safe_pwm":1000}]')
     $beta = Load-Config ('{"AircraftName":"Profile Beta","FlightControllerModel":"Controller Beta",' +
         '"ReceiverType":"Receiver Beta","AircraftFirmware":"fixture-version","Airframe":"fixture-airframe",' +
-        '"RcArmingChannel":7,"RcFlightModeChannel":8,"CoreRuntimePort":14642,' +
-        '"RouterLocalPort":14643,"ManagementPort":14644,"CoreClientCredential":"fixture-only-beta-key",' +
-        '"VideoUrl":"rtsp://profile-beta.invalid/stream","AutoStartHudVideo":false,' +
+        '"RouterLocalPort":14643,' +
+        '"VideoInputs":[{"Name":"Camera","Url":"rtsp://profile-beta.invalid/stream"}],"SelectedVideoInputName":"Camera","AutoStartHudVideo":false,' +
         '"JoystickGimbalMaxRateDegSec":80,"GimbalMountMode":3,"JoystickGimbalPitchInvert":false,' +
         '"ActuatorDefinitions":[{"id":"beta_output","name":"Beta Output","behavior":"RelayToggle","channel":1,"safe_pwm":1000}]}')
     $added = $profiles.Add($beta)
@@ -57,9 +51,6 @@ function Invoke-AircraftProfileTests {
         $restored.ActuatorDefinitions[0]['id'].ToString() -ne 'beta_output') {
         throw 'Restart mixed another aircraft''s connections, gimbal or actuator definitions into the selected profile.'
     }
-    if ([IO.File]::ReadAllText($legacy) -cne $legacyText) {
-        throw 'Loading legacy configuration rewrote operator files.'
-    }
     $clone = $reopened.Clone()
     $clone.Selected.Config.ActuatorDefinitions[0]['name'] = [Newtonsoft.Json.Linq.JValue]::new('Edited draft')
     $clone.Selected.Config.RouterLocalPort = 14652
@@ -70,15 +61,14 @@ function Invoke-AircraftProfileTests {
     $portable = Join-Path $directory 'portable.json'
     $restored.ExportToFile($portable)
     $portableText = [IO.File]::ReadAllText($portable)
-    if ($portableText.Contains('CoreClientCredential') -or $portableText.Contains('fixture-only-') -or
-        $portableText.Contains('Profile Alpha')) {
-        throw 'Single-aircraft export leaked credentials or another aircraft configuration.'
+    if ($portableText.Contains('Profile Alpha')) {
+        throw 'Single-aircraft export included another aircraft configuration.'
     }
     $imported = $ConfigType.GetMethod('LoadFromFile').Invoke($null, [object[]]@([string]$portable))
     if ($imported.AircraftName -ne 'Profile Beta' -or
         $imported.GimbalMountMode -ne 3 -or
         $imported.ActuatorDefinitions[0]['id'].ToString() -ne 'beta_output') {
-        throw 'Portable aircraft configuration did not restore independently of local credentials.'
+        throw 'Portable aircraft configuration did not restore independently.'
     }
     $profiles.SelectedId = $alpha.Id.ToUpperInvariant()
     $profiles.Save()
@@ -163,7 +153,7 @@ function Invoke-AircraftProfileTests {
         $rejected = $false
         try { Load-Profiles | Out-Null } catch { $rejected = $true }
         if (-not $rejected -or [IO.File]::ReadAllText($primary) -cne $invalid -or
-            [IO.File]::ReadAllText($backup) -cne $validBackup -or [IO.File]::ReadAllText($legacy) -cne $legacyText) {
+            [IO.File]::ReadAllText($backup) -cne $validBackup) {
             throw 'Invalid profile storage fell back or changed existing configuration files.'
         }
     }
@@ -178,13 +168,7 @@ function Invoke-AircraftProfileTests {
         throw 'A failed profile save replaced the previous persisted selection or backup.'
     }
     [IO.Directory]::Delete($primary + '.tmp')
-    foreach ($invalid in @('{"RcArmingChannel":0}', '{"RcFlightModeChannel":19}',
-        '{"RcArmingChannel":"5"}', '{"rcArmingChannel":"5"}',
-        '{"RcArmingChannel":null,"rcArmingChannel":"5"}',
-        '{"RcFlightModeChannel":5.5}', '{"RcArmingChannel":true}', '{"RcFlightModeChannel":{}}',
-        '{"RcArmingChannel":999999999999999999999}', '{"RcFlightModeChannel":-1}',
-        '{"rcFlightModeChannel":5}', '{"RcArmingChannel":1,"RcArmingChannel":2}',
-        '{"RcFlightModeChannel":null,"RcFlightModeChannel":18}', '{"GimbalMountMode":4}', '{"GimbalMountMode":null}',
+    foreach ($invalid in @('{"UnknownSetting":null}', '{"GimbalMountMode":4}', '{"GimbalMountMode":null}',
         '{"ActuatorDefinitions":{}}', '{"ActuatorDefinitions":[1]}', '{"FlightControllerModel":3}',
         '{"JoystickGimbalPitchAxis":"unknown"}', '{"JoystickPositionAxis":null}',
         '{"JoystickGimbalMaxRateDegSec":"NaN"}', '{"JoystickPositionDeadzone":0.51}')) {
@@ -192,66 +176,22 @@ function Invoke-AircraftProfileTests {
         try { Load-Config $invalid | Out-Null } catch { $rejected = $true }
         if (-not $rejected) { throw 'Invalid aircraft hardware/configuration data was accepted.' }
     }
-    $dateName = Load-Config '{"AircraftName":"2026-10-18T00:00:00Z","RcArmingChannel":null}'
+    $dateName = Load-Config '{"AircraftName":"2026-10-18T00:00:00Z"}'
     if ($dateName.AircraftName -cne '2026-10-18T00:00:00Z') {
         throw 'A textual aircraft name changed during parsing.'
     }
-    function Assert-NoRetiredRcRoles($Config) {
-        $document = [Newtonsoft.Json.Linq.JObject]::FromObject($Config)
-        foreach ($name in @('RcArmingChannel', 'RcFlightModeChannel')) {
-            if ($null -ne $document.Property($name)) { throw 'A retired RC role remained in the current configuration.' }
-        }
-    }
-    foreach ($json in @('{"RcArmingChannel":1,"RcFlightModeChannel":18}',
-        '{"RcArmingChannel":18,"RcFlightModeChannel":1}', '{"RcArmingChannel":null,"RcFlightModeChannel":null}')) {
-        $retired = Load-Config $json # Load-Config also asserts its source file remains byte-for-byte unchanged.
-        Assert-NoRetiredRcRoles $retired
-        Assert-NoRetiredRcRoles ($retired.Clone())
-        $retiredExport = Join-Path $directory 'retired-roles-export.json'
-        $retired.ExportToFile($retiredExport)
-        $exported = [Newtonsoft.Json.Linq.JObject]::Parse([IO.File]::ReadAllText($retiredExport))
-        if ($null -ne $exported.Property('RcArmingChannel') -or $null -ne $exported.Property('RcFlightModeChannel')) {
-            throw 'Explicit export retained retired RC roles.'
-        }
-    }
-    $activeWithoutRoles = Load-Profiles
     $nested = [Newtonsoft.Json.Linq.JObject]::Parse($validPrimary)
-    foreach ($aircraft in $nested['Aircraft']) {
-        $aircraft['Config']['RcArmingChannel'] = [Newtonsoft.Json.Linq.JValue]::new([int]1)
-        $aircraft['Config']['RcFlightModeChannel'] = [Newtonsoft.Json.Linq.JValue]::new([int]18)
-    }
-    $nestedLegacy = $nested.ToString()
+    $nested['Aircraft'][0]['Config']['UnknownSetting'] = [Newtonsoft.Json.Linq.JValue]::new($true)
+    $invalidNested = $nested.ToString()
     try {
-        [IO.File]::WriteAllText($primary, $nestedLegacy)
-        $retiredProfiles = Load-Profiles
-        if ([IO.File]::ReadAllText($primary) -cne $nestedLegacy -or [IO.File]::ReadAllText($backup) -cne $validBackup) {
-            throw 'Loading retired roles changed a profile source or backup.'
-        }
-        foreach ($aircraft in $retiredProfiles.Clone().Aircraft) { Assert-NoRetiredRcRoles $aircraft.Config }
-        if ($saveForConnection.Invoke($retiredProfiles, [object[]]@($activeWithoutRoles, $true))) {
-            throw 'Retired RC metadata requested a router replacement.'
-        }
-        $savedProfiles = [Newtonsoft.Json.Linq.JObject]::Parse([IO.File]::ReadAllText($primary))
-        foreach ($aircraft in $savedProfiles['Aircraft']) {
-            if ($null -ne $aircraft['Config']['RcArmingChannel'] -or $null -ne $aircraft['Config']['RcFlightModeChannel']) {
-                throw 'Connected Save retained retired RC roles or treated them as output calibration.'
-            }
-        }
-        if ([IO.File]::ReadAllText($backup) -cne $nestedLegacy) { throw 'Explicit Save lost the legacy profile backup.' }
-        $nested['Aircraft'][0]['Config']['RcArmingChannel'] = [Newtonsoft.Json.Linq.JValue]::new($true)
-        $invalidNested = $nested.ToString()
         [IO.File]::WriteAllText($primary, $invalidNested)
         $rejected = $false
         try { Load-Profiles | Out-Null } catch { $rejected = $true }
         if (-not $rejected -or [IO.File]::ReadAllText($primary) -cne $invalidNested -or
-            [IO.File]::ReadAllText($backup) -cne $nestedLegacy) {
-            throw 'Nested legacy RC-role validation was bypassed or changed existing files.'
+            [IO.File]::ReadAllText($backup) -cne $validBackup) {
+            throw 'Unknown nested configuration was accepted or changed existing files.'
         }
-    } finally {
-        [IO.File]::WriteAllText($primary, $validPrimary)
-        [IO.File]::WriteAllText($backup, $validBackup)
-    }
-    Write-Host 'Retired RC roles: strict standalone/nested loading, no rewrite, omitted clone/export/save and connected-save admission passed.'
+    } finally { [IO.File]::WriteAllText($primary, $validPrimary) }
     $filterType = $Plugin.GetType('NOMAD.MissionPlanner.GimbalArrowKeyFilter', $true)
     $filter = $filterType.GetConstructor([type[]]@($profilesType)).Invoke([object[]]@($selectedAlpha))
     try {
@@ -283,16 +223,16 @@ function Invoke-AircraftProfileUiTests {
     $formType = $Plugin.GetType('NOMAD.MissionPlanner.NOMADSettingsForm', $true)
     $outputType = $Plugin.GetType('NOMAD.MissionPlanner.OutputController', $true)
     $gimbalType = $Plugin.GetType('NOMAD.MissionPlanner.GimbalController', $true)
-    $alpha = Load-Config ('{"AircraftName":"Alpha UI","CoreRuntimePort":14651,' +
+    $alpha = Load-Config ('{"AircraftName":"Alpha UI",' +
         '"JoystickGimbalMaxRateDegSec":30,"FlightControllerModel":"Alpha controller"}')
     $arguments = New-Object object[] 1
     $arguments[0] = $alpha
     $profiles = $profilesType.GetConstructor([type[]]@($ConfigType)).Invoke($arguments)
     $alphaId = $profiles.SelectedId
-    $beta = Load-Config ('{"AircraftName":"Beta UI","CoreRuntimePort":14652,"RouterLocalPort":14653,' +
-        '"ManagementPort":14654,"VideoUrl":"rtsp://beta-ui.invalid/stream",' +
+    $beta = Load-Config ('{"AircraftName":"Beta UI","RouterLocalPort":14653,' +
+        '"VideoInputs":[{"Name":"Camera","Url":"rtsp://beta-ui.invalid/stream"}],"SelectedVideoInputName":"Camera",' +
         '"FlightControllerModel":"Beta controller","ReceiverType":"Beta receiver",' +
-        '"RcArmingChannel":7,"RcFlightModeChannel":8,"GimbalMountMode":3,"JoystickGimbalMaxRateDegSec":80,' +
+        '"GimbalMountMode":3,"JoystickGimbalMaxRateDegSec":80,' +
         '"JoystickGimbalPitchAxis":"Rz","JoystickPositionEnabled":true,"JoystickPositionActuatorId":"beta",' +
         '"ActuatorDefinitions":[{"id":"beta","name":"Beta","behavior":"RelayToggle","channel":0,"safe_pwm":1000}]}')
     $betaId = $profiles.Add($beta).Id
@@ -343,7 +283,7 @@ function Invoke-AircraftProfileUiTests {
             throw 'New aircraft inherited another aircraft''s notes or actuator mappings.'
         }
         $formType.GetMethod('RemoveAircraft', $instance).Invoke($form, @()) | Out-Null
-        $imported = Load-Config '{"AircraftName":"Imported UI","RcArmingChannel":9,"CoreRuntimePort":14659}'
+        $imported = Load-Config '{"AircraftName":"Imported UI"}'
         $formType.GetMethod('LoadAircraftConfiguration', $instance).Invoke($form, [object[]]@($imported)) | Out-Null
         $formType.GetMethod('LoadSettings', $instance).Invoke($form, @()) | Out-Null
         if ($form.Profiles.SelectedId -ne $alphaId -or (Profile-Control '_txtAircraftName').Text -ne 'Imported UI' -or

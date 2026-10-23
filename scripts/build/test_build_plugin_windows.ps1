@@ -119,7 +119,7 @@ function New-TestFixture {
         Install = Join-Path $root 'Program Files (x86)\Mission Planner'
         InstallPlugins = Join-Path $root 'Program Files (x86)\Mission Planner\plugins'
         LocalAppData = Join-Path $root 'Local App Data'
-        LegacyPlugin = Join-Path $root 'Local App Data\Mission Planner\plugins\NOMADPlugin.dll'
+        UnrelatedPlugin = Join-Path $root 'Local App Data\Mission Planner\plugins\NOMADPlugin.dll'
         PowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
         Icacls = (Get-Command icacls.exe -ErrorAction Stop).Source
         Compiler = (Get-MsBuildCompiler)
@@ -127,7 +127,7 @@ function New-TestFixture {
         DenyRule = ''
         DenyApplied = $false
         InstallBefore = ''
-        LegacyBefore = ''
+        UnrelatedBefore = ''
     }
 
     try {
@@ -135,7 +135,7 @@ function New-TestFixture {
         New-Item -ItemType Directory -Path $fixture.Project -Force | Out-Null
         New-Item -ItemType Directory -Path $fixture.Tools -Force | Out-Null
         New-Item -ItemType Directory -Path $fixture.InstallPlugins -Force | Out-Null
-        New-Item -ItemType Directory -Path (Split-Path $fixture.LegacyPlugin) -Force | Out-Null
+        New-Item -ItemType Directory -Path (Split-Path $fixture.UnrelatedPlugin) -Force | Out-Null
         Copy-Item -LiteralPath $SourceBuildScript -Destination $fixture.Script
         Copy-Item -LiteralPath (Join-Path (Split-Path $SourceBuildScript) 'windows_build_tools.ps1') `
             -Destination (Split-Path $fixture.Script)
@@ -143,12 +143,12 @@ function New-TestFixture {
         New-ReleaseIdentityFixture -Fixture $fixture -SourceBuildScript $SourceBuildScript
         [IO.File]::WriteAllText((Join-Path $fixture.Install 'MissionPlanner.exe'), 'installation sentinel')
         [IO.File]::WriteAllText((Join-Path $fixture.InstallPlugins 'existing-plugin.txt'), 'preserve this file')
-        [IO.File]::WriteAllText($fixture.LegacyPlugin, 'preserve the legacy copy')
+        [IO.File]::WriteAllText($fixture.UnrelatedPlugin, 'preserve the unrelated copy')
         New-NativeMsBuildTestDouble -Fixture $fixture
 
         $fixture.InstallBefore = Get-TreeSnapshot -Path $fixture.Install
-        $legacyRoot = Split-Path (Split-Path $fixture.LegacyPlugin)
-        $fixture.LegacyBefore = Get-TreeSnapshot -Path $legacyRoot
+        $unrelatedRoot = Split-Path (Split-Path $fixture.UnrelatedPlugin)
+        $fixture.UnrelatedBefore = Get-TreeSnapshot -Path $unrelatedRoot
         $fixture.DenyRule = "*$($fixture.CurrentUserSid):(W,D)"
         & $fixture.Icacls $fixture.InstallPlugins /deny $fixture.DenyRule /C | Out-Null
         if ($LASTEXITCODE -ne 0) {
@@ -465,9 +465,9 @@ function Test-InstallationUnchanged {
     Remove-DenyWrite -Fixture $Fixture
     Assert-Equal -Actual (Get-TreeSnapshot -Path $Fixture.Install) -Expected $Fixture.InstallBefore `
         -Message 'Build-only changed the deny-write Mission Planner installation fixture'
-    $legacyRoot = Split-Path (Split-Path $Fixture.LegacyPlugin)
-    Assert-Equal -Actual (Get-TreeSnapshot -Path $legacyRoot) -Expected $Fixture.LegacyBefore `
-        -Message 'Build-only changed the legacy AppData plugin fixture'
+    $unrelatedRoot = Split-Path (Split-Path $Fixture.UnrelatedPlugin)
+    Assert-Equal -Actual (Get-TreeSnapshot -Path $unrelatedRoot) -Expected $Fixture.UnrelatedBefore `
+        -Message 'Build-only changed the unrelated AppData plugin fixture'
 }
 
 function Remove-DenyWrite {

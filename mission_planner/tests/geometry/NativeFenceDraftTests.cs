@@ -150,7 +150,7 @@ internal static class NativeFenceDraftTests
                     "actual native AddCommand assigns count/latitude/longitude/unused zero altitude");
             }
             Check(ReferenceEquals(planner.geofencepolygon, polygon) && ReferenceEquals(planner.geofenceoverlay, overlay),
-                "native legacy fence objects preserved");
+                "native fence objects preserved");
             Check(ReferenceEquals(mav.fencepoints, cache) && cache.Count == 1 && cache[3].x == 123 &&
                 ReferenceEquals(mav.wps, missions) && missions.Count == 0, "native aircraft caches preserved");
         }

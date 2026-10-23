@@ -1,10 +1,8 @@
 # Qualification status
 
-Current evidence applies to the Mission Planner-native product and the exact reviewed
-host target. Historical C++/MAVSDK/runtime/SITL evidence is preserved on
-`MAVSDK-Archive`; it is not evidence that this implementation or a physical aircraft
-passed qualification. Repository source describes checks, not a claim that hosted
-runs completed on a particular commit. PR reports must record actual conclusions.
+Evidence must identify the executed source, binaries and reviewed Mission Planner
+host. Repository source describes checks; release and PR reports record the actual
+runs, conclusions and limits. Software results do not establish physical aircraft qualification.
 
 ## Software evidence
 
@@ -38,6 +36,13 @@ remain necessary; simulator PWM is not measured electrical PWM or physical compl
 
 ## Aircraft acceptance remains open
 
+The optional [native termination](native-termination.md) fork adds pinned Copter
+and front-two-motor tilt-tricopter SITL suites, feature-disabled compile guards and
+CubeOrangePlus builds without scripting. Its ground gate uses the built DLL and
+actual MP APIs on synthetic loopback. Reports must bind executed source, fixtures
+and binaries; these checks do not establish transmitter mixing, measured physical
+PWM, surface direction, descent through touchdown or organizer acceptance.
+
 - Copter, Plane and QuadPlane native flight behavior across the chosen firmware,
   controllers, frames and every intended flight phase.
 - Actual payload mechanisms, trim/calibration, feedback, link/power faults and
@@ -48,12 +53,6 @@ remain necessary; simulator PWM is not measured electrical PWM or physical compl
   exports and complete Task 1/2 rehearsals from the [source inventory](conops-requirements.md).
 - Installation/operator acceptance using a reviewed DLL and private deployment data.
 
-Current source CI tests the plugin it ships. Obsolete external C++/MAVSDK/SITL status
-contexts are not manufactured by replacement jobs. Repository protection is separate
-external state: required names must match the actual product jobs before merge.
-Source edits alone do not apply or establish that protection state.
-
-`config/github-main-protection.json` proposes the two current job names while
-preserving strict checks/reviews/admin controls. Applying that template requires
-explicit authorization and live readback; record the actual alignment result with
-the PR rather than treating this document as a live protection snapshot.
+The Windows workflow builds and tests the plugin; the firmware workflow runs its
+mandatory native qualification gates before packaging. Required GitHub checks and
+reviews must be verified on the actual pull request before merge.

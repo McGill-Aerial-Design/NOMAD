@@ -239,9 +239,9 @@ internal static partial class GroundRouterTests
             var cfg = new GroundLinkRouter.RouterConfig
             {
                 StatsTickMs = 50,
-                HeartbeatTimeoutSec = 0.6,
+                PacketTimeoutSec = 0.6,
                 FailoverCooldownSec = 0.2,
-                PreferredLink = LinkType.LTE,
+                PreferredLink = "LTE",
                 PreferredLinkReconnectDelaySec = 1,
                 Consumers = new List<ConsumerConfig>
                 {
@@ -249,8 +249,8 @@ internal static partial class GroundRouterTests
                 },
                 Links = new List<LinkConfig>
                 {
-                    new LinkConfig { Id = LinkType.LTE, Name = "LTE / Tailscale", Port = LtePort, Priority = 100 },
-                    new LinkConfig { Id = LinkType.RadioMaster, Name = "RadioMaster", Port = RadioPort, Priority = 80 },
+                    new LinkConfig { Id = "LTE", Name = "LTE / Tailscale", Port = LtePort, Priority = 100 },
+                    new LinkConfig { Id = "RadioMaster", Name = "RadioMaster", Port = RadioPort, Priority = 80 },
                 },
             };
             tweak?.Invoke(cfg);

@@ -23,14 +23,6 @@ namespace NOMAD.MissionPlanner
         private readonly int _uiThread = Thread.CurrentThread.ManagedThreadId;
         private bool _isPlaying => _session.IsActive;
 
-        public EmbeddedVideoPlayer(string title, string streamUrl, bool showControls = true)
-            : this(title, streamUrl, showControls, CancellationToken.None, () => new GStreamerVideoPipeline()) { }
-
-        internal EmbeddedVideoPlayer(string title, string streamUrl, bool showControls,
-            CancellationToken shutdown, Func<IVideoPipeline> createPipeline)
-            : this(title, new VideoInputProfile { Name = "Video Feed", Url = streamUrl ?? "" },
-                showControls, shutdown, createPipeline) { }
-
         internal EmbeddedVideoPlayer(string title, VideoInputProfile input, bool showControls,
             CancellationToken shutdown, Func<IVideoPipeline> createPipeline)
         {

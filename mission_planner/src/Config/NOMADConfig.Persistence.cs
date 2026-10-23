@@ -11,19 +11,6 @@ namespace NOMAD.MissionPlanner
 {
     public partial class NOMADConfig
     {
-        internal static NOMADConfig LoadFromPaths(string primary, string backup)
-        {
-            if (File.Exists(primary))
-            {
-                return LoadFromFile(primary);
-            }
-            if (File.Exists(backup))
-            {
-                return LoadFromFile(backup);
-            }
-            return new NOMADConfig();
-        }
-
         /// <summary>Load and validate a configuration profile from an arbitrary JSON file.</summary>
         public static NOMADConfig LoadFromFile(string path)
         {
@@ -129,34 +116,6 @@ namespace NOMAD.MissionPlanner
         internal static void ValidateInputDocument(JObject document)
         {
             ValidateVideoDocument(document);
-            // Retired service endpoints are discarded in memory; loading never rewrites operator files.
-            document.Remove("CoreRuntimePort");
-            document.Remove("CoreClientCredential");
-            document.Remove("ManagementPort");
-            var termination = document["JoystickTerminationButtonIndex"];
-            var monitor = document["JoystickKillSwitchEnabled"];
-            if ((termination != null && termination.Type != JTokenType.Integer) ||
-                (monitor != null && monitor.Type != JTokenType.Boolean))
-            {
-                throw new JsonSerializationException(
-                    "Retired HID termination index must be an integer and its enabled flag must be boolean.");
-            }
-            if (termination != null) { ValidatePhysicalIndex(termination, "Retired HID termination index"); }
-            // The unavailable monitor has no input ownership; accept only its exact typed legacy keys.
-            document.Remove("JoystickTerminationButtonIndex");
-            document.Remove("JoystickKillSwitchEnabled");
-            // Retired RC-role notes never configured the aircraft; retain their exact legacy input contract.
-            foreach (string name in new[] { "RcArmingChannel", "RcFlightModeChannel" })
-            {
-                var channel = document[name];
-                if (channel != null && channel.Type != JTokenType.Null &&
-                    (channel.Type != JTokenType.Integer || !int.TryParse(channel.ToString(Formatting.None),
-                        NumberStyles.Integer, CultureInfo.InvariantCulture, out int value) || value < 1 || value > 18))
-                {
-                    throw new JsonSerializationException("Retired RC roles must be null or integer channels from 1 to 18.");
-                }
-                document.Remove(name);
-            }
             foreach (var property in document.Properties())
             {
                 // Json.NET's case-insensitive coercion must not bypass raw-token validation below.
