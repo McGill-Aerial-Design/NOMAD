@@ -13,7 +13,7 @@ Set-Location $ProjectDir
 # Configuration
 $ProjectFile = "NOMADPlugin.csproj"
 $Configuration = "Release"
-$version = '0.4.0'
+$version = '0.4.1'
 
 # Step 1: Find MSBuild
 Write-Host "[1/4] Locating MSBuild..." -ForegroundColor Yellow

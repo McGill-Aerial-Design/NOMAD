@@ -26,7 +26,7 @@ matching [custom firmware and aircraft setup](docs/native-termination.md).
 
 ## Get started
 
-Download **NOMAD-0.4.0-Setup.exe** from the [NOMAD 0.4.0 release](https://github.com/McGill-Aerial-Design/NOMAD/releases/tag/v0.4.0).
+Download **NOMAD-0.4.1-Setup.exe** from the [NOMAD 0.4.1 release](https://github.com/McGill-Aerial-Design/NOMAD/releases/tag/v0.4.1).
 Close the selected Mission Planner installation, run setup and approve the Windows administrator prompt.
 Confirm its folder and select **Install**. Setup verifies the bundled DLL, preserves a previous copy outside
 the active plugins folder and removes the DLL's Windows download block. Aircraft profiles are preserved.

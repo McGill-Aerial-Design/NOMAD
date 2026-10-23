@@ -78,7 +78,10 @@ foreach ($path in $inputs) {
     $manifest.inputs_sha256[$relative] = (Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant()
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'installer-manifest.json')
-@($manifest.installer_sha256 + '  ' + [IO.Path]::GetFileName($exe),
-    ((Get-FileHash -LiteralPath (Join-Path $output 'installer-manifest.json')).Hash.ToLowerInvariant() + '  installer-manifest.json')) |
+$checksums = @(
+    ($manifest.installer_sha256 + '  ' + [IO.Path]::GetFileName($exe))
+    ((Get-FileHash -LiteralPath (Join-Path $output 'installer-manifest.json')).Hash.ToLowerInvariant() + '  installer-manifest.json')
+)
+$checksums |
     Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS') -Encoding ascii
 Write-Output "Built $exe (plugin $version, source $source); nothing installed."
