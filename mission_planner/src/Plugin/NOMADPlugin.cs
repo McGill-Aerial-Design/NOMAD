@@ -130,10 +130,7 @@ namespace NOMAD.MissionPlanner
                     Host?.MainForm?.BeginInvoke((MethodInvoker)delegate
                     {
                         CustomMessageBox.Show(
-                            $"NOMAD Plugin v{Version} loaded (debug mode).\n\n" +
-                            $"Click NOMAD for the interface,\n" +
-                            $"or choose tools and settings from the menu.\n\n" +
-                            "Custom gimbal and payload controls use Mission Planner. Physical completion remains unverified.",
+                            $"NOMAD v{Version} loaded (debug mode).",
                             "NOMAD"
                         );
                     });

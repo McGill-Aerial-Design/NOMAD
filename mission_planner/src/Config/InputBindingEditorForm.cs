@@ -20,7 +20,8 @@ namespace NOMAD.MissionPlanner
         private readonly ComboBox _device, _source, _axis, _button, _otherButton, _action, _otherAction;
         private readonly NumericUpDown _deadzone;
         private readonly Control _axisRow, _buttonRow, _otherButtonRow, _otherActionRow, _deadzoneRow, _invertRow;
-        private readonly Label _status, _hint;
+        private readonly Label _status;
+        private readonly ToolTip _tips = new ToolTip();
         private readonly Button _listenButton, _listenOther, _stopListen;
         private IList<string> _available = new List<string>();
         internal static readonly KeyValuePair<string, string>[] SourceChoices =
@@ -54,7 +55,7 @@ namespace NOMAD.MissionPlanner
             _name = new TextBox { Text = original.Name, BackColor = NOMADTheme.INPUT_BG, ForeColor = NOMADTheme.TEXT_PRIMARY }; Add("Control name", _name);
             _enabled = ControlFactory.CheckBox("Enabled", original.Enabled); Add("Use control", _enabled);
             body.Controls.Add(ControlFactory.Label("Input", foreColor: NOMADTheme.ACCENT));
-            _device = Combo(); Add("USB HID device", _device);
+            _device = Combo(); Add("Device", _device);
             var refresh = ControlFactory.Button("Refresh devices", (sender, args) => RefreshDevices(), width: 160); body.Controls.Add(refresh);
             NOMADSettingsForm.SetBindingChoices(_device, Array.Empty<KeyValuePair<string, string>>(), original.Device); RefreshDevices();
             _source = Combo(); NOMADSettingsForm.SetBindingChoices(_source, SourceChoices, original.Source);
@@ -64,12 +65,11 @@ namespace NOMAD.MissionPlanner
             for (int i = 0; i < 128; i++) { _button.Items.Add(InputListenState.ButtonLabel(i)); _otherButton.Items.Add(InputListenState.ButtonLabel(i)); }
             _button.SelectedIndex = original.Button; _otherButton.SelectedIndex = original.OtherButton;
             _buttonRow = Add("Button / positive endpoint", _button); _otherButtonRow = Add("Negative endpoint button", _otherButton);
-            _invert = ControlFactory.CheckBox("Invert axis (also swaps 2-position active endpoint)", original.Invert); _invertRow = Add("Axis direction", _invert);
+            _invert = ControlFactory.CheckBox("Invert", original.Invert); _invertRow = Add("Axis direction", _invert);
             _deadzone = ControlFactory.Numeric(0, 0.5m, (decimal)original.Deadzone); _deadzone.DecimalPlaces = 2; _deadzone.Increment = 0.01m;
             _deadzoneRow = Add("Continuous axis deadzone", _deadzone);
             body.Controls.Add(ControlFactory.Label("Action", foreColor: NOMADTheme.ACCENT));
             _action = Combo(); _otherAction = Combo(); Add("Action / positive endpoint", _action); _otherActionRow = Add("Negative endpoint action", _otherAction);
-            _hint = ControlFactory.Label("", foreColor: NOMADTheme.WARNING); _hint.MaximumSize = new Size(610, 0); body.Controls.Add(_hint);
             _listenButton = ControlFactory.Button("Listen for input", (sender, args) => BeginListen(false), width: 160);
             _listenOther = ControlFactory.Button("Listen negative button", (sender, args) => BeginListen(true), width: 190);
             _stopListen = ControlFactory.Button("Stop listening", (sender, args) => StopListen("Listen canceled."), width: 130);
@@ -117,9 +117,9 @@ namespace NOMAD.MissionPlanner
             var choices = ActionChoices(_config, source == "Axis");
             NOMADSettingsForm.SetBindingChoices(_action, choices, action);
             NOMADSettingsForm.SetBindingChoices(_otherAction, choices, other);
-            _hint.Text = source == "Axis" ? "Continuous axes support gimbal pitch/roll or nonhazardous position payloads without confirmations. Center before use." :
+            _tips.SetToolTip(_source, source == "Axis" ? "Continuous axes support gimbal pitch/roll or nonhazardous position payloads without confirmations. Center before use." :
                 source == "AxisSwitch2" ? "2-position axis: inactive endpoint establishes neutral; active endpoint fires once. Returning inactive does not switch a latched payload off. Bind Safe separately if needed." :
-                "Release / center before activation. A held input never counts as repeated confirmation. Opposing buttons request Safe.";
+                "Release / center before activation. A held input never counts as repeated confirmation. Opposing buttons request Safe.");
         }
         internal static List<KeyValuePair<string, string>> ActionChoices(NOMADConfig config, bool continuous)
         {
@@ -214,7 +214,7 @@ namespace NOMAD.MissionPlanner
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { _timer?.Stop(); _timer?.Dispose(); StopListen(""); }
+            if (disposing) { _timer?.Stop(); _timer?.Dispose(); _tips.Dispose(); StopListen(""); }
             base.Dispose(disposing);
         }
     }

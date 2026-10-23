@@ -13,18 +13,15 @@ namespace NOMAD.MissionPlanner
         private TabPage CreateJoystickTab()
         {
             var tab = CreateTabPage("Inputs");
-            AddLabel(tab, "Add a named control, choose its USB device and bind it to a payload or gimbal axis.", 12, 12);
             _inputList = CreateDefinitionList("Control", "Input", "Action", "Enabled");
-            _inputList.Location = new Point(12, 45); _inputList.Size = new Size(700, 260); tab.Controls.Add(_inputList);
+            _inputList.Location = new Point(12, 15); _inputList.Size = new Size(700, 260); tab.Controls.Add(_inputList);
             var add = ControlFactory.Button("Add control", (sender, args) => EditInput(-1), width: 120);
             var edit = ControlFactory.Button("Edit", (sender, args) => EditInput(SelectedRow(_inputList)));
             var remove = ControlFactory.Button("Remove", (sender, args) => RemoveInput());
             var buttons = ControlFactory.ButtonRow(add, edit, remove); buttons.Dock = DockStyle.None;
-            buttons.Location = new Point(12, 320); tab.Controls.Add(buttons);
-            AddLabel(tab, "Gimbal maximum rate (deg/s):", 12, 375);
-            _numJoyGimbalMaxRate = AddNumericUpDown(tab, 235, 372, 85, 5, 200, 60);
-            AddLabel(tab, "Listen requires a disconnected aircraft. Center / release controls before use.\n" +
-                "Gimbal movement uses continuous axes; flight controls remain in Mission Planner.", 12, 420, NOMADTheme.WARNING);
+            buttons.Location = new Point(12, 290); tab.Controls.Add(buttons);
+            AddLabel(tab, "Gimbal maximum rate (deg/s):", 12, 340);
+            _numJoyGimbalMaxRate = AddNumericUpDown(tab, 235, 337, 85, 5, 200, 60);
             _inputList.CellDoubleClick += (sender, args) => { if (args.RowIndex >= 0) { EditInput(args.RowIndex); } };
             return tab;
         }

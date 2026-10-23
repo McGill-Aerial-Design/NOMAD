@@ -17,7 +17,7 @@ namespace NOMAD.MissionPlanner
             internal string Intent;
             internal readonly HashSet<string> NeutralInputs = new HashSet<string>();
             internal bool Known, Active, Recovery;
-            internal string Status = "No command sent. Physical state is unverified.";
+            internal string Status = "";
         }
         internal static PayloadController Current { get; private set; }
         private readonly object _gate = new object();
@@ -132,13 +132,13 @@ namespace NOMAD.MissionPlanner
                     return _pending;
                 }
                 if (_busy || _stopping || state.Recovery || RepeatBusy())
-                { return SetStatus(id, "Payload is busy or needs an explicit accepted Safe command; no activation queued."); }
+                { return SetStatus(id, "Payload busy or needs an explicit accepted Safe."); }
                 if (source == "hid" && operation == "position" && !definition.Continuous)
-                { return SetStatus(id, "Continuous HID requires a nonhazardous unconfirmed position output."); }
+                { return SetStatus(id, "Position input requires a nonhazardous payload without confirmations."); }
                 if (!Confirmed(definition, state, operation, value, source, inputId))
-                { return SetStatus(id, "Confirmation incomplete or HID neutral return required; no command sent."); }
+                { return SetStatus(id, "Confirmation incomplete or neutral needed."); }
                 if (definition.Timed && !ReserveRepeat(definition.Id))
-                { return SetStatus(id, "Another native repeat is pending; no activation queued."); }
+                { return SetStatus(id, "Another timed action is active."); }
                 _busy = true;
                 _stopRequested = false;
                 _pending = ActivateAsync(definition, state, operation, value, target, inputStillCurrent);
@@ -229,14 +229,14 @@ namespace NOMAD.MissionPlanner
                     if (!target.IsCurrent) { state.Recovery = true; }
                 }
                 if (!target.IsCurrent)
-                { return await SetStatus(definition.Id, "Aircraft changed during the native command. Current aircraft output state is unknown."); }
-                return await SetStatus(definition.Id, accepted ? "Mission Planner received an accepted command ACK. Physical completion is unverified." :
-                    "Mission Planner did not confirm command acceptance; physical state is unverified.");
+                { return await SetStatus(definition.Id, "Aircraft changed. Check payload state."); }
+                return await SetStatus(definition.Id, accepted ? "Command accepted." :
+                    "Command not confirmed. Check payload.");
             }
             catch (Exception error)
             {
                 lock (_gate) { state.Recovery |= attempted; state.Known = false; }
-                return await SetStatus(definition.Id, "Payload outcome is uncertain. Use explicit Safe; do not replay activation. " + error.Message);
+                return await SetStatus(definition.Id, "Payload outcome uncertain. Check payload and use Safe. " + error.Message);
             }
             finally
             {
@@ -269,14 +269,14 @@ namespace NOMAD.MissionPlanner
                     }
                 }
                 if (!target.IsCurrent)
-                { return await SetStatus(definition.Id, "Aircraft changed during Safe. Current aircraft safe state is unknown."); }
-                return await SetStatus(definition.Id, accepted ? "Safe command ACK accepted. Physical state is unverified." :
-                    "Mission Planner did not confirm Safe acceptance; physical state is unverified.");
+                { return await SetStatus(definition.Id, "Aircraft changed during Safe. Check payload."); }
+                return await SetStatus(definition.Id, accepted ? "Safe accepted." :
+                    "Safe not confirmed. Check payload.");
             }
             catch (Exception error)
             {
                 lock (_gate) { state.Known = false; state.Recovery = true; }
-                return await SetStatus(definition.Id, "Safe outcome is uncertain; inspect aircraft before retrying. " + error.Message);
+                return await SetStatus(definition.Id, "Safe outcome uncertain. Inspect before retrying. " + error.Message);
             }
             finally { lock (_gate) { _safePending.Remove(definition.Id); _stopping = _safePending.Count != 0; } }
         }

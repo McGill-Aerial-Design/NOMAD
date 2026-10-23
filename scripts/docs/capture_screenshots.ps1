@@ -2,6 +2,7 @@
 # Render real plugin controls with example data; never load the operator profile or start the plugin.
 param([string]$OutputDirectory = 'docs/images')
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
 if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
     throw 'Run with Windows PowerShell: powershell -STA -NoProfile -File scripts/docs/capture_screenshots.ps1'
 }
@@ -21,6 +22,7 @@ New-Item -ItemType Directory -Path $output, $attempt -Force | Out-Null
 })
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+. (Join-Path $PSScriptRoot 'render_controls.ps1')
 [Windows.Forms.Application]::EnableVisualStyles()
 [Reflection.Assembly]::LoadFrom((Join-Path $hostRoot 'MissionPlanner.exe')) | Out-Null
 [Reflection.Assembly]::LoadFrom((Join-Path $hostRoot 'MissionPlanner.Utilities.dll')) | Out-Null
@@ -35,38 +37,21 @@ $plugin.GetType('NOMAD.MissionPlanner.Log').GetField('_logPath',
 function New-PluginObject([string]$name) {
     return [Activator]::CreateInstance($plugin.GetType('NOMAD.MissionPlanner.' + $name, $true))
 }
+$capturedPaths = [Collections.Generic.List[string]]::new()
 function Capture([Windows.Forms.Control]$control, [string]$filename) {
-    $form = if ($control -is [Windows.Forms.Form]) { $control } else {
-        $hostForm = [Windows.Forms.Form]::new()
-        $hostForm.ClientSize = [Drawing.Size]::new(1180, 760)
-        $hostForm.Controls.Add($control)
-        $hostForm
-    }
-    try {
-        $form.StartPosition = 'Manual'
-        $form.Location = [Drawing.Point]::new(-20000, -20000)
-        $form.ShowInTaskbar = $false
-        $form.Show()
-        $form.PerformLayout()
-        [Windows.Forms.Application]::DoEvents()
-        $bitmap = [Drawing.Bitmap]::new($form.ClientSize.Width, $form.ClientSize.Height)
-        try {
-            # Capture only the client area; no desktop pixels, unrelated windows or synthetic UI artwork.
-            $full = [Drawing.Bitmap]::new($form.Width, $form.Height)
-            try {
-                $form.DrawToBitmap($full, [Drawing.Rectangle]::new(0, 0, $form.Width, $form.Height))
-                $client = $form.PointToScreen([Drawing.Point]::Empty)
-                $graphics = [Drawing.Graphics]::FromImage($bitmap)
-                try { $graphics.DrawImage($full, $form.Left - $client.X, $form.Top - $client.Y) }
-                finally { $graphics.Dispose() }
-            } finally { $full.Dispose() }
-            $bitmap.Save((Join-Path $output $filename), [Drawing.Imaging.ImageFormat]::Png)
-        } finally { $bitmap.Dispose() }
-    } finally { $form.Dispose() }
+    $imagePath = Join-Path $output $filename
+    Save-ControlImage $control $imagePath
+    $capturedPaths.Add($imagePath)
 }
 
 # An unstarted shared service prevents dashboard construction from starting monitoring.
 $notifications = New-PluginObject 'NotificationService'
+$outputType = $plugin.GetType('NOMAD.MissionPlanner.OutputController', $true)
+$payloadType = $plugin.GetType('NOMAD.MissionPlanner.PayloadController', $true)
+$static = [Reflection.BindingFlags]'Static,NonPublic'
+$connectionField = $outputType.GetField('CurrentConnection', $static)
+$connectionField.SetValue($null, [Management.Automation.LanguagePrimitives]::ConvertTo(
+    { return $null }, $connectionField.FieldType))
 $notificationType = $notifications.GetType()
 $previousNotifications = $notificationType.GetProperty('Shared').GetValue($null)
 $notificationType.GetProperty('Shared').SetValue($null, $notifications)
@@ -107,29 +92,63 @@ try {
     $link.RemoteHost = 'relay.example.invalid'; $link.Port = 5760; $link.Priority = 1
     $config.RouterLinks.Add($link)
     $config.RouterPreferredLink = 'example-elrs'
-    foreach ($tab in @(@(0, 'aircraft-profiles.png'), @(1, 'router-settings.png'), @(2, 'video-profiles.png'))) {
+    $config.ActuatorDefinitions = [Newtonsoft.Json.Linq.JArray]::Parse('[{"id":"light","name":"Inspection light","behavior":"RelayToggle","channel":0,"safe_pwm":1000,"hazardous":false,"confirmation_count":0}]')
+    foreach ($definition in @(@('light-switch', 'Inspection light switch', 'AxisSwitch3', 'Rz', 'light:activate', 'light:safe'),
+        @('gimbal-pitch', 'Gimbal pitch stick', 'Axis', 'Y', 'gimbal:pitch', ''))) {
+        $binding = New-PluginObject 'InputBinding'
+        $binding.Id = $definition[0]; $binding.Name = $definition[1]; $binding.Device = 'Example USB controller'
+        $binding.Source = $definition[2]; $binding.Axis = $definition[3]
+        $binding.Action = $definition[4]; $binding.OtherAction = $definition[5]
+        $config.Inputs.Add([Newtonsoft.Json.Linq.JObject]::FromObject($binding))
+    }
+    foreach ($tab in @(@('Aircraft', 'aircraft-profiles.png'), @('Links', 'router-settings.png'),
+        @('Video', 'video-profiles.png'), @('Inputs', 'inputs-settings.png'))) {
         $profilesType = $plugin.GetType('NOMAD.MissionPlanner.NOMADProfiles')
         $profiles = $profilesType.GetConstructors() | Where-Object { $_.GetParameters().Count -eq 1 } |
             ForEach-Object { $_.Invoke([object[]]@($config)) }
         $settingsType = $plugin.GetType('NOMAD.MissionPlanner.NOMADSettingsForm')
         $settings = $settingsType.GetConstructors()[0].Invoke([object[]]@($profiles))
-        $settingsType.GetField('_tabControl', $private).GetValue($settings).SelectedIndex = $tab[0]
+        $tabs = $settingsType.GetField('_tabControl', $private).GetValue($settings)
+        $page = @($tabs.TabPages | Where-Object { $_.Text -eq $tab[0] })
+        if ($page.Count -ne 1) { throw ('Expected one settings page: ' + $tab[0]) }
+        $tabs.SelectedTab = $page[0]
         Capture $settings $tab[1]
     }
+    $editorType = $plugin.GetType('NOMAD.MissionPlanner.InputBindingEditorForm', $true)
+    $editor = [Activator]::CreateInstance($editorType, [Reflection.BindingFlags]'Instance,NonPublic',
+        $null, [object[]]@($config, [int]0), $null)
+    Capture $editor 'input-editor.png'
+    $outputType.GetMethod('Initialize', $static).Invoke($null, [object[]]@($config)) | Out-Null
+    $payloadType.GetMethod('ApplyProfile', $static).Invoke($null, [object[]]@($config)) | Out-Null
+    $selectMethod = $screenType.GetMethod('SetVideoInputSelection', $static)
+    $selectCallback = [Management.Automation.LanguagePrimitives]::ConvertTo(
+        {
+            param($draft, $name)
+            $draft.SelectedVideoInputName = $name
+            return $true
+        }, $selectMethod.GetParameters()[0].ParameterType)
+    $selectMethod.Invoke($null, [object[]]@($selectCallback)) | Out-Null
+    $videoType = $plugin.GetType('NOMAD.MissionPlanner.NOMADVideoView', $true)
+    $video = [Activator]::CreateInstance($videoType, [Reflection.BindingFlags]'Instance,NonPublic',
+        $null, [object[]]@($config, [Threading.CancellationToken]::None), $null)
+    Capture $video 'video-page.png'
 } finally {
+    $payloadType.GetMethod('Shutdown', $static).Invoke($null, $null) | Out-Null
+    $outputType.GetMethod('Shutdown', $static).Invoke($null, $null) | Out-Null
+    $screenType.GetMethod('SetVideoInputSelection', $static).Invoke($null, [object[]]@($null)) | Out-Null
     $screenType.GetMethod('SetFenceSetupInput', [Reflection.BindingFlags]'Static,NonPublic').Invoke(
         $null, [object[]]@($null)) | Out-Null
     $notificationType.GetProperty('Shared').SetValue($null, $previousNotifications)
     $notifications.Dispose()
 }
-Get-ChildItem -LiteralPath $output -Filter '*.png' | ForEach-Object {
-    $image = [Drawing.Image]::FromFile($_.FullName)
+$capturedPaths | ForEach-Object {
+    $image = [Drawing.Image]::FromFile($_)
     try {
-        if ($image.Width -lt 700 -or $image.Height -lt 600) { throw ('Incomplete capture: ' + $_.Name) }
+        if ($image.Width -lt 600 -or $image.Height -lt 500) { throw ('Incomplete capture: ' + $_) }
     } finally { $image.Dispose() }
 }
 [ordered]@{ plugin_sha256 = (Get-FileHash $pluginPath).Hash; example_data = $true;
-    aircraft_connected = $false; capture = 'WinForms DrawToBitmap'; images = @(Get-ChildItem $output -Filter '*.png' |
-        ForEach-Object { [ordered]@{ name = $_.Name; sha256 = (Get-FileHash $_.FullName).Hash } }) } |
+    aircraft_connected = $false; capture = 'WinForms DrawToBitmap without activation'; images = @($capturedPaths |
+        ForEach-Object { [ordered]@{ name = [IO.Path]::GetFileName($_); sha256 = (Get-FileHash $_).Hash } }) } |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $attempt 'captures.json')
-Write-Output ('Captured five NOMAD screens to ' + $output)
+Write-Output ('Captured NOMAD screens to ' + $output)

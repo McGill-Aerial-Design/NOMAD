@@ -12,19 +12,14 @@ namespace NOMAD.MissionPlanner
         private TabPage CreateActuatorsTab()
         {
             var tab = CreateTabPage("Payloads");
-            AddLabel(tab, "Configure this aircraft's payloads, then Save the profile to activate them.", 12, 12);
             _payloadList = CreateDefinitionList("Name", "Type", "Output", "Interlocks");
-            _payloadList.Location = new Point(12, 45); _payloadList.Size = new Size(700, 260);
+            _payloadList.Location = new Point(12, 15); _payloadList.Size = new Size(700, 260);
             tab.Controls.Add(_payloadList);
             var add = ControlFactory.Button("Add", (sender, args) => EditPayload(-1));
             var edit = ControlFactory.Button("Edit", (sender, args) => EditPayload(SelectedRow(_payloadList)));
             var remove = ControlFactory.Button("Remove", (sender, args) => RemovePayload());
             var buttons = ControlFactory.ButtonRow(add, edit, remove); buttons.Dock = DockStyle.None;
-            buttons.Location = new Point(12, 320); tab.Controls.Add(buttons);
-            var warning = ControlFactory.Label("Timed servos need live SERVOx_TRIM to match safe / neutral PWM.\n" +
-                "One timed action at a time. Commands may retry; Stop waits for pending work.\nPhysical state is unverified.",
-                foreColor: NOMADTheme.WARNING, fontSize: NOMADTheme.SIZE_BODY);
-            warning.Location = new Point(12, 365); tab.Controls.Add(warning);
+            buttons.Location = new Point(12, 290); tab.Controls.Add(buttons);
             _payloadList.CellDoubleClick += (sender, args) => { if (args.RowIndex >= 0) { EditPayload(args.RowIndex); } };
             return tab;
         }

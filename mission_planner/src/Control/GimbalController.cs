@@ -78,7 +78,7 @@ namespace NOMAD.MissionPlanner
         internal static string LastCommandStatus
         {
             get; private set;
-        } = "No gimbal command submitted.";
+        } = "Idle";
         internal static void ApplyProfile(NOMADConfig config)
         {
             InvalidateInput();

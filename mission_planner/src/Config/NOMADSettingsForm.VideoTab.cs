@@ -58,8 +58,6 @@ namespace NOMAD.MissionPlanner
 
             _chkAutoStartHudVideo = AddCheckBox(tab, "Auto-start video on HUD", 20, y);
             y += 35;
-            AddLabel(tab, "Choose the active input at the top-right of the video player.", 20, y);
-            y += 32;
             var info = ControlFactory.Button("Receiver help ⓘ", width: 150, height: 28);
             info.Location = new Point(20, y);
             info.AccessibleName = "Video receiver help";

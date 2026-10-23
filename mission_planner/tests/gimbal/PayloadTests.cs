@@ -241,7 +241,7 @@ internal static class PayloadTests
             var fixture = Reset(Definition("winch", "ServoBidirectional", 10, 1500));
             string activation = Act(fixture.Owner, "winch", "negative");
             var commands = fixture.Connection.Commands;
-            Check(activation.Contains("accepted command ACK") && commands.Count == 1 &&
+            Check(activation.Contains("Command accepted") && commands.Count == 1 &&
                 commands[0].Kind == MAVLink.MAV_CMD.DO_REPEAT_SERVO && commands[0].Second == 1000,
                 "Safe rejection fixture did not establish an accepted negative repeat");
             Check(SpinWait.SpinUntil(() => !PayloadController.HasPendingWork, 5000),
@@ -252,8 +252,8 @@ internal static class PayloadTests
             string rejected = Act(fixture.Owner, "winch", "safe");
             int expectedCommands = hostBusy ? 1 : 2;
             Check(commands.Count == expectedCommands &&
-                (hostBusy ? rejected.Contains("Safe outcome is uncertain") && rejected.Contains("busy") :
-                    rejected.Contains("did not confirm Safe acceptance")),
+                (hostBusy ? rejected.Contains("Safe outcome uncertain") && rejected.Contains("busy") :
+                    rejected.Contains("Safe not confirmed")),
                 "Busy admission and native nonconfirmation did not report distinct truthful Safe outcomes");
             if (!hostBusy)
             {
@@ -273,7 +273,7 @@ internal static class PayloadTests
 
             string accepted = Act(fixture.Owner, "winch", "safe");
             var neutral = commands.Last();
-            Check(accepted.Contains("Safe command ACK accepted") && commands.Count == expectedCommands + 1 &&
+            Check(accepted.Contains("Safe accepted") && commands.Count == expectedCommands + 1 &&
                 neutral.Kind == MAVLink.MAV_CMD.DO_SET_SERVO && neutral.First == 10 && neutral.Second == 1500 &&
                 neutral.System == 4 && neutral.Component == 2 && neutral.Ack,
                 "A new explicit Safe did not send exactly one accepted original-target neutral command");

@@ -41,7 +41,7 @@ namespace NOMAD.MissionPlanner
             mainLayout.Controls.Add(CreateStatusCard("Battery", "--.- V", out _lblBattery, NOMADTheme.TEXT_SECONDARY), 2, 0);
 
             mainLayout.Controls.Add(CreateStatusCard("Links", "--", out _lblLinks, NOMADTheme.TEXT_SECONDARY, fontSize: 10), 0, 1);
-            mainLayout.Controls.Add(CreateStatusCard("Gimbal command", "Unverified", out _lblGimbalCommand,
+            mainLayout.Controls.Add(CreateStatusCard("Gimbal", "Idle", out _lblGimbalCommand,
                 NOMADTheme.TEXT_SECONDARY, fontSize: 10), 1, 1);
 
             _terminationWidget = new TerminationWidget(NOMADMainScreen.Termination, _videoShutdown)

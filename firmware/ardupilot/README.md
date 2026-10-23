@@ -10,10 +10,6 @@ base features also work with stock firmware; native termination requires this ex
 
 ![NOMAD native fence draft helper used before aircraft commissioning](../../docs/images/fence-setup.png)
 
-*Actual NOMAD Fence setup controls with the public AEAC C1 polygon in an unsent
-draft. This helper stages coordinates in native Plan; it neither uploads a fence
-nor configures or demonstrates aircraft termination.*
-
 ## Supported build
 
 | Item | Source authority |
@@ -49,7 +45,7 @@ Build/test does not flash hardware, install the plugin or configure an aircraft.
 The [firmware workflow](../../.github/workflows/firmware.yml) qualifies relevant pull
 requests and supports manual builds. A manual run with an existing tag at the
 selected NOMAD commit can create a **draft prerelease**; it never publishes that
-draft automatically. The separate Windows workflow uploads the plugin DLL only.
+draft automatically. The separate Windows workflow uploads the plugin DLL and offline setup.
 The [release procedure](../../docs/native-termination.md#build-and-release-automation)
 also covers the same local build script. Qualified packages retain:
 

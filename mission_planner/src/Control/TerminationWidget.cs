@@ -116,7 +116,7 @@ namespace NOMAD.MissionPlanner
             RefreshStatus();
             _error = null;
             try { await _controller.CheckAsync(); }
-            catch (Exception) { _error = "Native support could not be verified. No termination sent."; }
+            catch (Exception) { _error = "Support could not be verified. No termination sent."; }
             finally { _busy = false; RefreshStatus(); }
         }
 
@@ -134,7 +134,7 @@ namespace NOMAD.MissionPlanner
                 _target = _controller.TargetDescription;
                 _waitingForRelease = true;
             }
-            catch (Exception) { _error = "Native support could not be verified. No termination sent."; }
+            catch (Exception) { _error = "Support could not be verified. No termination sent."; }
             finally
             {
                 if (!_waitingForRelease) { _busy = false; }
@@ -151,11 +151,11 @@ namespace NOMAD.MissionPlanner
                 if (_reviewCancelled || !_canInteract() || !_controller.CanRequest) { return; }
                 var result = _confirm(FindForm(), _target);
                 if (result != DialogResult.OK || IsDisposed || _shutdown.IsCancellationRequested) { return; }
-                _status.Text = "Request pending · unverified";
+                _status.Text = "Request pending";
                 string outcome = await _controller.RequestAsync(_generation, _mode);
                 if (!IsDisposed && !_shutdown.IsCancellationRequested && FindForm() != null)
                 {
-                    MessageBox.Show(FindForm(), outcome, "Native termination", MessageBoxButtons.OK,
+                    MessageBox.Show(FindForm(), outcome, "Termination", MessageBoxButtons.OK,
                         MessageBoxIcon.Information);
                 }
             }
@@ -163,16 +163,16 @@ namespace NOMAD.MissionPlanner
             {
                 if (!IsDisposed && !_shutdown.IsCancellationRequested)
                 { MessageBox.Show(FindForm(), "Termination outcome is uncertain. Inspect aircraft; do not replay.",
-                    "Native termination", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+                    "Termination", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
             }
             finally { _confirming = _busy = false; RefreshStatus(); }
         }
 
         private static DialogResult Confirm(IWin32Window owner, string target) => MessageBox.Show(owner,
-            $"Activate native TERMINATE on {target}?\n" +
+            $"Activate TERMINATE on {target}?\n" +
             "Fixed wing: motor off and full termination surfaces. VTOL: rapid descent through touchdown.\n" +
             "The aircraft chooses its response. This latches until controller reboot.\n" +
-            "Ordinary LAND remains separate. Physical completion is unverified.", "TERMINATE aircraft",
+            "This is not a LAND command.", "TERMINATE aircraft",
             MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
 
         internal void RefreshStatus()
@@ -182,7 +182,7 @@ namespace NOMAD.MissionPlanner
             string detail = _error ?? _controller?.Status ?? "Termination unavailable.";
             string summary = "Unavailable · check support";
             if (_waitingForRelease) { summary = "Release both Shift keys to review."; }
-            else if (_busy) { summary = "Checking native support…"; }
+            else if (_busy) { summary = "Checking support…"; }
             else if (_controller?.Observed == true) { summary = "Observed · reboot required"; }
             else if (_controller?.Supported == true && !_controller.Armed) { summary = "Supported · disarmed"; }
             else if (_controller?.CanRequest == true) { summary = "Hover here, then press both Shift keys."; }

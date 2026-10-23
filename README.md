@@ -4,10 +4,7 @@ Aircraft profiles, video, custom controls and redundant telemetry links in one
 Mission Planner plugin. Mission Planner owns the aircraft connection, normal
 flight controls, setup and missions. ArduPilot owns flight execution and failsafes.
 
-![NOMAD dashboard and navigation with no aircraft connected](docs/images/dashboard.png)
-
-*Actual NOMAD controls rendered from the built plugin with an example profile.
-No aircraft is connected; telemetry and actuator state are unverified.*
+![NOMAD dashboard and navigation](docs/images/dashboard.png)
 
 ## Capabilities
 
@@ -16,8 +13,8 @@ No aircraft is connected; telemetry and actuator state are unverified.*
 | Aircraft profiles | Separate video, links, payload calibration and input mappings for each aircraft |
 | Video inputs | Named RTSP or RTP/H.264 UDP sources, input selection and receiver latency/queue settings |
 | Gimbal and payloads | Native Mission Planner commands, calibrated outputs, bounded actions and input-loss Safe |
-| USB HID inputs | Gimbal axes, payload controls and configurable switch/button mappings |
-| Native fence setup | Coordinate validation and polygon staging in Mission Planner's existing Fence editor |
+| Input controls | Named controls, button/axis detection, payload bindings and continuous gimbal movement |
+| Native fence setup | Polygon staging in Mission Planner's Fence editor and native fence/failsafe configuration |
 | Link router | Plugin-owned UDP/TCP/serial links, duplicate suppression, failover and link status |
 | Optional aircraft firmware | A separate onboard TERMINATE mode for Copter and the supported QuadPlane layout |
 
@@ -29,7 +26,7 @@ matching [custom firmware and aircraft setup](docs/native-termination.md).
 
 ## Get started
 
-Download **NOMAD-0.3.1-Setup.exe** from the [NOMAD 0.3.1 release](https://github.com/McGill-Aerial-Design/NOMAD/releases/tag/v0.3.1).
+Download **NOMAD-0.4.0-Setup.exe** from the [NOMAD 0.4.0 release](https://github.com/McGill-Aerial-Design/NOMAD/releases/tag/v0.4.0).
 Close the selected Mission Planner installation, run setup and approve the Windows administrator prompt.
 Confirm its folder and select **Install**. Setup verifies the bundled DLL, preserves a previous copy outside
 the active plugins folder and removes the DLL's Windows download block. Aircraft profiles are preserved.
@@ -65,21 +62,24 @@ resolution and encoded quality are configured at the camera or encoder.
 
 ![Named RTSP video input and receiver settings](docs/images/video-profiles.png)
 
-*Example receiver profile. The `.invalid` address is documentation data; no camera
-was opened. An Ethernet receiver or a reachable Jetson/MediaMTX server can supply
-the actual RTSP URL. Network access and encoder configuration remain external.*
-
 ## Native fence setup
 
-Open **NOMAD → Fence setup** to load the published AEAC polygon or
-paste GPS points. Review the coordinate order and stage the complete polygon in
-native Plan with **Fence** selected. Staging changes the editor draft only; use
-Mission Planner's native **Write**, then **Read**, to transfer and verify it.
+Open **NOMAD → Fence setup**, paste GPS points and review the coordinate order.
+Open or Stage selects native **Fence** automatically and preserves other editor
+drafts during the plugin session. Staging changes the editor draft only; use native
+**Write**, then **Read**, to transfer and verify it. Read/apply supported fence response
+and controlled-termination settings on the page while disarmed.
 
-![Native fence draft helper with the published AEAC C1 coordinates](docs/images/fence-setup.png)
+![Fence setup](docs/images/fence-setup.png)
 
-*Public AEAC C1 coordinates in an unsent draft. This capture does not establish an
-aircraft fence, approved altitude datum or termination configuration.*
+## Named controls
+
+In **Settings → Inputs**, select **Add control**, choose an input device and select
+an input or use **Listen**. Bind it to a payload action or continuous gimbal axis.
+Listen requires a disconnected aircraft; release/center the control before use.
+Missing devices remain visible instead of being replaced automatically.
+
+![Named controls in aircraft settings](docs/images/inputs-settings.png)
 
 ## Firmware and releases
 
@@ -95,7 +95,7 @@ contains both board-specific images and their matching complete corresponding so
 
 | GitHub automation | Current result |
 |---|---|
-| [Windows plugin workflow](.github/workflows/csharp.yml) | Builds/tests the DLL and uploads an Actions artifact |
+| [Windows plugin workflow](.github/workflows/csharp.yml) | Builds/tests the DLL and offline setup; uploads both with setup identity/checksums |
 | [Documentation/Python workflow](.github/workflows/lint.yml) | Checks Python and builds documentation |
 | [Pages workflow](.github/workflows/static.yml) | Publishes the documentation site |
 | [Firmware qualification](.github/workflows/firmware.yml) | Runs native checks, packages both CubeOrangePlus images and matching source; manual runs can create a draft prerelease |
@@ -119,8 +119,7 @@ Competition requirements and unresolved organizer decisions are recorded in the
 For a reproducible bug report, include the NOMAD source/version, Mission Planner
 version, vehicle/firmware type, expected behavior and the smallest reproduction.
 Remove private URLs, credentials, identifiers and location data before sharing
-profiles or logs. Screenshots can be regenerated with the
-[command-driven capture procedure](docs/development.md#documentation-screenshots).
+profiles or logs.
 
 ## Scope and licensing
 

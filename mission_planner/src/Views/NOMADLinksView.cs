@@ -54,7 +54,7 @@ namespace NOMAD.MissionPlanner
 
             layout.Controls.Add(new Label
             {
-                Text = "MAVLink Multi-Link Router",
+                Text = "Links",
                 Font = new Font("Segoe UI", 14, FontStyle.Bold),
                 ForeColor = NOMADTheme.ACCENT,
                 AutoSize = true,
@@ -63,14 +63,8 @@ namespace NOMAD.MissionPlanner
 
             layout.Controls.Add(new Label
             {
-                Text = (disabled ? "The plugin router is disabled in settings.\n\n"
-                                 : "The plugin router is unavailable.\n\n") +
-                    "When enabled, Mission Planner owns the router for this aircraft profile.\n" +
-                    "The router selects one physical link, supplies telemetry, and reports link health.\n" +
-                    "Configure physical links here, then connect Mission Planner using the displayed UDPCl endpoint.\n\n" +
-                    "Mission Planner owns the connection and ordinary flight controls.\n" +
-                    (disabled ? "Enable the router in NOMAD → Settings → Links."
-                              : "Check this profile’s physical links in NOMAD → Settings → Links."),
+                Text = disabled ? "Router disabled. Enable it in Settings → Links." :
+                    "Router unavailable. Check Settings → Links.",
                 Font = new Font("Segoe UI", 10),
                 ForeColor = disabled ? NOMADTheme.TEXT_SECONDARY : NOMADTheme.WARNING,
                 AutoSize = true,

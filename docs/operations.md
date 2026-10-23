@@ -47,6 +47,9 @@ Only the current profile collection schema is accepted. Unknown or invalid field
 are rejected; loading never converts or rewrites the file. If the primary file is
 absent, its current-format `.bak` can be loaded. With neither file present, NOMAD
 starts with a fresh profile.
+To start fresh after a validation error, close Mission Planner and move both the
+named file and its `.bak` to a private backup folder, then reopen the host. Setup
+preserves these files; it does not convert or repair invalid profiles.
 Explicit Save replaces atomically with a `.bak`; cancelled/failed saves preserve the
 previous saved collection. Keep profiles private: connection URLs can contain sensitive
 details even though runtime credentials are no longer stored/exported.
@@ -66,7 +69,7 @@ name changes preserve stable IDs and saved input bindings. Payload dialogs show
 calibration, bounded timings and confirmation/neutral interlocks for the selected
 behavior. Link dialogs distinguish UDP local listening ports from TCP remote server
 ports; COM devices are entered explicitly and are never scanned or opened by setup.
-Inputs adds named controls bound to an explicit USB HID device. Choose a button,
+Inputs adds named controls bound to an explicit input device. Choose a button,
 paired buttons, a continuous axis, or a two/three-position axis switch, then select
 payload actions. Continuous axes also support gimbal pitch/roll movement; digital
 gimbal controls are not offered. Actions show payload names and retain stable IDs.
@@ -80,6 +83,9 @@ for each endpoint. Listen stops on timeout, device loss, cancellation or connect
 opening. It sends no commands and does not change Mission Planner's native joystick
 settings. Opening Settings pauses NOMAD HID and arrow inputs and waits for admitted
 Safe work; Cancel restores the same live profile with fresh neutral/center required.
+
+![Named control editor with a three-position switch and payload actions](images/input-editor.png)
+
 
 A two-position axis switch uses one endpoint as inactive neutral and the other as
 its action; Invert swaps them. Returning inactive does not turn a latched payload
@@ -132,6 +138,9 @@ updates HUD video and both NOMAD views. A stopped player stays stopped.
 Renaming the active definition preserves its selection; removing it chooses the
 first remaining input. Remove the final input to leave video unconfigured. Profiles use
 `VideoInputs` and `SelectedVideoInputName`; imports must use that same current schema.
+
+![Video page with active input selection beside playback controls](images/video-page.png)
+
 
 RTSP negotiates the video codec supported by the installed GStreamer decoder. Select
 TCP or UDP transport and a 0..5000 ms jitter buffer. UDP source URLs such as

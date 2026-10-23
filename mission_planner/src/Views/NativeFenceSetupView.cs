@@ -40,13 +40,8 @@ namespace NOMAD.MissionPlanner
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             Add(layout, new Label
             {
-                Text = "NATIVE FENCE SETUP", AutoSize = true,
+                Text = "FENCE SETUP", AutoSize = true,
                 Font = NOMADTheme.Font(NOMADTheme.SIZE_TITLE, FontStyle.Bold),
-            });
-            Add(layout, new Label
-            {
-                Text = "Prepare a polygon, stage it in Plan, then review and use native Write/Read.",
-                AutoSize = true, MaximumSize = new Size(680, 0),
             });
             var polygon = Group(layout, "Polygon draft");
             _order = new ComboBox
@@ -61,11 +56,6 @@ namespace NOMAD.MissionPlanner
                 if (Active) { input.LongitudeFirst = _order.SelectedIndex == 1; }
             };
             Add(polygon, _order);
-            Add(polygon, new Label
-            {
-                Text = "Paste one pair per line; comma, space or tab. Use . for decimals. The complete polygon is validated.",
-                AutoSize = true, MaximumSize = new Size(680, 0),
-            });
             _coordinates = new TextBox
             {
                 Name = "FenceCoordinates", Multiline = true, AcceptsReturn = true,
@@ -78,6 +68,7 @@ namespace NOMAD.MissionPlanner
             {
                 if (Active) { input.Coordinates = _coordinates.Text; }
             };
+            _tips.SetToolTip(_coordinates, "One coordinate pair per line. Separate values with a comma, space or tab.");
             Add(polygon, _coordinates);
             var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true };
             actions.Controls.Add(Button("Open Fence in Plan", (s, e) => OpenPlan()));
@@ -86,7 +77,7 @@ namespace NOMAD.MissionPlanner
             _status = new Label
             {
                 Name = "FenceSetupStatus", AutoSize = true, MaximumSize = new Size(680, 0),
-                Text = "Staging replaces the Plan draft after confirmation. Nothing is uploaded.",
+                Text = "",
             };
             Add(polygon, _status);
             AddParameters(layout, config);
@@ -99,7 +90,7 @@ namespace NOMAD.MissionPlanner
         {
             if (!Active) { return; }
             if (MainV2.comPort?.giveComport == true)
-            { _status.Text = "Wait for Mission Planner's native request before opening Fence."; return; }
+            { _status.Text = "Wait for the current request before opening Fence."; return; }
             try
             {
                 MainV2.instance?.MenuFlightPlanner?.PerformClick();
@@ -107,8 +98,8 @@ namespace NOMAD.MissionPlanner
             }
             catch (Exception error)
             {
-                if (Active) { _status.Text = "Native Plan unavailable: " + error.Message; }
-                else { MessageBox.Show(MainV2.instance, error.Message, "Native Fence selection failed",
+                if (Active) { _status.Text = "Plan unavailable: " + error.Message; }
+                else { MessageBox.Show(MainV2.instance, error.Message, "Fence selection failed",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning); }
             }
         }
@@ -116,7 +107,7 @@ namespace NOMAD.MissionPlanner
         private FlightPlanner SelectFence()
         {
             var planner = FlightPlanner.instance;
-            if (planner == null || planner.IsDisposed) { throw new InvalidOperationException("Open native Plan first."); }
+            if (planner == null || planner.IsDisposed) { throw new InvalidOperationException("Open Plan first."); }
             if (_input.Drafts?.IsFor(planner) != true)
             {
                 _input.Drafts?.Dispose();
@@ -142,9 +133,9 @@ namespace NOMAD.MissionPlanner
                 int order = _order.SelectedIndex;
                 var handle = Handle;
                 var choice = MessageBox.Show(this,
-                    $"Replace the current native Fence editor draft with {points.Count} vertices?\n" +
-                    "No aircraft upload is performed. Review the draft in Plan before native Write/Read.",
-                    "Stage native fence draft", MessageBoxButtons.OKCancel,
+                    $"Replace the current Fence draft with {points.Count} vertices?\n" +
+                    "No aircraft upload is performed. Review the draft in Plan before Write/Read.",
+                    "Stage fence draft", MessageBoxButtons.OKCancel,
                     MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
                 if (!Active || !IsHandleCreated || Handle != handle || choice != DialogResult.OK) { return; }
                 if (_coordinates.Text != original || _order.SelectedIndex != order)
@@ -159,7 +150,7 @@ namespace NOMAD.MissionPlanner
                     catch (Exception)
                     {
                         _status.Text = "Draft staged; Plan refresh/navigation failed. " +
-                            "Open native Plan manually and review before Write/Read.";
+                            "Open Plan and review before Write/Read.";
                     }
                     return;
                 }

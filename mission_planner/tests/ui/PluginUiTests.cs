@@ -290,6 +290,9 @@ internal static class PluginUiTests
             using var payload = new PayloadEditorForm(new JArray(), -1, "synthetic");
             using var router = new RouterLinkEditorForm(config, -1, "synthetic");
             using var input = new InputBindingEditorForm(config, -1);
+            using var payloadControls = new ActuatorControlPanel(config);
+            var payloadStatus = (Label)typeof(ActuatorControlPanel).GetField("_status", Hidden).GetValue(payloadControls);
+            Check(payloadStatus.Text == "" && !payloadStatus.Visible, "Idle payload controls displayed boilerplate instead of action status.");
             using var form = new NOMADForm { BackColor = NOMADTheme.BG_DARK };
             form.Controls.Add(ControlFactory.Button("Save", backColor: NOMADTheme.BTN_PRIMARY));
             foreach (var root in new Control[] { screen, settings, payload, router, input, form }) { RetainsTheme(root); }

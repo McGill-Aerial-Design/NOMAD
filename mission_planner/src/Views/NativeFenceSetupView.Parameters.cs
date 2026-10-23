@@ -23,8 +23,6 @@ namespace NOMAD.MissionPlanner
         private void AddParameters(TableLayoutPanel layout, NOMADConfig config)
         {
             var group = Group(layout, "Aircraft fence response");
-            Add(group, new Label { AutoSize = true, MaximumSize = new System.Drawing.Size(680, 0),
-                Text = "Read the aircraft's supported fence settings. Apply while disarmed; each change is read back." });
             _parameterRows = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 2 };
             _parameterRows.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
             _parameterRows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -32,7 +30,7 @@ namespace NOMAD.MissionPlanner
             var termination = Group(group, "Controlled termination");
             termination.Padding = new Padding(0, 8, 0, 0);
             _terminationStatus = new Label { AutoSize = true, MaximumSize = new System.Drawing.Size(680, 0),
-                Text = "Requires the advertised native extension. Normal LAND/QLAND settings stay unchanged." };
+                Text = "Read settings to check support." };
             Add(termination, _terminationStatus);
             _terminationRows = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 2 };
             _terminationRows.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
@@ -45,7 +43,7 @@ namespace NOMAD.MissionPlanner
             buttons.Controls.Add(_read); buttons.Controls.Add(_apply);
             Add(group, buttons);
             _parameterStatus = new Label { AutoSize = true, MaximumSize = new System.Drawing.Size(680, 0),
-                Text = "No aircraft settings read. Reading never writes parameters." };
+                Text = "Settings not read." };
             Add(group, _parameterStatus);
             _parameterShutdown = _shutdown.Register(() => _parameters?.Dispose());
         }
