@@ -107,7 +107,7 @@ Review them visually and retain those distinctions in captions.
 To render the setup window without invoking installation:
 
 ```powershell
-powershell -STA -NoProfile -File scripts/docs/capture_installer_screenshot.ps1 -InstallerPath build/installer/NOMAD-0.4.0-Setup.exe
+powershell -STA -NoProfile -File scripts/docs/capture_installer_screenshot.ps1 -InstallerPath build/installer/NOMAD-0.4.1-Setup.exe
 ```
 
 ## Manual native simulator acceptance

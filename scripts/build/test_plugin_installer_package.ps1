@@ -8,6 +8,21 @@ if (!$InstallerDirectory) { $InstallerDirectory = Join-Path $root 'build/install
 $manifest = Get-Content -LiteralPath (Join-Path $InstallerDirectory 'installer-manifest.json') -Raw | ConvertFrom-Json
 $exe = (Resolve-Path -LiteralPath (Join-Path $InstallerDirectory ('NOMAD-' + $manifest.version + '-Setup.exe'))).Path
 if ((Get-FileHash -LiteralPath $exe).Hash -ne $manifest.installer_sha256) { throw 'Setup checksum differs.' }
+$checksumLines = @(Get-Content -LiteralPath (Join-Path $InstallerDirectory 'SHA256SUMS'))
+if ($checksumLines.Count -ne 2) { throw 'Setup requires two separate checksum entries.' }
+$checksumFiles = @([IO.Path]::GetFileName($exe), 'installer-manifest.json')
+$seenFiles = @()
+foreach ($line in $checksumLines) {
+    $parts = $line.Split(@('  '), 2, [StringSplitOptions]::None)
+    if ($parts.Count -ne 2 -or $parts[0] -notmatch '^[0-9a-f]{64}$' -or
+        $checksumFiles -cnotcontains $parts[1] -or $seenFiles -ccontains $parts[1]) {
+        throw 'Invalid or duplicate setup checksum entry.'
+    }
+    if ((Get-FileHash -LiteralPath (Join-Path $InstallerDirectory $parts[1])).Hash -ne $parts[0]) {
+        throw ('Setup checksum entry differs: ' + $parts[1])
+    }
+    $seenFiles += $parts[1]
+}
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $assembly = [Reflection.Assembly]::LoadFile($exe)
