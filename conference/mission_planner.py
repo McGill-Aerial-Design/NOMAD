@@ -672,6 +672,9 @@ try:
     stage("connect_native_router")
     ui(lambda: connection.Open(False, True, False))
     current()
+    # Align MP automatic stream requests with the descent and output sampling.
+    connection.MAV.cs.rateposition = 10
+    connection.MAV.cs.raterc = 10
     for message in (33, 36, 65, 245):
         command(MAV_CMD.SET_MESSAGE_INTERVAL, [message, 100000, 0, 0, 0, 0, 0])
     upload_survey()
