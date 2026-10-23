@@ -13,19 +13,22 @@ namespace NOMAD.MissionPlanner
     {
         internal string Coordinates = "";
         internal bool LongitudeFirst;
+        internal NativePlanDrafts Drafts;
     }
 
-    public sealed class NativeFenceSetupView : UserControl
+    public sealed partial class NativeFenceSetupView : UserControl
     {
         private readonly CancellationToken _shutdown;
         private readonly TextBox _coordinates;
         private readonly ComboBox _order;
         private readonly Label _status;
         private readonly ToolTip _tips = new ToolTip();
+        private readonly FenceSetupInput _input;
 
-        internal NativeFenceSetupView(CancellationToken shutdown, FenceSetupInput input)
+        internal NativeFenceSetupView(CancellationToken shutdown, FenceSetupInput input, NOMADConfig config)
         {
             _shutdown = shutdown;
+            _input = input;
             BackColor = NOMADTheme.BG_DARK;
             ForeColor = NOMADTheme.TEXT_PRIMARY;
             Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL);
@@ -42,29 +45,10 @@ namespace NOMAD.MissionPlanner
             });
             Add(layout, new Label
             {
-                Text = "Prepare polygon → stage in native Plan → review → native Write/Read. " +
-                    "Mission Planner owns fence transfers and failsafe settings.",
+                Text = "Prepare a polygon, stage it in Plan, then review and use native Write/Read.",
                 AutoSize = true, MaximumSize = new Size(680, 0),
             });
-            var preset = Button("Use AEAC 2027 published C1", (s, e) =>
-            {
-                if (!Active) { return; }
-                _order.SelectedIndex = 0;
-                _coordinates.Text = FenceCoordinates.PublishedC1;
-                _status.Text = "Published C1 loaded into this draft. Review the site and coordinates before staging.";
-            });
-            Add(layout, preset);
-            _tips.SetToolTip(preset, "AEAC CONOPS v1.0 · 2026-09-08 · Appendix C, p31. " +
-                "One published polygon; source labels remain ambiguous. No second polygon is inferred.");
-            var source = new LinkLabel
-            {
-                Text = "Published CONOPS source", AutoSize = true, LinkColor = NOMADTheme.ACCENT,
-            };
-            source.LinkClicked += (s, e) =>
-            {
-                if (Active) { System.Diagnostics.Process.Start(FenceCoordinates.SourceUrl); }
-            };
-            Add(layout, source);
+            var polygon = Group(layout, "Polygon draft");
             _order = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList, Width = 240,
@@ -76,8 +60,8 @@ namespace NOMAD.MissionPlanner
             {
                 if (Active) { input.LongitudeFirst = _order.SelectedIndex == 1; }
             };
-            Add(layout, _order);
-            Add(layout, new Label
+            Add(polygon, _order);
+            Add(polygon, new Label
             {
                 Text = "Paste one pair per line; comma, space or tab. Use . for decimals. The complete polygon is validated.",
                 AutoSize = true, MaximumSize = new Size(680, 0),
@@ -85,7 +69,7 @@ namespace NOMAD.MissionPlanner
             _coordinates = new TextBox
             {
                 Name = "FenceCoordinates", Multiline = true, AcceptsReturn = true,
-                ScrollBars = ScrollBars.Vertical, Height = 200, Dock = DockStyle.Fill,
+                ScrollBars = ScrollBars.Vertical, Height = 140, Dock = DockStyle.Fill,
                 Font = NOMADTheme.Mono(NOMADTheme.SIZE_SMALL),
                 BackColor = NOMADTheme.CONTROL_BG, ForeColor = NOMADTheme.TEXT_PRIMARY,
                 Text = input.Coordinates,
@@ -94,21 +78,18 @@ namespace NOMAD.MissionPlanner
             {
                 if (Active) { input.Coordinates = _coordinates.Text; }
             };
-            Add(layout, _coordinates);
-            Add(layout, Button("Open native Plan (select Fence)", (s, e) => OpenPlan()));
-            Add(layout, Button("Stage polygon in native Plan", Stage));
-            var configuration = Button("Open native configuration (failsafes)", (s, e) =>
-            {
-                if (Active) { MainV2.instance?.MenuConfigTune?.PerformClick(); }
-            });
-            _tips.SetToolTip(configuration, "Review aircraft-specific fence and failsafe settings in Mission Planner.");
-            Add(layout, configuration);
+            Add(polygon, _coordinates);
+            var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true };
+            actions.Controls.Add(Button("Open Fence in Plan", (s, e) => OpenPlan()));
+            actions.Controls.Add(Button("Stage in Plan…", Stage));
+            Add(polygon, actions);
             _status = new Label
             {
                 Name = "FenceSetupStatus", AutoSize = true, MaximumSize = new Size(680, 0),
-                Text = "Choose Fence in native Plan first. Staging replaces only its editor draft; it does not upload.",
+                Text = "Staging replaces the Plan draft after confirmation. Nothing is uploaded.",
             };
-            Add(layout, _status);
+            Add(polygon, _status);
+            AddParameters(layout, config);
             Controls.Add(layout);
         }
 
@@ -116,7 +97,33 @@ namespace NOMAD.MissionPlanner
 
         private void OpenPlan()
         {
-            if (Active) { MainV2.instance?.MenuFlightPlanner?.PerformClick(); }
+            if (!Active) { return; }
+            if (MainV2.comPort?.giveComport == true)
+            { _status.Text = "Wait for Mission Planner's native request before opening Fence."; return; }
+            try
+            {
+                MainV2.instance?.MenuFlightPlanner?.PerformClick();
+                SelectFence();
+            }
+            catch (Exception error)
+            {
+                if (Active) { _status.Text = "Native Plan unavailable: " + error.Message; }
+                else { MessageBox.Show(MainV2.instance, error.Message, "Native Fence selection failed",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            }
+        }
+
+        private FlightPlanner SelectFence()
+        {
+            var planner = FlightPlanner.instance;
+            if (planner == null || planner.IsDisposed) { throw new InvalidOperationException("Open native Plan first."); }
+            if (_input.Drafts?.IsFor(planner) != true)
+            {
+                _input.Drafts?.Dispose();
+                _input.Drafts = new NativePlanDrafts(planner);
+            }
+            if (!_input.Drafts.SelectFence()) { throw new InvalidOperationException(_input.Drafts.Error); }
+            return planner;
         }
 
         private void Stage(object sender, EventArgs args)
@@ -127,15 +134,9 @@ namespace NOMAD.MissionPlanner
                 _status.Text = error;
                 return;
             }
-            var planner = FlightPlanner.instance;
-            if (!NativeFenceDraft.IsFence(planner))
-            {
-                _status.Text = "Select Fence in native Plan, then return here to stage. Existing mission drafts are not switched.";
-                OpenPlan();
-                return;
-            }
             try
             {
+                var planner = SelectFence();
                 var draft = new NativeFenceDraft(planner, points);
                 string original = _coordinates.Text;
                 int order = _order.SelectedIndex;
@@ -186,9 +187,28 @@ namespace NOMAD.MissionPlanner
             layout.Controls.Add(control, 0, row);
         }
 
+        private static TableLayoutPanel Group(TableLayoutPanel parent, string title)
+        {
+            var panel = new TableLayoutPanel
+            {
+                AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(14),
+                BackColor = NOMADTheme.CARD_BG,
+            };
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            Add(panel, new Label { Text = title, AutoSize = true,
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_HEADING, FontStyle.Bold) });
+            Add(parent, panel);
+            return panel;
+        }
+
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { _tips.Dispose(); }
+            if (disposing)
+            {
+                _parameterShutdown.Dispose();
+                _parameters?.Dispose();
+                _tips.Dispose();
+            }
             base.Dispose(disposing);
         }
     }

@@ -77,10 +77,23 @@ Reconnect explicitly and verify the live aircraft before using custom controls.
 
 ## Native fence setup
 
-Select Fence in native Plan first; NOMAD does not switch an existing mission draft.
-In NOMAD → Fence Setup, choose the published polygon or paste/review coordinates,
-then Stage. Review the native Plan fence draft, use native Write, then Read to verify
-the aircraft fence. Configure fence enable/type and other failsafes through MP.
+In NOMAD → Fence Setup, paste one coordinate pair per line and choose the coordinate
+order. Open Plan and Stage select native Fence automatically; unsaved Mission, Fence
+and Rally editor rows are preserved across mode changes during this plugin session.
+Stage asks before replacing the Fence draft. Review it in native Plan, use native Write,
+then native Read to verify the aircraft fence. Save needed drafts before plugin unload.
+
+Under Aircraft fence response, Read aircraft settings shows the selected aircraft's
+supported `FENCE_*` parameters with native firmware metadata. Missing metadata is
+read-only. Apply lists changes and the captured aircraft/system/component, defaults to
+Cancel, requires a fresh disarmed heartbeat and verifies each write by a separate read.
+Writes are sequential: a failure stops remaining changes, earlier writes remain and
+the page requires a new Read before retrying. Review actual fence responses before flight;
+parameter readback does not qualify containment or touchdown. Controlled termination
+shows supported extension settings only after native capability discovery: separate
+descent speed, controlled response 44 and AFS RC/fence triggers. See the
+[commissioning requirements](native-termination.md#aircraft-setup); channel assignment
+and other aircraft failsafes remain in Mission Planner's setup pages.
 
 NOMAD does not modify normal LAND or QLAND settings. The optional
 [native termination](native-termination.md) extension provides a separate onboard

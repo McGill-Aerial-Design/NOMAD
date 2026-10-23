@@ -30,9 +30,10 @@ namespace NOMAD.MissionPlanner
             _planner = planner ?? throw new ArgumentNullException(nameof(planner));
             if (!IsFence(planner)) { throw new InvalidOperationException("Select Fence in native Plan first."); }
             _grid = planner.Commands;
-            if (_grid == null || _grid.IsDisposed || planner.quickadd || _grid.IsCurrentCellInEditMode)
+            if (_grid == null || _grid.IsDisposed || planner.quickadd || _grid.IsCurrentCellInEditMode ||
+                MainV2.comPort?.giveComport == true)
             {
-                throw new InvalidOperationException("Finish the native Plan edit before staging a fence.");
+                throw new InvalidOperationException("Finish the Plan edit or wait for the native request before staging.");
             }
             _generation = OutputController.Generation;
             _port = MainV2.comPort;
@@ -93,6 +94,7 @@ namespace NOMAD.MissionPlanner
         {
             if (!IsFence(_planner) || !ReferenceEquals(FlightPlanner.instance, _planner) ||
                 !ReferenceEquals(_planner.Commands, _grid) || _grid.IsDisposed || _planner.quickadd ||
+                MainV2.comPort?.giveComport == true ||
                 !_grid.Columns.Cast<DataGridViewColumn>().SequenceEqual(_columns) ||
                 _grid.IsCurrentCellInEditMode || OutputController.Generation != _generation ||
                 !ReferenceEquals(MainV2.comPort, _port) || !ReferenceEquals(_port?.MAV, _mav) ||
@@ -112,7 +114,7 @@ namespace NOMAD.MissionPlanner
             return true;
         }
 
-        private static DataGridViewRow CopyRow(DataGridViewRow row)
+        internal static DataGridViewRow CopyRow(DataGridViewRow row)
         {
             var copy = (DataGridViewRow)row.Clone();
             copy.Tag = row.Tag;

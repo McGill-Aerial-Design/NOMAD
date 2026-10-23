@@ -74,6 +74,7 @@ namespace NOMAD.MissionPlanner
                 GimbalController.ApplyProfile(_config);
                 OutputController.Initialize(_config);
                 _termination = new TerminationController(_config);
+                NOMADMainScreen.SetTerminationController(_termination);
                 PayloadController.ApplyProfile(_config);
                 OutputController.ConnectionChanged += GimbalController.InvalidateInput;
                 if (Host?.MainForm != null) { Host.MainForm.FormClosed += OnHostClosed; }
@@ -256,6 +257,7 @@ namespace NOMAD.MissionPlanner
             RemoveTerminationMenu();
             _termination?.Dispose();
             _termination = null;
+            NOMADMainScreen.SetTerminationController(null);
             try { _gimbalArrowKeyFilter?.Dispose(); }
             catch (Exception error) { Log.Warn("Keyboard cleanup failed: " + error.Message); }
             _gimbalArrowKeyFilter = null;
@@ -313,6 +315,7 @@ namespace NOMAD.MissionPlanner
                     OutputController.Initialize(_config);
                     _termination?.Dispose();
                     _termination = new TerminationController(_config);
+                    NOMADMainScreen.SetTerminationController(_termination);
                     PayloadController.ApplyProfile(_config);
                     _gimbalArrowKeyFilter = new GimbalArrowKeyFilter(_profiles);
                     AudioAlerts.ApplyConfig(_config);

@@ -39,6 +39,7 @@ test-plugin-video = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts
 
 test-plugin-termination = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_termination.ps1"
 test-plugin-geometry = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_geometry.ps1"
+test-plugin-fence = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_fence.ps1"
 test-plugin-audio = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_audio.ps1"
 test-plugin-version = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_version.ps1"
 test-ground-router-logic = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_ground_router.ps1"

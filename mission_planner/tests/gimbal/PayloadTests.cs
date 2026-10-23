@@ -39,6 +39,8 @@ namespace MissionPlanner
         public string Parameter;
         public Task<float> GetParamAsync(byte system, byte component, string name)
         { Reads++; TrimSystem = system; TrimComponent = component; Parameter = name; return Trim(); }
+        public Task<bool> setParamAsync(byte system, byte component, string name, double value, bool force) =>
+            throw new InvalidOperationException("Payload fixtures do not write aircraft parameters.");
         public Task<bool> doCommandAsync(byte system, byte component, MAVLink.MAV_CMD kind,
             float p1, float p2, float p3, float p4, float p5, float p6, float p7, bool requireack)
         {

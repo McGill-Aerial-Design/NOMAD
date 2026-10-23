@@ -64,6 +64,22 @@ namespace NOMAD.MissionPlanner
                 try { return await task.ConfigureAwait(false); }
                 finally { lock (Gate) { _payloadBusy = false; } }
             }
+
+            internal async Task<bool> WriteParameterAsync(string name, float value, Func<bool> current)
+            {
+                Task<bool> task;
+                lock (Gate)
+                {
+                    if (!IsCurrent || current?.Invoke() != true || _payloadBusy || Connection.giveComport ||
+                        float.IsNaN(value) || float.IsInfinity(value))
+                    { throw new InvalidOperationException("Aircraft, safety state or input changed; no parameter was sent."); }
+                    _payloadBusy = true;
+                    try { task = Connection.setParamAsync(System, Component, name, value, true); }
+                    catch { _payloadBusy = false; throw; }
+                }
+                try { return await task.ConfigureAwait(false); }
+                finally { lock (Gate) { _payloadBusy = false; } }
+            }
         }
 
         internal static NativeTarget CaptureTarget(NOMADConfig config)

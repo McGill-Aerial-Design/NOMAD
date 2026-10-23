@@ -36,9 +36,26 @@ once on entry. Actual descent and airframe tuning still require measurement.
 
 ## Aircraft setup
 
-Use native Mission Planner parameters and fence tools. NOMAD does not write these
-settings or choose a channel. Configure/read back the actual aircraft with props
-removed before separately authorized physical qualification.
+NOMAD → Fence Setup → Controlled termination can read/configure the supported
+`AFS_*` settings below when the matching firmware advertises selectable `TERMINATE`
+and freshly exposes the private `AFS_TERM_RATE` parameter. Stock firmware keeps
+ordinary fence setup available and leaves this subgroup unavailable. NOMAD does not
+choose or write an RC channel; remaining commissioning settings use native Mission
+Planner parameters and fence tools. Configure/read back the actual aircraft with
+props removed before separately authorized physical qualification.
+
+The subgroup permits only controlled action **44**. Descent speed must be finite,
+at least 2 m/s and no greater than a freshly read `WP_SPD_DN` for Copter or
+`Q_WP_SPD_DN` for QuadPlane. It never changes either capability or normal LAND/QLAND
+speed. RC loss timeout must be greater than zero and no more than 4.5 seconds;
+the page offers 0.1–4.5 seconds.
+Applying requires the captured current aircraft/profile and fresh disarmed heartbeats;
+the confirmation names the aircraft and defaults to Cancel. Action/configuration is
+written before enabling AFS, and each value is independently read back. Enabling
+requires controlled action/rate, both RC/fence trigger parameters present and enabled,
+and a present valid RC timeout. A failed or uncertain write stops subsequent changes
+and requires another Read, preserving
+earlier writes. The menu must check support again before a subsequent TERMINATE request.
 
 | Native setting | Action-44 commissioning requirement |
 |---|---|
@@ -51,7 +68,7 @@ removed before separately authorized physical qualification.
 | `FLTMODE1` through `FLTMODE6` | Ordinary modes; none assigned `29` |
 | `RC_OPTIONS` | Ignore MAVLink RC overrides; do not ignore the receiver or receiver failsafe flags; preserve unrelated bits |
 | Native RC failsafe | Enabled; receiver timeout no more than 4.5 seconds; fresh healthy physical receiver required |
-| Copter descent capability | Native waypoint descent speed at least `AFS_TERM_RATE` |
+| Copter descent capability | `WP_SPD_DN` at least `AFS_TERM_RATE` |
 | QuadPlane descent capability | `Q_WP_SPD_DN` at least `AFS_TERM_RATE` |
 | QuadPlane estimator | Native `AHRS_OPTIONS` VTOL DCM-fallback inhibition, bit 1/value 2; preserve other bits |
 
