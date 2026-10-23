@@ -38,6 +38,8 @@ namespace NOMAD.MissionPlanner
         {
             Error = null;
             if (_disposed || _planner.IsDisposed) { Error = "Native Plan is unavailable."; return false; }
+            if (MainV2.comPort?.giveComport == true)
+            { Error = "Wait for Mission Planner's native request before changing mission type."; return false; }
             _planner.cmb_missiontype.SelectedItem = MAVLink.MAV_MISSION_TYPE.FENCE;
             return Error == null && NativeFenceDraft.IsFence(_planner);
         }
@@ -65,10 +67,10 @@ namespace NOMAD.MissionPlanner
             try
             {
                 Error = null;
-                if (grid.IsCurrentCellInEditMode || _planner.quickadd)
+                if (grid.IsCurrentCellInEditMode || _planner.quickadd || MainV2.comPort?.giveComport == true)
                 {
                     _planner.cmb_missiontype.SelectedItem = _mode;
-                    Error = "Finish the native Plan edit before changing mission type.";
+                    Error = "Finish the Plan edit or wait for the native request before changing mission type.";
                     return;
                 }
                 if (!SameContext)

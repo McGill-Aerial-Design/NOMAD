@@ -149,7 +149,7 @@ internal static class NativeFenceDraftTests
             Check(ReferenceEquals(mav.fencepoints, cache) && cache.Count == 1 && cache[3].x == 123 &&
                 ReferenceEquals(mav.wps, missions) && missions.Count == 0, "native aircraft caches preserved");
         }
-        foreach (int fault in Enumerable.Range(0, 8))
+        foreach (int fault in Enumerable.Range(0, 9))
         using (var planner = Planner())
         {
             var draft = new NativeFenceDraft(planner, points);
@@ -171,6 +171,7 @@ internal static class NativeFenceDraftTests
                 planner.Commands.Columns.Add(new DataGridViewTextBoxColumn { Name = "changed" });
                 original = Values(planner);
             }
+            if (fault == 8) { Set(port, "_giveComport", true); }
             if (fault != 0) { Check(!draft.TryStage(out _), "stale context or native row failure rejected"); }
             Check(Values(planner) == original && !planner.quickadd, "decline/stale/fault preserves original grid values");
             if (fault == 4)
@@ -179,6 +180,16 @@ internal static class NativeFenceDraftTests
                     ReferenceEquals(planner.Commands.Rows[0].Cells[8].Tag, row.Cells[8].Tag), "rollback preserves row and cell tags");
             }
             Set(port, "_baseStream", stream);
+            Set(port, "_giveComport", false);
+        }
+        using (var planner = Planner())
+        {
+            string original = Values(planner);
+            Set(port, "_giveComport", true);
+            bool rejected = false;
+            try { new NativeFenceDraft(planner, points); } catch (InvalidOperationException) { rejected = true; }
+            Check(rejected && Values(planner) == original, "busy native request refuses draft capture without changing rows");
+            Set(port, "_giveComport", false);
         }
         using (var planner = Planner())
         {

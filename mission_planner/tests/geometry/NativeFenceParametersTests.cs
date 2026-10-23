@@ -317,8 +317,35 @@ internal static class NativeFenceParametersTests
             var fences = peer.Connection.MAV.fencepoints;
             using (var drafts = (IDisposable)Create("NativePlanDrafts", planner))
             {
+                peer.Connection.giveComport = true;
+                Check(!(bool)Call(drafts, "SelectFence") &&
+                    (MAVLink.MAV_MISSION_TYPE)planner.cmb_missiontype.SelectedItem == MAVLink.MAV_MISSION_TYPE.MISSION,
+                    "Busy native request refuses automatic switching before editor mutation");
+                planner.cmb_missiontype.SelectedItem = MAVLink.MAV_MISSION_TYPE.FENCE;
+                Check((MAVLink.MAV_MISSION_TYPE)planner.cmb_missiontype.SelectedItem == MAVLink.MAV_MISSION_TYPE.MISSION &&
+                    Convert.ToDouble(planner.Commands.Rows[0].Cells[1].Value) == 7,
+                    "Busy native request refuses manual switching and preserves Mission rows");
+                peer.Connection.giveComport = false;
                 Check((bool)Call(drafts, "SelectFence"), "Actual native combo/handler selects Fence");
                 planner.AddCommand(MAVLink.MAV_CMD.FENCE_POLYGON_VERTEX_INCLUSION, 3, 0, 0, 0, 4, 3, 0);
+                var fenceRow = planner.Commands.Rows[0];
+                var fenceTag = new object(); fenceRow.Tag = fenceTag;
+                var cellTag = new object(); fenceRow.Cells["Lat"].Tag = cellTag;
+                var names = new[] { "Command", "Param1", "Lat", "Lon", "Alt", "Frame" };
+                var values = Array.ConvertAll(names, name => fenceRow.Cells[name].Value);
+                planner.Deactivate(); planner.Activate(); timer.Stop();
+                Check((bool)Call(drafts, "SelectFence") &&
+                    Enumerable.SequenceEqual(
+                        Array.ConvertAll(names, name => planner.Commands.Rows[0].Cells[name].Value), values) &&
+                    ReferenceEquals(planner.Commands.Rows[0].Tag, fenceTag) &&
+                    ReferenceEquals(planner.Commands.Rows[0].Cells["Lat"].Tag, cellTag),
+                    "Native deactivate/activate and repeated Fence selection preserve staged vertex fields/tags");
+                peer.Connection.giveComport = true;
+                Check(!(bool)Call(drafts, "SelectFence") &&
+                    Enumerable.SequenceEqual(
+                        Array.ConvertAll(names, name => planner.Commands.Rows[0].Cells[name].Value), values),
+                    "Busy native request is refused even when Fence is already selected");
+                peer.Connection.giveComport = false;
                 planner.cmb_missiontype.SelectedItem = MAVLink.MAV_MISSION_TYPE.MISSION;
                 Check(planner.Commands.Rows.Cast<DataGridViewRow>().Count(row => !row.IsNewRow) == 1 &&
                     Convert.ToDouble(planner.Commands.Rows[0].Cells[1].Value) == 7 && ReferenceEquals(planner.Commands.Rows[0].Tag, tag),

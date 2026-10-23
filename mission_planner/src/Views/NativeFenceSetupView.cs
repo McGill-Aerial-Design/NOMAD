@@ -98,6 +98,8 @@ namespace NOMAD.MissionPlanner
         private void OpenPlan()
         {
             if (!Active) { return; }
+            if (MainV2.comPort?.giveComport == true)
+            { _status.Text = "Wait for Mission Planner's native request before opening Fence."; return; }
             try
             {
                 MainV2.instance?.MenuFlightPlanner?.PerformClick();
