@@ -276,6 +276,14 @@ namespace NOMAD.MissionPlanner
             return session != null && ReferenceEquals(session, _videoShutdown) && !session.IsCancellationRequested;
         }
 
+        private void PauseCustomInputs()
+        {
+            _joystickService?.Stop();
+            GimbalJoystickWindow.CloseSingleton();
+            _gimbalArrowKeyFilter?.Dispose();
+            _gimbalArrowKeyFilter = null;
+        }
+
         private bool _savingSettings;
         private async void ShowSettings()
         {
@@ -288,6 +296,10 @@ namespace NOMAD.MissionPlanner
             bool inputStopped = false;
             try
             {
+                PauseCustomInputs();
+                inputStopped = true;
+                await (PayloadController.Current?.WaitForPendingAsync() ?? System.Threading.Tasks.Task.CompletedTask);
+                if (!IsActiveSession(session)) { return; }
                 using (var form = new NOMADSettingsForm(_profiles))
                 {
                     if (form.ShowDialog() != DialogResult.OK || !IsActiveSession(session)) { return; }
@@ -295,9 +307,6 @@ namespace NOMAD.MissionPlanner
                     try
                     {
                         form.Profiles.CheckForConnection(_profiles, MainV2.comPort?.BaseStream?.IsOpen == true);
-                        _joystickService?.Stop();
-                        inputStopped = true;
-                        await (PayloadController.Current?.WaitForPendingAsync() ?? System.Threading.Tasks.Task.CompletedTask);
                         if (!IsActiveSession(session)) { return; }
                         connectionChanged = form.Profiles.SaveForConnection(_profiles, MainV2.comPort?.BaseStream?.IsOpen == true);
                     }
@@ -333,6 +342,8 @@ namespace NOMAD.MissionPlanner
                     ReferenceEquals(previousService, _joystickService) && OutputController.IsCurrentProfile(previousConfig) &&
                     ReferenceEquals(previousOwner, PayloadController.Current))
                 {
+                    _gimbalArrowKeyFilter?.Dispose();
+                    _gimbalArrowKeyFilter = new GimbalArrowKeyFilter(_profiles);
                     try { previousService?.RestartWithConfig(); }
                     catch (Exception error) { Log.Error("Previous joystick restart failed: " + error.Message); }
                 }

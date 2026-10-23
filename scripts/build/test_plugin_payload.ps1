@@ -10,7 +10,7 @@ New-Item -ItemType Directory -Force $outDir | Out-Null
 Copy-Item -LiteralPath $json -Destination $outDir -Force
 $sources = @('Control/GimbalCommand.cs','Control/GimbalController.cs','Control/OutputController.cs',
     'Control/OutputController.Payload.cs','Control/PayloadDefinition.cs','Control/PayloadController.cs',
-    'Input/GimbalInputState.cs','Input/NomadJoystickService.cs','Input/NomadJoystickService.Axis.cs',
+    'Input/InputBinding.cs','Input/InputControlState.cs','Input/InputListenState.cs','Input/GimbalInputState.cs','Input/NomadJoystickService.cs','Input/NomadJoystickService.Axis.cs',
     'Input/NomadJoystickService.Payload.cs','Config/NOMADConfig.Input.cs') | ForEach-Object { Join-Path $repoRoot "mission_planner/src/$_" }
 $sources += Join-Path $repoRoot 'mission_planner/tests/gimbal/PayloadTests.cs'
 $exe = Join-Path $outDir 'PayloadTests.exe'

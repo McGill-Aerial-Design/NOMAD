@@ -10,17 +10,14 @@ $ErrorActionPreference = 'Stop'
 # Pixi can retain PowerShell 7 module paths when launching Windows PowerShell 5.1.
 Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
 function Assert-NativeSitlProfileSafe($config) {
-    foreach ($name in @('RouterClientEnabled', 'JoystickGimbalEnabled', 'JoystickPositionEnabled',
+    foreach ($name in @('RouterClientEnabled',
         'GimbalArrowKeysEnabled', 'DebugMode')) {
         if ($config.$name) {
             throw "Disable saved profile field $name before simulator startup."
         }
     }
-    foreach ($name in @('JoystickSw1UpAction', 'JoystickSw1DownAction', 'JoystickSw2UpAction',
-        'JoystickSw2DownAction', 'JoystickSw3UpAction', 'JoystickSw3DownAction')) {
-        if (![string]::IsNullOrWhiteSpace($config.$name) -and $config.$name -cne 'None') {
-            throw "Disable saved profile field $name before simulator startup."
-        }
+    foreach ($binding in $config.Inputs) {
+        if ($binding['Enabled'].Value) { throw 'Disable enabled Inputs before simulator startup.' }
     }
     if ($config.AutoStartHudVideo -and $null -ne $config.SelectedVideoInput) {
         throw 'Disable configured automatic HUD video before simulator startup.'

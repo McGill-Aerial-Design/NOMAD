@@ -74,7 +74,12 @@ installing the plugin or launching MP. It checks native capability discovery, re
 fresh heartbeat naming and target retirement; it does not qualify aircraft termination or touchdown.
 Gimbal includes native target/stale-input/fault tests. Payload covers native
 mapping/ACK faults, trim matching, pending Safe draining, confirmations, HID edges
-and controller repeat lifetime. Router covers parser, dedup/failover, one MP egress,
+and controller repeat lifetime. Named input checks cover button/pair and two/three-position
+axis decoding, fresh centered gimbal/position input, stable binding authorization,
+neutral-separated confirmations across list reorder, conflicting input Safe and
+retired asynchronous batches. Listen checks use synthetic snapshots for fresh
+button/axis detection, held/noisy baseline rejection, timeout, loss and connection
+opening; they do not acquire an operator device. Router covers parser, dedup/failover, one MP egress,
 parameter pinning and ownership disposal. Geometry/video/profile tests retain
 invalid-input and lifecycle fault cases.
 
@@ -105,7 +110,7 @@ powershell -STA -NoProfile -File scripts/docs/capture_installer_screenshot.ps1 -
 ## Manual native simulator acceptance
 
 With Mission Planner closed, an explicitly installed reviewed DLL, and the active
-saved profile's router, HID, switch bindings, arrow inputs and configured automatic
+saved profile's router, enabled input bindings, arrow inputs and configured automatic
 HUD video disabled, run:
 
 ```powershell

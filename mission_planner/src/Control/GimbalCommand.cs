@@ -4,7 +4,7 @@
 // Gimbal input math (Mission Planner-free)
 // ============================================================
 // The pure, dependency-free core of the gimbal control: stick integration,
-// deadzone and angle/rate clamping. The C++ runtime owns all MAVLink sends.
+// deadzone and angle/rate clamping. The Native OutputController owns all MAVLink sends.
 // ============================================================
 
 using System;

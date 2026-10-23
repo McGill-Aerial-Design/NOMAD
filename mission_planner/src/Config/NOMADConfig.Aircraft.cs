@@ -34,6 +34,7 @@ namespace NOMAD.MissionPlanner
                 throw new JsonSerializationException("GimbalMountMode must be an integer.");
             }
             ValidateActuatorDefinitions(document[nameof(ActuatorDefinitions)]);
+            if (document[nameof(Inputs)] != null) { InputBinding.Parse(document[nameof(Inputs)]); }
         }
 
         private static void ValidateActuatorDefinitions(JToken definitions)
@@ -46,31 +47,18 @@ namespace NOMAD.MissionPlanner
             var candidate = JObject.FromObject(this);
             var active = JObject.FromObject(other);
             return candidate.Properties().Where(property => property.Name.StartsWith("Joystick", System.StringComparison.Ordinal) ||
-                property.Name == nameof(ActuatorDefinitions) || property.Name == nameof(GimbalMountMode))
+                property.Name == nameof(Inputs) || property.Name == nameof(ActuatorDefinitions) || property.Name == nameof(GimbalMountMode))
                 .All(property => JToken.DeepEquals(property.Value, active[property.Name]));
         }
 
         private void ValidateAircraftSettings()
         {
             ValidateActuatorDefinitions(ActuatorDefinitions);
-            var axes = new[] { "X", "Y", "Z", "Rx", "Ry", "Rz", "Slider1", "Slider2" };
-            if (!axes.Contains(JoystickGimbalPitchAxis) || !axes.Contains(JoystickGimbalRollAxis) ||
-                !axes.Contains(JoystickPositionAxis))
-            {
-                throw new JsonSerializationException("Joystick axes must be supported DirectInput axes.");
-            }
             if (float.IsNaN(JoystickGimbalMaxRateDegSec) || float.IsInfinity(JoystickGimbalMaxRateDegSec) ||
                 JoystickGimbalMaxRateDegSec < GimbalCommand.MIN_MAX_RATE_DEG_SEC ||
                 JoystickGimbalMaxRateDegSec > GimbalCommand.MAX_MAX_RATE_DEG_SEC)
             {
                 throw new JsonSerializationException("Gimbal rate is outside the supported input range.");
-            }
-            foreach (float deadzone in new[] { JoystickGimbalDeadzone, JoystickPositionDeadzone })
-            {
-                if (float.IsNaN(deadzone) || float.IsInfinity(deadzone) || deadzone < 0 || deadzone > 0.5F)
-                {
-                    throw new JsonSerializationException("Joystick deadzones must be between 0 and 0.5.");
-                }
             }
             if (GimbalMountMode < (int)MountMode.Retract || GimbalMountMode > (int)MountMode.RcTargeting)
             {

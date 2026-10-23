@@ -50,7 +50,7 @@ namespace NOMAD.MissionPlanner
         {
             PayloadDefinition.Parse(candidate);
             Config.ActuatorDefinitions = (JArray)candidate.DeepClone();
-            LoadPayloadList(); RefreshPayloadBindings(true);
+            LoadPayloadList(); LoadInputList();
         }
         private void RemovePayload()
         {

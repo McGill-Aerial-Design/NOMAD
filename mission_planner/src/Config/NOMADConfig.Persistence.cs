@@ -132,15 +132,6 @@ namespace NOMAD.MissionPlanner
             { throw new JsonSerializationException("RouterClientEnabled must be boolean."); }
             if (document[nameof(RouterLocalPort)] != null && document[nameof(RouterLocalPort)].Type != JTokenType.Integer)
             { throw new JsonSerializationException("RouterLocalPort must be an integer."); }
-            if (document["JoystickButtonIndices"] == null) { return; }
-            if (!(document["JoystickButtonIndices"] is JArray indices))
-            { throw new JsonSerializationException("HID button indices must be an integer array."); }
-            foreach (var index in indices)
-            {
-                if (index.Type != JTokenType.Integer)
-                { throw new JsonSerializationException("HID button indices must be integers."); }
-                ValidatePhysicalIndex(index, "HID button indices");
-            }
         }
 
         private static void ValidateRouterLinks(JToken token)
@@ -161,13 +152,6 @@ namespace NOMAD.MissionPlanner
                     if (!valid) { throw new JsonSerializationException("Invalid router link field: " + field.Name); }
                 }
             }
-        }
-
-        private static void ValidatePhysicalIndex(JToken token, string name)
-        {
-            if (!int.TryParse(token.ToString(Formatting.None), NumberStyles.Integer, CultureInfo.InvariantCulture,
-                out int value) || value < 0 || value > 127)
-            { throw new JsonSerializationException(name + " must be an integer between 0 and 127."); }
         }
 
         internal bool HasSameRouterSettings(NOMADConfig other)

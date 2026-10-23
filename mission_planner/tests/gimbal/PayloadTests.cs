@@ -76,15 +76,7 @@ namespace NOMAD.MissionPlanner
         public JArray ActuatorDefinitions;
         public int GimbalMountMode = 2;
         public float JoystickGimbalMaxRateDegSec = 60;
-        public bool JoystickGimbalEnabled, JoystickPositionEnabled;
-        public string JoystickGimbalDevice = "", JoystickPositionDevice = "", JoystickSwitchDevice = "";
-        public string JoystickGimbalRollAxis = "X", JoystickGimbalPitchAxis = "Y", JoystickPositionAxis = "Y";
-        public bool JoystickGimbalRollInvert, JoystickGimbalPitchInvert, JoystickPositionInvert;
-        public float JoystickGimbalDeadzone = 0.08f, JoystickPositionDeadzone = 0.08f;
-        public string JoystickPositionActuatorId = "position";
-        public int[] JoystickButtonIndices = { 0, 1, 2, 3, 4, 5 };
-        public string JoystickSw1UpAction = "None", JoystickSw1DownAction = "None", JoystickSw2UpAction = "None",
-            JoystickSw2DownAction = "None", JoystickSw3UpAction = "None", JoystickSw3DownAction = "None";
+        public JArray Inputs = new JArray();
         internal bool HasSameOutputSettings(NOMADConfig other) => JToken.DeepEquals(ActuatorDefinitions, other.ActuatorDefinitions);
     }
     public static class Log
@@ -116,6 +108,29 @@ internal static class PayloadTests
         owner.ActAsync(id, operation, value).GetAwaiter().GetResult();
     private static void Wait(Task task)
     { Check(task.Wait(5000), "Native test deadline exceeded"); }
+    private sealed class Sample : MissionPlanner.Joystick.IMyJoystickState
+    {
+        internal bool[] Buttons = new bool[6];
+        internal int Raw = 32768;
+        public int X => Raw;
+        public int Y => 32768; public int Z => 32768; public int Rx => 32768; public int Ry => 32768; public int Rz => 32768;
+        public int[] GetSlider() => new[] { 32768, 32768 };
+        public bool[] GetButtons() => Buttons;
+    }
+    private static void Map(NOMADConfig config, string action, string other = "")
+    {
+        config.Inputs = new JArray(JObject.FromObject(new InputBinding { Id = "test_input", Name = "Test", Device = "test",
+            Enabled = true, Source = other == "" ? "Button" : "ButtonPair", Action = action, OtherAction = other }));
+    }
+    private static void MapPosition(NOMADConfig config)
+    {
+        config.Inputs = new JArray(JObject.FromObject(new InputBinding { Id = "position_input", Name = "Position", Device = "test",
+            Enabled = true, Source = "Axis", Action = "position:position" }));
+    }
+    private static void Buttons(NomadJoystickService service, bool[] buttons) => service.TranslateInputs(
+        new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = buttons == null ? null : new Sample { Buttons = buttons } });
+    private static void Position(NomadJoystickService service, bool valid, float value) => service.TranslateInputs(
+        new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = valid ? new Sample { Raw = (int)Math.Round((value + 1) * 32767.5) } : null });
     private static void InvalidDefinitions()
     {
         var valid = Definition("servo", "ServoToggle", 8);
@@ -267,18 +282,18 @@ internal static class PayloadTests
     private static void ConfirmationAndHid()
     {
         var fixture = Reset(Definition("release", "ServoToggle", 8, confirmations: 2));
-        fixture.Config.JoystickSw1UpAction = "release:activate";
+        Map(fixture.Config, "release:activate");
         var service = new NomadJoystickService(fixture.Config);
-        service.TranslatePayloadButtons(new[] { true, false, false, false, false, false });
-        service.TranslatePayloadButtons(new[] { true, false, false, false, false, false });
+        Buttons(service, new[] { true, false, false, false, false, false });
+        Buttons(service, new[] { true, false, false, false, false, false });
         Check(fixture.Connection.Commands.Count == 0, "Initially held HID activated payload");
-        service.TranslatePayloadButtons(new bool[6]);
-        service.TranslatePayloadButtons(new[] { true, false, false, false, false, false });
+        Buttons(service, new bool[6]);
+        Buttons(service, new[] { true, false, false, false, false, false });
         Check(fixture.Connection.Commands.Count == 0, "Hazardous action ignored confirmation count");
-        service.TranslatePayloadButtons(new bool[6]);
-        service.TranslatePayloadButtons(new[] { true, false, false, false, false, false });
+        Buttons(service, new bool[6]);
+        Buttons(service, new[] { true, false, false, false, false, false });
         Check(fixture.Connection.Commands.Count == 1, "Distinct neutral-separated HID confirmations failed");
-        service.TranslatePayloadButtons(null);
+        Buttons(service, null);
         Check(fixture.Connection.Commands.Count == 2 && fixture.Connection.Commands[1].Second == 1000,
             "HID loss did not request safe");
         fixture = Reset(Definition("servo", "ServoToggle", 8));
@@ -288,14 +303,15 @@ internal static class PayloadTests
         Check(fixture.Connection.Commands.Select(command => command.Second).SequenceEqual(new[] { 1000f, 2000f, 1000f }),
             "Saved toggle mapping lost ACK-backed commanded state");
         fixture = Reset(Definition("position", "ServoPosition", 9, 1500));
+        MapPosition(fixture.Config);
         service = new NomadJoystickService(fixture.Config);
-        service.TranslatePayloadPosition(true, 1); service.TranslatePayloadPosition(false, 0); service.TranslatePayloadPosition(true, 1);
+        Position(service, true, 1); Position(service, false, 0); Position(service, true, 1);
         Check(fixture.Connection.Commands.Count == 0, "Invalid/held position input bypassed center fence");
-        service.TranslatePayloadPosition(true, 0); service.TranslatePayloadPosition(true, 1);
+        Position(service, true, 0); Position(service, true, 1);
         Check(fixture.Connection.Commands.Count == 2 && fixture.Connection.Commands.Last().Second == 2000,
             "Centered fresh continuous HID input failed");
         fixture.Connection.Select();
-        service.TranslatePayloadPosition(true, 1);
+        Position(service, true, 1);
         Check(fixture.Connection.Commands.Count == 2, "Held continuous axis crossed selected-aircraft generation");
         var release = Definition("release", "ServoToggle", 8, confirmations: 2);
         release["confirmation_window_ms"] = 500;
@@ -306,11 +322,10 @@ internal static class PayloadTests
         Act(fixture.Owner, "release", "activate");
         Check(fixture.Connection.Commands.Count == 1, "Fresh confirmation sequence did not activate once");
         fixture = Reset(Definition("first", "ServoToggle", 8), Definition("second", "ServoToggle", 9));
-        fixture.Config.JoystickSw1UpAction = "first:activate";
-        fixture.Config.JoystickSw1DownAction = "second:activate";
+        Map(fixture.Config, "first:activate", "second:activate");
         service = new NomadJoystickService(fixture.Config);
-        service.TranslatePayloadButtons(new bool[6]);
-        service.TranslatePayloadButtons(new[] { true, true, false, false, false, false });
+        Buttons(service, new bool[6]);
+        Buttons(service, new[] { true, true, false, false, false, false });
         Wait(fixture.Owner.WaitForPendingAsync());
         Check(fixture.Connection.Commands.Count == 2 && fixture.Connection.Commands.All(command => command.Second == 1000),
             "Contradictory switch pair activated its different outputs instead of safe");
@@ -320,16 +335,15 @@ internal static class PayloadTests
         var fixture = Reset(Definition("first", "ServoToggle", 8), Definition("second", "ServoToggle", 9));
         Act(fixture.Owner, "first", "activate");
         Act(fixture.Owner, "second", "activate");
-        fixture.Config.JoystickSw1UpAction = "first:activate";
-        fixture.Config.JoystickSw1DownAction = "second:activate";
+        Map(fixture.Config, "first:activate", "second:activate");
         var service = new NomadJoystickService(fixture.Config);
-        service.TranslatePayloadButtons(new bool[6]);
+        Buttons(service, new bool[6]);
         var held = new TaskCompletionSource<bool>();
         fixture.Connection.Send = command => command.First == 8 ? held.Task : Task.FromResult(true);
-        service.TranslatePayloadButtons(new[] { true, true, false, false, false, false });
+        Buttons(service, new[] { true, true, false, false, false, false });
         var drain = fixture.Owner.WaitForPendingAsync();
         Check(!drain.IsCompleted && fixture.Connection.Commands.Count == 3, "First native Safe was not held");
-        service.TranslatePayloadButtons(new bool[6]);
+        Buttons(service, new bool[6]);
         held.SetResult(true);
         Wait(drain);
         Check(fixture.Connection.Commands.Count == 4 && fixture.Connection.Commands[3].First == 9 &&
@@ -354,34 +368,234 @@ internal static class PayloadTests
     }
     private static void MixedBatchRetiresAcrossAircraftChange()
     {
-        foreach (bool close in new[] { false, true })
+        foreach (string retirement in new[] { "selection", "disconnect", "input" })
         {
             var fixture = Reset(Definition("first", "ServoToggle", 8), Definition("second", "ServoToggle", 9));
             Act(fixture.Owner, "first", "activate");
-            fixture.Config.JoystickSw1UpAction = "first:safe";
-            fixture.Config.JoystickSw2UpAction = "second:activate";
+            Map(fixture.Config, "first:safe");
+            fixture.Config.Inputs.Add(JObject.FromObject(new InputBinding { Id = "second_input", Name = "Second", Device = "test", Enabled = true, Button = 2, Action = "second:activate" }));
             var service = new NomadJoystickService(fixture.Config);
-            service.TranslatePayloadButtons(new bool[6]);
+            Buttons(service, new bool[6]);
             var held = new TaskCompletionSource<bool>();
             fixture.Connection.Send = command => command.First == 8 ? held.Task : Task.FromResult(true);
             var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
             long revision = (long)typeof(NomadJoystickService).GetField("_inputRevision", flags).GetValue(service);
-            var events = new List<(string Id, string Operation, int Slot)> { ("first", "safe", 0), ("second", "activate", 1) };
+            var events = new List<(string Id, string Operation, string Input)> { ("first", "safe", "test_input"), ("second", "activate", "second_input") };
             var batch = (Task)typeof(NomadJoystickService).GetMethod("SendPayloadEvents", flags)
                 .Invoke(service, new object[] { events, revision });
             Check(!batch.IsCompleted && fixture.Connection.Commands.Count == 2, "Mixed HID batch did not pause at native Safe");
-            if (close) { fixture.Connection.Close(); }
-            else { fixture.Connection.sysidcurrent = 12; }
+            if (retirement == "disconnect") { fixture.Connection.Close(); }
+            else if (retirement == "selection") { fixture.Connection.sysidcurrent = 12; }
+            else { Buttons(service, new[] { true, false, false, false, false, false }); }
             // No HID poll occurs here: its input revision still belongs to the retired aircraft.
             held.SetResult(true);
             Wait(batch);
             Check(fixture.Connection.Commands.Count == 2 && fixture.Connection.Commands.All(command => command.First == 8 && command.System == 4),
-                "Old mixed HID batch activated an output after " + (close ? "disconnect" : "aircraft selection"));
+                "Old mixed HID batch activated an output after " + retirement);
+        }
+    }
+    private static void NamedInputSafety()
+    {
+        var fixture = Reset(Definition("first", "ServoToggle", 8, confirmations: 2), Definition("second", "ServoToggle", 9));
+        Map(fixture.Config, "first:activate");
+        Check(fixture.Owner.ActAsync("second", "activate", source: "hid", inputId: "test_input").Result.Contains("Invalid input") &&
+            fixture.Owner.ActAsync("first", "negative", source: "hid", inputId: "test_input").Result.Contains("Invalid input") &&
+            fixture.Connection.Commands.Count == 0, "Known binding authorized the wrong payload or operation");
+        var binding = InputBinding.Parse(fixture.Config.Inputs)[0];
+        var second = JObject.FromObject(binding); second["Id"] = "other_input"; second["Button"] = 1;
+        fixture.Config.Inputs.Add(second);
+        var service = new NomadJoystickService(fixture.Config);
+        Buttons(service, new bool[6]); Buttons(service, new[] { true, false, false, false, false, false });
+        Buttons(service, new bool[6]); Buttons(service, new[] { false, true, false, false, false, false });
+        Check(fixture.Connection.Commands.Count == 0, "Different stable identities combined their confirmations");
+        Buttons(service, new bool[6]);
+        var first = fixture.Config.Inputs[0]; fixture.Config.Inputs.RemoveAt(0); fixture.Config.Inputs.Add(first);
+        Buttons(service, new[] { false, true, false, false, false, false });
+        Check(fixture.Connection.Commands.Count == 1, "Reordering lost the same binding's neutral-separated confirmation: " + fixture.Connection.Commands.Count + " " + fixture.Owner.Status("first"));
+        Buttons(service, null); Buttons(service, new[] { false, true, false, false, false, false });
+        Check(fixture.Connection.Commands.Count == 2, "Held reconnect activated without neutral");
+        Check(NomadJoystickService.ResolveDeviceName("test", new[] { "test", "TEST" }) == null &&
+            NomadJoystickService.ResolveDeviceName("missing", new[] { "test" }) == null, "Ambiguous or missing device was substituted");
+        var state = new InputControlState();
+        binding.Source = "AxisSwitch3"; binding.Action = "first:activate"; binding.OtherAction = "second:safe";
+        Check(state.Sample(binding, new Sample { Raw = 65535 }) && !state.Ready, "Held three-position endpoint armed input");
+        state.Sample(binding, new Sample()); state.Sample(binding, new Sample { Raw = 65535 });
+        Check(state.Ready && state.Direction == 1, "Center did not unlock three-position switch");
+        state.Sample(binding, new Sample { Raw = 0 });
+        Check(!state.Ready, "Skipped axis center was accepted as neutral");
+        state.Sample(binding, new Sample()); state.Sample(binding, new Sample { Raw = 65535 });
+        state.Sample(binding, new Sample { Raw = 47000 });
+        Check(state.Direction == 1 && !state.Changed, "Axis threshold jitter retriggered endpoint");
+        binding.Source = "AxisSwitch2"; state.Reset();
+        state.Sample(binding, new Sample { Raw = 65535 }); Check(!state.Ready, "Held two-position axis armed input");
+        state.Sample(binding, new Sample { Raw = 0 }); state.Sample(binding, new Sample { Raw = 65535 });
+        Check(state.Ready && state.Direction == 1, "Two-position inactive endpoint did not arm fresh edge");
+        binding.Invert = true; state.Reset(); state.Sample(binding, new Sample { Raw = 65535 }); state.Sample(binding, new Sample { Raw = 0 });
+        Check(state.Ready && state.Direction == 1, "Inverted two-position endpoint did not work");
+        Check(NomadJoystickService.TryReadAxisNorm(new Sample { Raw = 32767 }, "X", false, 0, out float midpoint) && midpoint == 0 &&
+            NomadJoystickService.TryReadAxisNorm(new Sample { Raw = 32768 }, "X", false, 0, out midpoint) && midpoint == 0,
+            "Unsigned axis midpoint lost zero-deadzone center");
+        var now = DateTime.UtcNow;
+        var listen = new InputListenState(now);
+        listen.Sample(new Sample { Buttons = new[] { true, false } }, false, now);
+        listen.Sample(new Sample { Buttons = new[] { true, false }, Raw = 33000 }, false, now);
+        Check(listen.Active && fixture.Connection.Commands.Count == 2, "Held/noisy Listen input dispatched or captured");
+        listen.Sample(new Sample { Buttons = new[] { false, false } }, false, now);
+        listen.Sample(new Sample { Buttons = new[] { true, false } }, false, now);
+        Check(!listen.Active && listen.Button == 0 && fixture.Connection.Commands.Count == 2, "Fresh Listen press failed or dispatched output");
+        listen = new InputListenState(now); listen.Sample(new Sample(), false, now); listen.Sample(new Sample { Raw = 65535 }, false, now);
+        Check(!listen.Active && listen.Axis == "X", "Generic Listen failed to detect an axis without choosing its type");
+        listen = new InputListenState(now); listen.Sample(new Sample(), false, now); listen.Sample(new Sample { Raw = 65535 }, true, now);
+        Check(!listen.Active && listen.Axis == null && listen.Button == null, "New connection did not retire capture before detection");
+        listen = new InputListenState(now); listen.Sample(new Sample(), false, now.AddSeconds(16));
+        Check(!listen.Active, "Listen deadline did not retire capture");
+        listen = new InputListenState(now); listen.Sample(null, false, now);
+        Check(!listen.Active, "Device loss did not retire capture");
+        fixture = Reset(Definition("gimbal", "ServoToggle", 8)); Map(fixture.Config, "gimbal:activate");
+        service = new NomadJoystickService(fixture.Config); Buttons(service, new bool[6]); Buttons(service, new[] { true, false, false, false, false, false });
+        Check(fixture.Connection.Commands.Count == 1, "Payload named gimbal could not be bound");
+        fixture = Reset(Definition("first", "ServoToggle", 8));
+        fixture.Config.Inputs = new JArray(JObject.FromObject(new InputBinding { Id = "pitch", Name = "Pitch", Device = "test", Enabled = true,
+            Source = "Axis", Action = "gimbal:pitch" }));
+        service = new NomadJoystickService(fixture.Config); GimbalController.SetTargetAngles(0, 0);
+        Position(service, true, 1); Check(GimbalController.TargetPitchDeg == 0, "Held gimbal axis moved before center");
+        Position(service, true, 0); Position(service, true, 1); Check(GimbalController.TargetPitchDeg > 0, "Centered gimbal axis did not move");
+        float target = GimbalController.TargetPitchDeg; fixture.Connection.Select(); Position(service, true, 1);
+        Check(GimbalController.TargetPitchDeg == target, "Held gimbal crossed generation");
+    }
+    private static void MixedInputArbitration()
+    {
+        var fixture = Reset(Definition("position", "ServoPosition", 9, 1500));
+        MapPosition(fixture.Config);
+        fixture.Config.Inputs.Add(JObject.FromObject(new InputBinding { Id = "safe", Name = "Safe", Device = "test", Enabled = true,
+            Button = 0, Action = "position:safe" }));
+        var service = new NomadJoystickService(fixture.Config);
+        Position(service, true, 0); fixture.Connection.Commands.Clear();
+        service.TranslateInputs(new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample { Raw = 65535, Buttons = new[] { true, false } } });
+        Check(fixture.Connection.Commands.Count == 1 && fixture.Connection.Commands[0].Second == 1500,
+            "Same-sample position dispatched before its opposing Safe");
+        foreach (int raw in new[] { 50000, 32768, 0, 32768, 65535 })
+        {
+            service.TranslateInputs(new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample { Raw = raw, Buttons = new[] { true, false } } });
+        }
+        Check(fixture.Connection.Commands.All(command => command.Second == 1500), "Changing axis overrode a held Safe");
+        fixture = Reset(Definition("position", "ServoPosition", 9, 1500)); MapPosition(fixture.Config);
+        fixture.Config.Inputs.Add(JObject.FromObject(new InputBinding { Id = "axis2", Name = "Second axis", Device = "other", Enabled = true,
+            Source = "Axis", Action = "position:position" }));
+        service = new NomadJoystickService(fixture.Config);
+        var both = new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample(), ["other"] = new Sample() };
+        service.TranslateInputs(both); both["test"] = new Sample { Raw = 65535 }; both["other"] = new Sample { Raw = 0 }; service.TranslateInputs(both);
+        Check(fixture.Connection.Commands.Count == 1 && fixture.Connection.Commands[0].Second == 1500,
+            "Two continuous inputs dispatched position instead of conflict Safe");
+        fixture = Reset(Definition("winch", "ServoBidirectional", 10, 1500)); Map(fixture.Config, "winch:positive");
+        fixture.Config.Inputs.Add(JObject.FromObject(new InputBinding { Id = "pitch", Name = "Pitch", Device = "test", Enabled = true,
+            Source = "Axis", Action = "gimbal:pitch" }));
+        var trim = new TaskCompletionSource<float>(); fixture.Connection.Trim = () => trim.Task;
+        service = new NomadJoystickService(fixture.Config); Buttons(service, new bool[6]);
+        Buttons(service, new[] { true, false, false, false, false, false });
+        var pending = fixture.Owner.WaitForPendingAsync(); Check(!pending.IsCompleted, "Delayed trim fixture was not pending");
+        service.TranslateInputs(new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample { Raw = 65535, Buttons = new[] { true, false, false, false, false, false } } });
+        trim.SetResult(1500); Wait(pending);
+        Check(fixture.Connection.Commands.Any(command => command.Kind == MAVLink.MAV_CMD.DO_REPEAT_SERVO),
+            "Unrelated gimbal movement retired a legitimate pending payload action");
+        Act(fixture.Owner, "winch", "safe");
+        fixture = Reset(Definition("first", "ServoToggle", 8));
+        fixture.Config.Inputs = new JArray(JObject.FromObject(new InputBinding { Id = "pitch", Name = "Pitch", Device = "test", Enabled = true,
+            Source = "Axis", Action = "gimbal:pitch" }), JObject.FromObject(new InputBinding { Id = "roll", Name = "Roll", Device = "other", Enabled = true,
+            Source = "Axis", Action = "gimbal:roll" }));
+        service = new NomadJoystickService(fixture.Config); GimbalController.SetTargetAngles(0, 0);
+        both = new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample(), ["other"] = null };
+        service.TranslateInputs(both); both["test"] = new Sample { Raw = 65535 }; service.TranslateInputs(both);
+        Check(GimbalController.TargetPitchDeg == 0, "One valid gimbal axis moved while the other was missing");
+        both["test"] = new Sample(); both["other"] = new Sample { Raw = 65535 }; service.TranslateInputs(both);
+        both["test"] = new Sample { Raw = 65535 }; service.TranslateInputs(both);
+        Check(GimbalController.TargetPitchDeg == 0 && GimbalController.TargetRollDeg == 0, "One fresh gimbal center bypassed joint center");
+        both["test"] = new Sample(); both["other"] = new Sample(); service.TranslateInputs(both);
+        both["test"] = new Sample { Raw = 65535 }; service.TranslateInputs(both);
+        Check(GimbalController.TargetPitchDeg > 0, "Joint centered gimbal axes failed to move");
+        float target = GimbalController.TargetPitchDeg;
+        OutputController.Initialize(new NOMADConfig()); service.TranslateInputs(both);
+        Check(GimbalController.TargetPitchDeg == target, "Retired service profile continued gimbal movement");
+    }
+    private static void AbsentDeviceDoesNotRetireOtherInput()
+    {
+        foreach (bool loseActiveDevice in new[] { false, true })
+        {
+            var fixture = Reset(Definition("winch", "ServoBidirectional", 10, 1500), Definition("other", "RelayToggle", 0));
+            Map(fixture.Config, "winch:positive");
+            fixture.Config.Inputs.Add(JObject.FromObject(new InputBinding { Id = "absent", Name = "Unplugged control",
+                Device = "missing", Enabled = true, Action = "other:activate" }));
+            var trim = new TaskCompletionSource<float>(); fixture.Connection.Trim = () => trim.Task;
+            var service = new NomadJoystickService(fixture.Config);
+            var samples = new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample() };
+            service.TranslateInputs(samples);
+            samples["test"] = new Sample { Buttons = new[] { true, false, false, false, false, false } };
+            service.TranslateInputs(samples);
+            var activation = fixture.Owner.WaitForPendingAsync();
+            Check(!activation.IsCompleted && fixture.Connection.Reads == 1, "Delayed trim did not establish pending HID work");
+            for (int poll = 0; poll < 5; poll++) { service.TranslateInputs(samples); }
+            if (loseActiveDevice)
+            {
+                samples["test"] = null;
+                for (int poll = 0; poll < 5; poll++) { service.TranslateInputs(samples); }
+            }
+            var drain = fixture.Owner.WaitForPendingAsync();
+            trim.SetResult(1500); Wait(activation); Wait(drain);
+            Check(fixture.Connection.Commands.Count == 1 && fixture.Connection.Commands[0].First == 10 &&
+                fixture.Connection.Commands[0].Kind == (loseActiveDevice ? MAVLink.MAV_CMD.DO_SET_SERVO : MAVLink.MAV_CMD.DO_REPEAT_SERVO) &&
+                fixture.Connection.Commands[0].Second == (loseActiveDevice ? 1500 : 2000),
+                loseActiveDevice ? "Losing the active HID during trim did not refuse activation and send Safe" :
+                    "An already absent unrelated HID retired unchanged pending trim input");
+            if (!loseActiveDevice) { Act(fixture.Owner, "winch", "safe"); }
+        }
+    }
+    private static void StableConflictDoesNotRetireOtherInput()
+    {
+        foreach (int conflictRaw in new[] { 32768, 65535 })
+        {
+            var fixture = Reset(Definition("position", "ServoPosition", 9, 1500), Definition("winch", "ServoBidirectional", 10, 1500));
+            MapPosition(fixture.Config);
+            fixture.Config.Inputs.Add(JObject.FromObject(new InputBinding { Id = "safe", Name = "Safe", Device = "test", Enabled = true,
+                Button = 0, Action = "position:safe" }));
+            fixture.Config.Inputs.Add(JObject.FromObject(new InputBinding { Id = "winch", Name = "Winch", Device = "other", Enabled = true,
+                Button = 0, Action = "winch:positive" }));
+            var service = new NomadJoystickService(fixture.Config);
+            var samples = new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState>
+                { ["test"] = new Sample(), ["other"] = new Sample() };
+            service.TranslateInputs(samples);
+            int beforeConflict = fixture.Connection.Commands.Count;
+            samples["test"] = new Sample { Raw = conflictRaw, Buttons = new[] { true, false } };
+            service.TranslateInputs(samples); Wait(fixture.Owner.WaitForPendingAsync());
+            Check(fixture.Connection.Commands.Count == beforeConflict + 1 && fixture.Connection.Commands.Last().First == 9 &&
+                fixture.Connection.Commands.Last().Second == 1500, "Conflict entry did not admit exactly one position Safe");
+            fixture.Connection.Commands.Clear();
+            var trim = new TaskCompletionSource<float>(); fixture.Connection.Trim = () => trim.Task;
+            samples["other"] = new Sample { Buttons = new[] { true, false } };
+            service.TranslateInputs(samples);
+            var pending = fixture.Owner.WaitForPendingAsync();
+            Check(!pending.IsCompleted, "Unrelated winch did not begin blocked trim during established conflict");
+            for (int poll = 0; poll < 5; poll++) { service.TranslateInputs(samples); }
+            trim.SetResult(1500); Wait(pending);
+            Check(fixture.Connection.Commands.Count == 1 && fixture.Connection.Commands[0].Kind == MAVLink.MAV_CMD.DO_REPEAT_SERVO &&
+                fixture.Connection.Commands[0].First == 10 && fixture.Connection.Commands[0].Second == 2000,
+                "Unchanged conflict retired unrelated trim or emitted position/repeated Safe");
+            Act(fixture.Owner, "winch", "safe");
+            if (conflictRaw == 65535)
+            {
+                fixture.Connection.Commands.Clear();
+                samples["test"] = new Sample { Raw = 65535 };
+                service.TranslateInputs(samples);
+                Check(fixture.Connection.Commands.Count == 0, "Held axis resumed position after conflict without fresh center");
+                samples["test"] = new Sample(); service.TranslateInputs(samples);
+                samples["test"] = new Sample { Raw = 65535 }; service.TranslateInputs(samples);
+                Check(fixture.Connection.Commands.Count == 2 && fixture.Connection.Commands.Last().First == 9 &&
+                    fixture.Connection.Commands.Last().Second == 2000, "Fresh neutral did not restore position after conflict");
+            }
         }
     }
     private static int Main()
     {
-        InvalidDefinitions(); NativeMappings(); TrimAndTargetFences(); StopAndFaults(); SequentialSafeDrain(); SafeRejectionOutcomes(); ConfirmationAndHid(); ConflictSafetySurvivesNewInput(); RepeatSurvivesRetirement(); MixedBatchRetiresAcrossAircraftChange();
+        StableConflictDoesNotRetireOtherInput(); AbsentDeviceDoesNotRetireOtherInput(); MixedInputArbitration(); NamedInputSafety(); InvalidDefinitions(); NativeMappings(); TrimAndTargetFences(); StopAndFaults(); SequentialSafeDrain(); SafeRejectionOutcomes(); ConfirmationAndHid(); ConflictSafetySurvivesNewInput(); RepeatSurvivesRetirement(); MixedBatchRetiresAcrossAircraftChange();
         Console.WriteLine("Payload tests passed (native mappings, strict calibration, ACK faults, HID edges, stale targets and repeat lifetime).");
         return 0;
     }

@@ -32,7 +32,7 @@ function Invoke-AircraftProfileTests {
         '"ReceiverType":"Receiver Beta","AircraftFirmware":"fixture-version","Airframe":"fixture-airframe",' +
         '"RouterLocalPort":14643,' +
         '"VideoInputs":[{"Name":"Camera","Url":"rtsp://profile-beta.invalid/stream"}],"SelectedVideoInputName":"Camera","AutoStartHudVideo":false,' +
-        '"JoystickGimbalMaxRateDegSec":80,"GimbalMountMode":3,"JoystickGimbalPitchInvert":false,' +
+        '"JoystickGimbalMaxRateDegSec":80,"GimbalMountMode":3,' +
         '"ActuatorDefinitions":[{"id":"beta_output","name":"Beta Output","behavior":"RelayToggle","channel":1,"safe_pwm":1000}]}')
     $added = $profiles.Add($beta)
     $profiles.Save()
@@ -46,7 +46,7 @@ function Invoke-AircraftProfileTests {
     }
     if ($restored.RouterLocalPort -ne 14643 -or $restored.SelectedVideoInput.Url -ne 'rtsp://profile-beta.invalid/stream' -or
         $restored.AutoStartHudVideo -or $restored.JoystickGimbalMaxRateDegSec -ne 80 -or
-        $restored.GimbalMountMode -ne 3 -or $restored.JoystickGimbalPitchInvert -or
+        $restored.GimbalMountMode -ne 3 -or
         $restored.ActuatorDefinitions.Count -ne 1 -or
         $restored.ActuatorDefinitions[0]['id'].ToString() -ne 'beta_output') {
         throw 'Restart mixed another aircraft''s connections, gimbal or actuator definitions into the selected profile.'
@@ -98,7 +98,7 @@ function Invoke-AircraftProfileTests {
         if ($setting -eq 'definition') {
             $outputDraft.Selected.Config.ActuatorDefinitions[0]['channel'] = [Newtonsoft.Json.Linq.JValue]::new(2)
         } else {
-            $outputDraft.Selected.Config.JoystickGimbalDeadzone = 0.2
+            $outputDraft.Selected.Config.Inputs = [Newtonsoft.Json.Linq.JArray]::Parse('[{"Id":"edit","Name":"Edited control","Device":"test","Source":"Axis","Action":"gimbal:pitch","Deadzone":0.2}]')
         }
         $rejected = $false
         try { $saveForConnection.Invoke($outputDraft, [object[]]@($draft, $true)) | Out-Null } catch { $rejected = $true }
@@ -170,8 +170,8 @@ function Invoke-AircraftProfileTests {
     [IO.Directory]::Delete($primary + '.tmp')
     foreach ($invalid in @('{"UnknownSetting":null}', '{"GimbalMountMode":4}', '{"GimbalMountMode":null}',
         '{"ActuatorDefinitions":{}}', '{"ActuatorDefinitions":[1]}', '{"FlightControllerModel":3}',
-        '{"JoystickGimbalPitchAxis":"unknown"}', '{"JoystickPositionAxis":null}',
-        '{"JoystickGimbalMaxRateDegSec":"NaN"}', '{"JoystickPositionDeadzone":0.51}')) {
+        '{"Inputs":null}', '{"Inputs":[{"Id":"invalid"}]}',
+        '{"JoystickGimbalMaxRateDegSec":"NaN"}', '{"Inputs":[{"Id":"one","Name":"Invalid","Device":"test","Source":"Axis","Action":"gimbal:pitch","Deadzone":0.51}]}')) {
         $rejected = $false
         try { Load-Config $invalid | Out-Null } catch { $rejected = $true }
         if (-not $rejected) { throw 'Invalid aircraft hardware/configuration data was accepted.' }
@@ -233,7 +233,7 @@ function Invoke-AircraftProfileUiTests {
         '"VideoInputs":[{"Name":"Camera","Url":"rtsp://beta-ui.invalid/stream"}],"SelectedVideoInputName":"Camera",' +
         '"FlightControllerModel":"Beta controller","ReceiverType":"Beta receiver",' +
         '"GimbalMountMode":3,"JoystickGimbalMaxRateDegSec":80,' +
-        '"JoystickGimbalPitchAxis":"Rz","JoystickPositionEnabled":true,"JoystickPositionActuatorId":"beta",' +
+        '"Inputs":[{"Id":"beta_input","Name":"Beta control","Device":"missing","Source":"Axis","Axis":"Rz","Action":"gimbal:pitch"}],' +
         '"ActuatorDefinitions":[{"id":"beta","name":"Beta","behavior":"RelayToggle","channel":0,"safe_pwm":1000}]}')
     $betaId = $profiles.Add($beta).Id
     $profiles.SelectedId = $alphaId
@@ -259,8 +259,8 @@ function Invoke-AircraftProfileUiTests {
         }
         if ((Profile-Control '_cmbGimbalMountMode').SelectedIndex -ne 3 -or
             (Profile-Control '_numJoyGimbalMaxRate').Value -ne 80 -or
-            (Profile-Control '_cmbJoyGimbalPitchAxis').SelectedItem -ne 'Rz' -or
-            -not (Profile-Control '_chkJoyPositionEnabled').Checked -or
+            (Profile-Control '_inputList').Rows.Count -ne 1 -or
+            $form.Config.Inputs[0]['Axis'].Value -ne 'Rz' -or
             $form.Config.ActuatorDefinitions[0]['id'].ToString() -ne 'beta' -or
             (Profile-Control '_payloadList').Rows.Count -ne 1) {
             throw 'Aircraft selection lost gimbal, actuator or unavailable-backend input settings.'

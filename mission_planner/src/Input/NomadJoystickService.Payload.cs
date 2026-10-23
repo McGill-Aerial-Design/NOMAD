@@ -4,226 +4,156 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using JoystickBase = MissionPlanner.Joystick.JoystickBase;
-
+using IMyJoystickState = MissionPlanner.Joystick.IMyJoystickState;
 namespace NOMAD.MissionPlanner
 {
     public sealed partial class NomadJoystickService
     {
-        private readonly Dictionary<string, JoystickBase> _payloadDevices = new Dictionary<string, JoystickBase>(StringComparer.OrdinalIgnoreCase);
-        private JoystickBase _positionJoy, _switchJoy;
-        private bool[] _previousButtons;
+        private readonly Dictionary<string, InputControlState> _states = new Dictionary<string, InputControlState>();
+        // Availability survives conflict/neutral resets so absent devices cannot retire other controls.
+        private readonly Dictionary<string, bool> _available = new Dictionary<string, bool>();
+        private readonly Dictionary<string, double> _positions = new Dictionary<string, double>();
+        private readonly HashSet<(string Id, string Input)> _touched = new HashSet<(string, string)>();
         private readonly HashSet<string> _conflicting = new HashSet<string>();
-        private readonly HashSet<string> _touchedOutputs = new HashSet<string>();
-        private long _payloadGeneration = -1, _inputRevision;
-        private bool _positionCentered;
-        private double? _lastPosition;
-
-        private string[] PayloadBindings() => new[] { _config.JoystickSw1UpAction, _config.JoystickSw1DownAction,
-            _config.JoystickSw2UpAction, _config.JoystickSw2DownAction, _config.JoystickSw3UpAction, _config.JoystickSw3DownAction };
-        private static bool Binding(string binding, out string id, out string operation)
+        private long _generation = -1, _inputRevision;
+        private readonly GimbalInputState _gimbalInput = new GimbalInputState();
+        internal void TranslateInputs(IDictionary<string, IMyJoystickState> samples, float dt = 0.05f)
         {
-            int separator = binding?.LastIndexOf(':') ?? -1;
-            id = separator > 0 ? binding.Substring(0, separator) : "";
-            operation = separator > 0 ? binding.Substring(separator + 1) : "";
-            return id != "" && operation != "";
-        }
-        private void AcquirePayloadDevices()
-        {
-            var available = EnumerateDevices();
-            if (_config.JoystickPositionEnabled) { _positionJoy = AcquirePayloadDevice(_config.JoystickPositionDevice, available); }
-            if (PayloadBindings().Any(binding => Binding(binding, out _, out _)))
-            { _switchJoy = AcquirePayloadDevice(_config.JoystickSwitchDevice, available); }
-        }
-        private JoystickBase AcquirePayloadDevice(string selected, IList<string> available)
-        {
-            string name = ResolveDeviceName(selected, available);
-            if (name == null) { return null; }
-            if (_gimbalJoy != null && string.Equals(name, _config.JoystickGimbalDevice, StringComparison.OrdinalIgnoreCase))
-            { return _gimbalJoy; }
-            if (!_payloadDevices.TryGetValue(name, out var device))
+            if (!OutputController.IsCurrentProfile(_config)) { ResetInputs(false); return; }
+            if (_generation != OutputController.Generation) { ResetInputs(false); _generation = OutputController.Generation; }
+            var bindings = InputBinding.Parse(_config.Inputs).Where(binding => binding.Enabled).ToList();
+            var events = new List<(string Id, string Operation, string Input)>();
+            var active = new List<(InputBinding Binding, string Action)>();
+            var positions = new List<(InputBinding Binding, InputControlState State)>();
+            float pitch = 0, roll = 0;
+            bool gimbalValid = true, hasGimbal = false;
+            foreach (var binding in bindings)
             {
-                device = CreateAndAcquire(name);
-                if (device != null) { _payloadDevices.Add(name, device); }
-            }
-            return device;
-        }
-        private void StopPayloadDevices()
-        {
-            foreach (var handle in _payloadDevices.Values) { var device = handle; ReleaseJoy(ref device); }
-            _payloadDevices.Clear();
-            _positionJoy = null;
-            _switchJoy = null;
-        }
-        private void DrivePayloadInputs()
-        {
-            ObservePayloadGeneration();
-            if ((_config.JoystickPositionEnabled && _positionJoy == null) ||
-                (PayloadBindings().Any(binding => Binding(binding, out _, out _)) && _switchJoy == null))
-            {
-                if (DateTime.UtcNow - _lastPayloadAcquire > TimeSpan.FromSeconds(3))
-                { _lastPayloadAcquire = DateTime.UtcNow; AcquirePayloadDevices(); }
-            }
-            if (_config.JoystickPositionEnabled)
-            {
-                var state = _positionJoy == null ? null : SafeGetState(_positionJoy);
-                if (state == null) { RetirePayloadDevice(_positionJoy); }
-                bool valid = TryReadAxisNorm(state, _config.JoystickPositionAxis, _config.JoystickPositionInvert,
-                    _config.JoystickPositionDeadzone, out float normalized);
-                TranslatePayloadPosition(valid, normalized);
-            }
-            bool[] buttons = null;
-            try
-            {
-                var state = _switchJoy == null ? null : SafeGetState(_switchJoy);
-                if (state == null) { RetirePayloadDevice(_switchJoy); }
-                buttons = state?.GetButtons();
-            }
-            catch { }
-            TranslatePayloadButtons(buttons);
-        }
-        private DateTime _lastPayloadAcquire = DateTime.MinValue;
-        private void RetirePayloadDevice(JoystickBase device)
-        {
-            if (device == null) { return; }
-            foreach (string name in _payloadDevices.Where(entry => entry.Value == device).Select(entry => entry.Key).ToArray())
-            { _payloadDevices.Remove(name); }
-            if (_positionJoy == device) { _positionJoy = null; }
-            if (_switchJoy == device) { _switchJoy = null; }
-            if (_gimbalJoy == device) { _gimbalJoy = null; }
-            ReleaseJoy(ref device);
-        }
-        private void ObservePayloadGeneration()
-        {
-            long generation = OutputController.Generation;
-            if (_payloadGeneration == generation) { return; }
-            // Retire input without sending old releases to a newly selected aircraft.
-            _payloadGeneration = generation;
-            ClearPayloadInput();
-        }
-
-        internal void TranslatePayloadButtons(bool[] buttons)
-        {
-            ObservePayloadGeneration();
-            var bindings = PayloadBindings();
-            if (!bindings.Any(binding => Binding(binding, out _, out _))) { return; }
-            if (_config.GetInputMappingError() != null || buttons == null || bindings.Where((binding, slot) =>
-                Binding(binding, out _, out _) && _config.JoystickButtonIndices[slot] >= buttons.Length).Any())
-            { ResetPayloadButtons(); return; }
-            var pressed = bindings.Select((binding, slot) => Binding(binding, out _, out _) && buttons[_config.JoystickButtonIndices[slot]]).ToArray();
-            var conflicts = bindings.Where((binding, slot) => pressed[slot] && Binding(binding, out _, out _))
-                .Select(binding => binding.Substring(0, binding.LastIndexOf(':'))).GroupBy(id => id)
-                .Where(group => group.Count() > 1).Select(group => group.Key).ToHashSet();
-            for (int slot = 0; slot < bindings.Length; slot++)
-            {
-                int first = slot / 2 * 2;
-                if (pressed[first] && pressed[first + 1] && Binding(bindings[slot], out var id, out _))
-                { conflicts.Add(id); }
-            }
-            if (_previousButtons == null || !pressed.SequenceEqual(_previousButtons)) { Interlocked.Increment(ref _inputRevision); }
-            long revision = Interlocked.Read(ref _inputRevision);
-            var events = new List<(string Id, string Operation, int Slot)>();
-            for (int slot = 0; slot < bindings.Length; slot++)
-            {
-                if (!Binding(bindings[slot], out var id, out var operation)) { continue; }
-                if (conflicts.Contains(id))
+                if (!_states.TryGetValue(binding.Id, out var state)) { state = new InputControlState(); _states.Add(binding.Id, state); }
+                int previous = state.Direction; bool ready = state.Ready;
+                samples.TryGetValue(binding.Device, out var sample);
+                bool valid = state.Sample(binding, sample);
+                if (InputBinding.Gimbal(binding.Action))
                 {
-                    if (!_conflicting.Contains(id) && !events.Any(input => input.Id == id)) { events.Add((id, "safe", slot / 2)); }
+                    hasGimbal = true; gimbalValid &= valid;
+                    if (binding.Action == "gimbal:pitch") { pitch = state.Value; } else { roll = state.Value; }
                     continue;
                 }
-                if (_previousButtons != null && _previousButtons[slot] && !pressed[slot] &&
-                    PayloadController.Current?.Find(id)?.Behavior == "ServoBidirectional")
-                { events.Add((id, "release_input", slot / 2)); }
-                int first = slot / 2 * 2;
-                if (!pressed[first] && !pressed[first + 1] && (_previousButtons == null || _previousButtons[first] || _previousButtons[first + 1]))
+                bool wasAvailable = _available.TryGetValue(binding.Id, out bool available) && available;
+                _available[binding.Id] = valid;
+                if (valid != wasAvailable || state.Changed) { Interlocked.Increment(ref _inputRevision); }
+                if (!valid)
                 {
-                    if (!events.Any(input => input.Id == id && input.Operation == "neutral")) { events.Add((id, "neutral", slot / 2)); }
+                    foreach (var touched in _touched.Where(value => value.Input == binding.Id).ToArray())
+                    { events.Add((touched.Id, "safe", binding.Id)); _touched.Remove(touched); }
+                    _positions.Remove(binding.Id); continue;
                 }
-                else if (_previousButtons != null && pressed[slot] && !_previousButtons[slot])
-                { events.Add((id, operation, slot / 2)); }
+                if (binding.Continuous)
+                {
+                    active.Add((binding, binding.Action));
+                    if (state.Ready) { positions.Add((binding, state)); }
+                    continue;
+                }
+                AddDigitalEvents(binding, state, previous, ready, events, active);
             }
-            _previousButtons = pressed;
-            _conflicting.Clear();
-            _conflicting.UnionWith(conflicts);
-            foreach (var input in events) { _touchedOutputs.Add(input.Id); }
-            _ = SendPayloadEvents(events, revision);
+            var conflicts = active.Where(value => InputBinding.Split(value.Action, out _, out _))
+                .GroupBy(value => value.Action.Substring(0, value.Action.LastIndexOf(':')))
+                .Where(group => group.Count() > 1).Select(group => group.Key).ToHashSet();
+            if (!_conflicting.SetEquals(conflicts)) { Interlocked.Increment(ref _inputRevision); }
+            events.RemoveAll(value => conflicts.Contains(value.Id));
+            foreach (string id in conflicts)
+            {
+                var inputs = active.Where(value => InputBinding.Split(value.Action, out var target, out _) && target == id).ToList();
+                if (!_conflicting.Contains(id)) { events.Add((id, "safe", inputs[0].Binding.Id)); }
+                foreach (var input in inputs)
+                {
+                    _states[input.Binding.Id].RequireNeutral();
+                    _positions.Remove(input.Binding.Id);
+                }
+            }
+            _conflicting.Clear(); _conflicting.UnionWith(conflicts);
+            foreach (var input in events)
+            {
+                if (input.Operation == "safe" || input.Operation == "release_input") { _touched.Remove((input.Id, input.Input)); }
+                else { _touched.Add((input.Id, input.Input)); }
+            }
+            _ = SendPayloadEvents(events.Distinct().ToList(), Interlocked.Read(ref _inputRevision));
+            foreach (var position in positions)
+            {
+                if (InputBinding.Split(position.Binding.Action, out var id, out _) && !conflicts.Contains(id))
+                { DrivePosition(position.Binding, position.State); }
+            }
+            if (!OutputController.IsCurrentProfile(_config) || _generation != OutputController.Generation)
+            { _gimbalInput.Reset(); return; }
+            if (hasGimbal && _gimbalInput.CanMove(gimbalValid, roll, pitch, _generation))
+            { GimbalController.ApplyStick(roll, pitch, dt, true); }
         }
-        private async Task SendPayloadEvents(List<(string Id, string Operation, int Slot)> events, long revision)
+        private static void AddDigitalEvents(InputBinding binding, InputControlState state, int previous, bool ready,
+            List<(string Id, string Operation, string Input)> events, List<(InputBinding Binding, string Action)> active)
         {
+            if (previous != 0 && previous != state.Direction)
+            {
+                string released = previous < 0 ? binding.OtherAction : binding.Action;
+                if (InputBinding.Split(released, out var id, out _) && PayloadController.Current?.Find(id)?.Behavior == "ServoBidirectional")
+                { events.Add((id, "release_input", binding.Id)); }
+            }
+            if (state.Direction == 2)
+            {
+                if (!state.Changed) { return; }
+                foreach (string action in binding.Actions)
+                { if (InputBinding.Split(action, out var id, out _)) { events.Add((id, "safe", binding.Id)); } }
+            }
+            else if (state.Direction == 0 && state.Ready && (state.Changed || !ready))
+            {
+                foreach (string action in binding.Actions)
+                { if (InputBinding.Split(action, out var id, out _)) { events.Add((id, "neutral", binding.Id)); } }
+            }
+            else if (state.Direction != 0)
+            {
+                string action = state.Direction < 0 ? binding.OtherAction : binding.Action;
+                active.Add((binding, action));
+                if (state.Ready && state.Changed && InputBinding.Split(action, out var id, out var operation))
+                { events.Add((id, operation, binding.Id)); }
+            }
+        }
+        private void DrivePosition(InputBinding binding, InputControlState state)
+        {
+            if (!InputBinding.Split(binding.Action, out var id, out _) || PayloadController.Current?.Find(id)?.Continuous != true) { return; }
+            double position = (state.Value + 1.0) / 2;
+            if ((_positions.TryGetValue(binding.Id, out var previous) && Math.Abs(previous - position) < 0.001) || PayloadController.HasPendingWork) { return; }
             var owner = PayloadController.Current;
-            var config = _config;
-            long generation = _payloadGeneration;
+            long generation = _generation, revision = Interlocked.Read(ref _inputRevision);
+            _positions[binding.Id] = position; _touched.Add((id, binding.Id));
+            _ = owner.ActAsync(id, "position", position, "hid", binding.Id,
+                () => owner.Owns(_config) && generation == OutputController.Generation && state.Ready && revision == Interlocked.Read(ref _inputRevision));
+        }
+        private async Task SendPayloadEvents(List<(string Id, string Operation, string Input)> events, long revision)
+        {
+            var owner = PayloadController.Current; var config = _config; long generation = _generation;
             if (owner?.Owns(config) != true || generation != OutputController.Generation) { return; }
             bool Safety(string operation) => operation == "safe" || operation == "stop" || operation == "release_input";
             var safety = new List<Task<string>>();
-            foreach (var input in events.Where(input => Safety(input.Operation)))
+            foreach (var input in events.Where(input => Safety(input.Operation)).GroupBy(input => input.Id)
+                .Select(group => group.OrderBy(input => input.Operation == "safe" ? 0 : 1).First()))
             {
-                // Admit every original-target safety action before waiting for a native helper.
-                safety.Add(owner.ActAsync(input.Id, input.Operation, source: "hid", slot: input.Slot,
+                // Admit every original-target safety action before waiting for native retries.
+                safety.Add(owner.ActAsync(input.Id, input.Operation, source: "hid", inputId: input.Input,
                     inputStillCurrent: () => owner.Owns(config) && generation == OutputController.Generation));
             }
             await Task.WhenAll(safety).ConfigureAwait(false);
             foreach (var input in events.Where(input => !Safety(input.Operation)))
             {
-                if (!owner.Owns(config) || generation != OutputController.Generation ||
-                    revision != Interlocked.Read(ref _inputRevision)) { return; }
-                await owner.ActAsync(input.Id, input.Operation, source: "hid", slot: input.Slot,
-                    inputStillCurrent: () => owner.Owns(config) && generation == OutputController.Generation &&
-                        revision == Interlocked.Read(ref _inputRevision)).ConfigureAwait(false);
+                if (!owner.Owns(config) || generation != OutputController.Generation || revision != Interlocked.Read(ref _inputRevision)) { return; }
+                await owner.ActAsync(input.Id, input.Operation, source: "hid", inputId: input.Input,
+                    inputStillCurrent: () => owner.Owns(config) && generation == OutputController.Generation && revision == Interlocked.Read(ref _inputRevision)).ConfigureAwait(false);
             }
         }
-
-        internal void TranslatePayloadPosition(bool valid, float normalized)
+        private void ResetInputs(bool safe)
         {
-            ObservePayloadGeneration();
-            long generation = _payloadGeneration;
-            var owner = PayloadController.Current;
-            string id = _config.JoystickPositionActuatorId;
-            if (!valid || float.IsNaN(normalized) || float.IsInfinity(normalized) || Math.Abs(normalized) > 1 ||
-                owner?.Owns(_config) != true || owner.Find(id)?.Continuous != true)
-            {
-                if (_lastPosition.HasValue) { SendPayloadSafe(id); }
-                _positionCentered = false;
-                _lastPosition = null;
-                return;
-            }
-            if (normalized == 0) { _positionCentered = true; }
-            if (!_positionCentered) { return; }
-            double position = (normalized + 1.0) / 2.0;
-            if (_lastPosition.HasValue && Math.Abs(_lastPosition.Value - position) < 0.001) { return; }
-            if (PayloadController.HasPendingWork) { return; }
-            _lastPosition = position;
-            _ = owner.ActAsync(id, "position", position, "hid", 6,
-                () => owner.Owns(_config) && generation == OutputController.Generation && _positionCentered);
-        }
-        private void SendPayloadSafe(string id)
-        {
-            var owner = PayloadController.Current;
-            if (owner?.Owns(_config) == true)
-            { _ = owner.ActAsync(id, "safe", source: "hid", slot: 0); }
-        }
-        private void ResetPayloadInput()
-        {
-            if (_lastPosition.HasValue) { SendPayloadSafe(_config.JoystickPositionActuatorId); }
-            ResetPayloadButtons();
-            ClearPayloadInput();
-        }
-        private void ResetPayloadButtons()
-        {
-            foreach (string id in _touchedOutputs.ToArray()) { SendPayloadSafe(id); }
+            if (safe && _generation == OutputController.Generation)
+            { _ = SendPayloadEvents(_touched.Select(value => (value.Id, "safe", value.Input)).ToList(), Interlocked.Read(ref _inputRevision)); }
             Interlocked.Increment(ref _inputRevision);
-            _previousButtons = null;
-            _conflicting.Clear();
-            _touchedOutputs.Clear();
-        }
-        private void ClearPayloadInput()
-        {
-            Interlocked.Increment(ref _inputRevision);
-            _previousButtons = null;
-            _conflicting.Clear();
-            _touchedOutputs.Clear();
-            _positionCentered = false;
-            _lastPosition = null;
+            _states.Clear(); _available.Clear(); _positions.Clear(); _touched.Clear(); _conflicting.Clear(); _gimbalInput.Reset();
         }
     }
 }

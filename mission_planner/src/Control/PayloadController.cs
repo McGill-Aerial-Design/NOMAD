@@ -14,8 +14,9 @@ namespace NOMAD.MissionPlanner
         {
             internal int Confirmations;
             internal long FirstConfirmation;
-            internal string Intent, NeutralSource;
-            internal bool Neutral, Known, Active, Recovery;
+            internal string Intent;
+            internal readonly HashSet<string> NeutralInputs = new HashSet<string>();
+            internal bool Known, Active, Recovery;
             internal string Status = "No command sent. Physical state is unverified.";
         }
         internal static PayloadController Current { get; private set; }
@@ -80,7 +81,7 @@ namespace NOMAD.MissionPlanner
         private void ResetInput()
         {
             foreach (var state in _states.Values)
-            { state.Confirmations = 0; state.Intent = null; state.Neutral = false; state.NeutralSource = null; }
+            { state.Confirmations = 0; state.Intent = null; state.NeutralInputs.Clear(); }
         }
         private void ObserveGeneration(long generation)
         {
@@ -91,7 +92,7 @@ namespace NOMAD.MissionPlanner
         }
 
         internal Task<string> ActAsync(string id, string operation, double? value = null,
-            string source = "ui", int slot = -1, Func<bool> inputStillCurrent = null)
+            string source = "ui", string inputId = null, Func<bool> inputStillCurrent = null)
         {
             var target = OutputController.CaptureTarget(_config);
             lock (_gate)
@@ -101,13 +102,14 @@ namespace NOMAD.MissionPlanner
                 { return Task.FromResult("Aircraft or input is unavailable; no command sent."); }
                 ObserveGeneration(target.Generation);
                 var state = _states[id];
-                if ((source != "ui" && source != "hid") || (source == "ui" ? slot != -1 : slot < 0 || slot > 6))
+                if ((source != "ui" && source != "hid") || (source == "ui" ? inputId != null : !InputBinding.Parse(_config.Inputs).Any(binding =>
+                    binding.Id == inputId && binding.Authorizes(id, operation))))
                 { return Task.FromResult("Invalid input source; no command sent."); }
                 if (operation == "neutral" && source == "hid" && !value.HasValue)
-                { state.Neutral = true; state.NeutralSource = source + ":" + slot; return Task.FromResult("Neutral input observed; no command sent."); }
+                { state.NeutralInputs.Add(inputId); return Task.FromResult("Neutral input observed; no command sent."); }
                 if (operation == "release_input" && source == "hid" && definition.Behavior == "ServoBidirectional")
                 {
-                    state.Neutral = false;
+                    state.NeutralInputs.Remove(inputId);
                     if (!_busy && !state.Active && !state.Recovery) { return Task.FromResult("Input released; no command sent."); }
                     operation = "stop";
                 }
@@ -133,7 +135,7 @@ namespace NOMAD.MissionPlanner
                 { return SetStatus(id, "Payload is busy or needs an explicit accepted Safe command; no activation queued."); }
                 if (source == "hid" && operation == "position" && !definition.Continuous)
                 { return SetStatus(id, "Continuous HID requires a nonhazardous unconfirmed position output."); }
-                if (!Confirmed(definition, state, operation, value, source, slot))
+                if (!Confirmed(definition, state, operation, value, source, inputId))
                 { return SetStatus(id, "Confirmation incomplete or HID neutral return required; no command sent."); }
                 if (definition.Timed && !ReserveRepeat(definition.Id))
                 { return SetStatus(id, "Another native repeat is pending; no activation queued."); }
@@ -146,15 +148,15 @@ namespace NOMAD.MissionPlanner
 
         private static bool ValidPosition(double? value) => value.HasValue && !double.IsNaN(value.Value) &&
             !double.IsInfinity(value.Value) && value >= 0 && value <= 1;
-        private bool Confirmed(PayloadDefinition definition, State state, string operation, double? value, string source, int slot)
+        private bool Confirmed(PayloadDefinition definition, State state, string operation, double? value, string source, string inputId)
         {
             if (definition.Confirmations == 0) { return true; }
-            string intent = operation + ":" + value?.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + ":" + source + ":" + slot;
+            string intent = operation + ":" + value?.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + ":" + source + ":" + inputId;
             long now = Stopwatch.GetTimestamp();
             if (state.Intent != intent || now - state.FirstConfirmation > definition.WindowMs * (Stopwatch.Frequency / 1000.0))
             { state.Confirmations = 0; state.Intent = intent; }
-            if (source == "hid" && definition.RequireNeutral && (!state.Neutral || state.NeutralSource != source + ":" + slot)) { return false; }
-            state.Neutral = false;
+            if (source == "hid" && definition.RequireNeutral && !state.NeutralInputs.Contains(inputId)) { return false; }
+            state.NeutralInputs.Remove(inputId);
             if (state.Confirmations == 0) { state.FirstConfirmation = now; }
             if (++state.Confirmations < definition.Confirmations) { return false; }
             state.Confirmations = 0;

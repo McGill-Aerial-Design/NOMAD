@@ -45,21 +45,7 @@ namespace NOMAD.MissionPlanner
         // Log Analysis Tab
 
 
-        // Joystick Tab
-        private CheckBox _chkJoyGimbalEnabled, _chkJoyPositionEnabled;
-        private CheckBox _chkJoyGimbalPitchInvert, _chkJoyGimbalRollInvert, _chkJoyPositionInvert;
-        private ComboBox _cmbJoyGimbalDevice, _cmbJoyPositionDevice;
-        private ComboBox _cmbJoyGimbalPitchAxis, _cmbJoyGimbalRollAxis, _cmbJoyPositionAxis;
-        private NumericUpDown _numJoyGimbalDeadzone, _numJoyPositionDeadzone;
         private NumericUpDown _numJoyGimbalMaxRate;
-        private ComboBox _cmbJoyPositionPayload;
-        private readonly NumericUpDown[] _switchButtons = new NumericUpDown[6];
-        private Button _btnJoyRefreshDevices;
-        private Label _lblJoyStatus;
-        private Label _lblJoyPositionEligibility;
-        // 3-position switch action mapping (6 slots: sw1/2/3 x up/down)
-        private ComboBox _cmbSw1Up, _cmbSw1Down, _cmbSw2Up, _cmbSw2Down, _cmbSw3Up, _cmbSw3Down;
-        private ComboBox _cmbSwitchDevice;
 
         // Buttons
         private Button _btnOK;
