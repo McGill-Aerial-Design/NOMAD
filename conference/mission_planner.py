@@ -21,6 +21,8 @@ from System.Reflection import BindingFlags
 from System.Threading import Monitor, Thread
 from System.Windows.Forms import ToolStripMenuItem
 
+# The host imports above establish this CLR namespace before it is used.
+# isort: split
 from MAVLink import (
     MAV_CMD,
     MAV_FRAME,
