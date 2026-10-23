@@ -14,6 +14,8 @@ pixi run build-plugin-only
 
 The script cleans/builds Release, writes source SHA/MP target identity under
 `build/release/` and leaves `mission_planner/src/bin/Release/NOMADPlugin.dll`.
+The plugin release version is defined once in `scripts/build/build_plugin_windows.ps1`
+and embedded in the assembly, file, informational and Mission Planner display versions.
 All host references are non-copy-local. The artifact contains no host/dependency
 binaries and the script never writes an MP installation. Direct IDE builds use
 fallback development metadata if generated identity is absent; record the actual
