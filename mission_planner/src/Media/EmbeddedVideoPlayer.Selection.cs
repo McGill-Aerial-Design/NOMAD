@@ -22,6 +22,11 @@ namespace NOMAD.MissionPlanner
 
         private void OnSelectionDown(object sender, MouseEventArgs args)
         {
+            if (_flyEnabled)
+            {
+                if (args.Button == MouseButtons.Left) { _ = BeginFlightCaptureAsync((PictureBox)sender); }
+                return;
+            }
             var frame = _displayedVideoFrame;
             var box = (PictureBox)sender;
             if (!_showControls || args.Button != MouseButtons.Left || frame?.Fresh != true ||
@@ -74,6 +79,7 @@ namespace NOMAD.MissionPlanner
         {
             base.OnVisibleChanged(args);
             if (!_showControls || Visible) { return; }
+            ReleaseFlight();
             lock (_visionGate) { _trackingVisible = false; }
             RetireTracking("Video hidden; select again");
         }

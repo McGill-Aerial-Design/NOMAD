@@ -333,6 +333,20 @@ internal static class NativeTerminationTests
             Action<bool, bool, bool, long> update = (active, left, right, now) =>
                 sample.Invoke(widget, new object[] { active, left, right, now });
             var pending = widgetType.GetProperty("PendingReview", HiddenInstance);
+            var flightType = typeof(NOMADConfig).Assembly.GetType("NOMAD.MissionPlanner.VideoFlightInput", true);
+            var flight = Activator.CreateInstance(flightType, true);
+            Require((bool)flightType.GetMethod("Claim", HiddenInstance).Invoke(flight, null),
+                "Video input interlock fixture could not capture");
+            try
+            {
+                update(true, false, false, 0);
+                update(true, true, true, 10);
+                update(true, false, false, 20);
+                FinishWidget(peer, (Task)pending.GetValue(widget));
+                Require(peer.ModeCommands == 0 && confirmations == 0,
+                    "Both Shift keys during flight capture entered termination review");
+            }
+            finally { flightType.GetMethod("Release", HiddenInstance).Invoke(flight, null); }
             update(true, false, false, 0);
             update(true, true, false, 10);
             peer.HoldRate = scenario == "FocusLoss";

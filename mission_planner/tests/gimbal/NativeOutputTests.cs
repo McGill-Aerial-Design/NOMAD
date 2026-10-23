@@ -345,6 +345,16 @@ internal static class NativeOutputTests
         MissionPlanner.MainV2.comPort = new MissionPlanner.MAVLinkInterface();
         Require(!GimbalArrowKeyFilter.TryHandleMessage(ref repeated) && MissionPlanner.MainV2.comPort.Modes == 0,
             "Held arrow repeated into new selected aircraft");
+        var flight = new VideoFlightInput();
+        Require(flight.Claim(), "Video capture interlock fixture could not claim");
+        try
+        {
+            Require(!GimbalArrowKeyFilter.TryHandleKey(System.Windows.Forms.Keys.Left) &&
+                !GimbalArrowKeyFilter.TryHandleKey(System.Windows.Forms.Keys.Up) &&
+                MissionPlanner.MainV2.comPort.Modes == 0,
+                "Flight arrows also commanded the gimbal");
+        }
+        finally { flight.Release(); }
         int reads = 0;
         OutputController.CurrentConnection = () => { reads++; return connection; };
         OutputController.Shutdown();

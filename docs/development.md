@@ -103,6 +103,15 @@ test storage with its provenance. The conference rehearsal additionally observes
 native servo outputs and rendered camera motion. Detector scores and simulator
 centering do not establish performance on another camera, scene or physical mount.
 
+Video flight checks use synthetic input/cursor hooks and the actual MP packet writer:
+key release, opposing/diagonal inputs, bounded native configuration, stale queued sends,
+stop draining, original-target retirement, focus/video loss and captured worker shutdown.
+Metadata uses an owned host cache, guarded against the operator's cache path. The
+rendered rehearsal additionally observes body-axis motion at a rotated heading, both
+yaw directions, vertical signs, mouse pitch/pan outputs, input/focus retirement, and
+onboard GUIDED timeout with release packets blocked. Automated checks move their
+owned Mission Planner window off-screen and render screenshots from its controls.
+
 ## Documentation screenshots
 
 Build the plugin, then render its actual controls from a fresh Windows PowerShell

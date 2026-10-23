@@ -103,6 +103,17 @@ uncertain submissions retire tracking. An already-dispatched native helper may f
 Observations pair the displayed image with its detections and separately labeled
 aircraft position and last submitted tracking request. They do not infer target location.
 
+Video's explicit **Fly** capture is independent of detection/tracking.
+`VideoFlightInput` owns the shared capture claim and release-before-motion key gate.
+`VideoFlightController` verifies the captured airborne Copter GUIDED context and live
+timeout/GCS parameters. Fresh UI samples submit bounded BODY_NED velocity/yaw-rate
+packets through `OutputController` and native MP `sendPacket`, without ACK retries,
+RC overrides, parameter writes, arming or mode selection. Mouse targets reuse manual
+gimbal dispatch. Retirement fences new motion; the claim stays held until UI cursor
+cleanup, pending output and the original-target zero attempt finish. The onboard
+GUIDED timeout provides target expiry when a zero cannot be delivered. See the
+[operator contract](operations.md#video-flight-controls) for limits and takeover.
+
 Fence setup validates one
 inclusion polygon and selects Fence in the native Plan editor. A plugin-owned session
 preserves unsaved Mission/Fence/Rally rows across mode changes without changing aircraft
@@ -115,8 +126,8 @@ native descent limit, and supported RC/fence triggers. It never changes ordinary
 LAND/QLAND rates or selects a dedicated RC channel.
 NOMAD does not evaluate local outline crossings or claim containment. Unsaved coordinate
 text/order and inactive editor drafts remain in memory for the plugin session; save
-needed drafts before unloading the plugin. Alerts/audio and video do not become flight
-authority. The optional [native termination](native-termination.md) entry uses the
+needed drafts before unloading the plugin. Alerts and visual tracking do not command
+aircraft movement. The optional [native termination](native-termination.md) entry uses the
 same captured host target and an advertised aircraft mode; policy/execution remain
 onboard. Competition server, autonomous target pursuit and takeover integrations remain outside
 this implementation; requirements remain in [PRD](prd.md).

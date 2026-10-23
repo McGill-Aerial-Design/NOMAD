@@ -26,7 +26,7 @@ namespace NOMAD.MissionPlanner
                 BackColor = Color.Black,
                 SizeMode = PictureBoxSizeMode.Zoom,
             };
-            _videoBox.DoubleClick += (s, e) => ToggleFullscreen();
+            _videoBox.DoubleClick += (s, e) => { if (!_flyEnabled) { ToggleFullscreen(); } };
             _videoBox.Paint += OnVideoPaint;
 
             _lblStatus = new Label
@@ -89,6 +89,11 @@ namespace NOMAD.MissionPlanner
             }
 
             PaintDetections(box, e.Graphics);
+            if (_flyEnabled && ReferenceEquals(box, _fullscreenBox))
+            {
+                TextRenderer.DrawText(e.Graphics, _flightCaptured ? "FLY · Esc to release" : "FLY · Click to capture",
+                    Font, new Point(12, 12), NOMADTheme.TEXT_PRIMARY, NOMADTheme.CARD_BG);
+            }
             int centerX = box.Width / 2;
             int centerY = box.Height / 2;
             const int arm = 18;
@@ -111,6 +116,7 @@ namespace NOMAD.MissionPlanner
         public void ToggleFullscreen()
         {
             ValidateUiThread();
+            ReleaseFlight();
             if (IsDisposed)
             {
                 return;
@@ -141,6 +147,7 @@ namespace NOMAD.MissionPlanner
                     ToggleFullscreen();
                 }
             };
+            _fullscreenForm.FormClosed += (s, e) => ReleaseFlight();
 
             _fullscreenBox = new PictureBox
             {
@@ -148,7 +155,7 @@ namespace NOMAD.MissionPlanner
                 BackColor = Color.Black,
                 SizeMode = PictureBoxSizeMode.Zoom,
             };
-            _fullscreenBox.DoubleClick += (s, e) => ToggleFullscreen();
+            _fullscreenBox.DoubleClick += (s, e) => { if (!_flyEnabled) { ToggleFullscreen(); } };
             _fullscreenBox.Paint += OnVideoPaint;
             AttachSelectionMouse(_fullscreenBox);
 

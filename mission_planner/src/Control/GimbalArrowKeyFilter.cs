@@ -58,7 +58,7 @@ namespace NOMAD.MissionPlanner
 
         public bool PreFilterMessage(ref Message m)
         {
-            if (_disposed || !_enabled || !OutputController.IsCurrentProfile(_config) ||
+            if (_disposed || !_enabled || VideoFlightInput.Captured || !OutputController.IsCurrentProfile(_config) ||
                 (m.Msg != WM_KEYDOWN && m.Msg != WM_SYSKEYDOWN))
                 return false;
             if (Control.ModifierKeys != Keys.None)
@@ -76,6 +76,7 @@ namespace NOMAD.MissionPlanner
 
         internal static bool TryHandleKey(Keys key)
         {
+            if (VideoFlightInput.Captured) { return false; }
             float pitchDelta = 0f;
             float rollDelta = 0f;
             switch (key & Keys.KeyCode)

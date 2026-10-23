@@ -24,6 +24,13 @@ and save an observation while the aircraft holds position. General-purpose visua
 tracking works with detection off; optional vehicle detection assists selection.
 Vision receives camera pixels, without simulator object coordinates.
 
+For manual inspection, enter native **GUIDED** after takeoff, enable **Fly** and
+click the Video player. WASD moves the aircraft, left/right arrows yaw, Space/Shift
+climb/descend, and mouse movement aims the gimbal. Escape releases capture. See the
+[flight controls](../docs/operations.md#video-flight-controls) for limits and takeover.
+
+![Flying from the Video page](images/video-flight.png)
+
 ![Selected vehicle followed by the gimbal](images/tracking.png)
 
 ![Building detail tracked with detection off](images/texture-tracking.png)
@@ -123,7 +130,9 @@ The full check makes **two flights in the same controller boot**:
    follow the region until eight fresh frames remain centered. Repeat with an
    unclassified building-texture region. Independently observe pitch/pan PWM and the
    servo-driven rendered pose. Save the observation, verify manual takeover and
-   source-change retirement, then return with RTL and enter GUIDED hold above the clear launch
+   source-change retirement. Exercise keyboard flight and mouse gimbal aiming through
+   the actual Video controls, with observed motion, focus/input-loss release and an
+   onboard timeout test that blocks release packets. Then return with RTL and enter GUIDED hold above the clear launch
    area before RTL descends below the comparison height. Request TERMINATE through
    the actual NOMAD controller and observe fresh mode 29 plus the measured descent.
 

@@ -46,6 +46,7 @@ $nativeSources = @(
     (Join-Path $repoRoot 'mission_planner/src/Control/GimbalCommand.cs'),
     (Join-Path $repoRoot 'mission_planner/src/Control/GimbalController.cs'),
     (Join-Path $repoRoot 'mission_planner/src/Input/GimbalInputState.cs'),
+    (Join-Path $repoRoot 'mission_planner/src/Input/VideoFlightInput.cs'),
     (Join-Path $repoRoot 'mission_planner/src/Control/GimbalArrowKeyFilter.cs'),
     (Join-Path $repoRoot 'mission_planner/src/Control/OutputController.cs'),
     (Join-Path $repoRoot 'mission_planner/tests/gimbal/NativeOutputTests.cs')

@@ -30,13 +30,14 @@ namespace NOMAD.MissionPlanner
                     _fullscreenBox.Image = frame.Image;
                 }
                 old?.Dispose();
-                _lblStatus.Text = $"Streaming {frame.Image.Width}x{frame.Image.Height}";
+                _lblStatus.Text = _flyEnabled ? FlightStatus : $"Streaming {frame.Image.Width}x{frame.Image.Height}";
                 _lblStatus.ForeColor = Color.LimeGreen;
                 UpdateVisionFrame(frame);
                 _videoBox.Invalidate();
                 _fullscreenBox?.Invalidate();
             }
             UpdateVisionStatus();
+            SampleFlight();
             if (_session.State == VideoState.Stopped)
             {
                 RetireTracking("Video ended; select again after restarting");

@@ -88,6 +88,7 @@ controlled descent. Preserve native ArduPilot failsafes and qualify interactions
 | Timed payload actions | Live trim matching, bounded native repeats, shared-slot ownership and uncertain-outcome handling |
 | Video and links | Bounded frames/queues, disposal, one command egress, deduplication and parameter pinning |
 | Vision tracking | Explicit region selection/Track, calibrated pitch/yaw bounds and rate, fresh frames/selected telemetry, native loss handling, one active view owner and retirement on manual input or uncertainty |
+| Manual video flight | Explicit capture, airborne Copter GUIDED admission, bounded fresh velocity/yaw samples, one owner through release, original-target zero attempt and onboard timeout; no RC overrides or mode reentry |
 | Native fence draft | Complete polygon validation, selected Fence context, cache preservation and zero automatic uploads |
 | Native termination | Advertised support, fresh parameter/heartbeat checks and separate ACK/mode observation; onboard entry, RC/fence, phase and latch tests |
 

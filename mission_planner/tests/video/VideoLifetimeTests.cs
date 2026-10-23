@@ -61,6 +61,11 @@ internal static partial class VideoLifetimeTests
             Run("generic visual worker selection, replacement, loss and retirement", GenericVisualWorker);
             Run("zoom selection, manual override and observation ownership", VisionSelectionAndObservation);
             Run("natural EOF retires selection and calibration validates", VisionEndAndCalibration);
+            Run("video flight key release, opposite keys, diagonal limits and ownership", FlightInputVectors);
+            Run("video flight native admission, packet values and stale dispatch fences", FlightNativeFences);
+            Run("video flight capture, key ownership, cursor release and input stall", FlightCaptureLifecycle);
+            Run("video flight stop drain and target retirement", FlightStopDrain);
+            Run("captured video loss and worker shutdown", FlightVideoAndShutdown);
             return 0;
         }
         catch (Exception ex)
@@ -68,6 +73,8 @@ internal static partial class VideoLifetimeTests
             Console.Error.WriteLine(ex);
             return 1;
         }
+        finally
+        { CleanupVideoTestStorage(); }
     }
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
@@ -76,6 +83,17 @@ internal static partial class VideoLifetimeTests
         var directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "owned-user-data");
         Directory.CreateDirectory(directory);
         MissionPlanner.Utilities.Settings.CustomUserDataDirectory = directory;
+        MissionPlanner.Utilities.Settings.AppConfigName = "NOMAD-VideoTests-" + Guid.NewGuid().ToString("N");
+        MissionPlanner.Utilities.Settings.FileName = Path.Combine(directory, "host.xml");
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void CleanupVideoTestStorage()
+    {
+        string metadata = MissionPlanner.Utilities.Settings.GetDataDirectory().TrimEnd(Path.DirectorySeparatorChar);
+        if (Path.GetFileName(metadata).StartsWith("NOMAD-VideoTests-") && Directory.Exists(metadata) &&
+            Directory.GetParent(metadata).FullName == Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData))
+        { Directory.Delete(metadata, true); }
     }
 
     private static void Run(string name, Action test)

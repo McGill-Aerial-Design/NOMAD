@@ -13,6 +13,7 @@ flight controls, setup and missions. ArduPilot owns flight execution and failsaf
 | Aircraft profiles | Separate video, links, payload calibration and input mappings for each aircraft |
 | Video inputs | Named RTSP or RTP/H.264 UDP sources, input selection and receiver latency/queue settings |
 | Vision (conference branch) | Click/drag region tracking, optional object detection, calibrated gimbal following and saved observations |
+| Video flight (conference branch) | Click-to-capture keyboard flight in Copter GUIDED, with mouse gimbal aiming and Escape release |
 | Gimbal and payloads | Native Mission Planner commands, calibrated outputs, bounded actions and input-loss Safe |
 | Input controls | Named controls, button/axis detection, payload bindings and continuous gimbal movement |
 | Native fence setup | Polygon staging in Mission Planner's Fence editor and native fence/failsafe configuration |
@@ -85,6 +86,14 @@ classes or replace the YOLOX weights. See the [vision operator guide](docs/opera
 for calibration, model profiles and observation contents.
 
 ![Gimbal tracking in Mission Planner](conference/images/tracking.png)
+
+On an airborne Copter already in **GUIDED**, enable **Fly** and click the video.
+Use **WASD** to move, **← / →** to yaw, **Space / Shift** to climb/descend,
+and the mouse to aim the gimbal. **Esc** releases control. Flight capture pauses
+automatic tracking and requires calibrated video settings. See the
+[video flight controls](docs/operations.md#video-flight-controls) for setup and takeover.
+
+![Keyboard flight and mouse gimbal control](conference/images/video-flight.png)
 
 ## Native fence setup
 

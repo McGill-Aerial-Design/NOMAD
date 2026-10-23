@@ -91,6 +91,10 @@ provides the separate controller policy; aircraft acceptance remains required.
   This is not an independent RC radio or a qualified takeover implementation.
   The current action-44 configuration ignores flight RC overrides; the alternate
   joystick flight path needs a separately approved design.
+  The conference branch's separate keyboard/mouse Video capture uses Copter GUIDED
+  velocity commands without RC overrides; it does not implement or qualify that
+  physical joystick/QuadPlane takeover path. Its limits are in the
+  [operator contract](operations.md#video-flight-controls).
 - FPV uses a separate radio and provides awareness, not command authority.
 - The Arduino USB HID ground controller provides the joystick and a physical
   red termination button. Its termination request should attempt every approved

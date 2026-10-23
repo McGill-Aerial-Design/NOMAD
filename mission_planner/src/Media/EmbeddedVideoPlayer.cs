@@ -7,7 +7,7 @@ using System.Windows.Forms;
 
 namespace NOMAD.MissionPlanner
 {
-    public partial class EmbeddedVideoPlayer : UserControl
+    public partial class EmbeddedVideoPlayer : UserControl, IMessageFilter
     {
         private VideoInputProfile _input;
         private readonly VideoSession _session;
@@ -41,6 +41,7 @@ namespace NOMAD.MissionPlanner
             {
                 InitializeUI();
                 InitializeVision();
+                InitializeFlight();
                 if (shutdown.IsCancellationRequested)
                 {
                     Dispose();
@@ -70,6 +71,7 @@ namespace NOMAD.MissionPlanner
 
         private void ShutdownVideo()
         {
+            ReleaseFlight();
             RetireTracking("Video closed");
             GimbalController.ManualInput -= OnManualGimbalInput;
             OutputController.ConnectionChanged -= OnAircraftChanged;
@@ -88,6 +90,7 @@ namespace NOMAD.MissionPlanner
 
         private void OnPluginShutdown()
         {
+            _flightCaptured = false;
             RetireTracking("Plugin stopped");
             _session.Dispose();
             if (Thread.CurrentThread.ManagedThreadId == _uiThread)

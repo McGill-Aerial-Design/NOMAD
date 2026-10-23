@@ -125,6 +125,7 @@ namespace NOMAD.MissionPlanner
         internal bool StartTracking()
         {
             ValidateUiThread();
+            if (_flyEnabled) { return false; }
             if (!Visible || FindForm()?.Visible != true) { return false; }
             if (!_input.TrackingCalibrated)
             { SetTrackingStatus("Calibrate this input in Settings → Video before tracking"); return false; }
@@ -316,7 +317,7 @@ namespace NOMAD.MissionPlanner
             _lblVisionStatus.Text = TrackingStatus + (error == null ? "" : " | " + error) +
                 (!_input.TrackingCalibrated ? " | Calibration: Settings → Video" : "");
             _detectButton.Text = _session.DetectionEnabled ? "Detect on" : "Detect";
-            _trackButton.Enabled = _input.TrackingCalibrated && RegionReady && !IsTracking;
+            _trackButton.Enabled = !_flyEnabled && _input.TrackingCalibrated && RegionReady && !IsTracking;
             _stopTrackingButton.Enabled = IsTracking || SelectedRegion.HasValue;
         }
 

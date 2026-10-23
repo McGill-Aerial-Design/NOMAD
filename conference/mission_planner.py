@@ -3,6 +3,7 @@
 """Native Mission Planner script: the real NOMAD plugin and owned external SITL."""
 
 import json
+import math
 import os
 import sys
 import traceback
@@ -22,6 +23,7 @@ from System import (
     Byte,
     DateTime,
     DateTimeKind,
+    Enum,
     EventHandler,
     Int32,
     Int64,
@@ -155,6 +157,9 @@ def packet_received(sender, packet):
                 lon=item.lon / 1e7,
                 boot_ms=boot_ms,
                 vz=item.vz * 0.01,
+                vn=item.vx * 0.01,
+                ve=item.vy * 0.01,
+                heading=item.hdg * 0.01,
                 position_rx=received,
             )
             if (
@@ -887,6 +892,173 @@ def check_vision(player):
     select_camera(player, "Inspection gimbal")
 
 
+def check_video_flight(player):
+    stage("video_flight")
+    evidence = {"movements": []}
+    state["video_flight"] = evidence
+    hooks = {"keys": 0, "mouse": [0, 0], "foreground": True}
+    original_hooks = {}
+    box = player.GetType().GetField("_videoBox", INSTANCE).GetValue(player)
+
+    def pointer():
+        area = box.RectangleToScreen(box.ClientRectangle)
+        point = area.Location
+        point.X += area.Width // 2 + hooks["mouse"][0]
+        point.Y += area.Height // 2 + hooks["mouse"][1]
+        return point
+
+    def install_hook(name, function):
+        prop = player.GetType().GetProperty(name, INSTANCE)
+        original_hooks[name] = prop.GetValue(player, None)
+        prop.SetValue(player, clr.GetPythonType(prop.PropertyType)(function), None)
+
+    def capture_controls():
+        wait_for_video(player)
+        pending = []
+        ui(lambda: pending.append(video_action(player, "BeginFlightCaptureAsync", [None])))
+        finish(pending[0])
+        require(
+            video_property(pending[0], "Result"), "Fly capture rejected: " + str(video_property(player, "FlightStatus"))
+        )
+        hooks["keys"] = 0
+        Thread.Sleep(250)
+
+    def release_controls():
+        ui(lambda: video_action(player, "ReleaseFlight", ["Released"]))
+        finish(video_property(player, "FlightRelease"))
+
+    def stopped():
+        return fresh("position_rx") and math.hypot(observed["vn"], observed["ve"]) < 0.35 and abs(observed["vz"]) < 0.3
+
+    ui(lambda: install_hook("FlightForeground", lambda: hooks["foreground"]))
+    ui(lambda: install_hook("FlightPointer", pointer))
+    ui(lambda: install_hook("FlightCursor", lambda captured, control: None))
+    key_type = player.GetType().GetProperty("FlightKeys", INSTANCE).PropertyType.GetGenericArguments()[0]
+    ui(lambda: install_hook("FlightKeys", lambda: Enum.ToObject(key_type, Int32(hooks["keys"]))))
+    try:
+        native_idle()
+        ui(lambda: video_action(player, "SetFlightEnabled", [True]))
+        capture_controls()
+        for key, axis, sign in (
+            (1, "forward", 1),
+            (2, "forward", -1),
+            (8, "right", 1),
+            (4, "right", -1),
+            (64, "vz", -1),
+            (128, "vz", 1),
+        ):
+            before = dict(observed)
+            hooks["keys"] = key
+
+            def moving():
+                if not fresh("position_rx") or observed["position_rx"] <= before["position_rx"]:
+                    return False
+                angle = math.radians(before["heading"])
+                velocity = (
+                    observed["vz"]
+                    if axis == "vz"
+                    else (
+                        observed["vn"] * math.cos(angle) + observed["ve"] * math.sin(angle)
+                        if axis == "forward"
+                        else -observed["vn"] * math.sin(angle) + observed["ve"] * math.cos(angle)
+                    )
+                )
+                return velocity * sign > 0.5
+
+            wait_for(moving, 6, "Video flight key did not produce observed " + axis + " motion: " + str(key))
+            require(
+                video_property(player, "FlightCaptured"),
+                "Fly retired during movement: " + str(video_property(player, "FlightStatus")),
+            )
+            evidence["movements"].append(
+                {
+                    "key": key,
+                    "heading": before["heading"],
+                    "velocity_ned": [observed["vn"], observed["ve"], observed["vz"]],
+                }
+            )
+            hooks["keys"] = 0
+            wait_for(stopped, 6, "Neutral video input did not brake aircraft")
+        for key, sign in ((32, 1), (16, -1)):
+            before = observed["heading"]
+            hooks["keys"] = key
+            wait_for(
+                lambda: ((observed["heading"] - before + 180) % 360 - 180) * sign > 10,
+                6,
+                "Arrow key did not produce observed yaw",
+            )
+            hooks["keys"] = 0
+            evidence.setdefault("yaw", []).append({"key": key, "before": before, "after": observed["heading"]})
+            Thread.Sleep(300)
+        initial = [observed["pitch_pwm"], observed["yaw_pwm"]]
+        hooks["mouse"] = [12, -8]
+        wait_for(
+            lambda: (
+                fresh("servo_rx") and observed["pitch_pwm"] > initial[0] + 15 and observed["yaw_pwm"] > initial[1] + 15
+            ),
+            5,
+            "Mouse did not pan and tilt the native gimbal",
+        )
+        hooks["mouse"] = [0, 0]
+        evidence["mouse_pwm"] = {"before": initial, "after": [observed["pitch_pwm"], observed["yaw_pwm"]]}
+        capture(player, "nomad-video-flight")
+        release_controls()
+        require(not video_property(player, "FlightCaptured"), "Explicit release retained flight capture")
+        wait_for(stopped, 6, "Release did not brake aircraft")
+
+        capture_controls()
+        hooks["keys"] = 1 | 32
+        Thread.Sleep(700)
+        ui(lambda: Thread.Sleep(600))
+        wait_for(lambda: not video_property(player, "FlightCaptured"), 2, "UI stall did not retire capture")
+        finish(video_property(player, "FlightRelease"))
+        wait_for(stopped, 7, "Retired input did not brake aircraft")
+        evidence["ui_stall_retired"] = True
+
+        capture_controls()
+        hooks["keys"] = 1
+        Thread.Sleep(300)
+        hooks["foreground"] = False
+        wait_for(lambda: not video_property(player, "FlightCaptured"), 2, "Focus loss did not retire capture")
+        finish(video_property(player, "FlightRelease"))
+        hooks["foreground"] = True
+        Thread.Sleep(300)
+        require(not video_property(player, "FlightCaptured"), "Focus recovery silently resumed flight")
+        evidence["focus_loss_retired"] = True
+
+        capture_controls()
+        hooks["keys"] = 1 | 32
+        wait_for(
+            lambda: fresh("position_rx") and math.hypot(observed["vn"], observed["ve"]) > 0.8,
+            6,
+            "Timeout test never established motion",
+        )
+        ui(lambda: setattr(connection, "ReadOnly", True))
+        wait_for(lambda: not video_property(player, "FlightCaptured"), 2, "Read-only takeover retained capture")
+        finish(video_property(player, "FlightRelease"))
+        wait_for(stopped, 8, "Onboard GUIDED timeout did not brake without a release packet")
+        heading = observed["heading"]
+        Thread.Sleep(1200)
+        require(
+            abs((observed["heading"] - heading + 180) % 360 - 180) < 3,
+            "Onboard GUIDED timeout did not stop yaw rotation",
+        )
+        require(observed["mode"] == 4, "Onboard timeout changed GUIDED mode")
+        ui(lambda: setattr(connection, "ReadOnly", False))
+        evidence["onboard_timeout_without_zero"] = True
+        evidence["passed"] = True
+    except Exception:
+        evidence["status"] = str(video_property(player, "FlightStatus"))
+        evidence["captured"] = bool(video_property(player, "FlightCaptured"))
+        raise
+    finally:
+        ui(lambda: setattr(connection, "ReadOnly", False))
+        release_controls()
+        ui(lambda: video_action(player, "SetFlightEnabled", [False]))
+        for name, value in original_hooks.items():
+            ui(lambda: player.GetType().GetProperty(name, INSTANCE).SetValue(player, value, None))
+
+
 handler = EventHandler[MAVLinkMessage](packet_received)
 try:
     wait_for(
@@ -900,6 +1072,10 @@ try:
     def size_host():
         HOST.Width = 1440
         HOST.Height = 900
+        if CHECK:
+            location = HOST.Location
+            location.X = location.Y = -20000
+            HOST.Location = location
 
     ui(size_host)
     require(
@@ -1026,6 +1202,7 @@ try:
         marker_action(owner, method, "safe", 1000)
         set_links(True, True)
         check_vision(player)
+        check_video_flight(player)
         return_above_home()
         terminate_and_measure()
         verify_latch_and_ordinary_rates()

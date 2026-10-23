@@ -157,6 +157,12 @@ namespace NOMAD.MissionPlanner
         }
         internal static Task<GimbalRequestResult> RequestPitchRollTargetAsync(float pitch, float roll) =>
             SendManualAsync(SelectedMode, pitch, roll);
+        internal static Task<GimbalRequestResult> RequestManualPitchYawAsync(float pitch, float yaw, Func<bool> current)
+        {
+            long generation = OutputController.Generation;
+            long revision = RecordManualInput();
+            return SendAsync(MountMode.MavlinkTargeting, pitch, 0, yaw, generation, revision, current);
+        }
         internal static Task<GimbalRequestResult> SetModeAndTargetAsync(MountMode mode, float pitch, float roll) =>
             SendManualAsync(mode, pitch, roll);
         internal static Task<GimbalRequestResult> RequestTrackingTargetAsync(float pitch, float yaw,

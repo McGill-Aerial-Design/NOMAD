@@ -402,7 +402,7 @@ try {
         if (!$result.passed -or $result.stage -ne 'passed' -or !$postflightVerified) {
             throw 'Native rehearsal failed; see result.json.'
         }
-        Write-Output 'PASS generic region tracking, native LAND/TERMINATE, latch, AUTO, video, gimbal, failover, payload and cleanup.'
+        Write-Output 'PASS video flight/timeout, region tracking, native LAND/TERMINATE, latch, AUTO, gimbal, failover, payload and cleanup.'
     }
 } finally {
     try {

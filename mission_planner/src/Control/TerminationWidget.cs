@@ -81,7 +81,7 @@ namespace NOMAD.MissionPlanner
         private void Sample(object sender, EventArgs args)
         {
             if (_confirming) { return; }
-            bool eligible = CanInteract();
+            bool eligible = !VideoFlightInput.Captured && CanInteract();
             bool left = eligible && (GetAsyncKeyState(0xA0) & 0x8000) != 0;
             bool right = eligible && (GetAsyncKeyState(0xA1) & 0x8000) != 0;
             SampleState(eligible, left, right, _clock.ElapsedMilliseconds);
@@ -89,6 +89,7 @@ namespace NOMAD.MissionPlanner
 
         internal void SampleState(bool eligible, bool left, bool right, long milliseconds)
         {
+            eligible &= !VideoFlightInput.Captured;
             if (_confirming) { return; }
             if (!eligible)
             {

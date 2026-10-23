@@ -28,6 +28,11 @@ $references = @(
     "/r:$mpDir\MissionPlanner.Controls.dll"
     "/r:$mpDir\Newtonsoft.Json.dll"
     "/r:$mpDir\MissionPlanner.Utilities.dll"
+    "/r:$mpDir\MAVLink.dll"
+    "/r:$mpDir\MissionPlanner.Comms.dll"
+    "/r:$mpDir\MissionPlanner.ArduPilot.dll"
+    "/r:$mpDir\Interfaces.dll"
+    ('/r:' + (Join-Path ${env:ProgramFiles(x86)} 'Reference Assemblies/Microsoft/Framework/.NETFramework/v4.8/Facades/netstandard.dll'))
 )
 & $csc /nologo /target:exe /langversion:latest "/out:$exe" @references @sources
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

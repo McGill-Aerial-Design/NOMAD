@@ -163,6 +163,44 @@ this is not lossless recording. These receiver settings do not set end-to-end de
 bitrate, resolution or encoded quality; configure those at the camera or encoder.
 URLs can contain credentials: review profile exports before sharing them.
 
+## Video flight controls
+
+On **Video**, enable **Fly**, then click the player to capture the keyboard and mouse.
+Release all movement keys once before flying. **Esc** releases capture; another click
+is required to take control again. The same controls work in full screen.
+
+| Input | Action |
+|---|---|
+| W / S | Forward / backward relative to the aircraft |
+| A / D | Left / right relative to the aircraft |
+| ← / → | Aircraft yaw left / right |
+| Space / Shift | Ascend / descend |
+| Mouse | Gimbal pitch and yaw |
+
+Horizontal speed is limited to 2 m/s, vertical speed to 1 m/s and yaw to 30°/s.
+Diagonal input keeps the same horizontal limit. Opposing keys cancel. Mouse aiming
+uses the selected video's calibrated directions, mount limits and rate; roll is zero.
+Fly pauses automatic region tracking and suppresses the separate gimbal arrow keys
+and Dashboard Shift gesture during capture.
+
+Use native Mission Planner to arm, take off and enter **GUIDED** first. Fly accepts
+only a fresh, armed, airborne ArduCopter multirotor, with native joystick disabled,
+the configured GCS system ID, normal GUIDED stabilization and a verified
+`GUID_TIMEOUT` from 0.1 to 3 seconds. Configure and verify the input's gimbal
+calibration, **Drop old frames** and a **one-frame queue** in Settings → Video.
+QuadPlane flight control is unavailable: its native local-position handler does not
+support these body-velocity commands.
+
+Escape, focus loss, stale video/telemetry, an input stall, aircraft/profile changes,
+source changes and closing/hiding the view retire capture. NOMAD attempts one zero
+velocity/yaw-rate request on the original still-current GUIDED target. If it cannot
+send, the onboard timeout retires the previous target; braking is not instantaneous.
+A native RC mode switch away from GUIDED takes over, and NOMAD never reselects the
+mode or resumes after recovery. No RC overrides or aircraft parameter writes are used;
+the native RC-loss termination policy remains in force. Receiver delay before the
+decoder is not established by locally fresh frames. Qualify the camera/link and
+aircraft response separately before physical use.
+
 ## Vision and gimbal tracking
 
 On the Video page, click an object or textured area, or drag a rectangle around it.
