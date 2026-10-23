@@ -97,6 +97,7 @@ namespace NOMAD.MissionPlanner
         }
 
         public void UpdateData() { _videoHost?.RefreshInput(); }
+        internal void StopTracking() => _videoHost?.Player?.StopTracking();
 
         protected override void Dispose(bool disposing)
         {

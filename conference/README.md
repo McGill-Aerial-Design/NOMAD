@@ -7,9 +7,26 @@ SITL and Project AirSim Neighborhood environment. The camera shows the current
 rendered scene; its pose follows observed controller servo outputs. Compare an
 ordinary landing with the custom firmware's native, latched TERMINATE descent.
 
+The packaged drone's frame and landing legs are stretched vertically by 2.5 so
+its native collision mesh keeps the inspection camera about 13 cm above the road
+when settled. This also increases the body height.
+Camera and propeller visual transforms compensate for that scale, preserving the
+inspection camera's physical offset (0.3 m forward, 0.35 m down), gimbal calibration,
+and the configured mass, inertia and rotor dynamics.
+
+![Taller landing stance](images/landing-gear.png)
+
 Mission Planner owns flight controls and missions. ArduPilot executes the flight.
 NOMAD supplies its normal video, gimbal, payload and link-router controls, and
 discovers and requests the firmware's separate TERMINATE mode. No Lua is used.
+Click a car or drag over a building detail on the Video page, start gimbal tracking,
+and save an observation while the aircraft holds position. General-purpose visual
+tracking works with detection off; optional vehicle detection assists selection.
+Vision receives camera pixels, without simulator object coordinates.
+
+![Selected vehicle followed by the gimbal](images/tracking.png)
+
+![Building detail tracked with detection off](images/texture-tracking.png)
 
 ![Neighborhood inspection through NOMAD](images/inspection.png)
 
@@ -101,7 +118,12 @@ The full check makes **two flights in the same controller boot**:
    Require mission progress and changed GPS position. Switch between both actual
    camera inputs, observe gimbal outputs, cut the radio route, and operate the
    marker over the remaining route: explicit Safe, two confirmations, then Safe.
-   Restore routes, return with RTL, and enter GUIDED hold above the clear launch
+   Restore routes and enter GUIDED inspection hold. Detect a car from the live
+   rendered stream, select it through the Video controls, switch detection off and
+   follow the region until eight fresh frames remain centered. Repeat with an
+   unclassified building-texture region. Independently observe pitch/pan PWM and the
+   servo-driven rendered pose. Save the observation, verify manual takeover and
+   source-change retirement, then return with RTL and enter GUIDED hold above the clear launch
    area before RTL descends below the comparison height. Request TERMINATE through
    the actual NOMAD controller and observe fresh mode 29 plus the measured descent.
 

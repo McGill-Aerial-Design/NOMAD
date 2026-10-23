@@ -26,6 +26,8 @@ namespace NOMAD.MissionPlanner
         public const float PITCH_MAX_DEG = GimbalCommand.PITCH_MAX_DEG;
         public const float ROLL_MIN_DEG = GimbalCommand.ROLL_MIN_DEG;
         public const float ROLL_MAX_DEG = GimbalCommand.ROLL_MAX_DEG;
+        public const float YAW_MIN_DEG = GimbalCommand.YAW_MIN_DEG;
+        public const float YAW_MAX_DEG = GimbalCommand.YAW_MAX_DEG;
 
         // Integrated target angles in deg. Visible to UI components that want
         // to display the current target alongside their own controls.
@@ -34,6 +36,10 @@ namespace NOMAD.MissionPlanner
             get; private set;
         }
         public static float TargetRollDeg
+        {
+            get; private set;
+        }
+        public static float TargetYawDeg
         {
             get; private set;
         }
@@ -75,6 +81,12 @@ namespace NOMAD.MissionPlanner
 
         private static int _inflight;
         private static long _modeRevision;
+        private static long _manualRevision;
+        private static long _trackingClaim;
+        internal static long CurrentTrackingClaim => Interlocked.Read(ref _trackingClaim);
+        internal static long ClaimTracking() => Interlocked.Increment(ref _trackingClaim);
+        internal static long ManualRevision => Interlocked.Read(ref _manualRevision);
+        internal static event Action ManualInput;
         internal static string LastCommandStatus
         {
             get; private set;
@@ -84,7 +96,7 @@ namespace NOMAD.MissionPlanner
             InvalidateInput();
             SelectedMode = (MountMode)config.GimbalMountMode;
             MaxRateDegSec = config.JoystickGimbalMaxRateDegSec;
-            SetTargetAngles(0, 0);
+            SetTargetAnglesCore(0, 0, 0);
             ModeChanged?.Invoke(SelectedMode);
         }
         internal static void InvalidateInput()
@@ -92,6 +104,7 @@ namespace NOMAD.MissionPlanner
             Interlocked.Increment(ref _modeRevision);
             TargetPitchDeg = 0;
             TargetRollDeg = 0;
+            TargetYawDeg = 0;
         }
         public static void SetTargetAngles(float pitchDeg, float rollDeg)
         {
@@ -99,8 +112,14 @@ namespace NOMAD.MissionPlanner
             {
                 return;
             }
-            TargetPitchDeg = GimbalCommand.ClampPitch(pitchDeg);
-            TargetRollDeg = GimbalCommand.ClampRoll(rollDeg);
+            RecordManualInput();
+            SetTargetAnglesCore(GimbalCommand.ClampPitch(pitchDeg), GimbalCommand.ClampRoll(rollDeg), 0);
+        }
+        private static void SetTargetAnglesCore(float pitch, float roll, float yaw)
+        {
+            TargetPitchDeg = pitch;
+            TargetRollDeg = roll;
+            TargetYawDeg = yaw;
             TargetChanged?.Invoke(TargetPitchDeg, TargetRollDeg);
         }
         public static void NudgeTarget(float pitchDeltaDeg, float rollDeltaDeg)
@@ -112,58 +131,82 @@ namespace NOMAD.MissionPlanner
         public static void ApplyStick(float stickX, float stickY, float rate, float dt, bool send)
         {
             if (!Finite(stickX) || !Finite(stickY) || !Finite(rate) || !Finite(dt) ||
-                Math.Abs(stickX) > 1 || Math.Abs(stickY) > 1 || dt <= 0 || dt > 0.5f)
+                Math.Abs(stickX) > 1 || Math.Abs(stickY) > 1 || dt <= 0 || dt > 0.5f ||
+                (stickX == 0 && stickY == 0))
                 {
                     return;
                 }
+            long generation = OutputController.Generation;
+            long revision = RecordManualInput();
             GimbalCommand.IntegrateStick(TargetPitchDeg, TargetRollDeg, stickX, stickY,
                 GimbalCommand.ClampRate(rate), dt, out float pitch, out float roll);
-            SetTargetAngles(pitch, roll);
+            SetTargetAnglesCore(pitch, roll, 0);
             if (send)
             {
-                RequestPitchRollTarget(pitch, roll);
+                _ = SendAsync(SelectedMode, pitch, roll, 0, generation, revision, null);
             }
         }
         public static void SetMode(MountMode mode)
         {
             _ = SetModeAsync(mode);
         }
-        internal static Task<GimbalRequestResult> SetModeAsync(MountMode mode) => SendAsync(mode, null, null);
+        internal static Task<GimbalRequestResult> SetModeAsync(MountMode mode) => SendManualAsync(mode, null, null);
         public static void RequestPitchRollTarget(float pitchDeg, float rollDeg)
         {
             _ = RequestPitchRollTargetAsync(pitchDeg, rollDeg);
         }
         internal static Task<GimbalRequestResult> RequestPitchRollTargetAsync(float pitch, float roll) =>
-            SendAsync(SelectedMode, pitch, roll);
+            SendManualAsync(SelectedMode, pitch, roll);
         internal static Task<GimbalRequestResult> SetModeAndTargetAsync(MountMode mode, float pitch, float roll) =>
-            SendAsync(mode, pitch, roll);
-        private static async Task<GimbalRequestResult> SendAsync(MountMode mode, float? pitch, float? roll)
+            SendManualAsync(mode, pitch, roll);
+        internal static Task<GimbalRequestResult> RequestTrackingTargetAsync(float pitch, float yaw,
+            long generation, long manualRevision, Func<bool> inputStillCurrent) =>
+            SendAsync(MountMode.MavlinkTargeting, pitch, 0, yaw, generation, Interlocked.Read(ref _modeRevision),
+                () => manualRevision == ManualRevision && inputStillCurrent?.Invoke() == true);
+        private static long RecordManualInput()
+        {
+            Interlocked.Increment(ref _manualRevision);
+            long revision = Interlocked.Increment(ref _modeRevision);
+            ManualInput?.Invoke();
+            return revision;
+        }
+        private static Task<GimbalRequestResult> SendManualAsync(MountMode mode, float? pitch, float? roll)
         {
             long generation = OutputController.Generation;
+            long revision = RecordManualInput();
+            return SendAsync(mode, pitch, roll, 0, generation, revision, null);
+        }
+        private static async Task<GimbalRequestResult> SendAsync(MountMode mode, float? pitch, float? roll,
+            float yaw, long generation, long revision, Func<bool> inputStillCurrent)
+        {
+            bool Current() => revision == Interlocked.Read(ref _modeRevision) && inputStillCurrent?.Invoke() != false;
+            if (!Current())
+            {
+                return new GimbalRequestResult(GimbalRequestOutcome.NotSent, "Gimbal input was retired; no command was sent.");
+            }
             if (Interlocked.Exchange(ref _inflight, 1) != 0)
             {
-                return new GimbalRequestResult(GimbalRequestOutcome.NotSent, "A gimbal command is already in progress.");
+                return new GimbalRequestResult(GimbalRequestOutcome.Busy, "A gimbal command is already in progress.");
             }
-            long revision = Interlocked.Increment(ref _modeRevision);
             try
             {
                 if (pitch.HasValue && mode != MountMode.MavlinkTargeting)
                 {
                     return new GimbalRequestResult(GimbalRequestOutcome.NotSent, "Angle targets require MAVLink targeting.");
                 }
-                var result = await OutputController.SendGimbalAsync((int)mode, pitch, roll, generation,
-                    () => revision == Interlocked.Read(ref _modeRevision)).ConfigureAwait(false);
+                var result = await OutputController.SendGimbalTargetAsync((int)mode, pitch, roll, yaw, generation,
+                    Current).ConfigureAwait(false);
                 LastCommandStatus = result.Message;
                 if (!result.Submitted)
                 {
-                    Log.Warn(result.Message);
+                    if (result.Outcome != GimbalRequestOutcome.Busy) { Log.Warn(result.Message); }
                 }
-                else if (generation == OutputController.Generation && revision == Interlocked.Read(ref _modeRevision))
+                else if (generation == OutputController.Generation && Current())
                 {
                     SelectedMode = mode;
                     if (pitch.HasValue)
                     {
-                        SetTargetAngles(pitch.Value, roll.Value);
+                        SetTargetAnglesCore(pitch.Value, roll.Value, yaw);
                     }
                     ModeChanged?.Invoke(mode);
                 }

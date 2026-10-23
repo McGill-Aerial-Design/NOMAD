@@ -12,6 +12,7 @@ flight controls, setup and missions. ArduPilot owns flight execution and failsaf
 |---|---|
 | Aircraft profiles | Separate video, links, payload calibration and input mappings for each aircraft |
 | Video inputs | Named RTSP or RTP/H.264 UDP sources, input selection and receiver latency/queue settings |
+| Vision (conference branch) | Click/drag region tracking, optional object detection, calibrated gimbal following and saved observations |
 | Gimbal and payloads | Native Mission Planner commands, calibrated outputs, bounded actions and input-loss Safe |
 | Input controls | Named controls, button/axis detection, payload bindings and continuous gimbal movement |
 | Native fence setup | Polygon staging in Mission Planner's Fence editor and native fence/failsafe configuration |
@@ -28,6 +29,9 @@ Try the [neighborhood inspection rehearsal](conference/README.md) with the actua
 plugin, Mission Planner, ArduPilot SITL and a rendered Project AirSim camera. Fly a
 short mission, aim the inspection gimbal and exercise payload controls while an
 audience-selected telemetry cut tests the link router.
+The conference branch also runs object detection locally on the incoming video.
+Select an object or texture, follow it with the gimbal, and save the image with aircraft-position
+metadata. Build this branch through the conference setup for these capabilities.
 
 ## Get started
 
@@ -66,6 +70,21 @@ the decode queue and old-frame dropping bound receiver buffering. Bitrate,
 resolution and encoded quality are configured at the camera or encoder.
 
 ![Named RTSP video input and receiver settings](docs/images/video-profiles.png)
+
+## Detect and inspect
+
+On **Video**, click a target or drag a box around an object or texture, then select **Track**.
+The visual tracker works with detection off; **Detect** can help select recognized objects.
+Selection alone leaves the gimbal under manual control. Following uses calibrated
+pitch and yaw; manual input, target loss or a source change stops it. **Save observation**
+stores the image and matching metadata, and **History** shows recent tracking events.
+Set the camera FOV, mount limits, direction and rate in **Settings → Video** first.
+
+The bundled CPU model detects vehicles. A validated model profile can select different
+classes or replace the YOLOX weights. See the [vision operator guide](docs/operations.md#vision-and-gimbal-tracking)
+for calibration, model profiles and observation contents.
+
+![Gimbal tracking in Mission Planner](conference/images/tracking.png)
 
 ## Native fence setup
 
@@ -131,7 +150,7 @@ profiles or logs.
 Hardware calibration, transmitter termination mixing, physical flight behavior,
 manual takeover and competition acceptance require aircraft-specific qualification.
 Command ACKs do not prove actuator motion, touchdown or termination. Competition
-server, perception and USB ground-controller termination integrations are outside
+server, autonomous target pursuit and USB ground-controller termination integrations are outside
 the current base implementation.
 
 The plugin is [Apache-2.0 licensed](LICENSE). The separate ArduPilot firmware

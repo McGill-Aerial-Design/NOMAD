@@ -36,6 +36,15 @@ remain necessary; simulator PWM is not measured electrical PWM or physical compl
 
 ## Aircraft acceptance remains open
 
+Ground vision is qualified separately from aircraft flight controls. Its software
+gates exercise the pinned model, strict model profiles, native cancellation, frame
+ownership, CSRT region following and tracking retirement. The rendered conference
+check measures centering from new detector results and observes controller PWM and
+camera pose separately. Real-camera accuracy, upstream video delay/freeze behavior,
+mount direction, mechanical limits and manual takeover still require calibration.
+The plugin does not derive target coordinates, navigate toward detections or trigger
+payload actions from them.
+
 The optional [native termination](native-termination.md) fork adds pinned Copter
 and front-two-motor tilt-tricopter SITL suites, feature-disabled compile guards and
 CubeOrangePlus builds without scripting. Its ground gate uses the built DLL and

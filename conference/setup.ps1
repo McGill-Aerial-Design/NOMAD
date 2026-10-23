@@ -141,6 +141,14 @@ Copy-Item -LiteralPath (Join-Path $root 'mission_planner/tests/native_sitl/outpu
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'termination.parm') -Destination $config -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'descent.py') -Destination $config -Force
 Add-Content -LiteralPath (Join-Path $config 'outputs.parm') -Value "`nSERIAL1_PROTOCOL 2`nSERIAL2_PROTOCOL 2`nFS_CRASH_CHECK 1"
+Add-Content -LiteralPath (Join-Path $config 'outputs.parm') -Value @'
+SERVO12_FUNCTION 6
+SERVO12_MIN 1000
+SERVO12_MAX 2000
+SERVO12_TRIM 1500
+MNT1_YAW_MIN -90
+MNT1_YAW_MAX 90
+'@
 $pas = 'https://raw.githubusercontent.com/iamaisim/ProjectAirSim/v1.0.1/client/python/example_user_scripts/ardupilot/'
 foreach ($file in @('scene_ardu_quadrotor.jsonc', 'robot_ardu_quadrotor.jsonc')) {
     Invoke-WebRequest -UseBasicParsing -Uri ($pas + 'sim_config/' + $file) -OutFile (Join-Path $config $file)
@@ -155,9 +163,21 @@ scene=commentjson.loads((root/'scene_ardu_quadrotor.jsonc').read_text())
 scene['clock'].update({'step-ns':1000000,'real-time-update-rate':1000000})
 (root/'scene_ardu_quadrotor.jsonc').write_text(json.dumps(scene,indent=2))
 robot=commentjson.loads((root/'robot_ardu_quadrotor.jsonc').read_text())
+# Fast physics sweeps the Frame mesh; taller inertial boxes or child legs do not raise contact.
+# shortcut: scale the packaged body and legs together; use a dedicated mesh when one is available.
+frame_scale=2.5
+robot['links'][0]['visual']['geometry']['scale']=f'1 1 {frame_scale}'
+for link in robot['links'][1:]:
+    xyz=[float(x) for x in link['visual']['origin']['xyz'].split()]
+    xyz[2]/=frame_scale
+    link['visual']['origin']['xyz']=' '.join(map(str,xyz))
+    link['visual']['geometry']['scale']=f'1 1 {1/frame_scale}'
 for camera in robot['sensors']:
     if camera['type']!='camera':continue
     if camera['id']=='DownCamera':camera['origin']['xyz']='0.3 0 0.35'
+    xyz=[float(x) for x in camera['origin']['xyz'].split()]
+    xyz[2]/=frame_scale
+    camera['origin']['xyz']=' '.join(map(str,xyz))
     camera['capture-interval']=.1
     for capture in camera['capture-settings']:
         capture.update({'width':640,'height':360,'capture-enabled':capture['image-type']==0,'streaming-enabled':capture['image-type']==0})

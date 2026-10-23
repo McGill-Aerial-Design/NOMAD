@@ -15,6 +15,8 @@ namespace NOMAD.MissionPlanner
         private readonly System.Windows.Forms.Timer _frameTimer;
         private CancellationTokenRegistration _shutdown;
         private Bitmap _displayFrame;
+        private VideoFrame _displayedVideoFrame;
+        private readonly NOMADConfig _aircraft;
         private PictureBox _videoBox;
         private Label _lblStatus;
         private Form _fullscreenForm;
@@ -24,20 +26,21 @@ namespace NOMAD.MissionPlanner
         private bool _isPlaying => _session.IsActive;
 
         internal EmbeddedVideoPlayer(VideoInputProfile input, bool showControls,
-            CancellationToken shutdown, Func<IVideoPipeline> createPipeline)
+            CancellationToken shutdown, Func<IVideoPipeline> createPipeline, NOMADConfig aircraft = null,
+            Func<string, CancellationToken, IVideoDetector> createDetector = null,
+            Func<CancellationToken, IVisualTracker> createTracker = null)
         {
-            _input = new VideoInputProfile
-            {
-                Name = input.Name, Url = input.Url, RtspTransport = input.RtspTransport,
-                LatencyMs = input.LatencyMs, QueueMaxBuffers = input.QueueMaxBuffers, DropOldFrames = input.DropOldFrames,
-            };
+            _input = input.Copy();
+            _aircraft = aircraft;
             _showControls = showControls;
-            _session = new VideoSession(createPipeline);
+            _session = new VideoSession(createPipeline, createDetector,
+                showControls ? createTracker ?? VisualTrackerFactory.Create : null);
             _frameTimer = new System.Windows.Forms.Timer { Interval = 33 };
             _frameTimer.Tick += OnFrameTick;
             try
             {
                 InitializeUI();
+                InitializeVision();
                 if (shutdown.IsCancellationRequested)
                 {
                     Dispose();
@@ -67,6 +70,9 @@ namespace NOMAD.MissionPlanner
 
         private void ShutdownVideo()
         {
+            RetireTracking("Video closed");
+            GimbalController.ManualInput -= OnManualGimbalInput;
+            OutputController.ConnectionChanged -= OnAircraftChanged;
             try
             {
                 _session.Dispose();
@@ -82,6 +88,7 @@ namespace NOMAD.MissionPlanner
 
         private void OnPluginShutdown()
         {
+            RetireTracking("Plugin stopped");
             _session.Dispose();
             if (Thread.CurrentThread.ManagedThreadId == _uiThread)
             {

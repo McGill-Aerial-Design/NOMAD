@@ -78,6 +78,15 @@ $config = @{
         @{
             Name = 'Inspection gimbal'
             Url = 'rtsp://127.0.0.1:8554/inspection'
+            TrackingCalibrated = $true
+            HorizontalFovDeg = 90
+            PitchMinDeg = -90
+            PitchMaxDeg = 30
+            YawMinDeg = -90
+            YawMaxDeg = 90
+            PitchSign = 1
+            YawSign = 1
+            TrackingMaxRateDegSec = 20
             RtspTransport = 'TCP'
             LatencyMs = 60
             QueueMaxBuffers = 1
@@ -206,6 +215,10 @@ function Complete-Postflight($Result) {
         !$result.latch_refused -or !$result.land_descent -or !$result.terminate_descent -or
         !$result.same_controller_boot) {
         throw 'Separate native LAND, TERMINATE and latch observations are incomplete.'
+    }
+    if (!$result.vision.detector_disabled_during_follow -or !$result.vision.manual_override -or
+        !$result.vision.source_change_retired -or !$result.vision.texture.after.tracking) {
+        throw 'Generic region tracking and retirement evidence is incomplete.'
     }
     if ($simulator.HasExited -or $simulator.StartTime.ToUniversalTime() -ne $simulatorStarted -or
         !(Get-NetTCPConnection -State Listen -LocalPort 6310 -OwningProcess $simulator.Id `
@@ -389,7 +402,7 @@ try {
         if (!$result.passed -or $result.stage -ne 'passed' -or !$postflightVerified) {
             throw 'Native rehearsal failed; see result.json.'
         }
-        Write-Output 'PASS native LAND/TERMINATE descent, latch, AUTO inspection, video, gimbal, failover, payload and encoder cleanup.'
+        Write-Output 'PASS generic region tracking, native LAND/TERMINATE, latch, AUTO, video, gimbal, failover, payload and cleanup.'
     }
 } finally {
     try {

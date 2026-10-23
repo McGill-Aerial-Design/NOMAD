@@ -35,7 +35,7 @@ namespace NOMAD.MissionPlanner
             if (config.SelectedVideoInput != null)
             {
                 var input = config.SelectedVideoInput;
-                Player = new EmbeddedVideoPlayer(input, showControls, shutdown, createPipeline);
+                Player = new EmbeddedVideoPlayer(input, showControls, shutdown, createPipeline, config);
                 Controls.Add(Player);
                 Player.BringToFront();
             }

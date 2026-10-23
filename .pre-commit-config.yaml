@@ -8,9 +8,9 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: '\.(svg|patch)$'
+        exclude: '(\.(svg|patch)$|^mission_planner/third_party/)'
       - id: end-of-file-fixer
-        exclude: '\.(svg|patch)$'
+        exclude: '(\.(svg|patch)$|^mission_planner/third_party/)'
       - id: check-yaml
         args: [--allow-multiple-documents]
       - id: check-toml

@@ -57,7 +57,7 @@ jobs:
             'test_plugin_config_validation', 'test_plugin_geometry', 'test_plugin_fence', 'test_plugin_native_preflight',
             'test_plugin_audio', 'test_plugin_version', 'test_ground_router',
             'test_plugin_gimbal_ui', 'test_plugin_ui', 'test_plugin_router_ui', 'test_plugin_video', 'test_plugin_termination',
-            'test_plugin_installer')
+            'test_plugin_installer', 'test_plugin_vision')
           foreach ($check in $checks) {
             & powershell -NoProfile -File "scripts/build/$check.ps1"
             if ($LASTEXITCODE -ne 0) { throw "$check failed with exit $LASTEXITCODE" }

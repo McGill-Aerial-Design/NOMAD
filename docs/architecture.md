@@ -23,7 +23,7 @@ owns stabilization, navigation execution and native failsafes. NOMAD never start
 Mission Planner's HID RC override loop merely to read custom input devices.
 
 `NOMADPlugin` owns the host lifecycle and registers the menus/screens. `Config/`,
-`Control/`, `Input/`, `Media/` and `Views/` are logical source groups compiled into
+`Control/`, `Input/`, `Media/`, `Vision/` and `Views/` are logical source groups compiled into
 that same DLL, not separately running services. The C# router sources under
 `infra/transport/ground_router/` are also compiled into the plugin. `OutputController`
 is the internal guard for dispatch through the current host target.
@@ -72,7 +72,38 @@ a saved label does not establish either.
 Ordinary RC arming and flight-mode configuration belongs to Mission Planner and
 ArduPilot. NOMAD has no corresponding channel settings or automatic discovery.
 
-Video uses Mission Planner's installed GStreamer support. Fence setup validates one
+Video uses Mission Planner's installed GStreamer support. Optional detection runs
+on the existing decoder worker. One owning frame envelope carries its image,
+immutable detections, sequence and local receipt timestamps through the latest-frame
+slot into the player. HUD and Dashboard playback do not run inference.
+
+`IVideoDetector` is the model boundary. Its YOLOX adapter owns preprocessing,
+ONNX Runtime inference and class-aware suppression. `IVisualTracker` independently
+owns visual region tracking; its CSRT adapter follows the exact image region selected
+by the operator, without requiring detector matches. The video player owns explicit
+selection, tracking lifetime and presentation, and sends through the existing
+`GimbalController`/`OutputController` native path. There is no separate vision
+service or aircraft-control transport. Different YOLOX weights and labels use a
+validated JSON profile; a different model architecture implements the same detector
+interface without changing tracking or native dispatch. One pending selection owns
+a clone of the displayed image. The decode worker alone initializes, updates and
+disposes the tracker, and publishes its region with the matching current frame.
+Source/selection revisions reject superseded results; a shared gimbal claim prevents
+embedded and popped-out Video pages from controlling the mount simultaneously.
+
+The DLL embeds pinned CPU runtime binaries, model and notices. Detection lazily
+extracts verified assets into the host's user-data vision cache. Model loading and
+inference support cancellation; detector failure leaves plain video and region
+tracking available. CSRT calls have no native cancellation API: input is bounded
+to a 640-pixel longest edge, command eligibility retires immediately, and late
+results are discarded before worker shutdown.
+Tracking requires calibrated limits/FOV, latest-frame buffering and fresh selected
+aircraft telemetry. Manual input and session changes invalidate pending requests;
+uncertain submissions retire tracking. An already-dispatched native helper may finish.
+Observations pair the displayed image with its detections and separately labeled
+aircraft position and last submitted tracking request. They do not infer target location.
+
+Fence setup validates one
 inclusion polygon and selects Fence in the native Plan editor. A plugin-owned session
 preserves unsaved Mission/Fence/Rally rows across mode changes without changing aircraft
 caches. Staging never uploads; native Write/Read owns fence transfer. The page separately
@@ -87,5 +118,5 @@ text/order and inactive editor drafts remain in memory for the plugin session; s
 needed drafts before unloading the plugin. Alerts/audio and video do not become flight
 authority. The optional [native termination](native-termination.md) entry uses the
 same captured host target and an advertised aircraft mode; policy/execution remain
-onboard. Competition server, perception and takeover integrations remain outside
+onboard. Competition server, autonomous target pursuit and takeover integrations remain outside
 this implementation; requirements remain in [PRD](prd.md).

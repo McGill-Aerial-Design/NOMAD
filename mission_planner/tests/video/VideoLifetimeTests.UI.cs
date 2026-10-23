@@ -26,7 +26,7 @@ internal static partial class VideoLifetimeTests
                 Check(!string.IsNullOrWhiteSpace(GetField<ToolTip>(player, "_videoToolTips").GetToolTip(button)),
                     $"Playback control {label} has no explanatory tooltip");
             }
-            player.Size = new Size(100, 200);
+            player.Size = new Size(100, 450);
             player.PerformLayout();
             var toolbar = player.Controls.Find("VideoToolbar", true)[0];
             Check(toolbar.Height > 45 && toolbar.Height < player.Height,

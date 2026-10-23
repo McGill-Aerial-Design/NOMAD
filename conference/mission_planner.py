@@ -5,6 +5,7 @@
 import json
 import os
 import sys
+import traceback
 
 import clr
 
@@ -14,7 +15,21 @@ from MissionPlanner import MainV2 as MainType
 from MissionPlanner.Comms import UdpSerialConnect
 from MissionPlanner.Plugin import PluginLoader
 from MissionPlanner.Utilities import Locationwp
-from System import Action, Array, Byte, DateTime, DateTimeKind, EventHandler, Int64, Object, Single, UInt16, UInt32
+from System import (
+    Action,
+    Activator,
+    Array,
+    Byte,
+    DateTime,
+    DateTimeKind,
+    EventHandler,
+    Int32,
+    Int64,
+    Object,
+    Single,
+    UInt16,
+    UInt32,
+)
 from System.Diagnostics import Stopwatch
 from System.IO import File, Path
 from System.Net import IPAddress, IPEndPoint
@@ -159,6 +174,7 @@ def packet_received(sender, packet):
                     pitch_pwm=int(item.servo7_raw),
                     roll_pwm=int(item.servo8_raw),
                     marker_pwm=int(item.servo9_raw),
+                    yaw_pwm=int(item.servo12_raw),
                     servo_rx=received,
                     servo_serial=observed.get("servo_serial", 0) + 1,
                 )
@@ -325,9 +341,10 @@ def takeoff(name):
     wait_for(lambda: fresh("heartbeat_rx") and observed["mode"] == 4, 5, "Fresh GUIDED mode not observed")
     native_idle()
     require(connection.doARM(Byte(201), Byte(1), True, False), "Normal arming rejected")
+    # Native camera discovery can briefly own MP's reader after the arming ACK.
     wait_for(
         lambda: fresh("heartbeat_rx") and observed["armed"] and connection.MAV.cs.armed,
-        5,
+        15,
         "Fresh native armed state not observed",
     )
     command(MAV_CMD.TAKEOFF, [0, 0, 0, 0, 0, 0, 25])
@@ -647,6 +664,229 @@ def capture(embedded, name):
     ui(save)
 
 
+def video_property(subject, name):
+    return subject.GetType().GetProperty(name, INSTANCE).GetValue(subject, None)
+
+
+def video_action(player, name, arguments=None):
+    return (
+        player.GetType()
+        .GetMethod(name, INSTANCE)
+        .Invoke(player, None if arguments is None else Array[Object](arguments))
+    )
+
+
+def vision_sample(player):
+    sample = {}
+
+    def read():
+        frame = video_property(player, "DisplayedVideoFrame")
+        target = video_property(player, "SelectedRegion")
+        session = player.GetType().GetField("_session", INSTANCE).GetValue(player)
+        sample.update(
+            tracking=bool(video_property(player, "IsTracking")),
+            ready=bool(video_property(player, "RegionReady")),
+            detecting=bool(video_property(session, "DetectionEnabled")),
+            status=str(video_property(player, "TrackingStatus")),
+            requests=int(video_property(player, "SubmittedTrackingCommands")),
+        )
+        if frame is None or not video_property(frame, "Fresh"):
+            return
+        image = video_property(frame, "Image")
+        sample.update(sequence=int(video_property(frame, "Sequence")), fresh=True)
+        sample["cars"] = sum(1 for box in video_property(frame, "Detections") if video_property(box, "ClassId") == 2)
+        sample["frame_age_seconds"] = float(video_property(frame, "AgeSeconds"))
+        sample["boxes"] = []
+        for detection in video_property(frame, "Detections"):
+            bounds = video_property(detection, "Bounds")
+            sample["boxes"].append(
+                [
+                    int(video_property(detection, "ClassId")),
+                    float(video_property(detection, "Confidence")),
+                    float(bounds.X),
+                    float(bounds.Y),
+                    float(bounds.Width),
+                    float(bounds.Height),
+                ]
+            )
+        if target is not None:
+            box = target
+            sample.update(
+                x=float((box.X + box.Width / 2.0 - image.Width / 2.0) / image.Width),
+                y=float((box.Y + box.Height / 2.0 - image.Height / 2.0) / image.Height),
+                region=[float(box.X), float(box.Y), float(box.Width), float(box.Height)],
+            )
+
+    ui(read)
+    return sample
+
+
+def select_detected_car(player):
+    selected = []
+
+    def select():
+        frame = video_property(player, "DisplayedVideoFrame")
+        if frame is None or not video_property(frame, "Fresh"):
+            return
+        cars = [box for box in video_property(frame, "Detections") if video_property(box, "ClassId") == 2]
+        if not cars:
+            return
+        target = max(cars, key=lambda box: video_property(box, "Confidence"))
+        box = video_property(target, "Bounds")
+        image = video_property(frame, "Image")
+        viewport = player.GetType().GetField("_videoBox", INSTANCE).GetValue(player).ClientSize
+        scale = min(viewport.Width / float(image.Width), viewport.Height / float(image.Height))
+        x = (viewport.Width - image.Width * scale) / 2 + (box.X + box.Width / 2) * scale
+        y = (viewport.Height - image.Height * scale) / 2 + (box.Y + box.Height / 2) * scale
+        method = player.GetType().GetMethod("SelectTargetAt", INSTANCE)
+        point = Activator.CreateInstance(
+            method.GetParameters()[0].ParameterType, Array[Object]([Int32(int(round(x))), Int32(int(round(y)))])
+        )
+        if bool(method.Invoke(player, Array[Object]([point, viewport]))):
+            selected.append(True)
+
+    def ready():
+        ui(select)
+        return bool(selected)
+
+    wait_for(ready, 10, "No fresh pixel-detected car accepted selection")
+    wait_for(lambda: vision_sample(player)["ready"], 8, "Visual tracker did not lock the selected car")
+
+
+def start_visual_follow(player):
+    started = []
+
+    def ready():
+        def start():
+            if bool(video_action(player, "StartTracking")):
+                started.append(True)
+
+        ui(start)
+        return bool(started)
+
+    wait_for(ready, 5, "Gimbal following did not accept the fresh selected region")
+
+
+def center_visual_region(player, evidence):
+    samples = []
+    evidence["samples"] = samples
+
+    def centered():
+        sample = vision_sample(player)
+        if not sample["tracking"]:
+            evidence["retired"] = sample
+        require(sample["tracking"], "Tracking retired before centering: " + sample["status"])
+        require(not sample["detecting"], "Region following unexpectedly depends on detection")
+        if sample.get("fresh") and "x" in sample and (not samples or samples[-1]["sequence"] != sample["sequence"]):
+            samples.append(sample)
+        return len(samples) >= 8 and all(max(abs(row["x"]), abs(row["y"])) < 0.035 for row in samples[-8:])
+
+    wait_for(centered, 30, "Image region did not remain centered in eight fresh frames")
+    return samples[-1]
+
+
+def reset_inspection_gimbal():
+    task = call("GimbalController", "RequestPitchRollTargetAsync", [Single(-32), Single(0)])
+    finish(task)
+    # IronPython binds the public Task awaiter when its generic result type is internal.
+    result = video_property(task, "Result")
+    require(video_property(result, "Submitted"), "Manual gimbal request was not submitted")
+
+
+def check_vision(player):
+    stage("vision_tracking")
+    state["vision"] = {}
+    native_idle()
+    connection.setMode(Byte(201), Byte(1), "GUIDED")
+    wait_for(lambda: fresh("heartbeat_rx") and observed["mode"] == 4, 8, "GUIDED inspection hold missing")
+    reset_inspection_gimbal()
+    wait_for_video(player)
+    ui(lambda: video_action(player, "EnableDetection", [True]))
+    wait_for(lambda: vision_sample(player).get("cars", 0) > 0, 20, "Pinned model found no car in rendered video")
+    select_detected_car(player)
+    ui(lambda: video_action(player, "EnableDetection", [False]))
+    wait_for_video(player)
+    before = vision_sample(player)
+    capture(player, "nomad-tracking-before")
+    require(max(abs(before["x"]), abs(before["y"])) > 0.05, "Selected target was already centered")
+    initial_pwm = [observed["pitch_pwm"], observed["yaw_pwm"]]
+
+    state["vision"]["before"] = before
+    start_visual_follow(player)
+    after = center_visual_region(player, state["vision"])
+    require(after["requests"] >= 3, "Too few actual submitted tracking requests")
+    require(abs(observed["yaw_pwm"] - initial_pwm[1]) >= 8, "Native pan output did not change")
+    require(abs(observed["pitch_pwm"] - initial_pwm[0]) >= 5, "Native pitch output did not change")
+    camera = json.loads(File.ReadAllText(Path.Combine(RUN, "camera-status.json")))
+    require(camera["passed"] and camera["servo_age_seconds"] < 3, "Rendered camera telemetry is stale")
+    require(abs(camera["servo12_pwm"] - observed["yaw_pwm"]) < 15, "Renderer did not follow observed pan output")
+    state["vision"].update(
+        after=after,
+        initial_pitch_yaw_pwm=initial_pwm,
+        final_pitch_yaw_pwm=[observed["pitch_pwm"], observed["yaw_pwm"]],
+        renderer_pitch_yaw_deg=[camera["pitch_degrees"], camera["yaw_degrees"]],
+        detector_disabled_during_follow=True,
+    )
+    capture(player, "nomad-tracking")
+    saved = []
+
+    def save():
+        player.GetType().GetProperty("ObservationDirectory", INSTANCE).SetValue(player, RUN, None)
+        saved.append(video_action(player, "SaveObservation"))
+
+    ui(save)
+    require(bool(saved[0]) and File.Exists(saved[0]), "Observation PNG was not saved")
+    metadata = json.loads(File.ReadAllText(Path.ChangeExtension(saved[0], ".json")))
+    require(
+        metadata["SelectedTarget"]["Found"]
+        and metadata["SelectedTarget"]["Tracker"] == "OpenCV CSRT"
+        and metadata["AircraftPosition"]["Available"],
+        "Observation metadata incomplete",
+    )
+    require(
+        not metadata["TargetPosition"]["Available"] and metadata["LastSubmittedTrackingRequest"]["Available"],
+        "Observation confused aircraft/target or command identity",
+    )
+    state["vision"]["observation"] = str(Path.GetFileName(saved[0]))
+    native_idle()
+    reset_inspection_gimbal()
+    wait_for(lambda: not vision_sample(player)["tracking"], 2, "Manual input did not stop tracking")
+    requests = vision_sample(player)["requests"]
+    wait_for_video(player)
+    require(vision_sample(player)["requests"] == requests, "Automatic tracking resumed after manual input")
+    state["vision"]["manual_override"] = True
+
+    # An ordinary scene detail, selected directly from image pixels with detection off.
+    texture_selected = []
+
+    def select_texture():
+        method = player.GetType().GetMethod("SelectRegion", INSTANCE)
+        region = Activator.CreateInstance(
+            method.GetParameters()[0].ParameterType, Array[Object]([Single(160), Single(170), Single(70), Single(70)])
+        )
+        if bool(method.Invoke(player, Array[Object]([region]))):
+            texture_selected.append(True)
+
+    def texture_ready():
+        ui(select_texture)
+        return bool(texture_selected)
+
+    wait_for(texture_ready, 5, "Fresh texture-region selection failed")
+    wait_for(lambda: vision_sample(player)["ready"], 8, "Unclassified texture region did not lock")
+    state["vision"]["texture"] = {"before": vision_sample(player)}
+    start_visual_follow(player)
+    state["vision"]["texture"]["after"] = center_visual_region(player, state["vision"]["texture"])
+    capture(player, "nomad-texture-tracking")
+    select_camera(player, "Chase camera")
+    require(not vision_sample(player)["tracking"], "Changing video source did not retire tracking")
+    requests = vision_sample(player)["requests"]
+    wait_for_video(player)
+    require(vision_sample(player)["requests"] == requests, "Old-source tracking continued issuing requests")
+    state["vision"]["source_change_retired"] = True
+    ui(lambda: video_action(player, "EnableDetection", [False]))
+    select_camera(player, "Inspection gimbal")
+
+
 handler = EventHandler[MAVLinkMessage](packet_received)
 try:
     wait_for(
@@ -785,6 +1025,7 @@ try:
         capture(player, "nomad-inspection")
         marker_action(owner, method, "safe", 1000)
         set_links(True, True)
+        check_vision(player)
         return_above_home()
         terminate_and_measure()
         verify_latch_and_ordinary_rates()
@@ -798,7 +1039,18 @@ try:
         )
         stage("passed")
 except Exception as error:
-    state.update(passed=False, error=str(error), last_observed=dict(observed))
+    state.update(
+        passed=False,
+        error=str(error),
+        failed_stage=state["stage"],
+        last_observed=dict(observed),
+        failure_locations=[{"function": row[2], "line": row[1]} for row in traceback.extract_tb(sys.exc_info()[2])],
+    )
+    if state["failed_stage"] == "vision_tracking":
+        try:
+            capture(player, "nomad-vision-failure")
+        except Exception:
+            pass
     stage("failed")
 finally:
     if CHECK or state["stage"] == "failed":

@@ -16,8 +16,10 @@ The script cleans/builds Release, writes source SHA/MP target identity under
 `build/release/` and leaves `mission_planner/src/bin/Release/NOMADPlugin.dll`.
 The plugin release version is defined once in `scripts/build/build_plugin_windows.ps1`
 and embedded in the assembly, file, informational and Mission Planner display versions.
-All host references are non-copy-local. The artifact contains no host/dependency
-binaries and the script never writes an MP installation. Direct IDE builds use
+All host references are non-copy-local. The artifact embeds the pinned CPU vision
+runtime, model and their notices, and the script never writes an MP installation.
+`prepare_vision.ps1` verifies the archive and individual asset SHA256 values in its
+build cache before compilation. The installed plugin performs no downloads. Direct IDE builds use
 fallback development metadata if generated identity is absent; record the actual
 checked source and local changes with any artifact. Installation is a separate
 explicit [closed-MP operation](operations.md#plugin-installation).
@@ -65,6 +67,7 @@ pixi run test-plugin-gimbal-ui
 pixi run test-plugin-ui
 pixi run test-plugin-router-ui
 pixi run test-plugin-video
+pixi run test-plugin-vision
 pixi run test-plugin-termination
 ```
 
@@ -87,6 +90,18 @@ button/axis detection, held/noisy baseline rejection, timeout, loss and connecti
 opening; they do not acquire an operator device. Router covers parser, dedup/failover, one MP egress,
 parameter pinning and ownership disposal. Geometry/video/profile tests retain
 invalid-input and lifecycle fault cases.
+
+Vision checks run the pinned CPU model and verify preprocessing, decoding,
+invalid profiles/tensors, native load/inference cancellation and recovery. Video
+checks exercise matching frame ownership, selection clone replacement, cancellation/failure,
+native tracker loss, bounded angle steps, click/drag geometry, observations and manual/source
+retirement. CSRT checks follow moving/scaling texture and require loss without automatic
+reacquisition when it disappears. Optional `-TrackingFrames` and `-TrackingGroundTruth`
+arguments to `test_plugin_vision.ps1` require 120 aligned PNG/ground-truth frames and
+all 119 subsequent updates without reseeding. Keep external benchmark media in ignored
+test storage with its provenance. The conference rehearsal additionally observes actual detector pixels,
+native servo outputs and rendered camera motion. Detector scores and simulator
+centering do not establish performance on another camera, scene or physical mount.
 
 ## Documentation screenshots
 

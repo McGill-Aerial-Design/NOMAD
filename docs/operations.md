@@ -163,6 +163,65 @@ this is not lossless recording. These receiver settings do not set end-to-end de
 bitrate, resolution or encoded quality; configure those at the camera or encoder.
 URLs can contain credentials: review profile exports before sharing them.
 
+## Vision and gimbal tracking
+
+On the Video page, click an object or textured area, or drag a rectangle around it.
+A click selects a small region; dragging gives precise control over its size.
+The visual tracker follows that region in the image. Select **Track** to center it
+using the gimbal. **Detect** optionally highlights recognized objects and helps
+choose their initial bounds. Detection and selection alone send no commands.
+**Stop tracking** or a manual NOMAD gimbal input releases
+tracking; select an object again to resume. **History** shows the latest 32 transitions.
+The same overlays and click/drag selection work in full screen. Tracking requires
+Windows x64. Hiding the Video page releases its gimbal control; starting tracking
+in another NOMAD window replaces the previous window's control.
+
+Configure each input in **Settings → Video** before enabling tracking:
+
+- Confirm a rectilinear camera with fixed zoom and square pixels, and enter its
+  horizontal field of view. Vertical geometry follows the image aspect ratio.
+- Enter pitch/yaw limits and directions for the actual mount, then the maximum
+  requested-angle rate, from 1 to 30 degrees per second. Verify the calibration
+  before selecting its confirmation checkbox.
+- Enable **Drop old frames** with a **one-frame decode queue**. Start from a manual
+  target within the calibrated limits.
+
+Tracking uses pitch and yaw with roll zero. It commands the selected Mission Planner
+aircraft's mount, without changing flight mode, navigating the aircraft or operating
+payloads. A tracker-reported loss, stale decoded imagery, stale aircraft
+telemetry, an uncertain request, or changing source/aircraft retires tracking.
+An already-dispatched native request may finish. Local frame age measures when
+NOMAD received decoded pixels; it cannot establish camera capture time or detect
+every frozen upstream feed. Similar textures, occlusion and large appearance changes
+can cause drift; monitor the selected region. Mechanical response and total video
+delay need calibration. Stop revokes further requests immediately; an in-progress
+native CSRT update finishes before its worker closes.
+
+**Save observation** writes a PNG and matching JSON under the host user-data plugin
+directory's `NOMAD/observations` folder. The JSON includes the input name, model,
+frame time, optional detections and scores, the tracked region, recent transitions and separately
+labeled aircraft GPS and last submitted tracking request. Target coordinates and
+observed gimbal orientation are unavailable. Stream URLs are omitted. Save succeeds
+only with a fresh displayed frame and both files written.
+
+### Replace the detection model
+
+An empty **Model profile** uses bundled YOLOX Nano with COCO vehicle classes
+(bicycle, car, motorcycle, bus and truck). Inference runs locally on the CPU with
+two threads. The model and ONNX Runtime are included in the DLL; detection needs
+neither a companion computer nor a network download. General-purpose CSRT tracking
+is independent of that model and works on regions that the detector does not recognize.
+
+Start from the [YOLOX profile example](https://github.com/McGill-Aerial-Design/NOMAD/blob/ArduPilot-Developer-Conference/mission_planner/examples/vision-yolox.json).
+Place trusted ONNX weights beside the JSON, update their SHA256, labels and allowed
+class indices, then browse to the JSON in the input's settings. Relative weight
+paths resolve beside that JSON. The profile declares the exact supported format:
+static float NCHW BGR input, values 0..255, top-left letterboxing with padding 114,
+and raw YOLOX grid output at strides 8/16/32. Tensor dimensions and hashes are
+checked before use. Unsupported exports produce a vision error while ordinary
+video remains available. A different model architecture needs a detector adapter;
+it does not need changes to selection or gimbal transport.
+
 ## ELRS and LTE links
 
 Enable the profile's plugin router only when needed. Configure its physical links

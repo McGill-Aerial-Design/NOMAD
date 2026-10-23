@@ -23,6 +23,7 @@ internal static partial class VideoLifetimeTests
                 string path = Path.Combine(references, name == "MissionPlanner" ? name + ".exe" : name + ".dll");
                 return File.Exists(path) ? Assembly.LoadFrom(path) : null;
             };
+            ConfigureVideoTestStorage();
             Run("playback controls attached", PlaybackControlsAttached);
             Run("start-stop and repeated stop", StartStop);
             Run("duplicate start", DuplicateStart);
@@ -54,6 +55,12 @@ internal static partial class VideoLifetimeTests
             Run("active input replacement, cached views and stopped state", ActiveVideoInput);
             Run("active input save ownership, rollback and HUD replacement", ActiveVideoInputSave);
             Run("definition editing preserves active selection", VideoDefinitionSelection);
+            Run("vision envelope, detector toggles and inference cancellation", VisionWorkerLifetime);
+            Run("detector failure preserves plain video", VisionFailureKeepsVideo);
+            Run("bounded gimbal tracking angles", BoundedTrackingAngles);
+            Run("generic visual worker selection, replacement, loss and retirement", GenericVisualWorker);
+            Run("zoom selection, manual override and observation ownership", VisionSelectionAndObservation);
+            Run("natural EOF retires selection and calibration validates", VisionEndAndCalibration);
             return 0;
         }
         catch (Exception ex)
@@ -61,6 +68,14 @@ internal static partial class VideoLifetimeTests
             Console.Error.WriteLine(ex);
             return 1;
         }
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void ConfigureVideoTestStorage()
+    {
+        var directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "owned-user-data");
+        Directory.CreateDirectory(directory);
+        MissionPlanner.Utilities.Settings.CustomUserDataDirectory = directory;
     }
 
     private static void Run(string name, Action test)
@@ -205,7 +220,7 @@ internal static partial class VideoLifetimeTests
             session.PublishFrame(oldGeneration, stale);
             using (var displayed = session.TakeFrame())
             {
-                Check(ReferenceEquals(displayed, current), "Stale callback replaced the new frame");
+                Check(ReferenceEquals(displayed.Image, current), "Stale callback replaced the new frame");
             }
             CheckDisposed(stale);
             session.Stop();

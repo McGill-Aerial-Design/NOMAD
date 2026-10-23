@@ -235,19 +235,21 @@ def run(args):
                         raise RuntimeError("SITL rejected the one servo telemetry subscription")
                 if packet.get_type() != "SERVO_OUTPUT_RAW" or packet.port != 0:
                     continue
-                pwm = (packet.servo7_raw, packet.servo8_raw)
-                # SERVO7_FUNCTION=7 is mount tilt; SERVO8_FUNCTION=8 is mount roll.
-                pitch, roll = pwm_angle(pwm[0], 90), pwm_angle(pwm[1], 30)
+                pwm = (packet.servo7_raw, packet.servo8_raw, packet.servo12_raw)
+                # Functions 7/8/6 are mount tilt/roll/pan; pose follows received outputs only.
+                pitch, roll, yaw = pwm_angle(pwm[0], 90), pwm_angle(pwm[1], 30), pwm_angle(pwm[2], 90)
                 latest_servo = time.monotonic()
                 status.update(
                     servo_packets_observed=status["servo_packets_observed"] + 1,
                     servo7_pwm=pwm[0],
                     servo8_pwm=pwm[1],
+                    servo12_pwm=pwm[2],
                     roll_degrees=roll,
                     pitch_degrees=pitch,
+                    yaw_degrees=yaw,
                 )
                 if pwm != previous_pwm:
-                    quat = rpy_to_quaternion(math.radians(roll), math.radians(pitch), 0)
+                    quat = rpy_to_quaternion(math.radians(roll), math.radians(pitch), math.radians(yaw))
                     pose = Pose(
                         {
                             "translation": dict(zip(("x", "y", "z"), xyz)),

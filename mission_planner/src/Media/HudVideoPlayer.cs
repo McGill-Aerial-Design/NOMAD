@@ -16,6 +16,7 @@ namespace NOMAD.MissionPlanner
         private readonly VideoSession _session;
         private readonly Timer _timer = new Timer { Interval = 33 };
         private Bitmap _display;
+        private VideoFrame _displayedVideoFrame;
         private bool _disposed;
 
         internal HudVideoPlayer(Control hud, Action<Bitmap> setFrame, Func<Image> getFrame,
@@ -56,7 +57,8 @@ namespace NOMAD.MissionPlanner
         private void ClearDisplay()
         {
             if (!_hud.IsDisposed && ReferenceEquals(_getFrame(), _display)) { _setFrame(null); }
-            _display?.Dispose();
+            _displayedVideoFrame?.Dispose();
+            _displayedVideoFrame = null;
             _display = null;
         }
 
@@ -69,9 +71,10 @@ namespace NOMAD.MissionPlanner
             var frame = _session.TakeFrame();
             if (frame != null)
             {
-                var old = _display;
-                _display = frame;
-                _setFrame(frame);
+                var old = _displayedVideoFrame;
+                _displayedVideoFrame = frame;
+                _display = frame.Image;
+                _setFrame(frame.Image);
                 old?.Dispose();
             }
             if (_session.State == VideoState.Stopped)

@@ -26,6 +26,8 @@ $references = @(
     '/r:System.Windows.Forms.dll',
     "/r:$mpDir\MissionPlanner.exe",
     "/r:$mpDir\MissionPlanner.Controls.dll"
+    "/r:$mpDir\Newtonsoft.Json.dll"
+    "/r:$mpDir\MissionPlanner.Utilities.dll"
 )
 & $csc /nologo /target:exe /langversion:latest "/out:$exe" @references @sources
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
