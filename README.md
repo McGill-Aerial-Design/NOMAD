@@ -29,6 +29,9 @@ matching [custom firmware and aircraft setup](docs/native-termination.md).
 
 ## Get started
 
+Download the DLL or ZIP from the [NOMAD 0.3.0 release](https://github.com/McGill-Aerial-Design/NOMAD/releases/tag/v0.3.0),
+then follow the manual installation procedure below. The build steps are for source builds.
+
 1. Install the reviewed Mission Planner host. To build from source, install Visual
    Studio's .NET desktop build tools and .NET Framework 4.8 targeting pack, plus
    [Pixi](https://pixi.sh/) for repository checks.
@@ -82,6 +85,9 @@ It implements native termination without Lua and leaves ordinary LAND/QLAND
 settings unchanged. CubeOrange is a different build target. Follow the
 [firmware guide](docs/native-termination.md) for source pins, behavior, build commands,
 commissioning requirements and evidence limits.
+
+The [4.7.2-nomad.1 firmware release](https://github.com/McGill-Aerial-Design/NOMAD/releases/tag/ardupilot-4.7.2-nomad.1)
+contains both board-specific images and their matching complete corresponding source.
 
 | GitHub automation | Current result |
 |---|---|

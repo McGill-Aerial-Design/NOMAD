@@ -409,6 +409,11 @@ function Test-BuildOnlySuccess {
     $csharp = Get-Content -LiteralPath (Join-Path $Fixture.Repo 'build\release\ReleaseIdentity.cs') -Raw
     $sourceSha = & git -C $Fixture.Repo rev-parse HEAD
     Assert-Contains $csharp "SourceSha = `"$sourceSha`"" 'Plugin identity omitted exact source SHA'
+    Assert-Contains $csharp 'AssemblyVersion("0.3.0.0")' 'Assembly version must match the plugin release'
+    Assert-Contains $csharp 'AssemblyFileVersion("0.3.0.0")' 'File version must match the plugin release'
+    Assert-Contains $csharp "AssemblyInformationalVersion(`"0.3.0+$sourceSha`")" `
+        'Informational version must identify the release and exact source'
+    Assert-Contains $csharp 'Version = "0.3.0"' 'Mission Planner must display the plugin release version'
     if (Test-Path (Join-Path $Fixture.Repo 'build/release/package-identity.json')) {
         throw 'Plugin-only build unexpectedly produced a runtime package identity.'
     }

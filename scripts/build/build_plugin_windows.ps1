@@ -13,6 +13,7 @@ Set-Location $ProjectDir
 # Configuration
 $ProjectFile = "NOMADPlugin.csproj"
 $Configuration = "Release"
+$version = '0.3.0'
 
 # Step 1: Find MSBuild
 Write-Host "[1/4] Locating MSBuild..." -ForegroundColor Yellow
@@ -48,11 +49,12 @@ New-Item -ItemType Directory -Path (Split-Path $csharpPath) -Force | Out-Null
 @"
 // Generated NOMAD plugin identity.
 using System.Reflection;
-[assembly: AssemblyVersion("0.0.0.0")]
-[assembly: AssemblyInformationalVersion("0.0.0-dev+$sourceSha")]
+[assembly: AssemblyVersion("$version.0")]
+[assembly: AssemblyFileVersion("$version.0")]
+[assembly: AssemblyInformationalVersion("$version+$sourceSha")]
 namespace NOMAD.MissionPlanner {
     internal static class NomadRelease {
-        public const string Version = "0.0.0-development";
+        public const string Version = "$version";
         public const string SourceSha = "$sourceSha";
         public const string MissionPlannerTarget = "$target";
     }
