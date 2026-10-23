@@ -10,4 +10,5 @@
 *.ps1 text eol=crlf
 
 # Preserve the upstream binary redistribution agreement embedded in the plugin.
-mission_planner/third_party/OPENCV-IPP-EULA.rtf -text
+mission_planner/third_party/OPENCV-IPP-EULA.rtf -text -diff
+mission_planner/third_party/* -whitespace
