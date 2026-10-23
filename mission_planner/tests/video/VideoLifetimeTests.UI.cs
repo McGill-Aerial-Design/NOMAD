@@ -14,7 +14,7 @@ internal static partial class VideoLifetimeTests
 {
     private static void PlaybackControlsAttached()
     {
-        using (var player = new EmbeddedVideoPlayer("fake",
+        using (var player = new EmbeddedVideoPlayer(
             new VideoInputProfile { Name = "Test input", Url = "rtsp://video.invalid/stream" }, true,
             CancellationToken.None, () => new FakeVideoPipeline()))
         {
@@ -75,7 +75,7 @@ internal static partial class VideoLifetimeTests
             var config = VideoConfig();
             config.VideoInputs.Add(new VideoInputProfile { Name = "Replacement", Url = "rtsp://replacement.invalid/live" });
             var oldView = new NOMADVideoView(config, shutdown.Token, () => first);
-            var oldPlayer = GetField<EmbeddedVideoPlayer>(oldView, "_videoPlayer");
+            var oldPlayer = GetField<VideoInputPlayer>(oldView, "_videoHost").Player;
             oldPlayer.StartStream();
             Wait(first.ReadEntered, "first view stream");
             var oldSession = GetField<VideoSession>(oldPlayer, "_session");
@@ -87,7 +87,7 @@ internal static partial class VideoLifetimeTests
             config.SelectedVideoInputName = "Replacement";
             using (var view = new NOMADVideoView(config, shutdown.Token, () => second))
             {
-                var player = GetField<EmbeddedVideoPlayer>(view, "_videoPlayer");
+                var player = GetField<VideoInputPlayer>(view, "_videoHost").Player;
                 player.StartStream();
                 Wait(second.ReadEntered, "reopened stream");
                 Check(second.Pipeline.Contains("replacement.invalid/live"), "Reopened video retained the previous selected source.");
@@ -107,7 +107,7 @@ internal static partial class VideoLifetimeTests
     private static void HandleRecreation()
     {
         var fake = new FakeVideoPipeline();
-        using (var player = new EmbeddedVideoPlayer("fake",
+        using (var player = new EmbeddedVideoPlayer(
             new VideoInputProfile { Name = "Test input", Url = "rtsp://video.invalid/stream" }, false, CancellationToken.None, () => fake))
         {
             var handle = player.Handle;
@@ -200,7 +200,7 @@ internal static partial class VideoLifetimeTests
     private static WeakReference CreateDisposedView(CancellationToken token)
     {
         var view = new NOMADVideoView(VideoConfig(), token, () => new FakeVideoPipeline());
-        var weak = new WeakReference(GetField<EmbeddedVideoPlayer>(view, "_videoPlayer"));
+        var weak = new WeakReference(GetField<VideoInputPlayer>(view, "_videoHost").Player);
         view.Dispose();
         return weak;
     }
@@ -218,7 +218,7 @@ internal static partial class VideoLifetimeTests
     {
         var fake = new FakeVideoPipeline();
         using (var shutdown = new CancellationTokenSource())
-        using (var player = new EmbeddedVideoPlayer("fake",
+        using (var player = new EmbeddedVideoPlayer(
             new VideoInputProfile { Name = "Test input", Url = "rtsp://video.invalid/stream" }, true, shutdown.Token, () => fake))
         {
             var handle = player.Handle;
@@ -252,7 +252,7 @@ internal static partial class VideoLifetimeTests
     private static void CheckCancelledView(CancellationToken token)
     {
         int creates = 0;
-        using (var player = new EmbeddedVideoPlayer("fake",
+        using (var player = new EmbeddedVideoPlayer(
             new VideoInputProfile { Name = "Test input", Url = "rtsp://video.invalid/stream" }, true, token, () =>
         {
             ++creates;

@@ -97,15 +97,22 @@ and other aircraft failsafes remain in Mission Planner's setup pages.
 
 NOMAD does not modify normal LAND or QLAND settings. The optional
 [native termination](native-termination.md) extension provides a separate onboard
-mode and a confirmed NOMAD menu action. It requires the matching custom firmware
+mode and a guarded Dashboard action. It requires the matching custom firmware
 and actual aircraft commissioning; fence draft staging provides neither.
+
+Click the top NOMAD item to open its page. While already there, left-click opens
+the dropdown without resetting the current view; right-click opens that dropdown
+from any page. The dropdown contains settings/tools, not the termination action.
 
 ## Video inputs
 
 Settings → Video stores named inputs for the selected aircraft. Add an input, enter
-its name and source URL, and choose it from the dropdown. Save applies that selection
-to the HUD, Dashboard preview and Video view; Cancel leaves the active configuration
-unchanged. Remove the final input to leave video unconfigured. Profiles use
+its name and source URL, then Save the definitions. Browsing or editing an input in
+Settings does not change playback. Choose the active input from the top-right of
+the Dashboard preview or Video player; that choice is saved for the aircraft and
+updates HUD video and both NOMAD views. A stopped player stays stopped.
+Renaming the active definition preserves its selection; removing it chooses the
+first remaining input. Remove the final input to leave video unconfigured. Profiles use
 `VideoInputs` and `SelectedVideoInputName`; imports must use that same current schema.
 
 RTSP negotiates the video codec supported by the installed GStreamer decoder. Select

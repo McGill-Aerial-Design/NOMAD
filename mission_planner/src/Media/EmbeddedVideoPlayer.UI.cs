@@ -13,6 +13,8 @@ namespace NOMAD.MissionPlanner
 {
     public partial class EmbeddedVideoPlayer
     {
+        internal TableLayoutPanel Toolbar { get; private set; }
+
         private void InitializeUI()
         {
             BackColor = Color.Black;
@@ -40,7 +42,7 @@ namespace NOMAD.MissionPlanner
 
             var ctrlPanel = new FlowLayoutPanel
             {
-                Name = "VideoToolbar", Dock = DockStyle.Top, AutoSize = true,
+                Dock = DockStyle.Fill, AutoSize = true, Margin = Padding.Empty,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true,
                 BackColor = NOMADTheme.CARD_BG, Padding = new Padding(5),
             };
@@ -52,11 +54,20 @@ namespace NOMAD.MissionPlanner
                 CreateVideoButton("\uE722", "Take snapshot", (sender, args) => TakeSnapshot()),
             });
 
+            Toolbar = new TableLayoutPanel
+            {
+                Name = "VideoToolbar", Dock = DockStyle.Top, AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 1,
+                BackColor = NOMADTheme.CARD_BG, Margin = Padding.Empty,
+            };
+            Toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            Toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            Toolbar.Controls.Add(ctrlPanel, 0, 0);
             Controls.Add(_videoBox);
             Controls.Add(_lblStatus);
-            Controls.Add(ctrlPanel);
+            Controls.Add(Toolbar);
             _lblStatus.Visible = _showControls;
-            ctrlPanel.Visible = _showControls;
+            Toolbar.Visible = _showControls;
         }
 
         private Button CreateVideoButton(string symbol, string name, EventHandler onClick)
@@ -114,7 +125,7 @@ namespace NOMAD.MissionPlanner
                 return;
             }
 
-            _fullscreenForm = new Form
+            _fullscreenForm = new NOMADForm
             {
                 FormBorderStyle = FormBorderStyle.None,
                 WindowState = FormWindowState.Maximized,
@@ -162,6 +173,20 @@ namespace NOMAD.MissionPlanner
             }
             _lblStatus.Text = $"Saved: {System.IO.Path.GetFileName(path)}";
             _lblStatus.ForeColor = Color.LimeGreen;
+        }
+
+        internal void UpdateInput(VideoInputProfile input)
+        {
+            ValidateUiThread();
+            input.Validate();
+            var wasPlaying = _isPlaying;
+            StopStream();
+            _input = new VideoInputProfile
+            {
+                Name = input.Name, Url = input.Url, RtspTransport = input.RtspTransport,
+                LatencyMs = input.LatencyMs, QueueMaxBuffers = input.QueueMaxBuffers, DropOldFrames = input.DropOldFrames,
+            };
+            if (wasPlaying) { StartStream(); }
         }
 
         public void UpdateStreamUrl(string newUrl)

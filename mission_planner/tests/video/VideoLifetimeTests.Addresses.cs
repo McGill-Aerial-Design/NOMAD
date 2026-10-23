@@ -14,7 +14,7 @@ internal static partial class VideoLifetimeTests
     {
         var failures = new List<string>();
         var udp = new FakeVideoPipeline();
-        using (var player = new EmbeddedVideoPlayer("Synthetic UDP",
+        using (var player = new EmbeddedVideoPlayer(
             new VideoInputProfile { Name = "Test input", Url = "udp://127.0.0.1:6000" }, true,
             CancellationToken.None, () => udp))
         {
@@ -26,7 +26,7 @@ internal static partial class VideoLifetimeTests
         CheckClean(udp);
         const string url = "rtsp://synthetic:credential@video.invalid/live?note=\"left ! fakesink\"&view=main";
         var rtsp = new FakeVideoPipeline();
-        using (var player = new EmbeddedVideoPlayer("Synthetic RTSP",
+        using (var player = new EmbeddedVideoPlayer(
             new VideoInputProfile { Name = "Test input", Url = url }, true,
             CancellationToken.None, () => rtsp))
         {
@@ -45,7 +45,7 @@ internal static partial class VideoLifetimeTests
 
     private static string EmbeddedPipeline(string url)
     {
-        using (var player = new EmbeddedVideoPlayer("Synthetic source",
+        using (var player = new EmbeddedVideoPlayer(
             new VideoInputProfile { Name = "Test input", Url = url }, true,
             CancellationToken.None, () => throw new InvalidOperationException("No source may start in this check.")))
         {
@@ -104,7 +104,7 @@ internal static partial class VideoLifetimeTests
     private static void InvalidVideoDoesNotStart()
     {
         int created = 0;
-        using (var player = new EmbeddedVideoPlayer("Invalid synthetic source",
+        using (var player = new EmbeddedVideoPlayer(
             new VideoInputProfile { Name = "Test input", Url = "udp://bad" }, true,
             CancellationToken.None, () => { created++; return new FakeVideoPipeline(); }))
         {
@@ -118,7 +118,7 @@ internal static partial class VideoLifetimeTests
     private static void VideoUdpInput()
     {
         var fake = new FakeVideoPipeline();
-        using (var player = new EmbeddedVideoPlayer("fake",
+        using (var player = new EmbeddedVideoPlayer(
             new VideoInputProfile { Name = "Test input", Url = "UDP://@:6500" }, true,
             CancellationToken.None, () => fake))
         {

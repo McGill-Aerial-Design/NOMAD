@@ -10,6 +10,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using MissionPlanner;
 using MissionPlanner.Comms;
 using MissionPlanner.Utilities;
@@ -128,6 +129,7 @@ internal static class NativeTerminationTests
                 Require(peer.Connection.MAV.cs.mode == knownMode, "Disposed observer still changed native mode naming");
             }
             NegativeScenarios();
+            WidgetReviewScenarios();
             Console.WriteLine("PASS actual MP discovery/readback/ACK/observation/name/lifecycle loopback checks");
         }
         finally
@@ -197,6 +199,80 @@ internal static class NativeTerminationTests
         }
     }
 
+    private static void WidgetReviewScenarios()
+    {
+        var widgetType = typeof(NOMADConfig).Assembly.GetType("NOMAD.MissionPlanner.TerminationWidget", true);
+        foreach (string scenario in new[] { "Cancel", "OK", "FocusLoss", "ReleaseFocusLoss", "Retired", "SessionEnded" })
+        {
+            using var peer = new Peer();
+            using var shutdown = new CancellationTokenSource();
+            Require(peer.CheckSupport(), "Widget fixture did not establish native support");
+            bool eligible = true;
+            int confirmations = 0;
+            Func<IWin32Window, string, DialogResult> confirm = (owner, target) =>
+            {
+                confirmations++;
+                Require(target.Contains("Synthetic loopback") && target.Contains("201") && target.Contains("42"),
+                    "Widget confirmation did not identify its captured aircraft");
+                if (scenario == "Retired")
+                { Output.GetMethod("Initialize", HiddenStatic).Invoke(null, new object[] { peer.Config }); }
+                if (scenario == "SessionEnded") { shutdown.Cancel(); }
+                return scenario == "Cancel" ? DialogResult.Cancel : DialogResult.OK;
+            };
+            using var widget = (Control)Activator.CreateInstance(widgetType, HiddenInstance, null,
+                new object[] { peer.ControllerInstance, shutdown.Token, (Func<bool>)(() => eligible), confirm }, null);
+            var sample = widgetType.GetMethod("SampleState", HiddenInstance);
+            Action<bool, bool, bool, long> update = (active, left, right, now) =>
+                sample.Invoke(widget, new object[] { active, left, right, now });
+            var pending = widgetType.GetProperty("PendingReview", HiddenInstance);
+            update(true, false, false, 0);
+            update(true, true, false, 10);
+            peer.HoldRate = scenario == "FocusLoss";
+            update(true, true, true, 20);
+            if (peer.HoldRate)
+            {
+                var deadline = Stopwatch.StartNew();
+                while (!peer.RateSeen.IsSet && deadline.ElapsedMilliseconds < 5000) { peer.Pump(10); Application.DoEvents(); }
+                Require(peer.RateSeen.IsSet, "Widget check did not reach held synthetic readback");
+                eligible = false;
+                update(false, true, true, 30);
+                peer.ReleaseRate.Set();
+            }
+            FinishWidget(peer, (Task)pending.GetValue(widget));
+            Require(peer.ModeCommands == 0 && confirmations == 0, "Widget dispatched or confirmed before key release");
+            if (scenario == "ReleaseFocusLoss")
+            {
+                eligible = false;
+                update(false, true, true, 35);
+                eligible = true;
+            }
+            update(eligible, false, false, 40);
+            FinishWidget(peer, (Task)pending.GetValue(widget));
+            Require(confirmations == (scenario == "FocusLoss" || scenario == "ReleaseFocusLoss" ? 0 : 1), "Widget confirmation count was wrong: " + scenario);
+            Require(peer.ModeCommands == (scenario == "OK" ? 1 : 0), "Widget command count was wrong: " + scenario);
+            update(eligible, true, true, 50);
+            FinishWidget(peer, (Task)pending.GetValue(widget));
+            Require(peer.ModeCommands <= 1, "Held/repeated widget input replayed termination");
+            if (scenario == "Cancel")
+            {
+                peer.SendHeartbeat(0, false); peer.Pump(100);
+                widgetType.GetMethod("RefreshStatus", HiddenInstance).Invoke(widget, null);
+                var status = (Label)widgetType.GetField("_status", HiddenInstance).GetValue(widget);
+                Require(status.Text.Contains("Supported") && status.Text.Contains("disarmed"),
+                    "Verified disarmed support still looked unavailable in the Dashboard widget");
+            }
+        }
+        Console.WriteLine("PASS sampled Dashboard review Cancel/OK/focus-loss/retired-target/session gates");
+    }
+
+    private static void FinishWidget(Peer peer, Task task)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (!task.IsCompleted && deadline.ElapsedMilliseconds < 12000) { peer.Pump(10); Application.DoEvents(); }
+        Require(task.IsCompleted, "Widget review deadline");
+        task.GetAwaiter().GetResult();
+    }
+
     private sealed class Peer : IDisposable
     {
         internal readonly NOMADConfig Config = new NOMADConfig { AircraftName = "Synthetic loopback" };
@@ -241,6 +317,7 @@ internal static class NativeTerminationTests
             SendHeartbeat(0); Pump(100);
         }
 
+        internal object ControllerInstance => _controller;
         internal bool CanRequest => (bool)Controller.GetProperty("CanRequest", HiddenInstance).GetValue(_controller);
         internal string Status => (string)Controller.GetProperty("Status", HiddenInstance).GetValue(_controller);
         internal bool CheckSupport() => Finish((Task<bool>)Controller.GetMethod("CheckAsync", HiddenInstance)

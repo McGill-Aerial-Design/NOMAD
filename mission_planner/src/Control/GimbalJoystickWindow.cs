@@ -25,6 +25,7 @@ namespace NOMAD.MissionPlanner
     /// Floating window with a 2D rate joystick + mode buttons for the camera gimbal.
     /// Open with <see cref="ShowSingleton"/>; only one instance lives at a time.
     /// </summary>
+    [global::MissionPlanner.Utilities.PreventTheming]
     public class GimbalJoystickWindow : Form
     {
         private static GimbalJoystickWindow s_instance;
@@ -390,82 +391,6 @@ namespace NOMAD.MissionPlanner
             if (b == null) return;
             b.BackColor = active ? NOMADTheme.ACCENT : NOMADTheme.CARD_BG;
             b.FlatAppearance.BorderColor = active ? NOMADTheme.ACCENT : NOMADTheme.CARD_BORDER;
-        }
-
-        // ============================================================
-        // Theme persistence
-        // ============================================================
-        // Mission Planner's ThemeManager recolors plugin windows whenever they
-        // activate/deactivate (turning our buttons grey/green and the background
-        // light), exactly as it does to the main screen. Re-assert the NOMAD
-        // palette on every focus change — immediately and once more after MP's
-        // pass via BeginInvoke, whichever order it applies in.
-        protected override void OnActivated(EventArgs e)
-        {
-            base.OnActivated(e);
-            ScheduleThemeReapply();
-        }
-
-        protected override void OnDeactivate(EventArgs e)
-        {
-            base.OnDeactivate(e);
-            ScheduleThemeReapply();
-        }
-
-        private void ScheduleThemeReapply()
-        {
-            ReapplyTheme();
-            if (IsHandleCreated && !IsDisposed)
-                BeginInvoke((MethodInvoker)(() => { if (!IsDisposed) ReapplyTheme(); }));
-        }
-
-        private void ReapplyTheme()
-        {
-            if (IsDisposed) return;
-            BackColor = NOMADTheme.BG_DARK;
-            ForeColor = NOMADTheme.TEXT_PRIMARY;
-            ThemeTree(this);
-
-            // Containers/labels that need a non-default color (ThemeTree leaves
-            // them transparent / primary).
-            if (_lblTitle != null) _lblTitle.ForeColor = NOMADTheme.ACCENT;
-            if (_rateRow != null) _rateRow.BackColor = NOMADTheme.BG_DARK;
-            if (_pad != null) _pad.BackColor = NOMADTheme.CARD_BG;
-
-            HighlightModeButtons(); // re-paints the active mode button red
-        }
-
-        private void ThemeTree(Control parent)
-        {
-            foreach (Control c in parent.Controls)
-            {
-                switch (c)
-                {
-                    case Button b:
-                        b.FlatStyle = FlatStyle.Flat;
-                        b.FlatAppearance.BorderSize = 1;
-                        b.FlatAppearance.BorderColor = NOMADTheme.CARD_BORDER;
-                        b.BackColor = NOMADTheme.CARD_BG;
-                        b.ForeColor = NOMADTheme.TEXT_PRIMARY;
-                        break;
-                    case TrackBar tb:
-                        tb.BackColor = NOMADTheme.BG_DARK;
-                        break;
-                    case Label lbl:
-                        lbl.BackColor = Color.Transparent;
-                        lbl.ForeColor = NOMADTheme.TEXT_PRIMARY;
-                        break;
-                    case CheckBox chk:
-                        chk.BackColor = Color.Transparent;
-                        chk.ForeColor = NOMADTheme.TEXT_SECONDARY;
-                        break;
-                    case TableLayoutPanel _:
-                    case FlowLayoutPanel _:
-                        c.BackColor = Color.Transparent;
-                        break;
-                }
-                if (c.HasChildren) ThemeTree(c);
-            }
         }
 
         private Label MakeReadout(string text) => new Label

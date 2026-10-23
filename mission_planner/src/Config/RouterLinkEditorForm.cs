@@ -8,6 +8,7 @@ using Newtonsoft.Json.Linq;
 
 namespace NOMAD.MissionPlanner
 {
+    [global::MissionPlanner.Utilities.PreventTheming]
     internal sealed class RouterLinkEditorForm : Form
     {
         private readonly NOMADConfig _draft;

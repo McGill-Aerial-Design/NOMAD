@@ -15,7 +15,7 @@ namespace NOMAD.MissionPlanner
         {
             var tab = CreateTabPage("Links"); int y = 15;
             AddLabel(tab, "Mission Planner owns the connection and ordinary flight controls.", 20, y); y += 32;
-            _chkRouterClientEnabled = AddCheckBox(tab, "Run the router inside Mission Planner", 20, y); y += 38;
+            _chkRouterClientEnabled = AddCheckBox(tab, "Enable", 20, y); y += 38;
             AddLabel(tab, "Mission Planner UDPCl port:", 20, y);
             _numRouterLocalPort = AddNumericUpDown(tab, 235, y, 90, 1, 65535, 14600); y += 35;
             AddLabel(tab, "Preferred enabled link:", 20, y);

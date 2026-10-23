@@ -65,6 +65,7 @@ namespace NOMAD.MissionPlanner
                 NOMADMainScreen.SetFenceSetupInput(_fenceSetupInput);
                 _videoShutdown = new System.Threading.CancellationTokenSource();
                 NOMADMainScreen.SetVideoShutdown(_videoShutdown.Token, ShowSettings);
+                NOMADMainScreen.SetVideoInputSelection(SelectActiveVideoInput);
                 WarnIfUntestedMissionPlannerVersion();
 
                 // Load configuration
@@ -130,7 +131,7 @@ namespace NOMAD.MissionPlanner
                     {
                         CustomMessageBox.Show(
                             $"NOMAD Plugin v{Version} loaded (debug mode).\n\n" +
-                            $"Use NOMAD → Open NOMAD for the interface,\n" +
+                            $"Click NOMAD for the interface,\n" +
                             $"or choose tools and settings from the menu.\n\n" +
                             "Custom gimbal and payload controls use Mission Planner. Physical completion remains unverified.",
                             "NOMAD"
@@ -198,7 +199,6 @@ namespace NOMAD.MissionPlanner
         {
             OutputController.RefreshConnection();
             _termination?.UpdateBinding();
-            UpdateTerminationMenu();
             return true;
         }
 
@@ -254,7 +254,7 @@ namespace NOMAD.MissionPlanner
 
         private void StopCustomControls()
         {
-            RemoveTerminationMenu();
+            RemoveMainMenu();
             _termination?.Dispose();
             _termination = null;
             NOMADMainScreen.SetTerminationController(null);

@@ -58,7 +58,7 @@ namespace NOMAD.MissionPlanner
 
             _chkAutoStartHudVideo = AddCheckBox(tab, "Auto-start video on HUD", 20, y);
             y += 35;
-            AddLabel(tab, "Save applies the selected input to HUD and NOMAD video views.", 20, y);
+            AddLabel(tab, "Choose the active input at the top-right of the video player.", 20, y);
             y += 32;
             var info = ControlFactory.Button("Receiver help ⓘ", width: 150, height: 28);
             info.Location = new Point(20, y);
@@ -78,15 +78,16 @@ namespace NOMAD.MissionPlanner
             return tab;
         }
 
-        private void LoadVideoSettings()
+        private void LoadVideoSettings(VideoInputProfile editing = null)
         {
             _loadingVideo = true;
             try
             {
                 _cmbVideoInputs.Items.Clear();
                 _cmbVideoInputs.Items.AddRange(Config.VideoInputs.Cast<object>().ToArray());
-                _cmbVideoInputs.SelectedItem = Config.SelectedVideoInput;
-                LoadVideoInput(Config.SelectedVideoInput);
+                editing = editing ?? Config.SelectedVideoInput;
+                _cmbVideoInputs.SelectedItem = editing;
+                LoadVideoInput(editing);
             }
             finally { _loadingVideo = false; }
         }
@@ -120,9 +121,10 @@ namespace NOMAD.MissionPlanner
                 string.Equals(other.Name, input.Name, StringComparison.OrdinalIgnoreCase)))
             { throw new Newtonsoft.Json.JsonSerializationException("Video input names must be unique."); }
             int index = Config.VideoInputs.IndexOf(_editingVideoInput);
+            bool wasActive = string.Equals(Config.SelectedVideoInputName, _editingVideoInput.Name, StringComparison.OrdinalIgnoreCase);
             Config.VideoInputs[index] = input;
             _editingVideoInput = input;
-            Config.SelectedVideoInputName = input.Name;
+            if (wasActive) { Config.SelectedVideoInputName = input.Name; }
             _loadingVideo = true;
             try { _cmbVideoInputs.Items[index] = input; }
             finally { _loadingVideo = false; }
@@ -136,7 +138,6 @@ namespace NOMAD.MissionPlanner
             try
             {
                 SaveVideoInput();
-                Config.SelectedVideoInputName = next.Name;
                 LoadVideoInput(next);
             }
             catch (Exception error)
@@ -158,8 +159,8 @@ namespace NOMAD.MissionPlanner
                 { number++; }
                 var added = new VideoInputProfile { Name = "Input " + number };
                 Config.VideoInputs.Add(added);
-                Config.SelectedVideoInputName = added.Name;
-                LoadVideoSettings();
+                if (Config.VideoInputs.Count == 1) { Config.SelectedVideoInputName = added.Name; }
+                LoadVideoSettings(added);
             }
             catch (Exception error)
             { MessageBox.Show(this, error.Message, "Video input requires review", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
@@ -168,8 +169,9 @@ namespace NOMAD.MissionPlanner
         private void RemoveVideoInput()
         {
             if (_editingVideoInput == null) { return; }
+            bool wasActive = string.Equals(Config.SelectedVideoInputName, _editingVideoInput.Name, StringComparison.OrdinalIgnoreCase);
             Config.VideoInputs.Remove(_editingVideoInput);
-            Config.SelectedVideoInputName = Config.VideoInputs.FirstOrDefault()?.Name ?? "";
+            if (wasActive) { Config.SelectedVideoInputName = Config.VideoInputs.FirstOrDefault()?.Name ?? ""; }
             LoadVideoSettings();
         }
 

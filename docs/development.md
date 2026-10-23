@@ -42,7 +42,8 @@ Run the focused check first, then relevant gates once for the final coherent dif
 The host-dependent gates require the actual reviewed MP assemblies. UI checks use
 isolated Windows/STA fixtures; router checks bind loopback test sockets. Profile
 fixtures use temporary paths and must not touch real operator files.
-Video checks cover named-input round trips and strict nested configuration, independent
+UI checks exercise owned inactive menus, actual host theme opt-outs and sampled Shift
+gesture state without desktop input injection. Video checks cover named-input round trips and strict nested configuration, independent
 aircraft/settings drafts, both receiver pipeline paths, source replacement and stale
 frame disposal. They use fake pipelines and do not open operator camera feeds.
 
@@ -60,6 +61,7 @@ pixi run test-plugin-audio
 pixi run test-plugin-version
 pixi run test-ground-router-logic
 pixi run test-plugin-gimbal-ui
+pixi run test-plugin-ui
 pixi run test-plugin-router-ui
 pixi run test-plugin-video
 pixi run test-plugin-termination

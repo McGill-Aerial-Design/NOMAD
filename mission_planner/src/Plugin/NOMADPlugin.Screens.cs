@@ -4,12 +4,14 @@
 // NOMADPlugin.Screens.cs - NOMAD screen hosting
 // ============================================================
 // Registers the NOMAD screen with Mission Planner's MainSwitcher
-// (via reflection, since the API is not public) and shows it
+// through the reviewed host API and shows it
 // either as a top-level page or in a pop-out window.
 // ============================================================
 
 using System;
 using System.Drawing;
+using System.Linq;
+using MissionPlanner.Controls;
 using System.Windows.Forms;
 using MissionPlanner;
 
@@ -23,56 +25,15 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         private void RegisterNomadScreen()
         {
-            if (_screenRegistered)
-            {
-                return;
-            }
-
-            try
-            {
-                NOMADMainScreen.SetStaticConfig(_config, _connectionManager);
-
-                object mainSwitcher = null;
-
-                var viewField = typeof(MainV2).GetField("View",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                if (viewField != null)
-                {
-                    mainSwitcher = viewField.GetValue(null);
-                }
-
-                if (mainSwitcher != null)
-                {
-                    var screenType = mainSwitcher.GetType().GetNestedType("Screen",
-                        System.Reflection.BindingFlags.Public);
-                    if (screenType != null)
-                    {
-                        var screenCtor = screenType.GetConstructor(new Type[] { typeof(string), typeof(Type), typeof(bool) });
-                        if (screenCtor != null)
-                        {
-                            var screen = screenCtor.Invoke(new object[] { "NOMAD", typeof(NOMADMainScreen), false });
-
-                            var addScreenMethod = mainSwitcher.GetType().GetMethod("AddScreen",
-                                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                            if (addScreenMethod != null)
-                            {
-                                addScreenMethod.Invoke(mainSwitcher, new object[] { screen });
-                                _screenRegistered = true;
-                            }
-                        }
-                    }
-                }
-
-                if (!_screenRegistered)
-                {
-                    Log.Warn("Could not register as top-level screen");
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"RegisterNomadScreen failed — {ex.Message}");
-            }
+            if (_screenRegistered || MainV2.View == null) { return; }
+            NOMADMainScreen.SetStaticConfig(_config, _connectionManager);
+            if (!MainV2.View.screens.Any(screen => screen.Name == "NOMAD"))
+            { MainV2.View.AddScreen(new MainSwitcher.Screen("NOMAD", typeof(NOMADMainScreen), false)); }
+            _screenRegistered = true;
         }
+
+        private static bool IsMainScreenCurrent() => MainV2.View?.current?.Name == "NOMAD" &&
+            MainV2.View.current.Control != null && !MainV2.View.current.Control.IsDisposed;
 
         /// <summary>
         /// Shows the NOMAD interface as a top-level page in Mission Planner.
@@ -87,34 +48,14 @@ namespace NOMAD.MissionPlanner
                 return;
             }
 
-            if (!_screenRegistered)
-            {
-                RegisterNomadScreen();
-            }
-
+            if (IsMainScreenCurrent()) { return; }
             try
             {
-                var viewField = typeof(MainV2).GetField("View",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                if (viewField != null)
-                {
-                    var mainSwitcher = viewField.GetValue(null);
-                    if (mainSwitcher != null)
-                    {
-                        var showScreenMethod = mainSwitcher.GetType().GetMethod("ShowScreen",
-                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance,
-                            null, new Type[] { typeof(string) }, null);
-                        if (showScreenMethod != null)
-                        {
-                            showScreenMethod.Invoke(mainSwitcher, new object[] { "NOMAD" });
-                        }
-                    }
-                }
+                RegisterNomadScreen();
+                MainV2.View?.ShowScreen("NOMAD");
             }
             catch (Exception ex)
-            {
-                Log.Error($"Could not show NOMAD screen — {ex.Message}");
-            }
+            { Log.Error($"Could not show NOMAD screen — {ex.Message}"); }
         }
 
         /// <summary>
@@ -139,7 +80,7 @@ namespace NOMAD.MissionPlanner
 
                     var nomadScreen = new NOMADMainScreen(_config, _connectionManager);
 
-                    _popOutForm = new Form
+                    _popOutForm = new NOMADForm
                     {
                         Text = "NOMAD Control - Pop Out",
                         StartPosition = FormStartPosition.CenterScreen,
@@ -153,9 +94,10 @@ namespace NOMAD.MissionPlanner
                     _popOutForm.Controls.Add(nomadScreen);
 
                     // Activate when shown - NOMAD screen implements Activate() directly
-                    _popOutForm.Shown += (s, e) =>
+                    _popOutForm.VisibleChanged += (s, e) =>
                     {
-                        nomadScreen.Activate();
+                        if (_popOutForm.Visible) { nomadScreen.Activate(); }
+                        else { nomadScreen.Deactivate(); }
                     };
 
                     // Deactivate when hidden
@@ -165,7 +107,6 @@ namespace NOMAD.MissionPlanner
                         {
                             e.Cancel = true;
                             _popOutForm.Hide();
-                            nomadScreen.Deactivate();
                         }
                     };
                 }
@@ -183,7 +124,7 @@ namespace NOMAD.MissionPlanner
             catch (Exception ex)
             {
                 Log.Error($"Failed to show pop-out window — {ex.Message}");
-                CustomMessageBox.Show($"Failed to open pop-out window: {ex.Message}", "Error");
+                MessageBox.Show(Host.MainForm, $"Failed to open pop-out window: {ex.Message}", "Error");
             }
         }
     }

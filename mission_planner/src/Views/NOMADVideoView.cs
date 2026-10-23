@@ -15,7 +15,7 @@ namespace NOMAD.MissionPlanner
         private readonly System.Threading.CancellationToken _shutdown;
         private readonly Func<IVideoPipeline> _createPipeline;
         private readonly NOMADConfig _config;
-        private EmbeddedVideoPlayer _videoPlayer;
+        private VideoInputPlayer _videoHost;
         private ActuatorControlPanel _actuatorPanel;
 
         internal NOMADVideoView(NOMADConfig config, System.Threading.CancellationToken shutdown)
@@ -49,35 +49,9 @@ namespace NOMAD.MissionPlanner
                 Margin = new Padding(5),
             };
 
-            var input = _config.SelectedVideoInput;
-            try
-            {
-                if (input == null)
-                {
-                    videoPanel.Controls.Add(new Label
-                    {
-                        Text = "No video input configured. Add an input in Settings → Video.",
-                        ForeColor = TEXT_SECONDARY, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter,
-                    });
-                }
-                else
-                {
-                    _videoPlayer = new EmbeddedVideoPlayer(input.Name, input, true, _shutdown, _createPipeline)
-                    { Dock = DockStyle.Fill };
-                    videoPanel.Controls.Add(_videoPlayer);
-                }
-            }
-            catch (Exception ex)
-            {
-                videoPanel.Controls.Add(new Label
-                {
-                    Text = $"Video player unavailable: {ex.Message}",
-                    Font = new Font("Segoe UI", 12),
-                    ForeColor = TEXT_SECONDARY,
-                    Dock = DockStyle.Fill,
-                    TextAlign = ContentAlignment.MiddleCenter,
-                });
-            }
+            _videoHost = new VideoInputPlayer(_config, true, _shutdown, _createPipeline,
+                NOMADMainScreen.SelectVideoInput);
+            videoPanel.Controls.Add(_videoHost);
 
             mainLayout.Controls.Add(videoPanel, 0, 0);
 
@@ -122,15 +96,13 @@ namespace NOMAD.MissionPlanner
             Controls.Add(mainLayout);
         }
 
-        public void UpdateData()
-        {
-        }
+        public void UpdateData() { _videoHost?.RefreshInput(); }
 
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
-                _videoPlayer?.Dispose();
+                _videoHost?.Dispose();
                 _actuatorPanel?.Dispose();
             }
             base.Dispose(disposing);
