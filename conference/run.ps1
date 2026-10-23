@@ -201,6 +201,55 @@ function Read-CameraState {
     }
     throw 'Camera status could not be read.'
 }
+function Complete-Postflight($Result) {
+    if (!$result.ordinary_land_disarmed -or !$result.termination_landed_disarmed -or
+        !$result.latch_refused -or !$result.land_descent -or !$result.terminate_descent -or
+        !$result.same_controller_boot) {
+        throw 'Separate native LAND, TERMINATE and latch observations are incomplete.'
+    }
+    if ($simulator.HasExited -or $simulator.StartTime.ToUniversalTime() -ne $simulatorStarted -or
+        !(Get-NetTCPConnection -State Listen -LocalPort 6310 -OwningProcess $simulator.Id `
+            -ErrorAction SilentlyContinue)) {
+        throw 'The original simulator process did not survive both flights.'
+    }
+    @{
+        process_id = $simulator.Id
+        process_started_utc = $simulatorStarted.ToString('o')
+        same_process = $true
+        same_controller_boot = $result.same_controller_boot
+        controller_boot_count = $result.controller_boot_count_after
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $run 'controller-lifecycle.json') -Encoding utf8
+    $cameraState = Read-CameraState
+    if ($camera.Process.HasExited -or !$cameraState.passed -or
+        ((Get-Date) - (Get-Item -LiteralPath (Join-Path $run 'camera-status.json')).LastWriteTime).TotalSeconds -gt 3) {
+        throw 'The live camera bridge failed during rehearsal.'
+    }
+    foreach ($stream in $cameraState.streams.PSObject.Properties.Value) {
+        if (!$stream.encoder_running -or $stream.frame_age_seconds -gt 3) {
+            throw 'A live rendered camera stopped.'
+        }
+    }
+    # Exercise camera failure only after authoritative landed/disarmed observations.
+    $encoders[0].Kill()
+    if (!$camera.Process.WaitForExit(20000)) {
+        throw 'Camera bridge did not retire after encoder failure.'
+    }
+    $failedCamera = Read-CameraState
+    if ($camera.Process.ExitCode -eq 0 -or $failedCamera.passed -or !$failedCamera.stopped) {
+        throw 'Encoder failure was not reported as a stopped failed camera bridge.'
+    }
+    foreach ($encoder in $encoders) {
+        if (!$encoder.WaitForExit(5000)) {
+            throw 'Sibling encoder survived camera failure.'
+        }
+    }
+    @{
+        encoder_failure_detected = $true
+        sibling_stopped = $true
+        camera_exit_code = $camera.Process.ExitCode
+    } |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $run 'lifecycle.json') -Encoding utf8
+}
 function Start-Owned([string]$File, [string]$Arguments, [string]$Name, [bool]$Visible = $false) {
     $info = [Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $File
@@ -250,6 +299,7 @@ foreach ($file in $preserve) {
 $python = Join-Path $base 'python/Scripts/python.exe'
 $mp = $null
 $camera = $null
+$postflightVerified = $false
 try {
     $renderArgs = if ($Check) {
         '-RenderOffScreen -ResX=960 -ResY=540 -nosound'
@@ -313,8 +363,20 @@ try {
     $owned += $mp
     Write-Output "NOMAD conference session: $run"
     if ($Check) {
-        if (!$mp.Process.WaitForExit(420000)) {
-            throw 'Native conference rehearsal exceeded its deadline.'
+        $deadline = (Get-Date).AddSeconds(420)
+        while (!$mp.Process.WaitForExit(200)) {
+            if ((Get-Date) -gt $deadline) { throw 'Native conference rehearsal exceeded its deadline.' }
+            $checkpoint = $null
+            try {
+                $checkpoint = Get-Content -LiteralPath (Join-Path $run 'result.json') -Raw -ErrorAction Stop |
+                    ConvertFrom-Json
+            } catch { }
+            if (!$postflightVerified -and $checkpoint.passed -and $checkpoint.stage -eq 'aircraft_checks_passed') {
+                Complete-Postflight $checkpoint
+                if ((Get-Date) -gt $deadline) { throw 'Native conference rehearsal exceeded its deadline.' }
+                $postflightVerified = $true
+                New-Item -ItemType File -Path (Join-Path $run 'postflight-verified') | Out-Null
+            }
         }
     } else {
         $mp.Process.WaitForExit()
@@ -324,56 +386,9 @@ try {
     }
     if ($Check) {
         $result = Get-Content -LiteralPath (Join-Path $run 'result.json') -Raw | ConvertFrom-Json
-        if (!$result.passed) {
+        if (!$result.passed -or $result.stage -ne 'passed' -or !$postflightVerified) {
             throw 'Native rehearsal failed; see result.json.'
         }
-        if (!$result.ordinary_land_disarmed -or !$result.termination_landed_disarmed -or
-            !$result.latch_refused -or !$result.land_descent -or !$result.terminate_descent -or
-            !$result.same_controller_boot) {
-            throw 'Separate native LAND, TERMINATE and latch observations are incomplete.'
-        }
-        if ($simulator.HasExited -or $simulator.StartTime.ToUniversalTime() -ne $simulatorStarted -or
-            !(Get-NetTCPConnection -State Listen -LocalPort 6310 -OwningProcess $simulator.Id `
-                -ErrorAction SilentlyContinue)) {
-            throw 'The original simulator process did not survive both flights.'
-        }
-        @{
-            process_id = $simulator.Id
-            process_started_utc = $simulatorStarted.ToString('o')
-            same_process = $true
-            same_controller_boot = $result.same_controller_boot
-            controller_boot_count = $result.controller_boot_count_after
-        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $run 'controller-lifecycle.json') -Encoding utf8
-        $cameraState = Read-CameraState
-        if ($camera.Process.HasExited -or !$cameraState.passed -or
-            ((Get-Date) - (Get-Item -LiteralPath (Join-Path $run 'camera-status.json')).LastWriteTime).TotalSeconds -gt 3) {
-            throw 'The live camera bridge failed during rehearsal.'
-        }
-        foreach ($stream in $cameraState.streams.PSObject.Properties.Value) {
-            if (!$stream.encoder_running -or $stream.frame_age_seconds -gt 3) {
-                throw 'A live rendered camera stopped.'
-            }
-        }
-        # Exercise camera failure only after authoritative landed/disarmed observations.
-        $encoders[0].Kill()
-        if (!$camera.Process.WaitForExit(20000)) {
-            throw 'Camera bridge did not retire after encoder failure.'
-        }
-        $failedCamera = Read-CameraState
-        if ($camera.Process.ExitCode -eq 0 -or $failedCamera.passed -or !$failedCamera.stopped) {
-            throw 'Encoder failure was not reported as a stopped failed camera bridge.'
-        }
-        foreach ($encoder in $encoders) {
-            if (!$encoder.WaitForExit(5000)) {
-                throw 'Sibling encoder survived camera failure.'
-            }
-        }
-        @{
-            encoder_failure_detected = $true
-            sibling_stopped = $true
-            camera_exit_code = $camera.Process.ExitCode
-        } |
-            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $run 'lifecycle.json') -Encoding utf8
         Write-Output 'PASS native LAND/TERMINATE descent, latch, AUTO inspection, video, gimbal, failover, payload and encoder cleanup.'
     }
 } finally {

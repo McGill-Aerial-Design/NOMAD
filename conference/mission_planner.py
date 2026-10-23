@@ -784,6 +784,12 @@ try:
         verify_latch_and_ordinary_rates()
         state["landing_position"] = [observed["lat"], observed["lon"], observed["altitude"]]
         state.update(passed=True, landed_state=observed["landed"], disarmed=True)
+        stage("aircraft_checks_passed")
+        wait_for(
+            lambda: File.Exists(Path.Combine(RUN, "postflight-verified")),
+            45,
+            "Launcher did not verify the live controller and camera lifecycle",
+        )
         stage("passed")
 except Exception as error:
     state.update(passed=False, error=str(error), last_observed=dict(observed))
