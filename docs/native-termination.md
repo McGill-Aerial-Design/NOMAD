@@ -82,8 +82,11 @@ show private values numerically; use Full Parameter List and explicit write/read
 ## Ground operation
 
 Select the live aircraft and open **NOMAD → Dashboard**. The TERMINATE widget's
-**Check** button verifies the selectable native `TERMINATE` advertisement and
-freshly reads `AFS_ENABLE`, `AFS_TERM_ACTION` and `AFS_TERM_RATE`. Hover over the
+**Check** button enumerates native mode records by index and verifies a coherent,
+selectable `TERMINATE` advertisement. It then
+freshly reads `AFS_ENABLE`, `AFS_TERM_ACTION` and `AFS_TERM_RATE`.
+A valid disabled extension can be configured while disarmed in Fence Setup;
+activation still requires a selectable mode and the configured AFS readbacks. Hover over the
 widget with the NOMAD window in the foreground, release both Shift keys, then
 press left and right Shift within 750 ms of one another. Both must be down together.
 The widget rechecks support; keep the pointer over it and the window focused, then

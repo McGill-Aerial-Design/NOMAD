@@ -205,15 +205,19 @@ internal static class NativeFenceParametersTests
             peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
             Check(Field<IList>(peer.Controller, "Parameters").Count == 3 && peer.Writes == 0,
                 "Custom parameter alone without native mode advertisement never exposes configuration");
-            peer.Announce = true;
+        }
+        using (var peer = new Peer(true))
+        using (var shared = (IDisposable)Create("TerminationController", peer.Config))
+        {
+            peer.AddTermination(true);
             peer.Selectable = false;
+            peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
+            peer.Finish((Task)Call(peer.Controller, "ReadAsync"));
             peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
-            Check(Field<IList>(peer.Controller, "Parameters").Count == 3 && peer.Writes == 0,
-                "Nonselectable native advertisement never exposes controlled configuration");
-            peer.Selectable = true;
-            peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
-            Check(Field<IList>(peer.Controller, "Parameters").Count == 9,
-                "Advertised QuadPlane extension exposes configuration: " + peer.Controller.GetType().GetProperty("TerminationStatus", Hidden).GetValue(peer.Controller));
+            Check(Field<IList>(peer.Controller, "Parameters").Count == 9 && peer.Writes == 0 &&
+                !(bool)shared.GetType().GetProperty("CanRequest", Hidden).GetValue(shared),
+                "Disabled nonselectable QuadPlane extension exposes commissioning, not activation: " +
+                peer.Controller.GetType().GetProperty("TerminationStatus", Hidden).GetValue(peer.Controller));
             var rate = Field<IList>(peer.Controller, "Parameters").Cast<object>().Single(p => Field<string>(p, "Name") == "AFS_TERM_RATE");
             Check(Field<double>(rate, "Maximum") == 3 && peer.ReadNames.Contains("Q_WP_SPD_DN") && !peer.ReadNames.Contains("WP_SPD_DN"),
                 "QuadPlane reads its own native descent capability in metres per second");
@@ -498,7 +502,8 @@ internal static class NativeFenceParametersTests
                         {
                             ModeRequests++;
                             if (Announce) { Send(MAVLink.MAVLINK_MSG_ID.AVAILABLE_MODES, new MAVLink.mavlink_available_modes_t
-                            { custom_mode = 29, mode_index = 1, number_modes = 1, properties = Selectable ? 0U : 1U,
+                            { custom_mode = 29, mode_index = 1, number_modes = 1,
+                                properties = Selectable ? 0U : (uint)MAVLink.MAV_MODE_PROPERTY.NOT_USER_SELECTABLE,
                                 mode_name = Encoding.ASCII.GetBytes("TERMINATE".PadRight(35, '\0')) }); }
                         }
                         else { OtherCommands++; }

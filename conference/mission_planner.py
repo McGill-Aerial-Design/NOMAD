@@ -301,10 +301,11 @@ def verify_commissioning():
     state["receiver"] = {key: observed[key] for key in ("rc_channels", "rc3_pwm", "rc5_pwm", "rc7_pwm")}
     controller = plugin.GetType().GetField("_termination", INSTANCE).GetValue(plugin)
     native_idle()
-    require(
-        bool(finish(controller.GetType().GetMethod("CheckAsync", INSTANCE).Invoke(controller, None))),
-        "Actual NOMAD did not discover configured selectable TERMINATE",
+    supported = bool(finish(controller.GetType().GetMethod("CheckAsync", INSTANCE).Invoke(controller, None)))
+    state["termination_check_status"] = str(
+        controller.GetType().GetProperty("Status", INSTANCE).GetValue(controller, None)
     )
+    require(supported, "Actual NOMAD did not verify TERMINATE: " + state["termination_check_status"])
     state["termination_supported_disarmed"] = True
 
 

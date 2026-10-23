@@ -17,9 +17,11 @@ namespace NOMAD.MissionPlanner
         private int[] _subscriptions = Array.Empty<int>();
         private uint? _mode, _observedMode;
         private string _name, _outcome;
-        private TaskCompletionSource<bool> _discovery;
+        private TaskCompletionSource<MAVLink.mavlink_available_modes_t?> _discovery;
+        private int _requestedIndex, _modeCount;
         private long _heartbeat;
         private bool _armed, _supported, _configurationSupported, _selectable, _busy, _disposed, _ambiguous;
+        private bool _seenTermination;
 
         internal TerminationController(NOMADConfig config)
         {
@@ -70,22 +72,44 @@ namespace NOMAD.MissionPlanner
                 if (_disposed || !ReferenceEquals(_target, target)) { return true; }
                 if (packet.msgid == (uint)MAVLink.MAVLINK_MSG_ID.AVAILABLE_MODES)
                 {
+                    double age = (DateTime.UtcNow - packet.rxtime).TotalSeconds;
+                    if (packet.rxtime.Kind != DateTimeKind.Utc || age < 0 || age > 3.5) { return true; }
                     var mode = packet.ToStructure<MAVLink.mavlink_available_modes_t>();
-                    float encodedMode = mode.custom_mode;
-                    string name = Encoding.UTF8.GetString(mode.mode_name).TrimEnd('\0');
-                    if (!string.Equals(name, "TERMINATE", StringComparison.OrdinalIgnoreCase)) { return true; }
-                    _selectable = (mode.properties & 1U) == 0 && mode.custom_mode <= byte.MaxValue &&
-                        (double)encodedMode == mode.custom_mode;
-                    if (!_selectable) { _supported = _configurationSupported = false; }
-                    if (mode.custom_mode > byte.MaxValue || (double)encodedMode != mode.custom_mode)
+                    bool expected = _requestedIndex == 0 || mode.mode_index == _requestedIndex;
+                    if (mode.number_modes == 0 || mode.mode_index == 0 || mode.mode_index > mode.number_modes ||
+                        (_requestedIndex != 0 && _modeCount != 0 && mode.number_modes != _modeCount))
                     {
-                        _discovery?.TrySetResult(false);
+                        _supported = _configurationSupported = false;
+                        if (expected) { _discovery?.TrySetResult(null); }
                         return true;
                     }
-                    _ambiguous |= _mode.HasValue && _mode.Value != mode.custom_mode;
-                    _mode = mode.custom_mode;
-                    _name = name;
-                    _discovery?.TrySetResult(_selectable && !_ambiguous);
+                    float encodedMode = mode.custom_mode;
+                    int terminator = Array.IndexOf(mode.mode_name, (byte)0);
+                    string name = Encoding.UTF8.GetString(mode.mode_name, 0,
+                        terminator < 0 ? mode.mode_name.Length : terminator);
+                    if (string.Equals(name, "TERMINATE", StringComparison.OrdinalIgnoreCase))
+                    {
+                        bool validMode = mode.custom_mode <= byte.MaxValue && (double)encodedMode == mode.custom_mode;
+                        if (!validMode)
+                        {
+                            _selectable = _supported = _configurationSupported = false;
+                            _discovery?.TrySetResult(null);
+                            return true;
+                        }
+                        bool selectable = (mode.properties & (uint)MAVLink.MAV_MODE_PROPERTY.NOT_USER_SELECTABLE) == 0;
+                        if (_requestedIndex != 0) { _selectable &= selectable; }
+                        else { _selectable = selectable; }
+                        if (!selectable) { _supported = false; }
+                        _ambiguous |= _mode.HasValue && _mode.Value != mode.custom_mode;
+                        // Remember out-of-order IDs for conflicts without establishing selectability.
+                        if (expected || !_mode.HasValue) { _mode = mode.custom_mode; _name = name; }
+                        if (expected && _requestedIndex != 0) { _seenTermination = true; }
+                    }
+                    if (_requestedIndex != 0 && expected)
+                    {
+                        _modeCount = mode.number_modes;
+                        _discovery?.TrySetResult(mode);
+                    }
                 }
                 else
                 {
@@ -145,7 +169,7 @@ namespace NOMAD.MissionPlanner
             lock (_gate)
             {
                 return !_disposed && !_busy && _target?.Generation == generation && _configurationSupported &&
-                    _selectable && !_ambiguous && Fresh && !_armed && !ObservedNow;
+                    !_ambiguous && Fresh && !_armed && !ObservedNow;
             }
         }
 
@@ -162,7 +186,6 @@ namespace NOMAD.MissionPlanner
         {
             UpdateBinding();
             OutputController.NativeTarget target;
-            TaskCompletionSource<bool> discovery;
             lock (_gate)
             {
                 if (_disposed || _target == null || _busy) { return false; }
@@ -170,27 +193,27 @@ namespace NOMAD.MissionPlanner
                 _busy = true;
                 _supported = false;
                 _configurationSupported = false;
-                _selectable = false;
-                discovery = _discovery = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _selectable = true;
+                _seenTermination = false;
+                _requestedIndex = _modeCount = 0;
+                _discovery = null;
                 _outcome = "Checking support...";
             }
             try
             {
-                // Index zero requests all modes. Their records may arrive before or after the request ACK.
-                if (!await target.SendAsync(MAVLink.MAV_CMD.REQUEST_MESSAGE, 435, 0).ConfigureAwait(false))
-                { return SetOutcome(target, "Mode discovery was not accepted."); }
+                bool advertised = await DiscoverModesAsync(target).ConfigureAwait(false);
+                if (!advertised) { return SetOutcome(target, "Native capability discovery was incomplete or invalid."); }
+                if (!target.IsCurrent) { return false; }
                 float enabled = await target.ReadParameterAsync("AFS_ENABLE").ConfigureAwait(false);
                 float action = await target.ReadParameterAsync("AFS_TERM_ACTION").ConfigureAwait(false);
                 float rate = await target.ReadParameterAsync("AFS_TERM_RATE").ConfigureAwait(false);
-                var completed = await Task.WhenAny(discovery.Task, Task.Delay(2500)).ConfigureAwait(false);
-                bool advertised = completed == discovery.Task && await discovery.Task.ConfigureAwait(false);
                 bool current = target.IsCurrent;
                 lock (_gate)
                 {
                     if (!current || !ReferenceEquals(_target, target)) { return false; }
                     _supported = advertised && _selectable && !_ambiguous && enabled == 1 && action == 44 &&
                         !float.IsNaN(rate) && !float.IsInfinity(rate) && rate >= 2;
-                    _configurationSupported = advertised && _selectable && !_ambiguous &&
+                    _configurationSupported = advertised && !_ambiguous &&
                         target.Connection.MAVlist[target.System, target.Component].param.ContainsKey("AFS_TERM_RATE");
                     _outcome = _supported ? null : "Termination is not configured or selectable.";
                     return requireConfigured ? _supported : _configurationSupported;
@@ -198,6 +221,51 @@ namespace NOMAD.MissionPlanner
             }
             catch (Exception) { return SetOutcome(target, "Support could not be verified. No termination sent."); }
             finally { lock (_gate) { if (ReferenceEquals(_target, target)) { _busy = false; } } }
+        }
+
+        private async Task<bool> DiscoverModesAsync(OutputController.NativeTarget target)
+        {
+            var clock = Stopwatch.StartNew();
+            int count = 1;
+            try
+            {
+                // Request each index: pinned ArduPilot emits only the first record for index zero.
+                // Scan the complete list so a later conflicting TERMINATE cannot be accepted.
+                for (int index = 1; index <= count; index++)
+                {
+                    var reply = new TaskCompletionSource<MAVLink.mavlink_available_modes_t?>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                    lock (_gate)
+                    {
+                        if (!ReferenceEquals(_target, target) || _disposed) { return false; }
+                        _requestedIndex = index;
+                        _discovery = reply;
+                    }
+                    int remaining = 8000 - (int)clock.ElapsedMilliseconds;
+                    if (remaining <= 0) { return false; }
+                    var request = target.SendAsync(MAVLink.MAV_CMD.REQUEST_MESSAGE, 435, index,
+                        current: () => { lock (_gate) { return ReferenceEquals(_target, target); } });
+                    if (await Task.WhenAny(request, Task.Delay(remaining)).ConfigureAwait(false) != request ||
+                        !await request.ConfigureAwait(false)) { return false; }
+                    remaining = Math.Min(2500, 8000 - (int)clock.ElapsedMilliseconds);
+                    if (remaining <= 0 ||
+                        await Task.WhenAny(reply.Task, Task.Delay(remaining)).ConfigureAwait(false) != reply.Task)
+                    { return false; }
+                    var record = await reply.Task.ConfigureAwait(false);
+                    if (!record.HasValue || !target.IsCurrent) { return false; }
+                    count = record.Value.number_modes;
+                }
+                lock (_gate)
+                { return ReferenceEquals(_target, target) && _seenTermination && _mode.HasValue && !_ambiguous; }
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    if (ReferenceEquals(_target, target))
+                    { _requestedIndex = _modeCount = 0; _discovery = null; }
+                }
+            }
         }
 
         // Captured before the confirmation dialog; no future aircraft/profile may inherit that confirmation.
@@ -271,9 +339,11 @@ namespace NOMAD.MissionPlanner
                 _mode = _observedMode = null;
                 _name = _outcome = null;
                 _heartbeat = 0;
-                _discovery?.TrySetResult(false);
+                _discovery?.TrySetResult(null);
                 _discovery = null;
+                _requestedIndex = _modeCount = 0;
                 _armed = _supported = _configurationSupported = _selectable = _busy = _ambiguous = false;
+                _seenTermination = false;
             }
             Unsubscribe(target, subscriptions);
         }
