@@ -4,14 +4,35 @@ Use the reviewed Mission Planner version in
 [`mission-planner-target.json`](../scripts/release/mission-planner-target.json).
 Builds/tests do not install software, change operator settings or control aircraft.
 
-## Manual plugin installation
+## Plugin installation
+
+Download the matching **NOMAD-version-Setup.exe** from the published plugin release.
+It is a single offline Windows/.NET Framework 4.8 executable. Mission Planner must already be
+installed at the reviewed version; setup does not install the host or its dependencies.
+
+1. Close Mission Planner from the installation you want to update.
+2. Run setup and approve the Windows administrator prompt.
+3. Confirm the detected Mission Planner folder, or use **Browse** to select a portable installation.
+4. Select **Install**, then open Mission Planner normally and review the selected aircraft profile.
+
+Setup validates the bundled DLL and target host, backs up an existing DLL under
+`Mission Planner/NOMAD-backups/`, replaces only `plugins/NOMADPlugin.dll` and clears its download marker.
+It does not launch Mission Planner, change profiles or configure aircraft. A failure displays its backup
+location and whether replacement may have occurred. For rollback, close Mission Planner and restore
+the saved DLL; unblock it if it carries an Internet download marker.
+
+The setup executable is currently unsigned; Windows can display an unknown-publisher or SmartScreen
+warning. Verify its published checksum and source before running it.
+
+### Manual plugin installation
 
 1. Build and review `mission_planner/src/bin/Release/NOMADPlugin.dll` using
    [development checks](development.md). Record the checked source and test results.
 2. Close Mission Planner. Preserve the existing plugin DLL and real operator profiles
    outside the replacement destination before any manual change.
 3. Explicitly copy only the reviewed `NOMADPlugin.dll` into the `plugins` directory
-   of the intended Mission Planner installation, then start that installation.
+   of the intended Mission Planner installation. For a trusted downloaded DLL, use
+   **Properties → Unblock → Apply**, or `Unblock-File -LiteralPath <DLL-path>`, before starting the host.
 4. Verify the host version, plugin version/source identity and selected aircraft
    profile. Review mappings and calibration before enabling custom controls.
 

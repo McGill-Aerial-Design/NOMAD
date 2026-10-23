@@ -1,7 +1,7 @@
 # Development checks for the Mission Planner plugin; nothing here installs it.
 [workspace]
 name = "nomad"
-version = "0.2.1"
+version = "0.3.1"
 description = "Mission Planner plugin development and documentation"
 channels = ["conda-forge"]
 platforms = ["linux-64", "win-64"]
@@ -25,6 +25,8 @@ docs = "properdocs serve --dev-addr localhost:8001"
 docs-build = "properdocs build --strict"
 precommit = "pre-commit run --all-files"
 build-plugin-only = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/build_plugin_windows.ps1"
+build-installer = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/build_plugin_installer.ps1"
+test-plugin-installer = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_installer.ps1"
 lint-plugin = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/lint_plugin_deadcode.ps1"
 test-plugin-build-only = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_build_plugin_windows.ps1"
 test-plugin-config-validation = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_config_validation.ps1"

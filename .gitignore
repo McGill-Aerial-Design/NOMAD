@@ -39,6 +39,7 @@ wheels/
 
 # PyInstaller
 *.manifest
+!mission_planner/packaging/installer/app.manifest
 *.spec
 
 # Unit test / coverage reports

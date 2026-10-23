@@ -29,8 +29,11 @@ matching [custom firmware and aircraft setup](docs/native-termination.md).
 
 ## Get started
 
-Download the DLL or ZIP from the [NOMAD 0.3.0 release](https://github.com/McGill-Aerial-Design/NOMAD/releases/tag/v0.3.0),
-then follow the manual installation procedure below. The build steps are for source builds.
+Download **NOMAD-0.3.1-Setup.exe** from the [NOMAD 0.3.1 release](https://github.com/McGill-Aerial-Design/NOMAD/releases/tag/v0.3.1).
+Close the selected Mission Planner installation, run setup and approve the Windows administrator prompt.
+Confirm its folder and select **Install**. Setup verifies the bundled DLL, preserves a previous copy outside
+the active plugins folder and removes the DLL's Windows download block. Aircraft profiles are preserved.
+See [installation and rollback](docs/operations.md#plugin-installation). The build steps below are for source builds.
 
 1. Install the reviewed Mission Planner host. To build from source, install Visual
    Studio's .NET desktop build tools and .NET Framework 4.8 targeting pack, plus
