@@ -23,6 +23,7 @@ namespace NOMAD.MissionPlanner { internal static class OutputController { intern
 internal static class NativeFenceDraftTests
 {
     private const BindingFlags Fields = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+    private const string Polygon = "0,0\n0,1\n1,1\n2,0.5\n1,-0.5\n0.5,-0.5";
     private static int _checks;
     private static void Check(bool condition, string message)
     {
@@ -96,14 +97,8 @@ internal static class NativeFenceDraftTests
         try
         {
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-CA");
-            Check(FenceCoordinates.TryParse(FenceCoordinates.PublishedC1, false, out var published, out _) && published.Count == 6,
-                "published C1 is a six-vertex polygon independent of locale");
-            Check(published[0] == new PointLatLng(50.0970884, -110.7328077) &&
-                published[5] == new PointLatLng(50.0971194, -110.7382533), "published order and precision");
-            Check(published[1] == new PointLatLng(50.1061216, -110.7327756) &&
-                published[2] == new PointLatLng(50.1061482, -110.7437887) &&
-                published[3] == new PointLatLng(50.1035232, -110.7437798) &&
-                published[4] == new PointLatLng(50.0988785, -110.7382540), "all published middle vertices match source");
+            Check(FenceCoordinates.TryParse(Polygon, false, out var polygon, out _) && polygon.Count == 6 &&
+                polygon[3] == new PointLatLng(2, 0.5), "ordinary coordinates preserve order/precision independent of locale");
             Check(FenceCoordinates.TryParse("0 0\n0 1\n1 0\n0 0", true, out var reversed, out _) &&
                 reversed[1] == new PointLatLng(1, 0), "explicit longitude-first and redundant closing vertex");
             foreach (string input in new[] { "", "1,2\n3,4", "1,2\n3,4\nnope", "NaN,0\n0,1\n1,0",
@@ -119,7 +114,7 @@ internal static class NativeFenceDraftTests
                 out _), "vertex count above native supported encoding rejected");
         }
         finally { CultureInfo.CurrentCulture = culture; }
-        Check(FenceCoordinates.TryParse(FenceCoordinates.PublishedC1, false, out var points, out _), "preset parse");
+        Check(FenceCoordinates.TryParse(Polygon, false, out var points, out _), "ordinary polygon parse");
         var stream = new NoOutbound();
         var port = Uninitialized<MAVLinkInterface>();
         Set(port, "_baseStream", stream);

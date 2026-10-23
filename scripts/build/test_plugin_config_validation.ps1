@@ -76,23 +76,32 @@ try {
     $fenceInputType = $plugin.GetType('NOMAD.MissionPlanner.FenceSetupInput', $true)
     $fenceInput = [Activator]::CreateInstance($fenceInputType, $true)
     $fenceConstructor = $fenceViewType.GetConstructor([Reflection.BindingFlags]'Instance,NonPublic',
-        $null, [type[]]@([Threading.CancellationToken], $fenceInputType), $null)
+        $null, [type[]]@([Threading.CancellationToken], $fenceInputType, $configType), $null)
     $fenceRenderDir = Join-Path $repoRoot 'build/fence-ui'
     New-Item -ItemType Directory -Path $fenceRenderDir -Force | Out-Null
     foreach ($scale in @([single]1, [single]1.5)) {
-        $fenceView = $fenceConstructor.Invoke([object[]]@([Threading.CancellationToken]::None, $fenceInput))
+        $fenceView = $fenceConstructor.Invoke([object[]]@([Threading.CancellationToken]::None, $fenceInput, [Activator]::CreateInstance($configType)))
+        $fenceForm = [Windows.Forms.Form]::new()
         try {
             $fenceView.Size = [Drawing.Size]::new(760, 680)
-            $fenceView.CreateControl()
+            $fenceForm.ClientSize = $fenceView.Size
+            $fenceForm.StartPosition = 'Manual'
+            $fenceForm.Location = [Drawing.Point]::new(-20000, -20000)
+            $fenceForm.ShowInTaskbar = $false
+            $fenceForm.Controls.Add($fenceView)
+            $fenceForm.Show()
+            [Windows.Forms.Application]::DoEvents()
             $orderControl = $fenceViewType.GetField('_order', [Reflection.BindingFlags]'Instance,NonPublic').GetValue($fenceView)
             $null = $orderControl.Handle
             if ($orderControl.SelectedIndex -ne 0 -or $orderControl.Text -ne 'Latitude, longitude') {
                 throw 'Fence coordinate order is not selected or readable.'
             }
-            $published = $plugin.GetType('NOMAD.MissionPlanner.FenceCoordinates').GetField(
-                'PublishedC1', [Reflection.BindingFlags]'Static,NonPublic').GetRawConstantValue()
-            $fenceView.Controls.Find('FenceCoordinates', $true)[0].Text = $published
+            $coordinates = "1,1`r`n1,2`r`n2,1"
+            $fenceView.Controls.Find('FenceCoordinates', $true)[0].Text = $coordinates
             $fenceView.Scale([Drawing.SizeF]::new($scale, $scale))
+            $fenceForm.ClientSize = $fenceView.Size
+            $fenceForm.PerformLayout()
+            [Windows.Forms.Application]::DoEvents()
             $bitmap = [Drawing.Bitmap]::new($fenceView.Width, $fenceView.Height)
             try {
                 $fenceView.DrawToBitmap($bitmap, [Drawing.Rectangle]::new(0, 0, $bitmap.Width, $bitmap.Height))
@@ -101,19 +110,19 @@ try {
             $text = $fenceView.Controls.Find('FenceSetupStatus', $true)[0].Text
             if ($text -notmatch 'Staging.*does not upload') { throw 'Fence setup lost truthful initial transfer status.' }
             if ($fenceView.Controls.Find('FenceCoordinates', $true).Count -ne 1) { throw 'Fence coordinate editor missing.' }
-        } finally { $fenceView.Dispose() }
+        } finally { $fenceForm.Dispose() }
     }
     $draftText = "1,1`r`n1,2`r`n2,1"
-    $firstView = $fenceConstructor.Invoke([object[]]@([Threading.CancellationToken]::None, $fenceInput))
+    $firstView = $fenceConstructor.Invoke([object[]]@([Threading.CancellationToken]::None, $fenceInput, [Activator]::CreateInstance($configType)))
     $firstView.Controls.Find('FenceCoordinates', $true)[0].Text = $draftText
     $firstView.Dispose()
-    $secondView = $fenceConstructor.Invoke([object[]]@([Threading.CancellationToken]::None, $fenceInput))
+    $secondView = $fenceConstructor.Invoke([object[]]@([Threading.CancellationToken]::None, $fenceInput, [Activator]::CreateInstance($configType)))
     try {
         if ($secondView.Controls.Find('FenceCoordinates', $true)[0].Text -cne $draftText) {
             throw 'Native page navigation/disposal lost the unsaved coordinate draft.'
         }
     } finally { $secondView.Dispose() }
-    $cancelledView = $fenceConstructor.Invoke([object[]]@([Threading.CancellationToken]::new($true), $fenceInput))
+    $cancelledView = $fenceConstructor.Invoke([object[]]@([Threading.CancellationToken]::new($true), $fenceInput, [Activator]::CreateInstance($configType)))
     try {
         $cancelledView.Controls.Find('FenceCoordinates', $true)[0].Text = 'stale input'
         if ($fenceInputType.GetField('Coordinates', [Reflection.BindingFlags]'Instance,NonPublic').GetValue($fenceInput) -cne $draftText) {

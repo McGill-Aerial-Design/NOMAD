@@ -9,15 +9,6 @@ namespace NOMAD.MissionPlanner
 {
     internal static class FenceCoordinates
     {
-        internal const string SourceUrl =
-            "https://www.aerialevolution.ca/wp-content/uploads/2026/09/2027-AEAC-CONOPS-v1.0-2026-09-08.pdf";
-        // Published Appendix C, p31; v1.0, 2026-09-08. No second polygon is supplied.
-        // PDF SHA256: 0097ad8029086e2163e613d4d234d4720ed151e90fdbde8c8889f1b748d93708.
-        internal const string PublishedC1 =
-            "50.0970884, -110.7328077\r\n50.1061216, -110.7327756\r\n" +
-            "50.1061482, -110.7437887\r\n50.1035232, -110.7437798\r\n" +
-            "50.0988785, -110.7382540\r\n50.0971194, -110.7382533";
-
         internal static bool TryParse(string input, bool longitudeFirst,
             out List<PointLatLng> points, out string error)
         {

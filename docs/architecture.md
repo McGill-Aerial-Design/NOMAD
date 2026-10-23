@@ -73,11 +73,14 @@ Ordinary RC arming and flight-mode configuration belongs to Mission Planner and
 ArduPilot. NOMAD has no corresponding channel settings or automatic discovery.
 
 Video uses Mission Planner's installed GStreamer support. Fence setup validates one
-inclusion polygon and stages it in the existing native Plan editor while already in
-Fence mode. Staging never uploads or changes aircraft parameters; native Write/Read
-and configuration screens own aircraft interaction. NOMAD does not switch mission
-type, evaluate local outline crossings or claim containment. Unsaved coordinate text/order remain plugin-owned
-in memory across native page navigation and are discarded on plugin unload. Alerts/audio and video do not become flight
+inclusion polygon and selects Fence in the native Plan editor. A plugin-owned session
+preserves unsaved Mission/Fence/Rally rows across mode changes without changing aircraft
+caches. Staging never uploads; native Write/Read owns fence transfer. The page separately
+reads supported fence-response parameters and applies confirmed changes through captured
+native MP parameter requests, requiring a fresh disarmed heartbeat and value readback.
+NOMAD does not evaluate local outline crossings or claim containment. Unsaved coordinate
+text/order and inactive editor drafts remain in memory for the plugin session; save
+needed drafts before unloading the plugin. Alerts/audio and video do not become flight
 authority. The optional [native termination](native-termination.md) entry uses the
 same captured host target and an advertised aircraft mode; policy/execution remain
 onboard. Competition server, perception and takeover integrations remain outside

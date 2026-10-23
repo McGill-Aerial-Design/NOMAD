@@ -93,7 +93,11 @@ namespace NOMAD.MissionPlanner
         private static NOMADConfig _staticConfig;
         private static MAVLinkConnectionManager _staticConnectionManager;
         private static FenceSetupInput _staticFenceSetupInput;
-        internal static void SetFenceSetupInput(FenceSetupInput input) { _staticFenceSetupInput = input; }
+        internal static void SetFenceSetupInput(FenceSetupInput input)
+        {
+            if (!ReferenceEquals(_staticFenceSetupInput, input)) { _staticFenceSetupInput?.Drafts?.Dispose(); }
+            _staticFenceSetupInput = input;
+        }
 
         /// <summary>
         /// Sets the static configuration used by the MainSwitcher-created instance.
@@ -272,7 +276,8 @@ namespace NOMAD.MissionPlanner
                 case "Boundaries":
                     if (_boundaryView == null)
                     {
-                        _boundaryView = new NativeFenceSetupView(_videoShutdown, _staticFenceSetupInput ?? new FenceSetupInput());
+                        _boundaryView = new NativeFenceSetupView(_videoShutdown,
+                            _staticFenceSetupInput ?? new FenceSetupInput(), _config);
                     }
                     newView = _boundaryView;
                     break;

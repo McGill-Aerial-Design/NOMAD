@@ -78,8 +78,7 @@ try {
         $screenType = $plugin.GetType('NOMAD.MissionPlanner.NOMADMainScreen')
         if ($view[0] -eq 'Boundaries') {
             $input = New-PluginObject 'FenceSetupInput'
-            $coordinates = $plugin.GetType('NOMAD.MissionPlanner.FenceCoordinates').GetField('PublishedC1',
-                [Reflection.BindingFlags]'Static,NonPublic,Public').GetValue($null)
+            $coordinates = "45.00, -73.00`r`n45.01, -73.00`r`n45.01, -73.02`r`n45.00, -73.02"
             $input.GetType().GetField('Coordinates', $private).SetValue($input, $coordinates)
             $screenType.GetMethod('SetFenceSetupInput', [Reflection.BindingFlags]'Static,NonPublic').Invoke(
                 $null, [object[]]@($input)) | Out-Null

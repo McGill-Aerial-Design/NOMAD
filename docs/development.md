@@ -55,6 +55,7 @@ pixi run test-plugin-payload
 pixi run test-plugin-native-preflight
 pixi run test-plugin-config-validation
 pixi run test-plugin-geometry # coordinate validation and actual native Fence AddCommand staging
+pixi run test-plugin-fence # actual native editor mode switching and synthetic parameter read/write peer
 pixi run test-plugin-audio
 pixi run test-plugin-version
 pixi run test-ground-router-logic
@@ -178,3 +179,7 @@ run histories belong in ignored `local/`. Use [qualification](qualification.md) 
 separate software checks from hardware/competition acceptance; no build/test deploys.
 
 Native Fence draft tests skip host constructors and use real MP editor methods and grid types; only the selected-port global and output generation are isolated. They assert zero transport writes and cache preservation.
+The native Fence gate also constructs the actual editor with isolated settings/cache-only
+maps and uses the built DLL plus a synthetic loopback parameter peer. It checks unsaved
+Mission/Fence/Rally rows, metadata, addressed writes/readbacks, armed/stale/retired refusal
+and stop-on-failure. It neither starts Mission Planner nor connects to an aircraft.

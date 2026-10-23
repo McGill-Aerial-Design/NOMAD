@@ -112,7 +112,7 @@ namespace NOMAD.MissionPlanner
             return true;
         }
 
-        private static DataGridViewRow CopyRow(DataGridViewRow row)
+        internal static DataGridViewRow CopyRow(DataGridViewRow row)
         {
             var copy = (DataGridViewRow)row.Clone();
             copy.Tag = row.Tag;

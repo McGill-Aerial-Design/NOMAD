@@ -54,13 +54,18 @@ command owner or delivery guarantee is claimed.
 ## Native fence setup, takeover and termination
 
 Fence setup stages a validated inclusion polygon in native Mission Planner Plan,
-only when Fence mode is already selected and the operator confirms replacing that
-editor draft. It preserves aircraft caches and does not upload, enable or read back
-a fence. Native Write and Read are explicit operator actions. Native failsafe
-configuration remains in Mission Planner; no parameter writes occur from this page.
+automatically selecting Fence and asking before replacing that editor draft. It
+preserves unsaved mode drafts during the plugin session and leaves aircraft caches
+unchanged. Staging does not upload, enable or read back a fence; native Write and Read
+remain explicit operator actions. The separate response group reads supported aircraft
+`FENCE_*` settings using native metadata. Confirmed parameter changes use a captured
+connection/stream/aircraft/profile generation, a fresh disarmed heartbeat and independent
+readback. A failed or uncertain write stops the sequence, requires another Read and does
+not roll back earlier writes. Already-dispatched native requests can finish after the
+page closes; stopping the UI does not cancel them. Readback is configuration evidence,
+not proof of containment or physical response.
 
-The published AEAC 2027 C1 coordinates are sourced from CONOPS v1.0, 2026-09-08,
-Appendix C p31. NOMAD supplies no invented second polygon or boundary response. The
+NOMAD supplies no site-specific polygon or locally invented boundary response. The
 100 m AGL competition ceiling still needs approved enforcement and datum evidence.
 NOMAD leaves normal LAND and QLAND settings unchanged. Competition termination is
 a separate onboard mechanism for the aircraft and flight phase, not a global
