@@ -89,8 +89,11 @@ read-only. Apply lists changes and the captured aircraft/system/component, defau
 Cancel, requires a fresh disarmed heartbeat and verifies each write by a separate read.
 Writes are sequential: a failure stops remaining changes, earlier writes remain and
 the page requires a new Read before retrying. Review actual fence responses before flight;
-parameter readback does not qualify containment or touchdown. Other aircraft failsafes
-remain in Mission Planner's setup pages.
+parameter readback does not qualify containment or touchdown. Controlled termination
+shows supported extension settings only after native capability discovery: separate
+descent speed, controlled response 44 and AFS RC/fence triggers. See the
+[commissioning requirements](native-termination.md#aircraft-setup); channel assignment
+and other aircraft failsafes remain in Mission Planner's setup pages.
 
 NOMAD does not modify normal LAND or QLAND settings. The optional
 [native termination](native-termination.md) extension provides a separate onboard

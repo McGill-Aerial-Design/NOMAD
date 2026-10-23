@@ -108,7 +108,7 @@ try {
                 $bitmap.Save((Join-Path $fenceRenderDir ('fence-setup-' + $scale + '.png')))
             } finally { $bitmap.Dispose() }
             $text = $fenceView.Controls.Find('FenceSetupStatus', $true)[0].Text
-            if ($text -notmatch 'Staging.*does not upload') { throw 'Fence setup lost truthful initial transfer status.' }
+            if ($text -notmatch 'Staging.*Nothing is uploaded') { throw 'Fence setup lost truthful initial transfer status.' }
             if ($fenceView.Controls.Find('FenceCoordinates', $true).Count -ne 1) { throw 'Fence coordinate editor missing.' }
         } finally { $fenceForm.Dispose() }
     }

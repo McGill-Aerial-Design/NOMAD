@@ -69,7 +69,7 @@ namespace NOMAD.MissionPlanner
             _coordinates = new TextBox
             {
                 Name = "FenceCoordinates", Multiline = true, AcceptsReturn = true,
-                ScrollBars = ScrollBars.Vertical, Height = 200, Dock = DockStyle.Fill,
+                ScrollBars = ScrollBars.Vertical, Height = 140, Dock = DockStyle.Fill,
                 Font = NOMADTheme.Mono(NOMADTheme.SIZE_SMALL),
                 BackColor = NOMADTheme.CONTROL_BG, ForeColor = NOMADTheme.TEXT_PRIMARY,
                 Text = input.Coordinates,
@@ -80,13 +80,13 @@ namespace NOMAD.MissionPlanner
             };
             Add(polygon, _coordinates);
             var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true };
-            actions.Controls.Add(Button("Open native Plan · Fence", (s, e) => OpenPlan()));
-            actions.Controls.Add(Button("Stage polygon in native Plan", Stage));
+            actions.Controls.Add(Button("Open Fence in Plan", (s, e) => OpenPlan()));
+            actions.Controls.Add(Button("Stage in Plan…", Stage));
             Add(polygon, actions);
             _status = new Label
             {
                 Name = "FenceSetupStatus", AutoSize = true, MaximumSize = new Size(680, 0),
-                Text = "Open Plan selects Fence. Staging replaces its editor draft after confirmation; it does not upload.",
+                Text = "Staging replaces the Plan draft after confirmation. Nothing is uploaded.",
             };
             Add(polygon, _status);
             AddParameters(layout, config);

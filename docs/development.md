@@ -183,3 +183,6 @@ The native Fence gate also constructs the actual editor with isolated settings/c
 maps and uses the built DLL plus a synthetic loopback parameter peer. It checks unsaved
 Mission/Fence/Rally rows, metadata, addressed writes/readbacks, armed/stale/retired refusal
 and stop-on-failure. It neither starts Mission Planner nor connects to an aircraft.
+Controlled-termination cases exercise disabled/unconfigured view edits, native discovery,
+both vehicle descent limits, required commissioning fields and stop-on-mismatch/retirement;
+they assert that no ordinary landing, RC-channel or GCS-loss parameter is written.

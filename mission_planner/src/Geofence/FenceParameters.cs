@@ -19,6 +19,7 @@ namespace NOMAD.MissionPlanner
         internal bool Allows(float value)
         {
             if (float.IsNaN(value) || float.IsInfinity(value)) { return false; }
+            if (Name == "AFS_RC_FAIL_TIME" && value <= 0) { return false; }
             if (Options.Count > 0) { return Options.Any(option => option.Key == value); }
             if (Bits.Count > 0)
             {
@@ -31,7 +32,7 @@ namespace NOMAD.MissionPlanner
     }
 
     // One read/confirmation session, bound to one native aircraft and a fresh disarmed heartbeat.
-    internal sealed class FenceParameters : IDisposable
+    internal sealed partial class FenceParameters : IDisposable
     {
         internal static readonly string[] Names = { "FENCE_ACTION", "FENCE_ALT_MAX", "FENCE_ALT_MIN",
             "FENCE_MARGIN", "FENCE_RADIUS", "FENCE_TYPE", "FENCE_ENABLE" };
@@ -87,22 +88,34 @@ namespace NOMAD.MissionPlanner
             foreach (string name in Names)
             {
                 if (!mav.param.ContainsKey(name)) { continue; }
-                float value = await _target.ReadParameterAsync(name).ConfigureAwait(false);
-                if (!_target.IsCurrent) { throw new InvalidOperationException("Aircraft changed; read again."); }
-                var parameter = new FenceParameter
-                {
-                    Name = name, Value = value,
-                    DisplayName = ParameterMetaDataRepository.GetParameterMetaData(name, "DisplayName", firmware),
-                    Description = ParameterMetaDataRepository.GetParameterMetaData(name, "Description", firmware),
-                    Units = ParameterMetaDataRepository.GetParameterMetaData(name, "Units", firmware),
-                    Options = ParameterMetaDataRepository.GetParameterOptionsInt(name, firmware),
-                    Bits = ParameterMetaDataRepository.GetParameterBitMaskInt(name, firmware)
-                        .Where(bit => bit.Key >= 0 && bit.Key <= 30).ToList(),
-                };
-                parameter.HasRange = ParameterMetaDataRepository.GetParameterRange(name,
-                    ref parameter.Minimum, ref parameter.Maximum, firmware);
-                Parameters.Add(parameter);
+                Parameters.Add(await ReadParameterAsync(name, firmware).ConfigureAwait(false));
             }
+        }
+
+        private async Task<FenceParameter> ReadParameterAsync(string name, string firmware)
+        {
+            EnsureCurrentRead();
+            float value = await _target.ReadParameterAsync(name).ConfigureAwait(false);
+            EnsureCurrentRead();
+            var parameter = new FenceParameter
+            {
+                Name = name, Value = value,
+                DisplayName = ParameterMetaDataRepository.GetParameterMetaData(name, "DisplayName", firmware),
+                Description = ParameterMetaDataRepository.GetParameterMetaData(name, "Description", firmware),
+                Units = ParameterMetaDataRepository.GetParameterMetaData(name, "Units", firmware),
+                Options = ParameterMetaDataRepository.GetParameterOptionsInt(name, firmware),
+                Bits = ParameterMetaDataRepository.GetParameterBitMaskInt(name, firmware)
+                    .Where(bit => bit.Key >= 0 && bit.Key <= 30).ToList(),
+            };
+            parameter.HasRange = ParameterMetaDataRepository.GetParameterRange(name,
+                ref parameter.Minimum, ref parameter.Maximum, firmware);
+            return parameter;
+        }
+
+        private void EnsureCurrentRead()
+        {
+            lock (_gate) { if (_disposed) { throw new InvalidOperationException("Settings page closed; read stopped."); } }
+            if (!_target.IsCurrent) { throw new InvalidOperationException("Aircraft changed; read again."); }
         }
 
         internal async Task<string> ApplyAsync(IDictionary<string, float> changes, Func<bool> active)
@@ -111,9 +124,16 @@ namespace NOMAD.MissionPlanner
             string pending = "none";
             try
             {
-                if (changes.Count == 0) { return "No fence settings changed."; }
+                if (changes.Count == 0) { return "No aircraft settings changed."; }
                 if (changes.Keys.Any(name => !Parameters.Any(p => p.Name == name && p.Allows(changes[name]))))
-                { return "Invalid or unsupported fence setting; no parameters were sent."; }
+                { return "Invalid or unsupported setting; no parameters were sent."; }
+                bool termination = changes.Keys.Any(name => name.StartsWith("AFS_", StringComparison.Ordinal));
+                if (termination)
+                {
+                    if (!await CheckTerminationChangesAsync(changes, true).ConfigureAwait(false))
+                    { return "Controlled termination settings or native capability are invalid; no parameters were sent."; }
+                    _termination.RetireConfiguredSupport();
+                }
                 float? Candidate(string name) => changes.TryGetValue(name, out float value) ? value :
                     Parameters.Where(p => p.Name == name).Select(p => (float?)p.Value).FirstOrDefault();
                 if ((changes.ContainsKey("FENCE_ALT_MIN") || changes.ContainsKey("FENCE_ALT_MAX")) &&
@@ -123,15 +143,20 @@ namespace NOMAD.MissionPlanner
                     Candidate("FENCE_MARGIN") >= Candidate("FENCE_RADIUS"))
                 { return "Fence margin must be below fence radius; no parameters were sent."; }
                 var ordered = Parameters.Where(p => changes.ContainsKey(p.Name))
-                    .OrderBy(p => p.Name == "FENCE_ENABLE" && changes[p.Name] == 0 ? 0 : 1).ToList();
+                    .OrderBy(p => p.Name.EndsWith("_ENABLE", StringComparison.Ordinal) ?
+                        (changes[p.Name] == 0 ? 0 : 2) : 1).ToList();
                 foreach (var parameter in ordered)
                 {
                     pending = parameter.Name;
                     if (!CanApply || active?.Invoke() != true) { throw new InvalidOperationException("Fresh disarmed aircraft required."); }
                     float before = await _target.ReadParameterAsync(parameter.Name).ConfigureAwait(false);
                     if (before != parameter.Value) { throw new InvalidOperationException("Aircraft setting changed; read again."); }
+                    if (parameter.Name.StartsWith("AFS_", StringComparison.Ordinal) &&
+                        !await CheckTerminationChangesAsync(changes, parameter.Name == "AFS_ENABLE").ConfigureAwait(false))
+                    { throw new InvalidOperationException("Native termination capability or descent limit changed."); }
                     bool accepted = await _target.WriteParameterAsync(parameter.Name, changes[parameter.Name],
-                        () => CanApply && active?.Invoke() == true).ConfigureAwait(false);
+                        () => CanApply && active?.Invoke() == true && (!parameter.Name.StartsWith("AFS_", StringComparison.Ordinal) ||
+                            _termination.CanConfigure(_target.Generation))).ConfigureAwait(false);
                     if (!accepted) { throw new InvalidOperationException("Mission Planner did not accept the setting."); }
                     float observed = await _target.ReadParameterAsync(parameter.Name).ConfigureAwait(false);
                     if (!CanApply || active?.Invoke() != true || observed != changes[parameter.Name])
@@ -139,7 +164,7 @@ namespace NOMAD.MissionPlanner
                     parameter.Value = observed;
                     verified++;
                 }
-                return $"Verified {verified} fence setting(s) by native readback. Review aircraft behavior before flight.";
+                return $"Verified {verified} setting(s) by native readback. Review aircraft behavior before flight.";
             }
             catch (Exception error)
             {

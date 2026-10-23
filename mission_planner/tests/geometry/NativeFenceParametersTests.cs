@@ -25,7 +25,7 @@ internal static class NativeFenceParametersTests
     private static readonly Assembly Plugin = typeof(NOMADConfig).Assembly;
     private static Type Output => Plugin.GetType("NOMAD.MissionPlanner.OutputController", true);
     private static int _checks;
-    private static void Check(bool ok, string message) { _checks++; if (!ok) { throw new Exception(message); } }
+    private static void Check(bool ok, string message) { Interlocked.Increment(ref _checks); if (!ok) { throw new Exception(message); } }
     private static object Call(object owner, string name, params object[] args) => owner.GetType().GetMethod(name, Hidden).Invoke(owner, args);
     private static T Field<T>(object owner, string name) => (T)owner.GetType().GetField(name, Hidden).GetValue(owner);
     private static object Create(string name, params object[] args) => Activator.CreateInstance(
@@ -121,7 +121,148 @@ internal static class NativeFenceParametersTests
                     "Profile retirement during native write prevents readback claims and all remaining writes");
             }
         }
+        TestTermination(directory);
         Output.GetMethod("Shutdown", Static).Invoke(null, null);
+    }
+
+    private static void TestTermination(string directory)
+    {
+        using (var peer = new Peer())
+        using (var shared = (IDisposable)Create("TerminationController", peer.Config))
+        {
+            peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
+            peer.Finish((Task)Call(peer.Controller, "ReadAsync"));
+            peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
+            Check(Field<IList>(peer.Controller, "Parameters").Count == 3 && peer.ModeRequests == 0,
+                "Stock aircraft without unique custom parameter retains ordinary Fence and sends no discovery/writes");
+            peer.AddTermination(false, 1.9f, 0);
+            peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
+            var parameters = Field<IList>(peer.Controller, "Parameters");
+            Check(parameters.Count == 9 && peer.ModeRequests == 1 && peer.Writes == 0,
+                "Advertised disabled extension exposes supported settings without enabling it");
+            object action = parameters.Cast<object>().Single(p => Field<string>(p, "Name") == "AFS_TERM_ACTION");
+            Check(Field<IList>(action, "Options").Count == 1 && (bool)Call(action, "Allows", 44f) &&
+                !(bool)Call(action, "Allows", 42f), "Only controlled action44 is selectable, never a motor-cut action");
+            var configured = EditTermination(parameters, peer.Config);
+            foreach (float invalid in new[] { float.NaN, float.PositiveInfinity, 1.99f, 3.01f })
+            {
+                configured["AFS_TERM_RATE"] = invalid;
+                string result = peer.Apply(configured);
+                Check(peer.Writes == 0 && result.Contains("Invalid"), "Nonfinite/low/excess descent rate refuses all writes");
+            }
+            configured["AFS_TERM_RATE"] = 2.5f;
+            configured["AFS_RC_FAIL_TIME"] = 0;
+            Check(peer.Apply(configured).Contains("Invalid") && peer.Writes == 0, "Zero RC loss timeout refuses all writes");
+            configured["AFS_RC_FAIL_TIME"] = 4.51f;
+            Check(peer.Apply(configured).Contains("Invalid") && peer.Writes == 0, "RC loss timeout above4.5 refuses all writes");
+            configured["AFS_RC_FAIL_TIME"] = 4.5f;
+            foreach (string missing in new[] { "AFS_RC", "AFS_RC_FAIL_TIME", "AFS_GEOFENCE" })
+            {
+                object parameter = parameters.Cast<object>().Single(p => Field<string>(p, "Name") == missing);
+                int index = parameters.IndexOf(parameter);
+                parameters.Remove(parameter);
+                var incomplete = new Dictionary<string, float>(configured); incomplete.Remove(missing);
+                Check(peer.Apply(incomplete).Contains("invalid") && peer.Writes == 0,
+                    "Missing commissioning field blocks enabling AFS: " + missing);
+                parameters.Insert(index, parameter);
+            }
+            peer.Values["WP_SPD_DN"] = 2.3f;
+            Check(peer.Apply(configured).Contains("invalid") && peer.Writes == 0, "Fresh lower native descent capability refuses all writes");
+            foreach (float invalid in new[] { float.NaN, float.PositiveInfinity, 1.9f })
+            {
+                peer.Values["WP_SPD_DN"] = invalid;
+                Check(peer.Apply(configured).Contains("invalid") && peer.Writes == 0,
+                    "Nonfinite/insufficient fresh native descent capability refuses all writes");
+            }
+            peer.Values["WP_SPD_DN"] = 3;
+            peer.Heartbeat(false); peer.Pump(30);
+            string applied = peer.Apply(configured);
+            Check(applied.StartsWith("Verified 4") && peer.Written.SequenceEqual(new[] { "AFS_TERM_ACTION", "AFS_TERM_RATE",
+                "AFS_RC_FAIL_TIME", "AFS_ENABLE" }), "Native controlled action/config are readback-verified before enabling");
+            Check(peer.Written.All(name => name.StartsWith("AFS_")) && peer.OtherCommands == 0,
+                "Setup writes no ordinary landing/rate/RC-channel/GCS parameters and requests no flight mode");
+            Check(!(bool)shared.GetType().GetProperty("CanRequest", Hidden).GetValue(shared),
+                "Setup never grants armed menu request eligibility");
+            Render(parameters, peer.Config, directory);
+            peer.Controller.Dispose();
+            peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
+            peer.Finish((Task)Call(peer.Controller, "ReadAsync"));
+            peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
+            peer.Heartbeat(false); peer.Pump(30);
+            peer.IgnoreValue = true;
+            int writes = peer.Writes;
+            string refused = peer.Apply(new Dictionary<string, float> { ["AFS_TERM_RATE"] = 2.8f, ["AFS_RC_FAIL_TIME"] = 2 });
+            Check(refused.Contains("Stopped at AFS_TERM_RATE") && peer.Writes == writes + 1 && peer.Values["AFS_RC_FAIL_TIME"] == 4.5f,
+                "AFS echo/readback mismatch stops the remaining writes: " + refused + "; writes=" + (peer.Writes - writes));
+        }
+        using (var peer = new Peer(true))
+        using (var shared = (IDisposable)Create("TerminationController", peer.Config))
+        {
+            peer.AddTermination(true);
+            peer.Announce = false;
+            peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
+            peer.Finish((Task)Call(peer.Controller, "ReadAsync"));
+            peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
+            Check(Field<IList>(peer.Controller, "Parameters").Count == 3 && peer.Writes == 0,
+                "Custom parameter alone without native mode advertisement never exposes configuration");
+            peer.Announce = true;
+            peer.Selectable = false;
+            peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
+            Check(Field<IList>(peer.Controller, "Parameters").Count == 3 && peer.Writes == 0,
+                "Nonselectable native advertisement never exposes controlled configuration");
+            peer.Selectable = true;
+            peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
+            Check(Field<IList>(peer.Controller, "Parameters").Count == 9,
+                "Advertised QuadPlane extension exposes configuration: " + peer.Controller.GetType().GetProperty("TerminationStatus", Hidden).GetValue(peer.Controller));
+            var rate = Field<IList>(peer.Controller, "Parameters").Cast<object>().Single(p => Field<string>(p, "Name") == "AFS_TERM_RATE");
+            Check(Field<double>(rate, "Maximum") == 3 && peer.ReadNames.Contains("Q_WP_SPD_DN") && !peer.ReadNames.Contains("WP_SPD_DN"),
+                "QuadPlane reads its own native descent capability in metres per second");
+            peer.Heartbeat(false); peer.Pump(30);
+            peer.RetireAfterWrite = true;
+            string retired = peer.Apply(new Dictionary<string, float> { ["AFS_TERM_ACTION"] = 44, ["AFS_ENABLE"] = 1 });
+            Check(peer.Writes == 1 && retired.Contains("Stopped at AFS_TERM_ACTION") && peer.Values["AFS_ENABLE"] == 0,
+                "Retirement during an AFS write prevents enabling and false readback claims");
+        }
+        using (var peer = new Peer())
+        using (var shared = (IDisposable)Create("TerminationController", peer.Config))
+        {
+            peer.AddTermination(false);
+            peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
+            peer.Finish((Task)Call(peer.Controller, "ReadAsync"));
+            peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
+            peer.Heartbeat(false); peer.Pump(30);
+            peer.LowerLimitAfterWrite = true;
+            string limited = peer.Apply(new Dictionary<string, float>
+                { ["AFS_TERM_ACTION"] = 44, ["AFS_TERM_RATE"] = 2.8f, ["AFS_ENABLE"] = 1 });
+            Check(peer.Writes == 1 && limited.Contains("Stopped at AFS_TERM_RATE") && peer.Values["AFS_ENABLE"] == 0 &&
+                peer.Values["AFS_TERM_RATE"] == 2.2f, "Descent capability reduced during sequence blocks rate/enabling writes");
+        }
+    }
+
+    private static Dictionary<string, float> EditTermination(IList parameters, NOMADConfig config)
+    {
+        using (var view = (UserControl)Create("NativeFenceSetupView", CancellationToken.None, Create("FenceSetupInput"), config))
+        using (var form = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual,
+            Location = new System.Drawing.Point(-20000, -20000) })
+        {
+            form.Controls.Add(view); form.Show(); Application.DoEvents();
+            foreach (object parameter in parameters) { Call(view, "AddParameter", parameter); }
+            Check(((Dictionary<string, float>)Call(view, "ReadEdits")).Count == 0,
+                "Unconfigured current action/rate/timeout are shown without manufacturing proposed changes");
+            var action = (ComboBox)view.Controls.Find("AFS_TERM_ACTION", true)[0];
+            var rate = (TextBox)view.Controls.Find("AFS_TERM_RATE", true)[0];
+            var timeout = (TextBox)view.Controls.Find("AFS_RC_FAIL_TIME", true)[0];
+            Check(action.Enabled && action.Items.Count == 1 && action.SelectedIndex == -1 && rate.Enabled &&
+                rate.Text == "1.9" && timeout.Enabled && timeout.Text == "0",
+                "Actual view allows explicit correction from disabled AFS/action0/rate1.9/timeout0");
+            action.SelectedValue = 44; rate.Text = "2.5"; timeout.Text = "4.5";
+            ((ComboBox)view.Controls.Find("AFS_ENABLE", true)[0]).SelectedValue = 1;
+            var changes = (Dictionary<string, float>)Call(view, "ReadEdits");
+            Check(changes.Count == 4 && changes["AFS_TERM_ACTION"] == 44 && changes["AFS_TERM_RATE"] == 2.5f &&
+                changes["AFS_RC_FAIL_TIME"] == 4.5f && changes["AFS_ENABLE"] == 1,
+                "Actual view edits produce explicit controlled changes for the native Apply helper");
+            return changes;
+        }
     }
 
     private static void Render(IList parameters, NOMADConfig config, string directory)
@@ -141,6 +282,13 @@ internal static class NativeFenceParametersTests
             Check(margin.Minimum == 0 && margin.Maximum == 100 && margin.Value == 2 &&
                 type.CheckedItems.Count == 1 && (int)enabled.SelectedValue == 0,
                 "Real populated controls show fresh numeric, bitmask and enum settings at " + scale);
+            foreach (object parameter in parameters)
+            {
+                if (Field<IList>(parameter, "Options").Count == 0) { continue; }
+                var combo = (ComboBox)view.Controls.Find(Field<string>(parameter, "Name"), true)[0];
+                Check(combo.SelectedValue is int selected && selected == Field<float>(parameter, "Value"),
+                    "Populated enum retains the actual readback through parent/handle creation: " + combo.Name);
+            }
             using (var bitmap = new System.Drawing.Bitmap(form.Width, form.Height))
             {
                 form.DrawToBitmap(bitmap, new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height));
@@ -225,13 +373,18 @@ internal static class NativeFenceParametersTests
         private readonly MAVLink.MavlinkParse _encoder = new MAVLink.MavlinkParse();
         private readonly object _send = new object();
         private volatile bool _stop;
+        private bool _armedState;
         private Exception _failure;
         internal IDisposable Controller;
-        internal int Writes, Packets;
-        internal bool IgnoreValue, RetireAfterWrite;
+        internal int Writes, Packets, ModeRequests, OtherCommands;
+        internal bool IgnoreValue, RetireAfterWrite, LowerLimitAfterWrite;
+        internal bool Announce = true, Selectable = true;
+        internal MAVLink.MAV_TYPE AircraftType = MAVLink.MAV_TYPE.QUADROTOR;
+        internal readonly List<string> Written = new List<string>(), ReadNames = new List<string>();
 
-        internal Peer()
+        internal Peer(bool plane = false)
         {
+            AircraftType = plane ? MAVLink.MAV_TYPE.FIXED_WING : MAVLink.MAV_TYPE.QUADROTOR;
             _listener.Start();
             _serial.client = new TcpClient("127.0.0.1", ((IPEndPoint)_listener.LocalEndpoint).Port);
             _server = _listener.AcceptTcpClient(); _server.ReceiveTimeout = 100;
@@ -255,6 +408,15 @@ internal static class NativeFenceParametersTests
         {
             var task = (Task<string>)Call(Controller, "ApplyAsync", changes, new Func<bool>(() => true));
             Finish(task); return task.GetAwaiter().GetResult();
+        }
+        internal void AddTermination(bool plane, float rate = 2.2f, float timeout = 1)
+        {
+            AircraftType = plane ? MAVLink.MAV_TYPE.FIXED_WING : MAVLink.MAV_TYPE.QUADROTOR;
+            foreach (var pair in new Dictionary<string, float> { ["AFS_ENABLE"] = 0, ["AFS_TERM_ACTION"] = 0,
+                ["AFS_TERM_RATE"] = rate, ["AFS_RC"] = 1, ["AFS_RC_FAIL_TIME"] = timeout, ["AFS_GEOFENCE"] = 1,
+                [plane ? "Q_WP_SPD_DN" : "WP_SPD_DN"] = 3 })
+            { Values[pair.Key] = pair.Value; Parameter(pair.Key, pair.Value); }
+            Heartbeat(false); Pump(80);
         }
         internal void Pump(int milliseconds)
         {
@@ -281,7 +443,9 @@ internal static class NativeFenceParametersTests
                         var request = packet.ToStructure<MAVLink.mavlink_param_request_read_t>();
                         Check(request.target_system == 201 && request.target_component == 42, "Read addressed captured target");
                         string name = Encoding.ASCII.GetString(request.param_id).TrimEnd('\0');
+                        ReadNames.Add(name);
                         Parameter(name, Values[name]);
+                        Heartbeat(_armedState);
                     }
                     if (packet.msgid == (uint)MAVLink.MAVLINK_MSG_ID.PARAM_SET)
                     {
@@ -289,13 +453,31 @@ internal static class NativeFenceParametersTests
                         Check(request.target_system == 201 && request.target_component == 42, "Write addressed captured target");
                         string name = Encoding.ASCII.GetString(request.param_id).TrimEnd('\0');
                         Writes++;
+                        Written.Add(name);
                         if (!IgnoreValue) { Values[name] = request.param_value; }
+                        if (LowerLimitAfterWrite) { LowerLimitAfterWrite = false; Values["WP_SPD_DN"] = 2; }
                         if (RetireAfterWrite)
                         {
                             RetireAfterWrite = false;
                             Output.GetMethod("Initialize", Static).Invoke(null, new object[] { Config });
                         }
                         Parameter(name, Values[name]);
+                        Heartbeat(_armedState);
+                    }
+                    if (packet.msgid == (uint)MAVLink.MAVLINK_MSG_ID.COMMAND_LONG)
+                    {
+                        var request = packet.ToStructure<MAVLink.mavlink_command_long_t>();
+                        if (request.command == (ushort)MAVLink.MAV_CMD.REQUEST_MESSAGE && request.param1 == 435)
+                        {
+                            ModeRequests++;
+                            if (Announce) { Send(MAVLink.MAVLINK_MSG_ID.AVAILABLE_MODES, new MAVLink.mavlink_available_modes_t
+                            { custom_mode = 29, mode_index = 1, number_modes = 1, properties = Selectable ? 0U : 1U,
+                                mode_name = Encoding.ASCII.GetBytes("TERMINATE".PadRight(35, '\0')) }); }
+                        }
+                        else { OtherCommands++; }
+                        Send(MAVLink.MAVLINK_MSG_ID.COMMAND_ACK, new MAVLink.mavlink_command_ack_t
+                        { command = request.command, result = 0 });
+                        Heartbeat(_armedState);
                     }
                 }
                 catch (IOException) { }
@@ -304,9 +486,13 @@ internal static class NativeFenceParametersTests
                 catch (Exception error) { _failure = error; return; }
             }
         }
-        internal void Heartbeat(bool armed) => Send(MAVLink.MAVLINK_MSG_ID.HEARTBEAT, new MAVLink.mavlink_heartbeat_t
-        { autopilot = (byte)MAVLink.MAV_AUTOPILOT.ARDUPILOTMEGA, type = (byte)MAVLink.MAV_TYPE.QUADROTOR,
-            base_mode = (byte)(armed ? 129 : 1), mavlink_version = 3 });
+        internal void Heartbeat(bool armed)
+        {
+            _armedState = armed;
+            Send(MAVLink.MAVLINK_MSG_ID.HEARTBEAT, new MAVLink.mavlink_heartbeat_t
+            { autopilot = (byte)MAVLink.MAV_AUTOPILOT.ARDUPILOTMEGA, type = (byte)AircraftType,
+                base_mode = (byte)(armed ? 129 : 1), mavlink_version = 3 });
+        }
         private void Parameter(string name, float value) => Send(MAVLink.MAVLINK_MSG_ID.PARAM_VALUE,
             new MAVLink.mavlink_param_value_t { param_id = Encoding.ASCII.GetBytes(name.PadRight(16, '\0')),
                 param_value = value, param_count = 3, param_index = 0, param_type = 9 });

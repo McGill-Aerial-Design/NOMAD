@@ -71,8 +71,10 @@ NOMAD leaves normal LAND and QLAND settings unchanged. Competition termination i
 a separate onboard mechanism for the aircraft and flight phase, not a global
 landing-rate change. The optional [native extension](native-termination.md) owns
 the separate descent/aerodynamic policy, RC/fence triggers and reboot latch onboard.
-NOMAD only checks the advertised capability and requests its native mode; it never
-substitutes stock LAND, in-air disarm or a parameter recipe. ELRS/LTE takeover,
+The optional configuration subgroup uses the same advertised capability and fresh
+disarmed/readback guards to set only controlled action 44, its bounded rate and
+supported AFS RC/fence triggers. It never changes ordinary descent speeds, chooses
+an RC channel or substitutes stock LAND/in-air disarm. ELRS/LTE takeover,
 transmitter mixing, actual loss responses and physical termination remain aircraft
 acceptance work under D09/Q02. Total estimator/controller failure is not guaranteed
 controlled descent. Preserve native ArduPilot failsafes and qualify interactions.

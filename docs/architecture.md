@@ -78,6 +78,10 @@ preserves unsaved Mission/Fence/Rally rows across mode changes without changing 
 caches. Staging never uploads; native Write/Read owns fence transfer. The page separately
 reads supported fence-response parameters and applies confirmed changes through captured
 native MP parameter requests, requiring a fresh disarmed heartbeat and value readback.
+An optional controlled-termination subgroup shares the plugin's native capability
+discovery and confines AFS writes to controlled action 44, its rate bounded by a fresh
+native descent limit, and supported RC/fence triggers. It never changes ordinary
+LAND/QLAND rates or selects a dedicated RC channel.
 NOMAD does not evaluate local outline crossings or claim containment. Unsaved coordinate
 text/order and inactive editor drafts remain in memory for the plugin session; save
 needed drafts before unloading the plugin. Alerts/audio and video do not become flight

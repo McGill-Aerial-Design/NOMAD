@@ -19,7 +19,7 @@ namespace NOMAD.MissionPlanner
         private string _name, _outcome;
         private TaskCompletionSource<bool> _discovery;
         private long _heartbeat;
-        private bool _armed, _supported, _selectable, _busy, _disposed, _ambiguous;
+        private bool _armed, _supported, _configurationSupported, _selectable, _busy, _disposed, _ambiguous;
 
         internal TerminationController(NOMADConfig config)
         {
@@ -76,7 +76,7 @@ namespace NOMAD.MissionPlanner
                     if (!string.Equals(name, "TERMINATE", StringComparison.OrdinalIgnoreCase)) { return true; }
                     _selectable = (mode.properties & 1U) == 0 && mode.custom_mode <= byte.MaxValue &&
                         (double)encodedMode == mode.custom_mode;
-                    if (!_selectable) { _supported = false; }
+                    if (!_selectable) { _supported = _configurationSupported = false; }
                     if (mode.custom_mode > byte.MaxValue || (double)encodedMode != mode.custom_mode)
                     {
                         _discovery?.TrySetResult(false);
@@ -137,7 +137,28 @@ namespace NOMAD.MissionPlanner
             !_disposed && ReferenceEquals(_target, target) && target != null && _supported && _selectable && !_ambiguous &&
             mode.HasValue && _mode == mode && Fresh && _armed && _observedMode != mode;
 
-        internal async Task<bool> CheckAsync()
+        internal Task<bool> CheckAsync() => CheckNativeAsync(true);
+        internal Task<bool> CheckConfigurationAsync() => CheckNativeAsync(false);
+
+        internal bool CanConfigure(long generation)
+        {
+            lock (_gate)
+            {
+                return !_disposed && !_busy && _target?.Generation == generation && _configurationSupported &&
+                    _selectable && !_ambiguous && Fresh && !_armed && !ObservedNow;
+            }
+        }
+
+        internal void RetireConfiguredSupport()
+        {
+            lock (_gate)
+            {
+                _supported = false;
+                _outcome = "Termination settings changed; check native support again before requesting TERMINATE.";
+            }
+        }
+
+        private async Task<bool> CheckNativeAsync(bool requireConfigured)
         {
             UpdateBinding();
             OutputController.NativeTarget target;
@@ -148,6 +169,7 @@ namespace NOMAD.MissionPlanner
                 target = _target;
                 _busy = true;
                 _supported = false;
+                _configurationSupported = false;
                 _selectable = false;
                 discovery = _discovery = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                 _outcome = "Checking native support...";
@@ -168,8 +190,10 @@ namespace NOMAD.MissionPlanner
                     if (!current || !ReferenceEquals(_target, target)) { return false; }
                     _supported = advertised && _selectable && !_ambiguous && enabled == 1 && action == 44 &&
                         !float.IsNaN(rate) && !float.IsInfinity(rate) && rate >= 2;
+                    _configurationSupported = advertised && _selectable && !_ambiguous &&
+                        target.Connection.MAVlist[target.System, target.Component].param.ContainsKey("AFS_TERM_RATE");
                     _outcome = _supported ? null : "Native controlled termination is not configured or selectable.";
-                    return _supported;
+                    return requireConfigured ? _supported : _configurationSupported;
                 }
             }
             catch (Exception) { return SetOutcome(target, "Native support could not be verified. No termination sent."); }
@@ -249,7 +273,7 @@ namespace NOMAD.MissionPlanner
                 _heartbeat = 0;
                 _discovery?.TrySetResult(false);
                 _discovery = null;
-                _armed = _supported = _selectable = _busy = _ambiguous = false;
+                _armed = _supported = _configurationSupported = _selectable = _busy = _ambiguous = false;
             }
             Unsubscribe(target, subscriptions);
         }
