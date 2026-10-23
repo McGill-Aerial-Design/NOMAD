@@ -3,7 +3,7 @@
 The product is a C#/.NET Framework 4.8 DLL for the reviewed Mission Planner host
 in `scripts/release/mission-planner-target.json`. Windows builds require Visual
 Studio/MSBuild, its Roslyn compiler and the .NET Framework targeting pack, plus
-that installed host's reference assemblies. Python/Pixi serves checks/docs only.
+that installed host's reference assemblies. Python/Pixi serves development and simulator tooling only.
 The optional aircraft firmware has separate [native build/check instructions](native-termination.md).
 
 ## Build without installation
@@ -55,6 +55,7 @@ pixi run test-plugin-gimbal
 pixi run test-plugin-payload
 pixi run test-plugin-native-preflight
 pixi run test-plugin-config-validation
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_storage.ps1
 pixi run test-plugin-geometry # coordinate validation and actual native Fence AddCommand staging
 pixi run test-plugin-fence # actual native editor mode switching and synthetic parameter read/write peer
 pixi run test-plugin-audio
@@ -69,6 +70,10 @@ pixi run test-plugin-termination
 
 Configuration validation includes the aircraft-profile suite; use
 `pixi run test-aircraft-profiles` alone for a focused profile check.
+The storage check uses fresh CLR processes for default, custom and invalid host
+user-data settings. It checks the default path without opening operator files;
+custom profile save/backup/load and logging use owned directories. An invalid
+explicit custom root must fail without falling back to operator storage.
 Termination uses the built DLL and actual MP assemblies with an owned synthetic loopback peer, without
 installing the plugin or launching MP. It checks native capability discovery, readbacks, command ACKs,
 fresh heartbeat naming and target retirement; it does not qualify aircraft termination or touchdown.
@@ -164,6 +169,17 @@ message ID/native ACK result rather than treating absent relay telemetry as succ
 Allowlisted `result.json` retains failures and numeric output observations; raw
 telemetry logs/transcripts are not test artifacts. Review `passed` and process
 cleanup before proceeding. A timeout requests normal close of only the owned MP.
+
+## Rendered conference rehearsal
+
+The [conference runbook](../conference/README.md) describes a separate prepared
+Mission Planner host with the actual NOMAD plugin, pinned ArduPilot SITL and
+Project AirSim Neighborhood cameras. Unlike the unarmed native output fixture
+above, its explicit `conference/run.ps1 -Check` request arms and flies the owned
+simulator, executes an AUTO survey leg, checks video/gimbal/payload behavior across
+a telemetry route cut, observes landing/disarming, and checks encoder failure
+cleanup. Setup builds into `build/conference`; it does not install the plugin.
+The runbook defines prerequisites, commands, evidence files and network limits.
 
 ## Documentation and tooling
 

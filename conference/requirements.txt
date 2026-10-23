@@ -1,0 +1,2 @@
+projectairsim==1.0.2
+pymavlink==2.4.50

@@ -42,7 +42,15 @@ previous reviewed DLL available for manual restoration with Mission Planner clos
 
 ## Saved aircraft profiles
 
-NOMAD stores profiles in `%LOCALAPPDATA%/Mission Planner/plugins/nomad_aircraft_profiles.json`.
+By default, NOMAD stores profiles in
+`%LOCALAPPDATA%/Mission Planner/plugins/nomad_aircraft_profiles.json` and its rolling
+diagnostic log in `plugins/NOMAD/nomad.log` under that same Mission Planner root.
+When the host explicitly sets an absolute custom user-data directory before
+loading NOMAD, both profiles and logging use `plugins/` under Mission Planner's
+resolved user-data directory, including its application-name subdirectory.
+An invalid explicit root is rejected; it never falls back to operator storage.
+The [conference rehearsal](../conference/README.md) uses this host setting for
+its separate run profiles and logs without installing into the operator's host.
 Only the current profile collection schema is accepted. Unknown or invalid fields
 are rejected; loading never converts or rewrites the file. If the primary file is
 absent, its current-format `.bak` can be loaded. With neither file present, NOMAD

@@ -24,6 +24,11 @@ is the build authority. Video uses Mission Planner's installed GStreamer support
 Stock ArduPilot can use the base plugin. The termination action requires the
 matching [custom firmware and aircraft setup](docs/native-termination.md).
 
+Try the [neighborhood inspection rehearsal](conference/README.md) with the actual
+plugin, Mission Planner, ArduPilot SITL and a rendered Project AirSim camera. Fly a
+short mission, aim the inspection gimbal and exercise payload controls while an
+audience-selected telemetry cut tests the link router.
+
 ## Get started
 
 Download **NOMAD-0.4.1-Setup.exe** from the [NOMAD 0.4.1 release](https://github.com/McGill-Aerial-Design/NOMAD/releases/tag/v0.4.1).

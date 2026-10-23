@@ -8,6 +8,7 @@
 // centrally and output redirected without touching call sites.
 //
 // Output goes to the console AND to a rolling file under
+// the host's custom user-data folder, or by default
 // %LOCALAPPDATA%\Mission Planner\plugins\NOMAD\nomad.log — Mission
 // Planner does not capture plugin console output in its own log, so
 // the file is the only way to diagnose issues in a Release build.
@@ -45,9 +46,7 @@ namespace NOMAD.MissionPlanner
                     if (_fileFailed) return;
                     if (_logPath == null)
                     {
-                        var dir = Path.Combine(
-                            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                            "Mission Planner", "plugins", "NOMAD");
+                        var dir = Path.Combine(NOMADStorage.PluginsDirectory, "NOMAD");
                         Directory.CreateDirectory(dir);
                         _logPath = Path.Combine(dir, "nomad.log");
                         // Simple rollover: keep one previous generation.

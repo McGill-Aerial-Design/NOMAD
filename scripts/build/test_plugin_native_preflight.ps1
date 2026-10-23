@@ -15,8 +15,10 @@ if (!$guard) { throw 'Native runner prelaunch guard missing.' }
 $hostRoot = Join-Path ${env:ProgramFiles(x86)} 'Mission Planner'
 $resolver = [ResolveEventHandler] {
     param($sender, $eventArgs)
-    if (([Reflection.AssemblyName]$eventArgs.Name).Name -ne 'Newtonsoft.Json') { return $null }
-    return [Reflection.Assembly]::LoadFrom((Join-Path $hostRoot 'Newtonsoft.Json.dll'))
+    $name = ([Reflection.AssemblyName]$eventArgs.Name).Name
+    $file = Join-Path $hostRoot ($name + '.dll')
+    if (!(Test-Path -LiteralPath $file)) { return $null }
+    return [Reflection.Assembly]::LoadFrom($file)
 }
 [AppDomain]::CurrentDomain.add_AssemblyResolve($resolver)
 try {
