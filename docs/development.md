@@ -20,7 +20,21 @@ All host references are non-copy-local. The artifact contains no host/dependency
 binaries and the script never writes an MP installation. Direct IDE builds use
 fallback development metadata if generated identity is absent; record the actual
 checked source and local changes with any artifact. Installation is a separate
-explicit [manual closed-MP operation](operations.md#manual-plugin-installation).
+explicit [closed-MP operation](operations.md#plugin-installation).
+
+Build and check the single offline Windows setup after building the DLL:
+
+```powershell
+pixi run build-installer
+pixi run test-plugin-installer
+```
+
+Setup is a separate .NET Framework 4.8 executable compiled with the same Roslyn toolchain.
+It embeds the exact DLL, version/hash and notices, requests Windows administrator consent,
+and writes under `build/installer/` without installing anything. Its tests use owned temporary
+hosts for actual install/update/backup, invalid input, process/file locks, reparse guards and
+download-marker removal; package tests inspect the actual EXE resources, manifest and UI.
+Profiles and aircraft settings are outside its write scope.
 
 ## Product checks
 
@@ -78,6 +92,12 @@ nor opens an aircraft/camera connection or saves operator settings. The settings
 constructor enumerates HID device names but does not acquire or start them.
 Captures are WinForms control renders, not a connected Mission Planner session.
 Review them visually and retain those distinctions in captions.
+
+To render the setup window without invoking installation:
+
+```powershell
+powershell -STA -NoProfile -File scripts/docs/capture_installer_screenshot.ps1 -InstallerPath build/installer/NOMAD-0.3.1-Setup.exe
+```
 
 ## Manual native simulator acceptance
 
