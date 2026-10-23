@@ -1,0 +1,48 @@
+name: Conference Windows SITL
+
+on:
+  push:
+    branches: [ArduPilot-Developer-Conference]
+    paths:
+      - .github/workflows/conference-sitl.yml
+      - conference/build_sitl.py
+      - tests/test_conference_sitl.py
+      - scripts/release/build_firmware.py
+      - firmware/ardupilot/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conference-sitl-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/ArduPilot-Developer-Conference'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: cygwin/cygwin-install-action@v6
+        with:
+          packages: gcc-g++=13.4.0-1 python312 python312-pip git procps gettext binutils
+          add-to-path: false
+      - name: Build the pinned Copter simulator
+        shell: C:\cygwin\bin\bash.exe -eo pipefail '{0}'
+        run: |
+          export PATH=/usr/bin:$(cygpath "$SYSTEMROOT")/system32
+          cd "$(cygpath -u "$GITHUB_WORKSPACE")"
+          python3.12 -m pip install --disable-pip-version-check empy==3.3.4 pexpect==4.9.0 dronecan==1.0.27
+          python3.12 -m unittest discover -s tests -p test_conference_sitl.py -v
+          python3.12 conference/build_sitl.py --work "$(cygpath -u "$RUNNER_TEMP")/nomad-conference-sitl"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conference-windows-sitl
+          path: ${{ runner.temp }}/nomad-conference-sitl/runtime/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
