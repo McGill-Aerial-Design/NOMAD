@@ -117,24 +117,33 @@ MAVLink estimator data; they are not separate ground-truth measurements.
 | Native TERMINATE | `AFS_TERM_RATE=2.2` | Fresh mode 29, with both rates within 2.0–2.7 m/s in both bands |
 | Termination latch | Controller reboot required | Explicit rejection ACK for an ordinary mode request, fresh continuing mode 29, and normal rearming refusal after landing |
 
-These are configured targets and acceptance ranges, not measured results. An ACK
-alone proves neither the mode nor descent. The check requires separate fresh
+Validated flights measured **0.49–0.50 m/s** during ordinary LAND and
+**2.15–2.20 m/s** during TERMINATE, including **2.20 m/s** in the final band.
+The altitude/time cross-checks were approximately 0.50 and 2.20 m/s respectively.
+The check also requires separate fresh
 heartbeat, position, landed and disarmed observations. Rejections require a new
 matching DENIED or FAILED ACK; a timeout or unsupported command is not evidence
 of the latch. It also reads back the unchanged ordinary LAND speed parameters.
 
 Native TERMINATE owns contact disarming. After landing, the check attempts normal
 rearming and requires explicit refusal with the native latch reason and continuing
-disarmed TERMINATE state. It ends with reboot required. A preserved-parameter
-controller-restart test is separate; MP reconnection alone does not establish reset.
+disarmed TERMINATE state. It ends with reboot required. A separate ground test
+restarted the identical firmware with the preserved EEPROM and defaults: the
+termination request cleared, commissioning stayed unchanged, and normal arming
+and disarming succeeded with zero parameter writes. That test used the internal
+quad model; it does not claim a Project AirSim restart flight.
 
-After Mission Planner closes, the launcher deliberately stops one owned encoder
-and requires the camera bridge to report failure and stop its sibling encoder.
+![Native TERMINATE observed on the Dashboard](images/termination.png)
+
+After the flight checks, while Mission Planner remains connected, the launcher
+verifies the original controller process and deliberately stops one owned encoder.
+It requires the camera bridge to report failure and stop its sibling encoder.
 That camera failure is expected only at the end of `-Check`. A successful run
-requires both the native rehearsal and this lifecycle check to complete.
+requires both the native rehearsal and this lifecycle check to complete before
+Mission Planner closes. This SITL build exits when its main telemetry client disconnects.
 
 Each invocation creates `build/conference/run-<timestamp>-<id>`. Inspect
-`result.json`, `lifecycle.json` and the command's exit status together. Require the
+`result.json`, `controller-lifecycle.json`, `lifecycle.json` and the command's exit status together. Require the
 actual measured summaries and latch observations, not just a completed build. The final
 `camera-status.json` records the deliberate encoder failure, not a failed flight
 check. Screenshots and diagnostic logs remain in that run directory. These are

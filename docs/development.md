@@ -189,9 +189,11 @@ inspection flight retains actual AUTO mission progress, both video inputs, gimba
 outputs, route failover and payload confirmation/Safe checks. The termination
 request uses the actual NOMAD controller; separate fresh mode, landed and disarmed
 observations are required. New matching rejection ACKs and continuing native state
-prove mode-change/rearming refusal. The check does not claim the human Shift
-gesture or confirmation dialog was exercised, or that a subsequent preserved-state
-controller reboot was qualified.
+prove mode-change/rearming refusal. The launcher verifies the original process and
+camera failure cleanup before MP disconnects. A separate internal-quad ground test
+verified retained-EEPROM restart, unchanged commissioning and normal arm/disarm
+without parameter writes. The Project AirSim check does not exercise the human
+Shift gesture or confirmation dialog; the product's isolated widget tests cover those gates.
 
 Pure helper checks can run without Mission Planner or a simulator:
 

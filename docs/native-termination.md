@@ -37,9 +37,11 @@ once on entry. Actual descent and airframe tuning still require measurement.
 ## Aircraft setup
 
 NOMAD → Fence Setup → Controlled termination can read/configure the supported
-`AFS_*` settings below when the matching firmware advertises selectable `TERMINATE`
+`AFS_*` settings below when the matching firmware advertises a valid `TERMINATE`
 and freshly exposes the private `AFS_TERM_RATE` parameter. Stock firmware keeps
-ordinary fence setup available and leaves this subgroup unavailable. NOMAD does not
+ordinary fence setup available and leaves this subgroup unavailable. A disabled
+extension can be configured while disarmed; activation still requires a fresh,
+selectable advertisement and valid AFS settings. NOMAD does not
 choose or write an RC channel; remaining commissioning settings use native Mission
 Planner parameters and fence tools. Configure/read back the actual aircraft with
 props removed before separately authorized physical qualification.
