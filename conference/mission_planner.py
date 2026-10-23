@@ -226,6 +226,20 @@ def read_parameter(name):
     return float(finish(connection.GetParamAsync(Byte(201), Byte(1), name)))
 
 
+def check_termination(controller):
+    subject = controller.GetType()
+    # MP periodically owns the port for camera discovery; repeat completed read-only checks only.
+    for attempt in range(3):
+        native_idle()
+        supported = bool(finish(subject.GetMethod("CheckAsync", INSTANCE).Invoke(controller, None)))
+        state.setdefault("termination_check_attempts", {})[state["stage"]] = attempt + 1
+        state["termination_check_status"] = str(subject.GetProperty("Status", INSTANCE).GetValue(controller, None))
+        if supported:
+            return
+        Thread.Sleep(250)
+    raise Exception("Actual NOMAD did not verify TERMINATE: " + state["termination_check_status"])
+
+
 def rejected_ack(command_id, after):
     Monitor.Enter(gate)
     try:
@@ -300,12 +314,7 @@ def verify_commissioning():
     state["commissioning"] = values
     state["receiver"] = {key: observed[key] for key in ("rc_channels", "rc3_pwm", "rc5_pwm", "rc7_pwm")}
     controller = plugin.GetType().GetField("_termination", INSTANCE).GetValue(plugin)
-    native_idle()
-    supported = bool(finish(controller.GetType().GetMethod("CheckAsync", INSTANCE).Invoke(controller, None)))
-    state["termination_check_status"] = str(
-        controller.GetType().GetProperty("Status", INSTANCE).GetValue(controller, None)
-    )
-    require(supported, "Actual NOMAD did not verify TERMINATE: " + state["termination_check_status"])
+    check_termination(controller)
     state["termination_supported_disarmed"] = True
 
 
@@ -420,11 +429,7 @@ def terminate_and_measure():
     wait_for_video(dashboard_player)
     controller = plugin.GetType().GetField("_termination", INSTANCE).GetValue(plugin)
     subject = controller.GetType()
-    native_idle()
-    require(
-        bool(finish(subject.GetMethod("CheckAsync", INSTANCE).Invoke(controller, None))),
-        "NOMAD could not freshly verify TERMINATE",
-    )
+    check_termination(controller)
     capture_args = Array[Object]([Int64(0), UInt32(0)])
     require(
         bool(subject.GetMethod("TryCaptureRequest", INSTANCE).Invoke(controller, capture_args)),
