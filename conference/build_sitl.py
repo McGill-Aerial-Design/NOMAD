@@ -3,6 +3,7 @@
 """Build only the pinned Windows conference Copter; never install or flash it."""
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -26,8 +27,38 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def verify_features(header, symbols):
-    definitions = dict(re.findall(r"^\s*#define\s+(\w+)\s+([01])\s*$", header, re.MULTILINE))
+def verify_features(cache, symbols):
+    configuration = {}
+    for statement in ast.parse(cache).body:
+        require(
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name),
+            "Waf cache must contain literal assignments only",
+        )
+        require(
+            not any(isinstance(node, ast.Call) for node in ast.walk(statement.value)),
+            "Waf cache values must not call functions",
+        )
+        value = ast.literal_eval(statement.value)
+        name = statement.targets[0].id
+        if name in ("CXXFLAGS", "DEFINES"):
+            require(name not in configuration, "Duplicate Waf configuration assignment")
+            require(
+                isinstance(value, list) and all(isinstance(item, str) for item in value),
+                "Waf compiler definitions must be string lists",
+            )
+            configuration[name] = value
+    require(set(configuration) == {"CXXFLAGS", "DEFINES"}, "Waf compiler definition lists missing")
+    entries = configuration["DEFINES"] + [flag[2:] for flag in configuration["CXXFLAGS"] if flag.startswith("-D")]
+    definitions = {}
+    for entry in entries:
+        name, separator, value = entry.partition("=")
+        if name not in FEATURES:
+            continue
+        require(separator and value in ("0", "1"), "Invalid required feature definition")
+        require(name not in definitions or definitions[name] == value, "Conflicting required feature definitions")
+        definitions[name] = value
     require(
         all(definitions.get(name) == value for name, value in FEATURES.items()),
         "The built configuration must enable both AFS features and disable Lua",
@@ -127,9 +158,9 @@ def build(work):
     require(executable.is_file(), "Copter executable missing")
     with executable.open("rb") as binary:
         require(binary.read(2) == b"MZ", "Copter output is not a Windows executable")
-    header = (output / "sitl/ap_config.h").read_text()
-    symbols = run(["x86_64-pc-cygwin-nm", "--demangle", executable])
-    features = verify_features(header, symbols)
+    cache = (output / "c4che/sitl_cache.py").read_text()
+    symbols = run(["nm", "--demangle", executable])
+    features = verify_features(cache, symbols)
     dependencies = cygwin_dependencies(run(["cygcheck", executable]))
     # The frozen source includes its own manifest; every original source file must remain unchanged.
     for relative, record in frozen.items():
