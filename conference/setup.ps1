@@ -8,14 +8,35 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $output = Join-Path $root 'build/conference'
 $runtime = (Resolve-Path -LiteralPath $SitlRuntimeDirectory).Path
 $hostRoot = Join-Path ${env:ProgramFiles(x86)} 'Mission Planner'
-$sitlHash = 'C5D95E95684D3AC0A6FA7315DD23D005D1BFCA81D1CB156EAC113D3C49822D75'
-if ((Get-FileHash -LiteralPath (Join-Path $runtime 'ArduCopter.exe')).Hash -ne $sitlHash) {
-    throw 'Supply the qualified Windows Copter b7ba8bca runtime directory; a rolling download is not interchangeable.'
+$runtimeManifestHash = 'D7214B1626038936C56A773A0C6F031FE7A36ADCC0353534C0F0D535E6D4944F'
+if ((Get-FileHash -LiteralPath (Join-Path $runtime 'manifest.json')).Hash -ne $runtimeManifestHash) {
+    throw 'Supply the pinned conference Windows TERMINATE runtime, including its original manifest.'
 }
-if ((Get-FileHash -LiteralPath (Join-Path $runtime 'copter.parm')).Hash -ne
-    '5E01345B45D1C6190B28BECE5638BBDD4CF1CCE35E05BBBF480AB24D2B51AA0E') {
-    throw 'The qualified copter.parm must accompany the SITL runtime.'
+$runtimeManifest = Get-Content -LiteralPath (Join-Path $runtime 'manifest.json') -Raw | ConvertFrom-Json
+if ($runtimeManifest.target -ne 'Windows x86_64 Copter SITL' -or
+    $runtimeManifest.source_identity.revision -ne 'fb773567896014da007bca58358704d4a0d8516f' -or
+    $runtimeManifest.source_sha256 -ne 'f728fb7fc24260b3f85445e2a3f8ed2786ec642c256374a41db703fbb8b374ab' -or
+    $runtimeManifest.source_identity.patch_sha256 -ne '4beb471e4b1fc769d6285c09c44fbd1618fab81caac0b13ca4c69a3a121d2be8' -or
+    $runtimeManifest.verified_features.AP_ADVANCEDFAILSAFE_ENABLED -cne '1' -or
+    $runtimeManifest.verified_features.AP_COPTER_ADVANCED_FAILSAFE_ENABLED -cne '1' -or
+    $runtimeManifest.verified_features.AP_SCRIPTING_ENABLED -cne '0') {
+    throw 'The runtime is not the reviewed native AFS/no-Lua Copter build.'
 }
+$runtimeFiles = @($runtimeManifest.files.PSObject.Properties)
+foreach ($required in @('ArduCopter.exe', 'cygwin1.dll', 'copter.parm', 'COPYING.txt', 'SOURCE.txt',
+    'source.json', 'controlled-termination.patch')) {
+    if ($required -notin $runtimeFiles.Name) { throw "Runtime file missing: $required" }
+}
+foreach ($file in $runtimeFiles) {
+    if ($file.Name -notmatch '^[A-Za-z0-9][A-Za-z0-9_.+-]*$' -or
+        (Get-FileHash -LiteralPath (Join-Path $runtime $file.Name)).Hash -ne $file.Value) {
+        throw "Runtime file changed or invalid: $($file.Name)"
+    }
+}
+if (@(Get-ChildItem -LiteralPath $runtime -Force).Count -ne $runtimeFiles.Count + 1) {
+    throw 'The runtime directory contains files outside the pinned cohort.'
+}
+$sitlHash = $runtimeManifest.files.'ArduCopter.exe'
 if ([Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $hostRoot 'MissionPlanner.exe')).FileVersion -ne '1.3.83') {
     throw 'Mission Planner 1.3.83 is required.'
 }
@@ -62,6 +83,15 @@ $prepared = Join-Path $output 'prepared'
 $hostCopy = Join-Path $prepared 'host'
 $sitl = Join-Path $prepared 'sitl'
 $config = Join-Path $prepared 'config'
+if (Test-Path -LiteralPath $sitl) {
+    $previous = Join-Path $output ('sitl-before-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' +
+        [Guid]::NewGuid().ToString('N').Substring(0, 6))
+    foreach ($path in @($sitl, $previous)) {
+        if (![IO.Path]::GetFullPath($path).StartsWith($output + [IO.Path]::DirectorySeparatorChar,
+            [StringComparison]::OrdinalIgnoreCase)) { throw 'Runtime backup must stay under build/conference.' }
+    }
+    Move-Item -LiteralPath $sitl -Destination $previous
+}
 New-Item -ItemType Directory -Path $hostCopy, $sitl, $config -Force | Out-Null
 foreach ($item in Get-ChildItem -LiteralPath $hostRoot) {
     if ($item.Name -notin @('plugins', 'Drivers')) {
@@ -105,20 +135,18 @@ if ($LASTEXITCODE -ne 0) {
 New-Item -ItemType Directory -Path (Join-Path $hostCopy 'plugins') -Force | Out-Null
 $plugin = Join-Path $root 'mission_planner/src/bin/Release/NOMADPlugin.dll'
 Copy-Item -LiteralPath $plugin -Destination (Join-Path $hostCopy 'plugins/NOMADPlugin.dll') -Force
-foreach ($item in Get-ChildItem -LiteralPath $runtime -File) {
-    if ($item.Name -eq 'ArduCopter.exe' -or $item.Name -like 'cyg*.dll') {
-        Copy-Item -LiteralPath $item.FullName -Destination $sitl -Force
-    }
-}
+Copy-Item -Path (Join-Path $runtime '*') -Destination $sitl
 Copy-Item -LiteralPath (Join-Path $runtime 'copter.parm') -Destination $config -Force
 Copy-Item -LiteralPath (Join-Path $root 'mission_planner/tests/native_sitl/outputs.parm') -Destination $config -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'termination.parm') -Destination $config -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'descent.py') -Destination $config -Force
 Add-Content -LiteralPath (Join-Path $config 'outputs.parm') -Value "`nSERIAL1_PROTOCOL 2`nSERIAL2_PROTOCOL 2`nFS_CRASH_CHECK 1"
 $pas = 'https://raw.githubusercontent.com/iamaisim/ProjectAirSim/v1.0.1/client/python/example_user_scripts/ardupilot/'
 foreach ($file in @('scene_ardu_quadrotor.jsonc', 'robot_ardu_quadrotor.jsonc')) {
     Invoke-WebRequest -UseBasicParsing -Uri ($pas + 'sim_config/' + $file) -OutFile (Join-Path $config $file)
 }
 Invoke-WebRequest -UseBasicParsing -Uri ($pas + 'project-airsim-quad.param') -OutFile (Join-Path $config 'project-airsim-quad.param')
-Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/ArduPilot/ardupilot/b7ba8bca/Tools/autotest/default_params/airsim-quadX.parm' -OutFile (Join-Path $config 'airsim-quadX.parm')
+Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/ArduPilot/ardupilot/fb773567896014da007bca58358704d4a0d8516f/Tools/autotest/default_params/airsim-quadX.parm' -OutFile (Join-Path $config 'airsim-quadX.parm')
 $adjust = @'
 import commentjson,json,sys
 from pathlib import Path
@@ -160,8 +188,9 @@ $manifest = [ordered]@{
     projectairsim = '1.0.1'
     python_client = '1.0.2'
     mediamtx = '1.21.2'
-    sitl_revision = 'b7ba8bca'
+    sitl_revision = 'fb773567896014da007bca58358704d4a0d8516f'
     sitl_sha256 = $sitlHash
+    sitl_manifest_sha256 = $runtimeManifestHash
     plugin_sha256 = (Get-FileHash -LiteralPath $plugin).Hash
     files = @($files | ForEach-Object {
         @{

@@ -46,7 +46,7 @@ New-Item -ItemType Directory -Path $profileDirectory -Force | Out-Null
 $id = [Guid]::NewGuid().ToString('N')
 $config = @{
     AircraftName = 'NOMAD Inspection / SITL'
-    AircraftFirmware = 'ArduCopter 4.8.0-dev b7ba8bca'
+    AircraftFirmware = 'ArduCopter 4.7.2 / NOMAD TERMINATE'
     FlightControllerModel = 'Project AirSim quadrotor'
     AudioAlerts = $false
     AltitudeCallouts = $false
@@ -262,8 +262,9 @@ try {
             '" -abslog="' + (Join-Path $run 'renderer.log') + '"') 'renderer' (!$Check)
     $renderer = $owned[-1].Process
     $owned += Start-Owned (Join-Path $prepared 'sitl/ArduCopter.exe') `
-        '-Mairsim-copter -I55 -O47.641468,-122.140165,122,0 --sim-address 127.0.0.1 --sim-port-in 9003 --sim-port-out 9002 --serial0 tcp:0 --serial1 tcp:2 --serial2 tcp:3 --defaults copter.parm,airsim-quadX.parm,project-airsim-quad.param,outputs.parm' 'sitl'
+        '-Mairsim-copter -I55 -O47.641468,-122.140165,122,0 --sim-address 127.0.0.1 --sim-port-in 9003 --sim-port-out 9002 --serial0 tcp:0 --serial1 tcp:2 --serial2 tcp:3 --defaults copter.parm,airsim-quadX.parm,project-airsim-quad.param,outputs.parm,termination.parm' 'sitl'
     $simulator = $owned[-1].Process
+    $simulatorStarted = $simulator.StartTime.ToUniversalTime()
     $owned += Start-Owned (Join-Path $base 'simulators/mediamtx-1.21.2/mediamtx.exe') `
         ('"' + (Join-Path $run 'mediamtx.yml') + '"') 'rtsp'
     $deadline = (Get-Date).AddSeconds(25)
@@ -312,7 +313,7 @@ try {
     $owned += $mp
     Write-Output "NOMAD conference session: $run"
     if ($Check) {
-        if (!$mp.Process.WaitForExit(240000)) {
+        if (!$mp.Process.WaitForExit(420000)) {
             throw 'Native conference rehearsal exceeded its deadline.'
         }
     } else {
@@ -326,6 +327,23 @@ try {
         if (!$result.passed) {
             throw 'Native rehearsal failed; see result.json.'
         }
+        if (!$result.ordinary_land_disarmed -or !$result.termination_landed_disarmed -or
+            !$result.latch_refused -or !$result.land_descent -or !$result.terminate_descent -or
+            !$result.same_controller_boot) {
+            throw 'Separate native LAND, TERMINATE and latch observations are incomplete.'
+        }
+        if ($simulator.HasExited -or $simulator.StartTime.ToUniversalTime() -ne $simulatorStarted -or
+            !(Get-NetTCPConnection -State Listen -LocalPort 6310 -OwningProcess $simulator.Id `
+                -ErrorAction SilentlyContinue)) {
+            throw 'The original simulator process did not survive both flights.'
+        }
+        @{
+            process_id = $simulator.Id
+            process_started_utc = $simulatorStarted.ToString('o')
+            same_process = $true
+            same_controller_boot = $result.same_controller_boot
+            controller_boot_count = $result.controller_boot_count_after
+        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $run 'controller-lifecycle.json') -Encoding utf8
         $cameraState = Read-CameraState
         if ($camera.Process.HasExited -or !$cameraState.passed -or
             ((Get-Date) - (Get-Item -LiteralPath (Join-Path $run 'camera-status.json')).LastWriteTime).TotalSeconds -gt 3) {
@@ -356,7 +374,7 @@ try {
             camera_exit_code = $camera.Process.ExitCode
         } |
             ConvertTo-Json | Set-Content -LiteralPath (Join-Path $run 'lifecycle.json') -Encoding utf8
-        Write-Output 'PASS native flight, AUTO survey, video, gimbal, failover, payload, landing and encoder failure cleanup.'
+        Write-Output 'PASS native LAND/TERMINATE descent, latch, AUTO inspection, video, gimbal, failover, payload and encoder cleanup.'
     }
 } finally {
     try {

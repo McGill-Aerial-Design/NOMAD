@@ -4,6 +4,7 @@
 
 import json
 import os
+import sys
 
 import clr
 
@@ -13,7 +14,8 @@ from MissionPlanner import MainV2 as MainType
 from MissionPlanner.Comms import UdpSerialConnect
 from MissionPlanner.Plugin import PluginLoader
 from MissionPlanner.Utilities import Locationwp
-from System import Action, Array, Byte, EventHandler, Object, Single, UInt16
+from System import Action, Array, Byte, DateTime, DateTimeKind, EventHandler, Int64, Object, Single, UInt16, UInt32
+from System.Diagnostics import Stopwatch
 from System.IO import File, Path
 from System.Net import IPAddress, IPEndPoint
 from System.Net.Sockets import UdpClient
@@ -27,20 +29,33 @@ from MAVLink import (
     MAV_CMD,
     MAV_FRAME,
     MAVLinkMessage,
+    mavlink_command_ack_t,
     mavlink_extended_sys_state_t,
     mavlink_global_position_int_t,
     mavlink_heartbeat_t,
     mavlink_mission_current_t,
+    mavlink_rc_channels_t,
     mavlink_servo_output_raw_t,
+    mavlink_statustext_t,
 )
 
 HOST = MainV2
 RUN = os.environ["NOMAD_CONFERENCE_RUN"]
 CHECK = os.environ.get("NOMAD_CONFERENCE_CHECK") == "1"
+sys.path.insert(0, RUN)
+from descent import controller_time_advanced, measure_descent
+
 STATIC = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic
 INSTANCE = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
 state = {"passed": False, "stage": "startup"}
 observed = {"altitude": 0, "boot_ms": 0, "mode": -1, "armed": False, "landed": -1}
+clock = Stopwatch.StartNew()
+trace_mode = None
+descent_rows = []
+servo_rows = []
+ack_rows = []
+ack_serial = 0
+callback_error = ""
 gate = Object()
 connection = MainType.comPort
 stream = None
@@ -64,10 +79,9 @@ def stage(name):
 
 
 def wait_for(predicate, seconds, diagnostic):
-    from System import DateTime
-
-    deadline = DateTime.UtcNow.AddSeconds(seconds)
-    while DateTime.UtcNow < deadline:
+    deadline = clock.ElapsedMilliseconds + seconds * 1000
+    while clock.ElapsedMilliseconds < deadline:
+        require(not callback_error, callback_error)
         if predicate():
             return
         Thread.Sleep(50)
@@ -86,8 +100,6 @@ def current():
 
 
 def native_idle():
-    from System.Diagnostics import Stopwatch
-
     timer = Stopwatch.StartNew()
     idle_since = None
     while timer.ElapsedMilliseconds < 10000:
@@ -103,33 +115,86 @@ def native_idle():
 
 
 def packet_received(sender, packet):
+    global callback_error, ack_serial
     if packet.sysid != 201 or packet.compid != 1:
         return
+    age = (DateTime.UtcNow - packet.rxtime).TotalSeconds
+    if packet.rxtime.Kind != DateTimeKind.Utc or age < 0 or age > 3.5:
+        return
+    received = clock.ElapsedMilliseconds - age * 1000
     Monitor.Enter(gate)
     try:
         message = int(packet.msgid)
         if message == 0:
             item = packet.ToStructure[mavlink_heartbeat_t]()
-            observed.update(mode=int(item.custom_mode), armed=bool(int(item.base_mode) & 128))
+            observed.update(mode=int(item.custom_mode), armed=bool(int(item.base_mode) & 128), heartbeat_rx=received)
         elif message == 33:
             item = packet.ToStructure[mavlink_global_position_int_t]()
+            boot_ms = int(item.time_boot_ms)
+            if not controller_time_advanced(observed["boot_ms"], boot_ms):
+                observed["stale_position_samples"] = observed.get("stale_position_samples", 0) + 1
+                return
             observed.update(
                 altitude=item.relative_alt / 1000.0,
                 lat=item.lat / 1e7,
                 lon=item.lon / 1e7,
-                boot_ms=int(item.time_boot_ms),
+                boot_ms=boot_ms,
+                vz=item.vz * 0.01,
+                position_rx=received,
             )
+            if (
+                trace_mode is not None
+                and observed["mode"] == trace_mode
+                and fresh("heartbeat_rx")
+                and (not descent_rows or boot_ms > descent_rows[-1][0])
+            ):
+                if len(descent_rows) >= 2000:
+                    callback_error = "Bounded descent trace overflowed"
+                else:
+                    descent_rows.append((boot_ms, item.relative_alt * 0.001, item.vz * 0.01))
         elif message == 36:
             item = packet.ToStructure[mavlink_servo_output_raw_t]()
             if item.port == 0:
                 observed.update(
-                    pitch_pwm=int(item.servo7_raw), roll_pwm=int(item.servo8_raw), marker_pwm=int(item.servo9_raw)
+                    pitch_pwm=int(item.servo7_raw),
+                    roll_pwm=int(item.servo8_raw),
+                    marker_pwm=int(item.servo9_raw),
+                    servo_rx=received,
+                    servo_serial=observed.get("servo_serial", 0) + 1,
                 )
+                servo_rows.append((observed["servo_serial"], received, int(item.servo9_raw)))
+                if len(servo_rows) > 32:
+                    servo_rows.pop(0)
         elif message == 245:
             item = packet.ToStructure[mavlink_extended_sys_state_t]()
-            observed["landed"] = int(item.landed_state)
+            observed.update(landed=int(item.landed_state), landed_rx=received)
         elif message == 42:
             observed["mission_item"] = int(packet.ToStructure[mavlink_mission_current_t]().seq)
+        elif message == 65:
+            item = packet.ToStructure[mavlink_rc_channels_t]()
+            observed.update(
+                rc_channels=int(item.chancount),
+                rc7_pwm=int(item.chan7_raw),
+                rc3_pwm=int(item.chan3_raw),
+                rc5_pwm=int(item.chan5_raw),
+                rc_rx=received,
+            )
+        elif message == 77:
+            item = packet.ToStructure[mavlink_command_ack_t]()
+            ack_serial += 1
+            ack_rows.append((ack_serial, int(item.command), int(item.result), received))
+            if len(ack_rows) > 32:
+                ack_rows.pop(0)
+            if int(item.command) in (176, 400):
+                prefix = "mode_ack" if int(item.command) == 176 else "arm_ack"
+                observed.update({prefix: int(item.result), prefix + "_rx": received})
+        elif message == 253:
+            item = packet.ToStructure[mavlink_statustext_t]()
+            text = "".join(chr(int(value)) for value in item.text).rstrip("\0")
+            if "Termination latched: reboot required" in text:
+                observed["latch_notice_rx"] = received
+    except Exception as error:
+        callback_error = "Native packet observation failed: " + str(error)
     finally:
         Monitor.Exit(gate)
 
@@ -144,6 +209,333 @@ def command(identifier, values):
 def call(name, method, values):
     subject = assembly.GetType("NOMAD.MissionPlanner." + name)
     return subject.GetMethod(method, STATIC).Invoke(None, Array[Object](values))
+
+
+def fresh(*keys):
+    now = clock.ElapsedMilliseconds
+    return all(key in observed and 0 <= now - observed[key] <= 3500 for key in keys)
+
+
+def finish(task):
+    wait_for(lambda: task.IsCompleted, 12, "Native helper deadline; outcome requires inspection, no retry")
+    return task.GetAwaiter().GetResult()
+
+
+def read_parameter(name):
+    native_idle()
+    return float(finish(connection.GetParamAsync(Byte(201), Byte(1), name)))
+
+
+def rejected_ack(command_id, after):
+    Monitor.Enter(gate)
+    try:
+        matching = [
+            row
+            for row in ack_rows
+            if row[0] > after
+            and row[1] == command_id
+            and row[2] in (2, 4)
+            and 0 <= clock.ElapsedMilliseconds - row[3] <= 3500
+        ]
+        return matching[-1][2] if matching else None
+    finally:
+        Monitor.Exit(gate)
+
+
+def marker_reports(after, started, expected, reports):
+    Monitor.Enter(gate)
+    try:
+        rows = [
+            row
+            for row in servo_rows
+            if row[0] > after and row[1] >= started and 0 <= clock.ElapsedMilliseconds - row[1] <= 3500
+        ]
+        if reports == 2:
+            require(all(row[2] == expected for row in rows), "First confirmation changed reported marker output")
+        return fresh("servo_rx") and len([row for row in rows if row[2] == expected]) >= reports
+    finally:
+        Monitor.Exit(gate)
+
+
+def marker_action(owner, method, operation, expected, reports=1):
+    native_idle()
+    Monitor.Enter(gate)
+    try:
+        started, after = clock.ElapsedMilliseconds, observed.get("servo_serial", 0)
+    finally:
+        Monitor.Exit(gate)
+    outcome = str(finish(method.Invoke(owner, Array[Object](["marker", operation, None, "ui", None, None]))))
+    wait_for(
+        lambda: marker_reports(after, started, expected, reports),
+        6,
+        "Fresh post-action marker output was not observed: " + operation,
+    )
+    return outcome
+
+
+def verify_commissioning():
+    values = {}
+    for line in File.ReadAllLines(Path.Combine(RUN, "termination.parm")):
+        fields = line.split("#", 1)[0].split()
+        if not fields:
+            continue
+        require(len(fields) == 2 and fields[0] not in values, "Invalid commissioning parameter row")
+        name, expected = fields[0], float(fields[1])
+        actual = read_parameter(name)
+        require(abs(actual - expected) <= 0.0001, "Commissioning readback mismatch: " + name)
+        values[name] = actual
+    require(len(values) > 0, "Commissioning parameters are missing")
+    wait_for(
+        lambda: (
+            fresh("rc_rx", "heartbeat_rx")
+            and not observed["armed"]
+            and observed.get("rc_channels", 0) >= 7
+            and abs(observed.get("rc7_pwm", 0) - 1000) <= 25
+            and abs(observed.get("rc3_pwm", 0) - 1000) <= 25
+            and abs(observed.get("rc5_pwm", 0) - 1800) <= 25
+        ),
+        8,
+        "Healthy native simulated receiver defaults were not observed",
+    )
+    state["commissioning"] = values
+    state["receiver"] = {key: observed[key] for key in ("rc_channels", "rc3_pwm", "rc5_pwm", "rc7_pwm")}
+    controller = plugin.GetType().GetField("_termination", INSTANCE).GetValue(plugin)
+    native_idle()
+    require(
+        bool(finish(controller.GetType().GetMethod("CheckAsync", INSTANCE).Invoke(controller, None))),
+        "Actual NOMAD did not discover configured selectable TERMINATE",
+    )
+    state["termination_supported_disarmed"] = True
+
+
+def takeoff(name):
+    stage(name)
+    native_idle()
+    connection.setMode(Byte(201), Byte(1), "GUIDED")
+    wait_for(lambda: fresh("heartbeat_rx") and observed["mode"] == 4, 5, "Fresh GUIDED mode not observed")
+    native_idle()
+    require(connection.doARM(Byte(201), Byte(1), True, False), "Normal arming rejected")
+    wait_for(
+        lambda: fresh("heartbeat_rx") and observed["armed"] and connection.MAV.cs.armed,
+        5,
+        "Fresh native armed state not observed",
+    )
+    command(MAV_CMD.TAKEOFF, [0, 0, 0, 0, 0, 0, 25])
+    wait_for(
+        lambda: fresh("position_rx") and observed["altitude"] >= 24,
+        45,
+        "Actual aircraft did not reach the requested takeoff height",
+    )
+    wait_for(lambda: fresh("landed_rx") and observed["landed"] == 2, 5, "Fresh airborne state not observed")
+
+
+def begin_descent(mode):
+    global trace_mode
+    Monitor.Enter(gate)
+    try:
+        descent_rows[:] = []
+        trace_mode = mode
+    finally:
+        Monitor.Exit(gate)
+
+
+def descent_metrics(minimum, maximum):
+    global trace_mode
+    Monitor.Enter(gate)
+    try:
+        mode = trace_mode
+        trace_mode = None
+        rows = list(descent_rows)
+    finally:
+        Monitor.Exit(gate)
+    require(not callback_error, callback_error)
+    File.WriteAllText(Path.Combine(RUN, "descent-" + str(mode) + ".json"), json.dumps(rows))
+    return measure_descent(rows, minimum, maximum)
+
+
+def at_home():
+    return (
+        fresh("position_rx")
+        and abs(observed["lat"] - 47.641468) < 0.00005
+        and abs(observed["lon"] + 122.140165) < 0.00007
+    )
+
+
+def baseline_landing():
+    stage("ordinary_land_descent")
+    begin_descent(9)
+    native_idle()
+    connection.setMode(Byte(201), Byte(1), "LAND")
+    wait_for(lambda: fresh("heartbeat_rx") and observed["mode"] == 9, 6, "Fresh LAND mode not observed")
+    state["ordinary_land_mode_observed"] = True
+    wait_for(
+        lambda: (
+            fresh("landed_rx", "position_rx")
+            and observed["landed"] == 1
+            and at_home()
+            and abs(observed["altitude"]) < 2
+        ),
+        90,
+        "Ordinary LAND did not reach the clear launch site",
+    )
+    state["land_descent"] = descent_metrics(0.2, 1.0)
+    native_idle()
+    require(connection.doARM(Byte(201), Byte(1), False, False), "Normal disarming rejected after ordinary LAND")
+    wait_for(lambda: fresh("heartbeat_rx") and not observed["armed"], 6, "Fresh baseline disarm not observed")
+    state["ordinary_land_disarmed"] = True
+    state["baseline_end_boot_ms"] = observed["boot_ms"]
+
+
+def return_above_home():
+    stage("native_return_above_home")
+    native_idle()
+    connection.setMode(Byte(201), Byte(1), "RTL")
+    wait_for(lambda: fresh("heartbeat_rx") and observed["mode"] == 6, 6, "Fresh RTL mode not observed")
+    wait_for(lambda: at_home() and observed["altitude"] >= 20, 45, "RTL did not reach the clear launch site above 20 m")
+    native_idle()
+    connection.setMode(Byte(201), Byte(1), "GUIDED")
+    wait_for(
+        lambda: (
+            fresh("heartbeat_rx", "position_rx")
+            and observed["mode"] == 4
+            and at_home()
+            and observed["altitude"] >= 20
+            and abs(observed["vz"]) < 0.3
+        ),
+        10,
+        "GUIDED hold above the clear launch site was not observed",
+    )
+
+
+def terminate_and_measure():
+    stage("native_terminate_request")
+    require(
+        fresh("position_rx") and observed["boot_ms"] > state["baseline_end_boot_ms"],
+        "Controller time did not advance from the ordinary LAND flight",
+    )
+    dashboard_players = []
+    ui(lambda: dashboard_players.append(open_video("Dashboard")))
+    dashboard_player = dashboard_players[0]
+    wait_for_video(dashboard_player)
+    controller = plugin.GetType().GetField("_termination", INSTANCE).GetValue(plugin)
+    subject = controller.GetType()
+    native_idle()
+    require(
+        bool(finish(subject.GetMethod("CheckAsync", INSTANCE).Invoke(controller, None))),
+        "NOMAD could not freshly verify TERMINATE",
+    )
+    capture_args = Array[Object]([Int64(0), UInt32(0)])
+    require(
+        bool(subject.GetMethod("TryCaptureRequest", INSTANCE).Invoke(controller, capture_args)),
+        "NOMAD could not capture the fresh armed termination target",
+    )
+    require(int(capture_args[1]) == 29, "Unexpected advertised termination mode")
+    begin_descent(29)
+    outcome = str(finish(subject.GetMethod("RequestAsync", INSTANCE).Invoke(controller, capture_args)))
+    state["termination_command_accepted"] = outcome.startswith("Command accepted")
+    require(state["termination_command_accepted"], "Native termination request was not confirmed; no retry")
+    wait_for(
+        lambda: (
+            fresh("heartbeat_rx")
+            and observed["mode"] == 29
+            and bool(subject.GetProperty("Observed", INSTANCE).GetValue(controller, None))
+        ),
+        6,
+        "Fresh TERMINATE heartbeat and actual NOMAD observation were not established",
+    )
+    state["termination_mode_observed"] = True
+    state["termination_entry_boot_ms"] = observed["boot_ms"]
+    ui(
+        lambda: (
+            MainType.View.current.Control.GetType()
+            .GetField("_dashboardView", INSTANCE)
+            .GetValue(MainType.View.current.Control)
+            .UpdateData()
+        )
+    )
+    capture(dashboard_player, "nomad-terminate")
+    native_idle()
+    started = clock.ElapsedMilliseconds
+    previous_ack = ack_serial
+    escaped = finish(
+        connection.doCommandAsync(
+            Byte(201),
+            Byte(1),
+            MAV_CMD.DO_SET_MODE,
+            Single(1),
+            Single(4),
+            Single(0),
+            Single(0),
+            Single(0),
+            Single(0),
+            Single(0),
+            True,
+        )
+    )
+    rejection = rejected_ack(176, previous_ack)
+    require(not escaped and rejection is not None, "The ordinary GUIDED mode request was not explicitly rejected")
+    wait_for(
+        lambda: fresh("heartbeat_rx") and observed["heartbeat_rx"] > started and observed["mode"] == 29,
+        5,
+        "Fresh TERMINATE mode did not persist after the rejected escape",
+    )
+    state["ordinary_mode_change_rejected"] = True
+    state["ordinary_mode_rejection_ack"] = rejection
+    stage("native_terminate_descent")
+    wait_for(
+        lambda: (
+            fresh("landed_rx", "heartbeat_rx", "position_rx")
+            and observed["landed"] == 1
+            and not observed["armed"]
+            and at_home()
+            and abs(observed["altitude"]) < 2
+        ),
+        45,
+        "Native TERMINATE contact and disarming were not observed at the launch site",
+    )
+    state["terminate_descent"] = descent_metrics(2.0, 2.7)
+    state["termination_landed_disarmed"] = True
+
+
+def verify_latch_and_ordinary_rates():
+    stage("termination_latch_refusal")
+    native_idle()
+    started = clock.ElapsedMilliseconds
+    previous_ack = ack_serial
+    require(not connection.doARM(Byte(201), Byte(1), True, False), "Normal arming escaped the native latch")
+    rejections = []
+
+    def latch_refused():
+        rejection = rejected_ack(400, previous_ack)
+        if rejection is not None and not rejections:
+            rejections.append(rejection)
+        return (
+            bool(rejections)
+            and observed.get("latch_notice_rx", -1) >= started
+            and fresh("heartbeat_rx")
+            and observed["heartbeat_rx"] > started
+            and not observed["armed"]
+            and observed["mode"] == 29
+        )
+
+    wait_for(
+        latch_refused, 6, "Native rearming refusal, latch reason and fresh disarmed TERMINATE state were not observed"
+    )
+    state["latch_refused"] = True
+    state["rearm_rejection_ack"] = rejections[0]
+    state["reboot_required"] = True
+    state["termination_latch_parameter"] = read_parameter("AFS_TERMINATE")
+    require(state["termination_latch_parameter"] == 1, "Native termination latch parameter was not observed")
+    rates = {name: read_parameter(name) for name in ("LAND_SPD_MS", "LAND_SPD_HIGH_MS")}
+    require(all(abs(value - 0.5) <= 0.0001 for value in rates.values()), "Termination changed ordinary LAND rates")
+    state["ordinary_land_rates_after_termination"] = rates
+    state["controller_boot_count_after"] = read_parameter("STAT_BOOTCNT")
+    require(
+        not callback_error and state["controller_boot_count_after"] == state["controller_boot_count_before"],
+        "Controller boot count changed during the two-flight check",
+    )
+    state["same_controller_boot"] = True
+    state["stale_position_samples"] = observed.get("stale_position_samples", 0)
 
 
 def set_links(radio, network):
@@ -191,11 +583,12 @@ def upload_survey():
     state["mission_items"] = len(definitions)
 
 
-def open_video():
+def open_video(view="Video"):
     plugin.GetType().GetMethod("ShowMainScreen", INSTANCE).Invoke(plugin, None)
     screen = MainType.View.current.Control
-    screen.GetType().GetMethod("ShowView", INSTANCE).Invoke(screen, Array[Object](["Video"]))
-    video = screen.GetType().GetField("_videoView", INSTANCE).GetValue(screen)
+    screen.GetType().GetMethod("ShowView", INSTANCE).Invoke(screen, Array[Object]([view]))
+    field = "_videoView" if view == "Video" else "_dashboardView"
+    video = screen.GetType().GetField(field, INSTANCE).GetValue(screen)
     player = video.GetType().GetField("_videoHost", INSTANCE).GetValue(video)
     embedded = player.GetType().GetProperty("Player", INSTANCE).GetValue(player, None)
     embedded.GetType().GetMethod("StartStream", INSTANCE).Invoke(embedded, None)
@@ -207,8 +600,6 @@ def camera_frame(embedded):
 
 
 def select_camera(embedded, name):
-    decoded = {"last": camera_frame(embedded), "frames": 0}
-
     def select():
         screen = MainType.View.current.Control
         video = screen.GetType().GetField("_videoView", INSTANCE).GetValue(screen)
@@ -218,6 +609,11 @@ def select_camera(embedded, name):
         require(selector.SelectedItem == name, "Native video input selection was rejected")
 
     ui(select)
+    wait_for_video(embedded)
+
+
+def wait_for_video(embedded):
+    decoded = {"last": camera_frame(embedded), "frames": 0}
 
     def receiving():
         frame = camera_frame(embedded)
@@ -229,7 +625,7 @@ def select_camera(embedded, name):
     wait_for(
         receiving,
         15,
-        "NOMAD did not decode the selected live input: " + name,
+        "NOMAD did not decode fresh frames from the selected live input",
     )
 
 
@@ -275,7 +671,7 @@ try:
     stage("connect_native_router")
     ui(lambda: connection.Open(False, True, False))
     current()
-    for message in (33, 36, 245):
+    for message in (33, 36, 65, 245):
         command(MAV_CMD.SET_MESSAGE_INTERVAL, [message, 100000, 0, 0, 0, 0, 0])
     upload_survey()
     ui(menu)
@@ -287,17 +683,19 @@ try:
     stage("ready")
     if CHECK:
         wait_for(lambda: observed["boot_ms"] >= 45000 and observed.get("lat", 0) != 0, 60, "GPS/EKF settling deadline")
-        native_idle()
-        connection.setMode(Byte(201), Byte(1), "GUIDED")
-        wait_for(lambda: observed["mode"] == 4, 5, "GUIDED mode not observed")
-        native_idle()
-        require(connection.doARM(Byte(201), Byte(1), True, False), "Normal arming rejected")
-        wait_for(lambda: observed["armed"] and connection.MAV.cs.armed, 5, "Native armed state not observed")
-        stage("native_takeoff")
-        command(MAV_CMD.TAKEOFF, [0, 0, 0, 0, 0, 0, 25])
-        wait_for(lambda: observed["altitude"] >= 24, 45, "Actual aircraft did not reach the requested takeoff height")
+        stage("termination_commissioning")
+        verify_commissioning()
+        state["controller_boot_count_before"] = read_parameter("STAT_BOOTCNT")
+        require(
+            state["controller_boot_count_before"] >= 0
+            and state["controller_boot_count_before"] == int(state["controller_boot_count_before"]),
+            "Invalid controller boot counter",
+        )
+        state["descent_evidence"] = "Sampled MAVLink rates with an altitude/time cross-check"
+        takeoff("ordinary_land_takeoff")
+        baseline_landing()
+        takeoff("inspection_takeoff")
         state["takeoff_altitude_m"] = observed["altitude"]
-        wait_for(lambda: observed["landed"] == 2, 5, "Airborne state not observed")
         native_idle()
         require(connection.setWPCurrent(Byte(201), Byte(1), UInt16(2)), "Survey start item not confirmed")
         native_idle()
@@ -316,10 +714,17 @@ try:
         state["video_inputs_observed"] = ["Chase camera", "Inspection gimbal"]
         old_frame = camera_frame(player)
         native_idle()
+        gimbal_started, gimbal_serial = clock.ElapsedMilliseconds, observed.get("servo_serial", 0)
         result = call("GimbalController", "RequestPitchRollTargetAsync", [Single(-35), Single(12)])
         result.GetAwaiter().GetResult()
         wait_for(
-            lambda: abs(observed.get("pitch_pwm", 0) - 1306) < 20 and abs(observed.get("roll_pwm", 0) - 1698) < 20,
+            lambda: (
+                fresh("servo_rx")
+                and observed.get("servo_serial", 0) > gimbal_serial
+                and observed["servo_rx"] >= gimbal_started
+                and abs(observed.get("pitch_pwm", 0) - 1306) < 20
+                and abs(observed.get("roll_pwm", 0) - 1698) < 20
+            ),
             8,
             "NOMAD gimbal command did not change real SITL outputs",
         )
@@ -349,7 +754,7 @@ try:
         wait_for(lambda: manager.ActiveLink == "network", 15, "Actual router did not fail over")
         state["failover_observed"] = True
         # ArduPilot message intervals belong to each MAVLink serial port.
-        for message in (33, 36, 245):
+        for message in (33, 36, 65, 245):
             command(MAV_CMD.SET_MESSAGE_INTERVAL, [message, 100000, 0, 0, 0, 0, 0])
         owner = (
             assembly.GetType("NOMAD.MissionPlanner.PayloadController")
@@ -357,43 +762,23 @@ try:
             .GetValue(None, None)
         )
         method = owner.GetType().GetMethod("ActAsync", INSTANCE)
-        native_idle()
-        safe = method.Invoke(owner, Array[Object](["marker", "safe", None, "ui", None, None])).GetAwaiter().GetResult()
+        safe = marker_action(owner, method, "safe", 1000)
         require(str(safe) == "Safe accepted.", "Marker Safe rejected: " + str(safe))
-        wait_for(lambda: observed.get("marker_pwm") == 1000, 6, "Initial Safe output not observed")
-        first = (
-            method.Invoke(owner, Array[Object](["marker", "activate", None, "ui", None, None])).GetAwaiter().GetResult()
-        )
+        first = marker_action(owner, method, "activate", 1000, reports=2)
         state["first_confirmation"] = str(first)
         require(
             str(first) == "Confirmation incomplete or neutral needed." and observed.get("marker_pwm") == 1000,
             "First marker confirmation changed output: " + str(first),
         )
-        method.Invoke(owner, Array[Object](["marker", "activate", None, "ui", None, None])).GetAwaiter().GetResult()
-        wait_for(lambda: observed.get("marker_pwm") == 2000, 6, "Marker output not observed after failover")
+        marker_action(owner, method, "activate", 2000)
         state["marker_pwm"] = observed["marker_pwm"]
         capture(player, "nomad-inspection")
-        method.Invoke(owner, Array[Object](["marker", "safe", None, "ui", None, None])).GetAwaiter().GetResult()
-        wait_for(lambda: observed.get("marker_pwm") == 1000, 6, "Safe output not observed")
+        marker_action(owner, method, "safe", 1000)
         set_links(True, True)
-        stage("native_return_and_land")
-        native_idle()
-        connection.setMode(Byte(201), Byte(1), "RTL")
-        wait_for(lambda: observed["mode"] == 6, 6, "RTL mode not observed")
-        wait_for(
-            lambda: (
-                observed["landed"] == 1
-                and abs(observed["lat"] - 47.641468) < 0.00005
-                and abs(observed["lon"] + 122.140165) < 0.00007
-                and abs(observed["altitude"]) < 2
-            ),
-            90,
-            "Return to launch and landed state not observed",
-        )
+        return_above_home()
+        terminate_and_measure()
+        verify_latch_and_ordinary_rates()
         state["landing_position"] = [observed["lat"], observed["lon"], observed["altitude"]]
-        native_idle()
-        require(connection.doARM(Byte(201), Byte(1), False, False), "Normal disarming rejected after landing")
-        wait_for(lambda: not observed["armed"], 6, "Disarmed state not observed")
         state.update(passed=True, landed_state=observed["landed"], disarmed=True)
         stage("passed")
 except Exception as error:

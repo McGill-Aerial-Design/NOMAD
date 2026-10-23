@@ -173,13 +173,44 @@ cleanup before proceeding. A timeout requests normal close of only the owned MP.
 ## Rendered conference rehearsal
 
 The [conference runbook](../conference/README.md) describes a separate prepared
-Mission Planner host with the actual NOMAD plugin, pinned ArduPilot SITL and
-Project AirSim Neighborhood cameras. Unlike the unarmed native output fixture
-above, its explicit `conference/run.ps1 -Check` request arms and flies the owned
-simulator, executes an AUTO survey leg, checks video/gimbal/payload behavior across
-a telemetry route cut, observes landing/disarming, and checks encoder failure
-cleanup. Setup builds into `build/conference`; it does not install the plugin.
-The runbook defines prerequisites, commands, evidence files and network limits.
+Mission Planner host with the actual NOMAD plugin, custom Copter 4.7.2 SITL and
+Project AirSim Neighborhood cameras. The custom runtime retains native TERMINATE,
+AFS/RC/fence entry checks and the reboot latch, with scripting disabled. The
+read-only [Windows SITL workflow](../.github/workflows/conference-sitl.yml) builds
+the pinned corresponding source and produces a one-day runtime artifact with
+source/compiler/file identities. A compiled binary is not behavior qualification.
+
+Unlike the unarmed native output fixture above, explicit
+`conference/run.ps1 -Check` normally arms and flies the owned simulator twice in
+one boot. It compares ordinary LAND against native TERMINATE using fresh signed
+velocity with an altitude/time cross-check in two descent bands. Both use MAVLink
+estimator data, with coverage and sample-gap bounds. The
+inspection flight retains actual AUTO mission progress, both video inputs, gimbal
+outputs, route failover and payload confirmation/Safe checks. The termination
+request uses the actual NOMAD controller; separate fresh mode, landed and disarmed
+observations are required. New matching rejection ACKs and continuing native state
+prove mode-change/rearming refusal. The check does not claim the human Shift
+gesture or confirmation dialog was exercised, or that a subsequent preserved-state
+controller reboot was qualified.
+
+Pure helper checks can run without Mission Planner or a simulator:
+
+```powershell
+pixi run pytest tests/test_conference_descent.py tests/test_conference_links.py tests/test_conference_sitl.py -q
+```
+
+The descent tests reject climbs, contradictory altitude/velocity, excessive speed,
+stale/duplicate controller times, nonfinite values, and missing/short descent bands.
+The link tests cover independent disconnect/reconnect, drop/restore and partial
+send failure. Source-builder tests verify the bounded extraction/build identities
+and required native features; they do not execute flight behavior. The existing
+product termination gate retains separate synthetic-peer/actual-host API coverage.
+
+After the native flight check, the launcher also checks encoder failure cleanup.
+Setup builds into `build/conference`; it does not install the plugin or flash
+hardware. The runbook defines the exact cohort, setup/run commands, commissioning,
+evidence files and network limits. Copter simulator evidence does not establish
+QuadPlane or physical aircraft acceptance.
 
 ## Documentation and tooling
 
