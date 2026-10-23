@@ -113,6 +113,8 @@ def build(work):
     require(sys.platform == "cygwin" and sys.version_info[:2] == (3, 12), "Use Cygwin Python 3.12")
     require(not work.exists(), "The build directory must be fresh")
     repo = Path(__file__).resolve().parents[1]
+    nomad_sha = run(["git", "-c", "safe.directory=" + str(repo), "-C", repo, "rev-parse", "HEAD"]).strip()
+    require(re.fullmatch(r"[0-9a-f]{40}", nomad_sha), "NOMAD source revision missing")
     sys.path.insert(0, str(repo))
     from scripts.release.build_firmware import digest, extract_verified, load_identity, verify_revisions
 
@@ -151,9 +153,10 @@ def build(work):
         "--no-submodule-update",
         *FLAGS,
     ]
-    compile_command = [sys.executable, source / "waf", "--out", output, "copter", "-j4"]
-    for command in (configure, compile_command):
-        print(run(command, cwd=source, timeout=3600), flush=True)
+    compile_command = [sys.executable, source / "waf", "--out", output, "copter", "-j8"]
+    print(run(configure, cwd=source, timeout=3600), flush=True)
+    print("+ " + " ".join(str(value) for value in compile_command), flush=True)
+    subprocess.run([str(value) for value in compile_command], cwd=source, check=True, timeout=3600)
     executable = output / "sitl/bin/arducopter"
     require(executable.is_file(), "Copter executable missing")
     with executable.open("rb") as binary:
@@ -184,7 +187,6 @@ def build(work):
         original = work / "source" / filename
         require(original.is_file(), "Corresponding-source notice missing: " + filename)
         shutil.copy2(original, runtime / filename)
-    nomad_sha = run(["git", "-C", repo, "rev-parse", "HEAD"]).strip()
     (runtime / "SOURCE.txt").write_text(
         "Windows SITL only; not an aircraft firmware image or physical qualification.\n"
         "ArduPilot and the native termination patch are GPL-3.0-or-later; see COPYING.txt.\n"
