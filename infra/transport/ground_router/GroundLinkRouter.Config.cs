@@ -10,19 +10,14 @@ namespace NOMAD.MissionPlanner
 {
     public partial class GroundLinkRouter
     {
-        private static List<LinkConfig> TranslateLinks(RouterConfig c)
-        {
-            return c.Links;
-        }
-
         private static void Validate(RouterConfig config, List<LinkConfig> links, List<ConsumerConfig> consumers)
         {
             if (links == null || links.Count == 0 || links.Count > 64 || !links.Any(l => l != null && l.Enabled))
             {
                 throw new ArgumentException(
-                    "Router Links are required; move legacy LTE/RadioMaster settings into the Links array.");
+                    "At least one enabled router link is required.");
             }
-            if (config.StatsTickMs < 10 || !Positive(config.HeartbeatTimeoutSec) ||
+            if (config.StatsTickMs < 10 || !Positive(config.PacketTimeoutSec) ||
                 !Positive(config.FailoverCooldownSec) || config.PreferredLinkReconnectDelaySec < 0)
             {
                 throw new ArgumentException("Invalid router timing");

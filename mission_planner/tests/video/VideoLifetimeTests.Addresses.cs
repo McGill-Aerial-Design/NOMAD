@@ -14,7 +14,8 @@ internal static partial class VideoLifetimeTests
     {
         var failures = new List<string>();
         var udp = new FakeVideoPipeline();
-        using (var player = new EmbeddedVideoPlayer("Synthetic UDP", "udp://127.0.0.1:6000", true,
+        using (var player = new EmbeddedVideoPlayer("Synthetic UDP",
+            new VideoInputProfile { Name = "Test input", Url = "udp://127.0.0.1:6000" }, true,
             CancellationToken.None, () => udp))
         {
             player.StartStream();
@@ -25,7 +26,8 @@ internal static partial class VideoLifetimeTests
         CheckClean(udp);
         const string url = "rtsp://synthetic:credential@video.invalid/live?note=\"left ! fakesink\"&view=main";
         var rtsp = new FakeVideoPipeline();
-        using (var player = new EmbeddedVideoPlayer("Synthetic RTSP", url, true,
+        using (var player = new EmbeddedVideoPlayer("Synthetic RTSP",
+            new VideoInputProfile { Name = "Test input", Url = url }, true,
             CancellationToken.None, () => rtsp))
         {
             player.StartStream();
@@ -43,7 +45,8 @@ internal static partial class VideoLifetimeTests
 
     private static string EmbeddedPipeline(string url)
     {
-        using (var player = new EmbeddedVideoPlayer("Synthetic source", url, true,
+        using (var player = new EmbeddedVideoPlayer("Synthetic source",
+            new VideoInputProfile { Name = "Test input", Url = url }, true,
             CancellationToken.None, () => throw new InvalidOperationException("No source may start in this check.")))
         {
             return (string)typeof(EmbeddedVideoPlayer).GetMethod("BuildGStreamerPipeline",
@@ -101,7 +104,8 @@ internal static partial class VideoLifetimeTests
     private static void InvalidVideoDoesNotStart()
     {
         int created = 0;
-        using (var player = new EmbeddedVideoPlayer("Invalid synthetic source", "udp://bad", true,
+        using (var player = new EmbeddedVideoPlayer("Invalid synthetic source",
+            new VideoInputProfile { Name = "Test input", Url = "udp://bad" }, true,
             CancellationToken.None, () => { created++; return new FakeVideoPipeline(); }))
         {
             player.StartStream();
@@ -109,6 +113,21 @@ internal static partial class VideoLifetimeTests
             Check(created == 0 && status.ForeColor == Color.Red && status.Text.Contains("UDP listening port"),
                 "Invalid video source started native resources or escaped its UI error state.");
         }
+    }
+
+    private static void VideoUdpInput()
+    {
+        var fake = new FakeVideoPipeline();
+        using (var player = new EmbeddedVideoPlayer("fake",
+            new VideoInputProfile { Name = "Test input", Url = "UDP://@:6500" }, true,
+            CancellationToken.None, () => fake))
+        {
+            player.StartStream();
+            Wait(fake.ReadEntered, "UDP stream startup");
+            Check(fake.Pipeline.StartsWith("udpsrc port=6500 ", StringComparison.Ordinal),
+                "Configured UDP port was changed: " + fake.Pipeline);
+        }
+        CheckClean(fake);
     }
 
 }

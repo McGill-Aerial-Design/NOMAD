@@ -11,22 +11,6 @@ namespace NOMAD.MissionPlanner
     {
         private static void ValidateVideoDocument(JObject document)
         {
-            var legacy = document["VideoUrl"];
-            if (legacy != null)
-            {
-                if (legacy.Type != JTokenType.String)
-                { throw new JsonSerializationException("Legacy VideoUrl must be text."); }
-                if (document[nameof(VideoInputs)] != null || document[nameof(SelectedVideoInputName)] != null)
-                { throw new JsonSerializationException("Use video inputs or legacy VideoUrl, not both."); }
-                string url = (string)legacy;
-                document.Remove("VideoUrl");
-                if (!string.IsNullOrWhiteSpace(url))
-                {
-                    document[nameof(VideoInputs)] = new JArray(JObject.FromObject(
-                        new VideoInputProfile { Name = "Default", Url = url.Trim() }));
-                    document[nameof(SelectedVideoInputName)] = "Default";
-                }
-            }
             if (document[nameof(SelectedVideoInputName)] != null &&
                 document[nameof(SelectedVideoInputName)].Type != JTokenType.String)
             { throw new JsonSerializationException("Selected video input name must be text."); }

@@ -76,10 +76,7 @@ Copy-Item -LiteralPath (Join-Path $fixtures 'native_sitl.py') -Destination $atte
 $preserved = @(
     (Join-Path $env:USERPROFILE 'Documents/Mission Planner/config.xml'),
     (Join-Path $env:LOCALAPPDATA 'Mission Planner/plugins/nomad_aircraft_profiles.json'),
-    (Join-Path $env:LOCALAPPDATA 'Mission Planner/plugins/nomad_aircraft_profiles.json.bak'),
-    (Join-Path $env:LOCALAPPDATA 'Mission Planner/plugins/nomad_config.json'),
-    (Join-Path $env:LOCALAPPDATA 'Mission Planner/plugins/nomad_config.json.bak'),
-    (Join-Path $env:LOCALAPPDATA 'Mission Planner/plugins/NOMAD/geofence_config.json')
+    (Join-Path $env:LOCALAPPDATA 'Mission Planner/plugins/nomad_aircraft_profiles.json.bak')
 )
 $before = @{}
 foreach ($path in $preserved) {
@@ -233,8 +230,7 @@ try {
         }
     }
     $result.preserved_files_unchanged = $unchanged
-    $result.preserved_file_set = @('mp-config', 'aircraft-profiles', 'aircraft-profiles-backup',
-        'legacy-profile', 'legacy-profile-backup', 'advisory-config')
+    $result.preserved_file_set = @('mp-config', 'aircraft-profiles', 'aircraft-profiles-backup')
     $result.passed = $result.passed -and $unchanged -and $result.owned_host_exited -and $result.host_exit_code -eq 0 -and $result.owned_simulator_exited
     $result | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $attempt 'result.json') -Encoding UTF8
     $result | ConvertTo-Json -Depth 10

@@ -23,7 +23,7 @@ internal static partial class GroundRouterTests
         {
             await bed.LatchMp();
             bed.SendLte(Frames.Heartbeat(1, 9, 0)); // pin active=LTE before the storm
-            await WaitUntil(() => bed.Router.Lte.IsConnected, 2000);
+            await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").IsConnected, 2000);
 
             const int N = 3000;
             var frames = new byte[N][];
@@ -64,8 +64,10 @@ internal static partial class GroundRouterTests
             CheckEq(got.Count, N, "zero duplicates under mirrored stress");
             CheckEq(got.Distinct().Count(), N, "zero loss under mirrored stress");
             Check(bed.Router.IsRunning, "router still running after stress");
-            Check(bed.Router.Lte.FramesReceived >= N, $"LTE ingested full stream ({bed.Router.Lte.FramesReceived}/{N})");
-            Check(bed.Router.Radio.FramesReceived >= N, $"Radio ingested full stream ({bed.Router.Radio.FramesReceived}/{N})");
+            Check(bed.Router.Links.Single(link => link.Type == "LTE").FramesReceived >= N,
+                $"LTE ingested full stream ({bed.Router.Links.Single(link => link.Type == "LTE").FramesReceived}/{N})");
+            Check(bed.Router.Links.Single(link => link.Type == "RadioMaster").FramesReceived >= N,
+                $"Radio ingested full stream ({bed.Router.Links.Single(link => link.Type == "RadioMaster").FramesReceived}/{N})");
             if (TestFailedSoFar) bed.DumpLogs("mirrored stress");
         }
     }
@@ -76,7 +78,7 @@ internal static partial class GroundRouterTests
         {
             await bed.LatchMp();
             bed.SendLte(Frames.Heartbeat(1, 9, 0)); // pin active=LTE before the storm
-            await WaitUntil(() => bed.Router.Lte.IsConnected, 2000);
+            await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").IsConnected, 2000);
 
             const int N = 1500; // inbound mirrored frames per link
             const int M = 300;  // GCS-originated outbound frames
@@ -121,11 +123,11 @@ internal static partial class GroundRouterTests
             CheckEq(DrainMarkers(bed.RadioSrc).Count(m => m >= 300000), 0, "no outbound frames leaked to the standby link");
 
             Check(bed.Router.IsRunning, "router still running");
-            Check(bed.Router.Lte.BytesSentOutbound > 0, "outbound byte counter advanced");
+            Check(bed.Router.Links.Single(link => link.Type == "LTE").BytesSentOutbound > 0, "outbound byte counter advanced");
             Check(!string.IsNullOrEmpty(bed.Router.GetStatusSummary()), "status summary available");
 
             bed.Router.ResetCounters();
-            CheckEq(bed.Router.Lte.FramesReceived, 0, "counters reset");
+            CheckEq(bed.Router.Links.Single(link => link.Type == "LTE").FramesReceived, 0, "counters reset");
             if (TestFailedSoFar) bed.DumpLogs("bidirectional stress");
         }
     }

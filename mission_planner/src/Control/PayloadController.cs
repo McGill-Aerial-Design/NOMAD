@@ -197,7 +197,7 @@ namespace NOMAD.MissionPlanner
             {
                 if (definition.Behavior == "ServoBidirectional")
                 {
-                    float trim = await target.ReadTrimAsync(definition.Channel).ConfigureAwait(false);
+                    float trim = await target.ReadParameterAsync("SERVO" + definition.Channel + "_TRIM").ConfigureAwait(false);
                     if (trim != definition.Safe)
                     { return await SetStatus(definition.Id, "Live SERVO" + definition.Channel + "_TRIM must equal profile safe/neutral PWM; no activation sent."); }
                 }

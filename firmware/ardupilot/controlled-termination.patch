@@ -1,0 +1,2649 @@
+diff --git a/ArduCopter/AP_Arming_Copter.cpp b/ArduCopter/AP_Arming_Copter.cpp
+index cf7a28a..a0cd0f1 100644
+--- a/ArduCopter/AP_Arming_Copter.cpp
++++ b/ArduCopter/AP_Arming_Copter.cpp
+@@ -26,6 +26,10 @@ bool AP_Arming_Copter::run_pre_arm_checks(bool display_failure)
+         return false;
+     }
+ 
++    if (!termination_pre_arm_checks(display_failure)) {
++        return false;
++    }
++
+     // check if motor interlock and either Emergency Stop aux switches are used
+     // at the same time.  This cannot be allowed.
+     bool passed = true;
+@@ -652,6 +656,77 @@ bool AP_Arming_Copter::arm_checks(AP_Arming::Method method)
+ }
+ 
+ // mandatory checks that will be run if ARMING_SKIPCHK skips all or arming forced
++bool AP_Arming_Copter::termination_pre_arm_checks(bool display_failure)
++{
++    int8_t position = -1;
++    const bool position_valid = rc().get_raw_flight_mode_switch_position(position);
++    if (position_valid && position >= 0 && position < copter.num_flight_modes &&
++        copter.flight_modes[position] == (int8_t)Mode::Number::TERMINATE) {
++        check_failed(display_failure, "Terminate mode switch selected");
++        return false;
++    }
++#if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
++    if (copter.mode_terminate.active()) {
++        check_failed(display_failure, "Termination latched: reboot required");
++        return false;
++    }
++    if (copter.g2.afs.controlled_termination_configured() && copter.g2.afs.termination_requested()) {
++        check_failed(display_failure, "Termination request active");
++        return false;
++    }
++    if (copter.g2.afs.controlled_termination_configured()) {
++        for (uint8_t i = 0; i < copter.num_flight_modes; i++) {
++            if (copter.flight_modes[i] == (int8_t)Mode::Number::TERMINATE) {
++                check_failed(display_failure, "Termination must use dedicated RC option");
++                return false;
++            }
++        }
++        if (!position_valid || position < 0 || position >= copter.num_flight_modes ||
++            copter.g.flight_mode_chan <= 0 || copter.g.flight_mode_chan > NUM_RC_CHANNELS) {
++            check_failed(display_failure, "Termination requires native RC mode switch");
++            return false;
++        }
++        RC_Channel *termination_input = rc().get_termination_input();
++        if (termination_input == nullptr) {
++            check_failed(display_failure, "Termination requires one valid dedicated RC input");
++            return false;
++        }
++        if (termination_input->get_aux_switch_pos() != RC_Channel::AuxSwitchPos::LOW) {
++            check_failed(display_failure, "Termination RC input must be valid LOW");
++            return false;
++        }
++#if AP_FENCE_ENABLED
++        char fence_failure[100] {};
++        if (!copter.fence.enabled() || !copter.fence.pre_arm_check(fence_failure, sizeof(fence_failure))) {
++            check_failed(display_failure, "Termination requires valid enabled fence");
++            return false;
++        }
++#else
++        check_failed(display_failure, "Termination requires native fence support");
++        return false;
++#endif
++        if (!copter.g2.afs.controlled_termination_available()) {
++            check_failed(display_failure, "Controlled termination unavailable");
++            return false;
++        }
++        if (!rc().option_is_enabled(RC_Channels::Option::IGNORE_OVERRIDES) ||
++            rc().option_is_enabled(RC_Channels::Option::IGNORE_RECEIVER) ||
++            rc().option_is_enabled(RC_Channels::Option::IGNORE_FAILSAFE) ||
++            copter.g.failsafe_throttle == FS_THR_DISABLED) {
++            check_failed(display_failure, "Termination requires physical RC failsafe, no overrides");
++            return false;
++        }
++        if (rc().get_fs_timeout_ms() > 4500 || !rc().has_had_rc_receiver() ||
++            AP_HAL::millis() - copter.last_radio_update_ms > rc().get_fs_timeout_ms() ||
++            !rc().has_valid_input() || copter.g2.afs.receiver_failsafe_active()) {
++            check_failed(display_failure, "Termination requires healthy RC");
++            return false;
++        }
++    }
++#endif
++    return true;
++}
++
+ bool AP_Arming_Copter::mandatory_checks(bool display_failure)
+ {
+     // call mandatory position checks and update notify status because regular position checks will not run
+@@ -688,6 +763,11 @@ bool AP_Arming_Copter::arm(const AP_Arming::Method method, const bool do_arming_
+         return true;
+     }
+ 
++    // These safety checks also apply to forced arming and disabled optional checks.
++    if (!termination_pre_arm_checks(true)) {
++        in_arm_motors = false;
++        return false;
++    }
+     if (!AP_Arming::arm(method, do_arming_checks)) {
+         AP_Notify::events.arming_failed = true;
+         in_arm_motors = false;
+diff --git a/ArduCopter/AP_Arming_Copter.h b/ArduCopter/AP_Arming_Copter.h
+index 906e49d..5b747a1 100644
+--- a/ArduCopter/AP_Arming_Copter.h
++++ b/ArduCopter/AP_Arming_Copter.h
+@@ -34,6 +34,7 @@ protected:
+ 
+     // mandatory checks that cannot be bypassed.  This function will only be called if ARMING_SKIPCHK skips all or arming forced
+     bool mandatory_checks(bool display_failure) override;
++    bool termination_pre_arm_checks(bool display_failure);
+ 
+     // NOTE! the following check functions *DO* call into AP_Arming:
+     bool ins_checks(bool display_failure) override;
+diff --git a/ArduCopter/Copter.h b/ArduCopter/Copter.h
+index 90bee85..5f7c9b8 100644
+--- a/ArduCopter/Copter.h
++++ b/ArduCopter/Copter.h
+@@ -215,6 +215,7 @@ public:
+     friend class ModeFollow;
+     friend class ModeGuided;
+     friend class ModeLand;
++    friend class ModeTerminate;
+     friend class ModeLoiter;
+     friend class ModePosHold;
+     friend class ModeRTL;
+@@ -1058,6 +1059,9 @@ private:
+ #endif
+ #endif
+     ModeLand mode_land;
++#if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
++    ModeTerminate mode_terminate;
++#endif
+ #if MODE_LOITER_ENABLED
+     ModeLoiter mode_loiter;
+ #endif
+diff --git a/ArduCopter/GCS_MAVLink_Copter.cpp b/ArduCopter/GCS_MAVLink_Copter.cpp
+index edf8b20..ed5e312 100644
+--- a/ArduCopter/GCS_MAVLink_Copter.cpp
++++ b/ArduCopter/GCS_MAVLink_Copter.cpp
+@@ -1235,6 +1235,10 @@ void GCS_MAVLINK_Copter::handle_message(const mavlink_message_t &msg)
+ 
+ MAV_RESULT GCS_MAVLINK_Copter::handle_flight_termination(const mavlink_command_int_t &packet) {
+ #if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
++    if (copter.g2.afs.controlled_termination_configured() || copter.g2.afs.controlled_termination_active()) {
++        // A failed controlled request must never become the legacy immediate disarm.
++        return copter.g2.afs.gcs_terminate(packet.param1 > 0.5f, "GCS request") ? MAV_RESULT_ACCEPTED : MAV_RESULT_FAILED;
++    }
+     if (GCS_MAVLINK::handle_flight_termination(packet) == MAV_RESULT_ACCEPTED) {
+         return MAV_RESULT_ACCEPTED;
+     }
+@@ -1396,6 +1400,9 @@ uint8_t GCS_MAVLINK_Copter::send_available_mode(uint8_t index) const
+         &copter.mode_guided,
+ #endif
+         &copter.mode_land,
++#if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
++        &copter.mode_terminate,
++#endif
+ #if MODE_RTL_ENABLED
+         &copter.mode_rtl,
+ #endif
+diff --git a/ArduCopter/Parameters.cpp b/ArduCopter/Parameters.cpp
+index 61ce1fe..0806bb8 100644
+--- a/ArduCopter/Parameters.cpp
++++ b/ArduCopter/Parameters.cpp
+@@ -149,7 +149,7 @@ const AP_Param::Info Copter::var_info[] = {
+     // @Param: FLTMODE1
+     // @DisplayName: Flight Mode 1
+     // @Description: Flight mode when pwm of Flightmode channel(FLTMODE_CH) is <= 1230
+-    // @Values: 0:Stabilize,1:Acro,2:AltHold,3:Auto,4:Guided,5:Loiter,6:RTL,7:Circle,9:Land,11:Drift,13:Sport,14:Flip,15:AutoTune,16:PosHold,17:Brake,18:Throw,19:Avoid_ADSB,20:Guided_NoGPS,21:Smart_RTL,22:FlowHold,23:Follow,24:ZigZag,25:SystemID,26:Heli_Autorotate,27:Auto RTL,28:Turtle
++    // @Values: 0:Stabilize,1:Acro,2:AltHold,3:Auto,4:Guided,5:Loiter,6:RTL,7:Circle,9:Land,11:Drift,13:Sport,14:Flip,15:AutoTune,16:PosHold,17:Brake,18:Throw,19:Avoid_ADSB,20:Guided_NoGPS,21:Smart_RTL,22:FlowHold,23:Follow,24:ZigZag,25:SystemID,26:Heli_Autorotate,27:Auto RTL,28:Turtle,29:TERMINATE
+     // @User: Standard
+     GSCALAR(flight_mode1, "FLTMODE1",               (uint8_t)FLIGHT_MODE_1),
+ 
+diff --git a/ArduCopter/afs_copter.cpp b/ArduCopter/afs_copter.cpp
+index 0d639e1..ad9e45b 100644
+--- a/ArduCopter/afs_copter.cpp
++++ b/ArduCopter/afs_copter.cpp
+@@ -3,6 +3,7 @@
+  */
+ 
+ #include "Copter.h"
++#include <AP_RCProtocol/AP_RCProtocol.h>
+ 
+ #if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
+ 
+@@ -11,6 +12,11 @@
+  */
+ void AP_AdvancedFailsafe_Copter::terminate_vehicle(void)
+ {
++    if (controlled_termination_active() || controlled_termination_configured()) {
++        // Never fall through to the hard-cut action if controlled entry is unavailable.
++        copter.set_mode(Mode::Number::TERMINATE, ModeReason::TERMINATE);
++        return;
++    }
+     if (_terminate_action == TERMINATE_ACTION_LAND) {
+         copter.set_mode(Mode::Number::LAND, ModeReason::TERMINATE);
+     } else {
+@@ -63,4 +69,57 @@ AP_AdvancedFailsafe::control_mode AP_AdvancedFailsafe_Copter::afs_mode(void)
+  {
+     copter.set_mode(Mode::Number::AUTO,ModeReason::GCS_FAILSAFE);
+  }
++bool AP_AdvancedFailsafe_Copter::supports_controlled_termination() const
++{
++    return FRAME_CONFIG != HELI_FRAME && AP_RCPROTOCOL_ENABLED;
++}
++
++bool AP_AdvancedFailsafe_Copter::receiver_failsafe_active() const
++{
++#if AP_RCPROTOCOL_ENABLED
++    return copter.failsafe.radio || AP::RC().failsafe_active() ||
++        (controlled_termination_configured() && rc().get_termination_input() == nullptr);
++#else
++    return true;
++#endif
++}
++
++bool AP_AdvancedFailsafe_Copter::controlled_termination_active() const
++{
++    return copter.mode_terminate.active();
++}
++
++bool AP_AdvancedFailsafe_Copter::terminating_vehicle_via_landing() const
++{
++    return controlled_termination_active() || controlled_termination_configured() ||
++        AP_AdvancedFailsafe::terminating_vehicle_via_landing();
++}
++
++bool AP_AdvancedFailsafe_Copter::controlled_termination_available() const
++{
++    return copter.wp_nav != nullptr && copter.pos_control != nullptr &&
++        controlled_parameters_valid() && copter.ekf_alt_ok() && copter.ahrs.healthy() &&
++        controlled_descent_rate_ms() <= copter.wp_nav->get_default_speed_down_ms();
++}
++
++void AP_AdvancedFailsafe_Copter::mark_controlled_termination()
++{
++    _terminate.set_and_notify(1);
++}
++
++bool AP_AdvancedFailsafe_Copter::gcs_terminate(bool should_terminate, const char *reason)
++{
++    if (controlled_termination_active()) {
++        return should_terminate;
++    }
++    if (!controlled_termination_configured()) {
++        return AP_AdvancedFailsafe::gcs_terminate(should_terminate, reason);
++    }
++    if (!should_terminate) {
++        _terminate.set_and_notify(0);
++        return true;
++    }
++    return copter.set_mode(Mode::Number::TERMINATE, ModeReason::TERMINATE);
++}
++
+ #endif // AP_COPTER_ADVANCED_FAILSAFE_ENABLED
+diff --git a/ArduCopter/afs_copter.h b/ArduCopter/afs_copter.h
+index 4d133f6..74667f6 100644
+--- a/ArduCopter/afs_copter.h
++++ b/ArduCopter/afs_copter.h
+@@ -34,6 +34,13 @@ public:
+ 
+     // called to set all outputs to termination state
+     void terminate_vehicle(void) override;
++    bool gcs_terminate(bool should_terminate, const char *reason) override;
++    bool supports_controlled_termination() const override;
++    bool controlled_termination_active() const override;
++    bool terminating_vehicle_via_landing() const override;
++    bool controlled_termination_available() const;
++    void mark_controlled_termination();
++    bool receiver_failsafe_active() const;
+     
+ protected:
+     // setup failsafe values for if FMU firmware stops running
+diff --git a/ArduCopter/events.cpp b/ArduCopter/events.cpp
+index 3fbfc3e..da5c925 100644
+--- a/ArduCopter/events.cpp
++++ b/ArduCopter/events.cpp
+@@ -14,6 +14,15 @@ void Copter::failsafe_radio_on_event()
+ {
+     LOGGER_WRITE_ERROR(LogErrorSubsystem::FAILSAFE_RADIO, LogErrorCode::FAILSAFE_OCCURRED);
+ 
++#if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
++    if ((g2.afs.controlled_termination_configured() || g2.afs.controlled_termination_active()) &&
++        motors->armed() && !ap.land_complete) {
++        // Do not let the stock RC action disarm or divert an airborne controlled termination.
++        g2.afs.gcs_terminate(true, "RC failsafe");
++        return;
++    }
++#endif
++
+     // set desired action based on FS_THR_ENABLE parameter
+     FailsafeAction desired_action;
+     switch (g.failsafe_throttle) {
+@@ -164,6 +173,12 @@ void Copter::failsafe_gcs_on_event(void)
+ {
+     LOGGER_WRITE_ERROR(LogErrorSubsystem::FAILSAFE_GCS, LogErrorCode::FAILSAFE_OCCURRED);
+     RC_Channels::clear_overrides();
++#if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
++    if (g2.afs.controlled_termination_configured() || g2.afs.controlled_termination_active()) {
++        // The physical RC path owns C2 loss for action 44; MP/GCS loss is not a trigger.
++        return;
++    }
++#endif
+ 
+     // convert the desired failsafe response to the FailsafeAction enum
+     FailsafeAction desired_action;
+diff --git a/ArduCopter/failsafe.cpp b/ArduCopter/failsafe.cpp
+index f143505..9ba106c 100644
+--- a/ArduCopter/failsafe.cpp
++++ b/ArduCopter/failsafe.cpp
+@@ -79,6 +79,6 @@ void Copter::failsafe_check()
+ void Copter::afs_fs_check(void)
+ {
+     // perform AFS failsafe checks
+-    g2.afs.check(last_radio_update_ms);
++    g2.afs.check(last_radio_update_ms, g2.afs.receiver_failsafe_active());
+ }
+ #endif
+diff --git a/ArduCopter/mode.cpp b/ArduCopter/mode.cpp
+index 394c28c..aa4627d 100644
+--- a/ArduCopter/mode.cpp
++++ b/ArduCopter/mode.cpp
+@@ -66,6 +66,10 @@ Mode *Copter::mode_from_mode_num(const Mode::Number mode)
+ 
+         case Mode::Number::LAND:
+             return &mode_land;
++#if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
++        case Mode::Number::TERMINATE:
++            return &mode_terminate;
++#endif
+ 
+ #if MODE_RTL_ENABLED
+         case Mode::Number::RTL:
+@@ -312,6 +316,11 @@ uint32_t Copter::get_available_mode_enabled_mask() const
+ // ACRO, STABILIZE, ALTHOLD, LAND, DRIFT and SPORT can always be set successfully but the return state of other flight modes should be checked and the caller should deal with failures appropriately
+ bool Copter::set_mode(Mode::Number mode, ModeReason reason)
+ {
++#if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
++    if (mode_terminate.active() && mode != Mode::Number::TERMINATE) {
++        return false;
++    }
++#endif
+     // update last reason
+     const ModeReason last_reason = _last_reason;
+     _last_reason = reason;
+@@ -412,6 +421,7 @@ bool Copter::set_mode(Mode::Number mode, ModeReason reason)
+         fence.option_enabled(AC_Fence::OPTIONS::DISABLE_MODE_CHANGE) &&
+         fence.get_breaches() &&
+         motors->armed() &&
++        mode != Mode::Number::TERMINATE &&
+         get_control_mode_reason() == ModeReason::FENCE_BREACHED &&
+         !ap.land_complete) {
+         mode_change_failed(new_flightmode, "in fence recovery");
+diff --git a/ArduCopter/mode.h b/ArduCopter/mode.h
+index e2dca5d..59010e6 100644
+--- a/ArduCopter/mode.h
++++ b/ArduCopter/mode.h
+@@ -100,6 +100,7 @@ public:
+         SYSTEMID  =    25,  // System ID mode produces automated system identification signals in the controllers
+         AUTOROTATE =   26,  // Autonomous autorotation
+         AUTO_RTL =     27,  // Auto RTL, this is not a true mode, AUTO will report as this mode if entered to perform a DO_LAND_START Landing sequence
++        TERMINATE =    29,  // latched controlled termination; requires native AFS support
+         TURTLE =       28,  // Flip over after crash
+ 
+         // Mode number 30 reserved for "offboard" for external/lua control.
+@@ -1286,6 +1287,32 @@ private:
+ };
+ 
+ 
++#if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
++class ModeTerminate : public Mode {
++public:
++    using Mode::Mode;
++    Number mode_number() const override { return Number::TERMINATE; }
++    bool init(bool ignore_checks) override;
++    void run() override;
++    bool requires_position() const override { return false; }
++    bool has_manual_throttle() const override { return false; }
++    bool allows_arming(AP_Arming::Method method) const override { return false; }
++    bool is_autopilot() const override { return true; }
++    bool is_landing() const override { return true; }
++    bool use_pilot_yaw() const override { return false; }
++    bool enabled() const override;
++    bool active() const { return _latched; }
++protected:
++    const char *name() const override { return "TERMINATE"; }
++    const char *name4() const override { return "TERM"; }
++private:
++    bool _latched = false;
++    bool _control_position = false;
++    float _descent_rate_ms = 0;
++    uint32_t _last_fault_ms = 0;
++};
++#endif
++
+ class ModeLand : public Mode {
+ 
+ public:
+diff --git a/ArduPlane/AP_Arming_Plane.cpp b/ArduPlane/AP_Arming_Plane.cpp
+index 53d663d..8600a2f 100644
+--- a/ArduPlane/AP_Arming_Plane.cpp
++++ b/ArduPlane/AP_Arming_Plane.cpp
+@@ -46,6 +46,9 @@ bool AP_Arming_Plane::terrain_database_required() const
+  */
+ bool AP_Arming_Plane::pre_arm_checks(bool display_failure)
+ {
++    if (!armed && !termination_pre_arm_checks(display_failure)) {
++        return false;
++    }
+     if (armed || require == (uint8_t)Required::NO) {
+         // if we are already armed or don't need any arming checks
+         // then skip the checks
+@@ -138,9 +141,92 @@ bool AP_Arming_Plane::pre_arm_checks(bool display_failure)
+     return ret;
+ }
+ 
++bool AP_Arming_Plane::termination_pre_arm_checks(bool display_failure)
++{
++#if AP_ADVANCEDFAILSAFE_ENABLED
++    if (plane.afs.controlled_termination_configured() && !plane.afs.supports_controlled_termination()) {
++        check_failed(display_failure, "Controlled termination unsupported");
++        return false;
++    }
++#endif
++#if HAL_QUADPLANE_ENABLED && AP_ADVANCEDFAILSAFE_ENABLED
++    int8_t position = -1;
++    const bool position_valid = rc().get_raw_flight_mode_switch_position(position);
++    if (position_valid && position >= 0 && position < plane.num_flight_modes &&
++        plane.flight_modes[position] == (int8_t)Mode::Number::TERMINATE) {
++        check_failed(display_failure, "Terminate mode switch selected");
++        return false;
++    }
++    if (plane.mode_terminate.active()) {
++        check_failed(display_failure, "Termination latched: reboot required");
++        return false;
++    }
++    if (plane.afs.controlled_termination_configured() && plane.afs.termination_requested()) {
++        check_failed(display_failure, "Termination request active");
++        return false;
++    }
++    if (!plane.afs.controlled_termination_configured()) {
++        return true;
++    }
++    for (uint8_t i = 0; i < plane.num_flight_modes; i++) {
++        if (plane.flight_modes[i] == (int8_t)Mode::Number::TERMINATE) {
++            check_failed(display_failure, "Termination must use dedicated RC option");
++            return false;
++        }
++    }
++    if (require == (uint8_t)Required::NO || !position_valid ||
++        position < 0 || position >= plane.num_flight_modes ||
++        plane.g.flight_mode_channel <= 0 || plane.g.flight_mode_channel > NUM_RC_CHANNELS) {
++        check_failed(display_failure, "Termination requires arming and native RC mode switch");
++        return false;
++    }
++    RC_Channel *termination_input = rc().get_termination_input();
++    if (termination_input == nullptr) {
++        check_failed(display_failure, "Termination requires one valid dedicated RC input");
++        return false;
++    }
++    if (termination_input->get_aux_switch_pos() != RC_Channel::AuxSwitchPos::LOW) {
++        check_failed(display_failure, "Termination RC input must be valid LOW");
++        return false;
++    }
++#if AP_FENCE_ENABLED
++    char failure[100] {};
++    if (!plane.fence.enabled() || !plane.fence.pre_arm_check(failure, sizeof(failure))) {
++        check_failed(display_failure, "Termination requires valid enabled fence");
++        return false;
++    }
++#else
++    check_failed(display_failure, "Termination requires native fence support");
++    return false;
++#endif
++    if (!plane.ahrs.dcm_fallback_disabled_for_vtol()) {
++        check_failed(display_failure, "Termination needs AHRS_OPTIONS bit1");
++        return false;
++    }
++    if (!plane.afs.controlled_termination_available()) {
++        check_failed(display_failure, "Controlled termination unavailable");
++        return false;
++    }
++    if (!rc().option_is_enabled(RC_Channels::Option::IGNORE_OVERRIDES) ||
++        rc().option_is_enabled(RC_Channels::Option::IGNORE_RECEIVER) ||
++        rc().option_is_enabled(RC_Channels::Option::IGNORE_FAILSAFE) ||
++        plane.g.throttle_fs_enabled != Plane::ThrFailsafe::Enabled) {
++        check_failed(display_failure, "Termination requires physical RC failsafe, no overrides");
++        return false;
++    }
++    if (rc().get_fs_timeout_ms() > 4500 || !rc().has_had_rc_receiver() ||
++        AP_HAL::millis() - plane.failsafe.AFS_last_valid_rc_ms > rc().get_fs_timeout_ms() ||
++        !rc().has_valid_input() || plane.afs.receiver_failsafe_active()) {
++        check_failed(display_failure, "Termination requires healthy RC");
++        return false;
++    }
++#endif
++    return true;
++}
++
+ bool AP_Arming_Plane::mandatory_checks(bool display_failure)
+ {
+-    bool ret = true;
++    bool ret = termination_pre_arm_checks(display_failure);
+ 
+     ret &= rc_received_if_enabled_check(display_failure);
+ 
+@@ -283,6 +369,9 @@ void AP_Arming_Plane::change_arm_state(void)
+ 
+ bool AP_Arming_Plane::arm(const AP_Arming::Method method, const bool do_arming_checks)
+ {
++    if (!termination_pre_arm_checks(true)) {
++        return false;
++    }
+     if (!AP_Arming::arm(method, do_arming_checks)) {
+         return false;
+     }
+diff --git a/ArduPlane/AP_Arming_Plane.h b/ArduPlane/AP_Arming_Plane.h
+index 7d7a56d..361e201 100644
+--- a/ArduPlane/AP_Arming_Plane.h
++++ b/ArduPlane/AP_Arming_Plane.h
+@@ -47,6 +47,7 @@ protected:
+     bool rc_received_if_enabled_check(bool display_failure);
+ 
+ private:
++    bool termination_pre_arm_checks(bool display_failure);
+     void change_arm_state(void);
+ 
+     // oneshot with duration AP_ARMING_DELAY_MS used by quadplane to delay spoolup after arming:
+diff --git a/ArduPlane/Attitude.cpp b/ArduPlane/Attitude.cpp
+index 658fe46..0475f37 100644
+--- a/ArduPlane/Attitude.cpp
++++ b/ArduPlane/Attitude.cpp
+@@ -308,7 +308,7 @@ void Plane::stabilize_stick_mixing_fbw()
+         control_mode == &mode_qstabilize ||
+         control_mode == &mode_qhover ||
+         control_mode == &mode_qloiter ||
+-        control_mode == &mode_qland ||
++        control_mode == &mode_qland || quadplane.in_termination_descent() ||
+         control_mode == &mode_qacro ||
+ #if QAUTOTUNE_ENABLED
+         control_mode == &mode_qautotune ||
+diff --git a/ArduPlane/GCS_MAVLink_Plane.cpp b/ArduPlane/GCS_MAVLink_Plane.cpp
+index 48abe7b..89bfbb1 100644
+--- a/ArduPlane/GCS_MAVLink_Plane.cpp
++++ b/ArduPlane/GCS_MAVLink_Plane.cpp
+@@ -72,6 +72,11 @@ uint8_t GCS_MAVLINK_Plane::base_mode() const
+         // APM does in any mode, as that is defined as "system finds its own goal
+         // positions", which APM does not currently do
+         break;
++#if HAL_QUADPLANE_ENABLED && AP_ADVANCEDFAILSAFE_ENABLED
++    case Mode::Number::TERMINATE:
++        _base_mode = plane.mode_terminate.vertical() ? MAV_MODE_FLAG_STABILIZE_ENABLED : 0;
++        break;
++#endif
+     case Mode::Number::INITIALISING:
+         break;
+     }
+@@ -1347,6 +1352,9 @@ uint8_t GCS_MAVLINK_Plane::send_available_mode(uint8_t index) const
+         &plane.mode_qhover,
+         &plane.mode_qloiter,
+         &plane.mode_qland,
++#if AP_ADVANCEDFAILSAFE_ENABLED
++        &plane.mode_terminate,
++#endif
+         &plane.mode_qrtl,
+         &plane.mode_qacro,
+         &plane.mode_loiter_qland,
+diff --git a/ArduPlane/GCS_Plane.cpp b/ArduPlane/GCS_Plane.cpp
+index c2cc070..7519418 100644
+--- a/ArduPlane/GCS_Plane.cpp
++++ b/ArduPlane/GCS_Plane.cpp
+@@ -83,6 +83,13 @@ void GCS_Plane::update_vehicle_sensor_status_flags(void)
+         control_sensors_health |= MAV_SYS_STATUS_SENSOR_XY_POSITION_CONTROL;
+         break;
+ 
++#if HAL_QUADPLANE_ENABLED && AP_ADVANCEDFAILSAFE_ENABLED
++    case Mode::Number::TERMINATE:
++        rate_controlled = plane.mode_terminate.vertical();
++        attitude_stabilized = plane.mode_terminate.vertical();
++        break;
++#endif
++
+     case Mode::Number::INITIALISING:
+         break;
+     }
+diff --git a/ArduPlane/Parameters.cpp b/ArduPlane/Parameters.cpp
+index 4532e91..f532a41 100644
+--- a/ArduPlane/Parameters.cpp
++++ b/ArduPlane/Parameters.cpp
+@@ -475,7 +475,7 @@ const AP_Param::Info Plane::var_info[] = {
+     // @Param: FLTMODE1
+     // @DisplayName: FlightMode1
+     // @Description: Flight mode for switch position 1 (910 to 1230 and above 2049)
+-    // @Values: 0:Manual,1:CIRCLE,2:STABILIZE,3:TRAINING,4:ACRO,5:FBWA,6:FBWB,7:CRUISE,8:AUTOTUNE,10:Auto,11:RTL,12:Loiter,13:TAKEOFF,14:AVOID_ADSB,15:Guided,17:QSTABILIZE,18:QHOVER,19:QLOITER,20:QLAND,21:QRTL,22:QAUTOTUNE,23:QACRO,24:THERMAL,25:Loiter to QLand,26:AUTOLAND
++    // @Values: 0:Manual,1:CIRCLE,2:STABILIZE,3:TRAINING,4:ACRO,5:FBWA,6:FBWB,7:CRUISE,8:AUTOTUNE,10:Auto,11:RTL,12:Loiter,13:TAKEOFF,14:AVOID_ADSB,15:Guided,17:QSTABILIZE,18:QHOVER,19:QLOITER,20:QLAND,21:QRTL,22:QAUTOTUNE,23:QACRO,24:THERMAL,25:Loiter to QLand,26:AUTOLAND,29:Terminate
+     // @User: Standard
+     GSCALAR(flight_mode1,           "FLTMODE1",       FLIGHT_MODE_1),
+ 
+diff --git a/ArduPlane/Plane.cpp b/ArduPlane/Plane.cpp
+index 6cc6205..a83a5cd 100644
+--- a/ArduPlane/Plane.cpp
++++ b/ArduPlane/Plane.cpp
+@@ -350,7 +350,7 @@ void Plane::update_logging25(void)
+ #if AP_ADVANCEDFAILSAFE_ENABLED
+ void Plane::afs_fs_check(void)
+ {
+-    afs.check(failsafe.AFS_last_valid_rc_ms);
++    afs.check(failsafe.AFS_last_valid_rc_ms, afs.receiver_failsafe_active());
+ }
+ #endif
+ 
+diff --git a/ArduPlane/Plane.h b/ArduPlane/Plane.h
+index 9ecb989..3854439 100644
+--- a/ArduPlane/Plane.h
++++ b/ArduPlane/Plane.h
+@@ -168,6 +168,7 @@ public:
+     friend class ModeQHover;
+     friend class ModeQLoiter;
+     friend class ModeQLand;
++    friend class ModeTerminate;
+     friend class ModeQRTL;
+     friend class ModeQAcro;
+     friend class ModeQAutotune;
+@@ -321,6 +322,9 @@ private:
+     ModeQHover mode_qhover;
+     ModeQLoiter mode_qloiter;
+     ModeQLand mode_qland;
++#if AP_ADVANCEDFAILSAFE_ENABLED
++    ModeTerminate mode_terminate;
++#endif
+     ModeQRTL mode_qrtl;
+     ModeQAcro mode_qacro;
+     ModeLoiterAltQLand mode_loiter_qland;
+diff --git a/ArduPlane/afs_plane.cpp b/ArduPlane/afs_plane.cpp
+index 298d7f5..be1fd4e 100644
+--- a/ArduPlane/afs_plane.cpp
++++ b/ArduPlane/afs_plane.cpp
+@@ -3,6 +3,7 @@
+  */
+ 
+ #include "Plane.h"
++#include <AP_RCProtocol/AP_RCProtocol.h>
+ 
+ #if AP_ADVANCEDFAILSAFE_ENABLED
+ 
+@@ -12,7 +13,17 @@
+ void AP_AdvancedFailsafe_Plane::terminate_vehicle(void)
+ {
+ #if HAL_QUADPLANE_ENABLED
+-    if (plane.quadplane.available() && _terminate_action == TERMINATE_ACTION_LAND) {
++    if (controlled_termination_active() || controlled_termination_configured()) {
++        // Unavailable vertical entry must never fall through to the hard-cut path.
++        if (!plane.set_mode(plane.mode_terminate, ModeReason::TERMINATE) ||
++            plane.mode_terminate.vertical()) {
++            return;
++        }
++        // Captured established fixed-wing flight reuses the native aerodynamic outputs below.
++    }
++#endif
++#if HAL_QUADPLANE_ENABLED
++    if (plane.quadplane.available() && !controlled_termination_active() && _terminate_action == TERMINATE_ACTION_LAND) {
+         // perform a VTOL landing
+         plane.set_mode(plane.mode_qland, ModeReason::FENCE_BREACHED);
+         return;
+@@ -21,7 +32,7 @@ void AP_AdvancedFailsafe_Plane::terminate_vehicle(void)
+ 
+     plane.g2.servo_channels.disable_passthrough(true);
+     
+-    if (_terminate_action == TERMINATE_ACTION_LAND) {
++    if (!controlled_termination_active() && _terminate_action == TERMINATE_ACTION_LAND) {
+         plane.landing.terminate();
+     } else {
+         // remove flap slew limiting
+@@ -110,4 +121,77 @@ AP_AdvancedFailsafe::control_mode AP_AdvancedFailsafe_Plane::afs_mode(void)
+     plane.set_mode(plane.mode_auto,ModeReason::GCS_FAILSAFE);
+  }
+ 
++
++bool AP_AdvancedFailsafe_Plane::supports_controlled_termination() const
++{
++    return HAL_QUADPLANE_ENABLED && AP_RCPROTOCOL_ENABLED;
++}
++
++bool AP_AdvancedFailsafe_Plane::controlled_termination_active() const
++{
++#if HAL_QUADPLANE_ENABLED
++    return plane.mode_terminate.active();
++#else
++    return false;
++#endif
++}
++
++bool AP_AdvancedFailsafe_Plane::terminating_vehicle_via_landing() const
++{
++#if HAL_QUADPLANE_ENABLED
++    if (controlled_termination_active()) {
++        return plane.mode_terminate.vertical();
++    }
++    if (controlled_termination_configured()) {
++        // Preserve lift while controlled entry is pending or unavailable.
++        return true;
++    }
++#endif
++    return AP_AdvancedFailsafe::terminating_vehicle_via_landing();
++}
++
++bool AP_AdvancedFailsafe_Plane::controlled_termination_available(bool require_vertical) const
++{
++#if HAL_QUADPLANE_ENABLED
++    return controlled_parameters_valid() && plane.quadplane.available() &&
++        (!require_vertical || plane.quadplane.termination_available());
++#else
++    return false;
++#endif
++}
++
++bool AP_AdvancedFailsafe_Plane::receiver_failsafe_active() const
++{
++#if AP_RCPROTOCOL_ENABLED
++    return plane.failsafe.rc_failsafe || plane.rc_failsafe_active() || AP::RC().failsafe_active() ||
++        (controlled_termination_configured() && rc().get_termination_input() == nullptr);
++#else
++    return true;
++#endif
++}
++
++void AP_AdvancedFailsafe_Plane::mark_controlled_termination()
++{
++    _terminate.set_and_notify(1);
++}
++
++bool AP_AdvancedFailsafe_Plane::gcs_terminate(bool should_terminate, const char *reason)
++{
++    if (controlled_termination_active()) {
++        return should_terminate;
++    }
++    if (!controlled_termination_configured()) {
++        return AP_AdvancedFailsafe::gcs_terminate(should_terminate, reason);
++    }
++    if (!should_terminate) {
++        _terminate.set_and_notify(0);
++        return true;
++    }
++#if HAL_QUADPLANE_ENABLED
++    return plane.set_mode(plane.mode_terminate, ModeReason::TERMINATE);
++#else
++    return false;
++#endif
++}
++
+ #endif // AP_ADVANCEDFAILSAFE_ENABLED
+diff --git a/ArduPlane/afs_plane.h b/ArduPlane/afs_plane.h
+index ffd3414..ea6ccba 100644
+--- a/ArduPlane/afs_plane.h
++++ b/ArduPlane/afs_plane.h
+@@ -32,6 +32,13 @@ public:
+ 
+     // called to set all outputs to termination state
+     void terminate_vehicle(void) override;
++    bool gcs_terminate(bool should_terminate, const char *reason) override;
++    bool supports_controlled_termination() const override;
++    bool controlled_termination_active() const override;
++    bool terminating_vehicle_via_landing() const override;
++    bool controlled_termination_available(bool require_vertical = true) const;
++    bool receiver_failsafe_active() const;
++    void mark_controlled_termination();
+     
+ protected:
+     // setup failsafe values for if FMU firmware stops running
+diff --git a/ArduPlane/altitude.cpp b/ArduPlane/altitude.cpp
+index 73d1466..0af21c6 100644
+--- a/ArduPlane/altitude.cpp
++++ b/ArduPlane/altitude.cpp
+@@ -777,7 +777,7 @@ void Plane::rangefinder_height_update(void)
+                 flightstage_good_for_rangefinder_landing = true;
+             }
+ #if HAL_QUADPLANE_ENABLED
+-            if (control_mode == &mode_qland ||
++            if (control_mode == &mode_qland || quadplane.in_termination_descent() ||
+                 control_mode == &mode_qrtl ||
+                 (control_mode == &mode_auto && quadplane.is_vtol_land(plane.mission.get_current_nav_cmd().id))) {
+                 flightstage_good_for_rangefinder_landing = true;
+diff --git a/ArduPlane/control_modes.cpp b/ArduPlane/control_modes.cpp
+index 5d07b45..f2ac410 100644
+--- a/ArduPlane/control_modes.cpp
++++ b/ArduPlane/control_modes.cpp
+@@ -68,6 +68,11 @@ Mode *Plane::mode_from_mode_num(const enum Mode::Number num)
+     case Mode::Number::QLAND:
+         ret = &mode_qland;
+         break;
++#if AP_ADVANCEDFAILSAFE_ENABLED
++    case Mode::Number::TERMINATE:
++        ret = &mode_terminate;
++        break;
++#endif
+     case Mode::Number::QRTL:
+         ret = &mode_qrtl;
+         break;
+@@ -114,7 +119,7 @@ void RC_Channels_Plane::read_mode_switch()
+ 
+ void RC_Channel_Plane::mode_switch_changed(modeswitch_pos_t new_pos)
+ {
+-    if (new_pos < 0 || (uint8_t)new_pos > plane.num_flight_modes) {
++    if (new_pos < 0 || (uint8_t)new_pos >= plane.num_flight_modes) {
+         // should not have been called
+         return;
+     }
+diff --git a/ArduPlane/ekf_check.cpp b/ArduPlane/ekf_check.cpp
+index 57465c9..e29dfd0 100644
+--- a/ArduPlane/ekf_check.cpp
++++ b/ArduPlane/ekf_check.cpp
+@@ -163,6 +163,9 @@ void Plane::failsafe_ekf_event()
+         return;
+     }
+ 
++    if (quadplane.in_termination_descent()) {
++        return;
++    }
+     if (quadplane.in_vtol_auto()) {
+         // the pilot is not controlling via sticks so switch to QLAND
+         plane.set_mode(mode_qland, ModeReason::EKF_FAILSAFE);
+diff --git a/ArduPlane/events.cpp b/ArduPlane/events.cpp
+index c48b903..adf6c56 100644
+--- a/ArduPlane/events.cpp
++++ b/ArduPlane/events.cpp
+@@ -97,6 +97,9 @@ void Plane::rc_failsafe_short_on_event()
+     case Mode::Number::QLAND:
+     case Mode::Number::QRTL:
+     case Mode::Number::LOITER_ALT_QLAND:
++#endif
++#if HAL_QUADPLANE_ENABLED && AP_ADVANCEDFAILSAFE_ENABLED
++    case Mode::Number::TERMINATE:
+ #endif
+     case Mode::Number::INITIALISING:
+         break;
+@@ -230,6 +233,9 @@ void Plane::failsafe_long_on_event(enum failsafe_state fstype, ModeReason reason
+     case Mode::Number::QLAND:
+     case Mode::Number::QRTL:
+     case Mode::Number::LOITER_ALT_QLAND:
++#endif
++#if HAL_QUADPLANE_ENABLED && AP_ADVANCEDFAILSAFE_ENABLED
++    case Mode::Number::TERMINATE:
+ #endif
+     case Mode::Number::INITIALISING:
+ #if MODE_AUTOLAND_ENABLED
+diff --git a/ArduPlane/mode.h b/ArduPlane/mode.h
+index 9bae00e..bfc32de 100644
+--- a/ArduPlane/mode.h
++++ b/ArduPlane/mode.h
+@@ -62,6 +62,9 @@ public:
+         QAUTOTUNE     = 22,
+ #endif
+         QACRO         = 23,
++#endif
++#if HAL_QUADPLANE_ENABLED && AP_ADVANCEDFAILSAFE_ENABLED
++        TERMINATE     = 29,
+ #endif
+         THERMAL       = 24,
+ #if HAL_QUADPLANE_ENABLED
+@@ -842,6 +845,32 @@ protected:
+     bool _pre_arm_checks(size_t buflen, char *buffer) const override { return false; }
+ };
+ 
++#if AP_ADVANCEDFAILSAFE_ENABLED
++// A latched native termination mode; phase is captured before changing control_mode.
++class ModeTerminate : public ModeQLand
++{
++public:
++    Number mode_number() const override { return Number::TERMINATE; }
++    const char *name() const override { return "Terminate"; }
++    const char *name4() const override { return "TERM"; }
++    bool is_vtol_mode() const override { return _vertical; }
++    bool is_landing() const override { return _vertical; }
++    bool active() const { return _latched; }
++    bool vertical() const { return _vertical; }
++    float descent_rate_ms() const { return _descent_rate_ms; }
++    bool prepare();
++    void update() override;
++    void run() override;
++protected:
++    bool _enter() override;
++private:
++    bool _latched;
++    bool _vertical;
++    float _descent_rate_ms;
++    uint32_t _last_fault_ms;
++};
++#endif
++
+ class ModeQRTL : public Mode
+ {
+ public:
+diff --git a/ArduPlane/mode_qhover.cpp b/ArduPlane/mode_qhover.cpp
+index edf0081..b6981e5 100644
+--- a/ArduPlane/mode_qhover.cpp
++++ b/ArduPlane/mode_qhover.cpp
+@@ -41,7 +41,8 @@ void ModeQHover::run()
+         pos_control->D_relax_controller(0);
+     } else {
+         plane.quadplane.assign_tilt_to_fwd_thr();
+-        quadplane.hold_hover(quadplane.get_pilot_desired_climb_rate_cms());
++        quadplane.hold_hover(quadplane.in_termination_descent() ?
++            -quadplane.landing_descent_rate_ms(0) * 100 : quadplane.get_pilot_desired_climb_rate_cms());
+     }
+ 
+     // Stabilize with fixed wing surfaces
+diff --git a/ArduPlane/mode_qloiter.cpp b/ArduPlane/mode_qloiter.cpp
+index ae7594c..cd2df86 100644
+--- a/ArduPlane/mode_qloiter.cpp
++++ b/ArduPlane/mode_qloiter.cpp
+@@ -41,6 +41,7 @@ void ModeQLoiter::run()
+     }
+ 
+     const uint32_t now = AP_HAL::millis();
++    const bool terminating = quadplane.in_termination_descent();
+ 
+ #if AC_PRECLAND_ENABLED
+     const uint32_t precland_timeout_ms = 250;
+@@ -52,7 +53,7 @@ void ModeQLoiter::run()
+     const uint32_t last_pos_set_ms = last_target_loc_set_ms;
+     const uint32_t last_vel_set_ms = quadplane.poscontrol.last_velocity_match_ms;
+ 
+-    if (last_pos_set_ms != 0 && now - last_pos_set_ms < precland_timeout_ms) {
++    if (!terminating && last_pos_set_ms != 0 && now - last_pos_set_ms < precland_timeout_ms) {
+         // we have an active landing target override
+         Vector2f rel_origin;
+         if (plane.next_WP_loc.get_vector_xy_from_origin_NE_cm(rel_origin)) {
+@@ -62,7 +63,7 @@ void ModeQLoiter::run()
+     }
+ 
+     // allow for velocity override as well
+-    if (last_vel_set_ms != 0 && now - last_vel_set_ms < precland_timeout_ms) {
++    if (!terminating && last_vel_set_ms != 0 && now - last_vel_set_ms < precland_timeout_ms) {
+         // we have an active landing velocity override
+         Vector2f target_accel;
+         Vector2f target_speed_xy_ms{quadplane.poscontrol.velocity_match_ms.x, quadplane.poscontrol.velocity_match_ms.y};
+@@ -109,7 +110,8 @@ void ModeQLoiter::run()
+ 
+     // set vertical speed and acceleration limits
+     // All limits must be positive
+-    pos_control->D_set_max_speed_accel_m(quadplane.get_pilot_velocity_z_max_dn_m(), quadplane.pilot_speed_z_max_up_ms, quadplane.pilot_accel_z_mss);
++    const float speed_down_ms = terminating ? quadplane.landing_descent_rate_ms(0) : quadplane.get_pilot_velocity_z_max_dn_m();
++    pos_control->D_set_max_speed_accel_m(speed_down_ms, quadplane.pilot_speed_z_max_up_ms, quadplane.pilot_accel_z_mss);
+ 
+     // process pilot's roll and pitch input
+     float target_roll_cd, target_pitch_cd;
+@@ -120,11 +122,16 @@ void ModeQLoiter::run()
+     if (!pos_control->NE_is_active()) {
+         pos_control->NE_init_controller();
+     }
+-    loiter_nav->update();
++    nav_filter_status status {};
++    const bool position_valid = ahrs.have_inertial_nav() && !AP_Notify::flags.ekf_bad && ahrs.get_filter_status(status) &&
++        (status.flags.horiz_pos_abs || status.flags.horiz_pos_rel);
++    if (!terminating || position_valid) {
++        loiter_nav->update();
++    }
+ 
+     // nav roll and pitch are controller by loiter controller
+-    plane.nav_roll_cd = loiter_nav->get_roll_cd();
+-    plane.nav_pitch_cd = loiter_nav->get_pitch_cd();
++    plane.nav_roll_cd = terminating && !position_valid ? 0 : loiter_nav->get_roll_cd();
++    plane.nav_pitch_cd = terminating && !position_valid ? 0 : loiter_nav->get_pitch_cd();
+ 
+     plane.quadplane.assign_tilt_to_fwd_thr();
+ 
+@@ -148,7 +155,7 @@ void ModeQLoiter::run()
+                                                                   target.y*100,
+                                                                   target.z*100);
+ 
+-    if (plane.control_mode == &plane.mode_qland) {
++    if (plane.control_mode == &plane.mode_qland || terminating) {
+         if (poscontrol.get_state() < QuadPlane::QPOS_LAND_FINAL && quadplane.check_land_final()) {
+             poscontrol.set_state(QuadPlane::QPOS_LAND_FINAL);
+             quadplane.setup_target_position();
+diff --git a/ArduPlane/mode_qstabilize.cpp b/ArduPlane/mode_qstabilize.cpp
+index ad72a21..d05a3e1 100644
+--- a/ArduPlane/mode_qstabilize.cpp
++++ b/ArduPlane/mode_qstabilize.cpp
+@@ -17,8 +17,9 @@ void ModeQStabilize::update()
+     // radio_in values. This means that the results for norm_input would not necessarily
+     // be correct for tailsitters, so get_control_in() must be used instead.
+     // normalize control_input to [-1,1]
+-    const float roll_input = (float)plane.channel_roll->get_control_in() / plane.channel_roll->get_range();
+-    const float pitch_input = (float)plane.channel_pitch->get_control_in() / plane.channel_pitch->get_range();
++    const bool terminating = quadplane.in_termination_descent();
++    const float roll_input = terminating ? 0 : (float)plane.channel_roll->get_control_in() / plane.channel_roll->get_range();
++    const float pitch_input = terminating ? 0 : (float)plane.channel_pitch->get_control_in() / plane.channel_pitch->get_range();
+ 
+     // then scale to target angles in centidegrees
+     if (plane.quadplane.tailsitter.active()) {
+diff --git a/ArduPlane/quadplane.cpp b/ArduPlane/quadplane.cpp
+index 5cbbad8..c8dbb44 100644
+--- a/ArduPlane/quadplane.cpp
++++ b/ArduPlane/quadplane.cpp
+@@ -1105,7 +1105,8 @@ void QuadPlane::hold_hover(float target_climb_rate_cms)
+ 
+     // set vertical speed and acceleration limits
+     // All limits must be positive
+-    pos_control->D_set_max_speed_accel_m(get_pilot_velocity_z_max_dn_m(), pilot_speed_z_max_up_ms, pilot_accel_z_mss);
++    const float speed_down_ms = in_termination_descent() ? landing_descent_rate_ms(0) : get_pilot_velocity_z_max_dn_m();
++    pos_control->D_set_max_speed_accel_m(speed_down_ms, pilot_speed_z_max_up_ms, pilot_accel_z_mss);
+ 
+     // call attitude controller
+     multicopter_attitude_rate_update(get_desired_yaw_rate_cds(false));
+@@ -1142,6 +1143,11 @@ float QuadPlane::get_pilot_throttle()
+ */
+ void QuadPlane::get_pilot_desired_lean_angles(float &roll_out_cd, float &pitch_out_cd, float angle_max_cd, float angle_limit_cd) const
+ {
++    if (in_termination_descent()) {
++        roll_out_cd = 0;
++        pitch_out_cd = 0;
++        return;
++    }
+     // failsafe check
+     if (plane.failsafe.rc_failsafe || plane.failsafe.throttle_counter > 0) {
+         roll_out_cd = 0;
+@@ -1268,6 +1274,11 @@ bool QuadPlane::is_flying_vtol(void) const
+  */
+ float QuadPlane::landing_descent_rate_ms(float height_above_ground_m)
+ {
++#if AP_ADVANCEDFAILSAFE_ENABLED
++    if (in_termination_descent()) {
++        return plane.mode_terminate.descent_rate_ms();
++    }
++#endif
+     if (poscontrol.last_override_descent_ms != 0) {
+         const uint32_t now = AP_HAL::millis();
+         if (now - poscontrol.last_override_descent_ms < 1000) {
+@@ -1363,6 +1374,9 @@ float QuadPlane::get_pilot_input_yaw_rate_cds(void) const
+  */
+ float QuadPlane::get_desired_yaw_rate_cds(bool should_weathervane)
+ {
++    if (in_termination_descent()) {
++        return 0;
++    }
+     float yaw_cds = 0;
+     if (assisted_flight) {
+         // use bank angle to get desired yaw rate
+@@ -2129,6 +2143,46 @@ bool QuadPlane::in_vtol_auto(void) const
+   note that AIRBRAKE is not considered in_vtol_mode even though the
+   VTOL motors are running
+  */
++bool QuadPlane::in_termination_descent() const
++{
++#if AP_ADVANCEDFAILSAFE_ENABLED
++    return plane.mode_terminate.active() && plane.mode_terminate.vertical();
++#else
++    return false;
++#endif
++}
++
++bool QuadPlane::termination_is_vertical() const
++{
++    // Engineering transition policy: only completed, unassisted FW uses aerodynamic termination.
++    // Do not force transition completion; native recovery retains controller authority.
++    return in_vtol_mode() || in_vtol_airbrake() || assisted_flight ||
++        !transition->complete() || tailsitter.in_vtol_transition() ||
++        (tiltrotor.enabled() && !tiltrotor.fully_fwd());
++}
++
++bool QuadPlane::termination_estimate_available() const
++{
++    nav_filter_status status {};
++    Vector3f velocity;
++    float height;
++    // Filter flags describe the configured EKF, even when DCM is the active backend.
++    return ahrs.have_inertial_nav() && ahrs.healthy() && ahrs.get_velocity_NED(velocity) &&
++        ahrs.get_relative_position_D_origin_float(height) && isfinite(height) && isfinite(velocity.z) &&
++        ahrs.get_filter_status(status) && status.flags.attitude && status.flags.vert_pos && status.flags.vert_vel;
++}
++
++bool QuadPlane::termination_available() const
++{
++#if AP_ADVANCEDFAILSAFE_ENABLED
++    return available() && pos_control != nullptr && attitude_control != nullptr && wp_nav != nullptr &&
++        ahrs.dcm_fallback_disabled_for_vtol() && termination_estimate_available() &&
++        plane.afs.controlled_descent_rate_ms() <= wp_nav->get_default_speed_down_ms();
++#else
++    return false;
++#endif
++}
++
+ bool QuadPlane::in_vtol_mode(void) const
+ {
+     if (!available()) {
+@@ -2166,7 +2220,7 @@ bool QuadPlane::in_vtol_posvel_mode(void) const
+         return false;
+     }
+     return (plane.control_mode == &plane.mode_qloiter ||
+-            plane.control_mode == &plane.mode_qland ||
++            plane.control_mode == &plane.mode_qland || in_termination_descent() ||
+             plane.control_mode == &plane.mode_qrtl ||
+ #if QAUTOTUNE_ENABLED
+             plane.control_mode == &plane.mode_qautotune ||
+@@ -4049,7 +4103,7 @@ bool QuadPlane::do_user_takeoff(float takeoff_altitude)
+ // return true if the wp_nav controller is being updated
+ bool QuadPlane::using_wp_nav(void) const
+ {
+-    if (plane.control_mode == &plane.mode_qloiter || plane.control_mode == &plane.mode_qland) {
++    if (plane.control_mode == &plane.mode_qloiter || plane.control_mode == &plane.mode_qland || in_termination_descent()) {
+         return true;
+     }
+     return false;
+diff --git a/ArduPlane/quadplane.h b/ArduPlane/quadplane.h
+index 9d31ffc..1cadb35 100644
+--- a/ArduPlane/quadplane.h
++++ b/ArduPlane/quadplane.h
+@@ -56,6 +56,7 @@ public:
+     friend class ModeGuided;
+     friend class ModeQHover;
+     friend class ModeQLand;
++    friend class ModeTerminate;
+     friend class ModeQLoiter;
+     friend class ModeQRTL;
+     friend class ModeQStabilize;
+@@ -122,6 +123,10 @@ public:
+     bool verify_vtol_land(void);
+     bool in_vtol_auto(void) const;
+     bool in_vtol_mode(void) const;
++    bool in_termination_descent() const;
++    bool termination_is_vertical() const;
++    bool termination_available() const;
++    bool termination_estimate_available() const;
+     bool in_vtol_takeoff(void) const;
+     bool in_vtol_posvel_mode(void) const;
+     void update_throttle_hover();
+diff --git a/ArduPlane/system.cpp b/ArduPlane/system.cpp
+index dba21a0..4f49f36 100644
+--- a/ArduPlane/system.cpp
++++ b/ArduPlane/system.cpp
+@@ -251,6 +251,14 @@ uint32_t Plane::get_available_mode_enabled_mask() const
+ 
+ bool Plane::set_mode(Mode &new_mode, const ModeReason reason)
+ {
++#if HAL_QUADPLANE_ENABLED && AP_ADVANCEDFAILSAFE_ENABLED
++    if (mode_terminate.active() && &new_mode != &mode_terminate) {
++        return false;
++    }
++    if (&new_mode == &mode_terminate && !mode_terminate.prepare()) {
++        return false;
++    }
++#endif
+ 
+     if (control_mode == &new_mode) {
+         // don't switch modes if we are already in the correct mode.
+@@ -291,7 +299,11 @@ bool Plane::set_mode(Mode &new_mode, const ModeReason reason)
+         fence.option_enabled(AC_Fence::OPTIONS::DISABLE_MODE_CHANGE) &&
+         fence.get_breaches() &&
+         in_fence_recovery() &&
+-        !mode_reason_is_landing_sequence(reason)) {
++        !mode_reason_is_landing_sequence(reason)
++#if HAL_QUADPLANE_ENABLED && AP_ADVANCEDFAILSAFE_ENABLED
++        && &new_mode != &mode_terminate
++#endif
++        ) {
+         gcs().send_text(MAV_SEVERITY_NOTICE,"Mode change to %s denied, in fence recovery", new_mode.name());
+         AP_Notify::events.user_mode_change_failed = 1;
+         return false;
+@@ -370,6 +382,12 @@ bool Plane::set_mode_by_number(const Mode::Number new_mode_number, const ModeRea
+ 
+ void Plane::check_long_failsafe()
+ {
++#if AP_ADVANCEDFAILSAFE_ENABLED
++    // Action 44 uses physical RC loss, never GCS loss or the legacy comms hold.
++    if (afs.controlled_termination_configured() || afs.controlled_termination_active()) {
++        return;
++    }
++#endif
+     const uint32_t gcs_last_seen_ms = gcs().sysid_mygcs_last_seen_time_ms();
+     const uint32_t rc_last_seen_ms = failsafe.last_valid_rc_ms;
+     const uint32_t tnow = millis();
+diff --git a/Tools/autotest/arducopter.py b/Tools/autotest/arducopter.py
+index c909faa..ba53715 100644
+--- a/Tools/autotest/arducopter.py
++++ b/Tools/autotest/arducopter.py
+@@ -16320,6 +16320,300 @@ RTL_ALT_M 111
+         ret["AVOID_ENABLE"] = 0
+         return ret
+ 
++    def terminate_parameters(self):
++        """Commission the native test aircraft with independent RC and fence prerequisites."""
++        return {
++            "AFS_ENABLE": 1, "AFS_TERM_ACTION": 44, "AFS_TERM_RATE": 2.2, "AFS_TERMINATE": 0,
++            "AFS_RC": 1, "AFS_RC_FAIL_TIME": 1.0, "AFS_GEOFENCE": 1,
++            "RC_OPTIONS": 2, "RC_FS_TIMEOUT": 1.0, "FS_THR_ENABLE": 1,
++            "FS_GCS_ENABLE": 5, "FS_GCS_TIMEOUT": 2, "MAV_GCS_SYSID": self.mav.source_system,
++            "FLTMODE1": 0, "FLTMODE6": 0, "RC7_OPTION": 187, "WP_SPD_DN": 3.0,
++            "FENCE_TYPE": 1, "FENCE_ALT_MAX": 100, "FENCE_ACTION": 0, "FENCE_ENABLE": 1,
++            "LAND_SPD_MS": 0.5, "LAND_SPD_HIGH_MS": 0.5, "SIM_RC_FAIL": 0,
++        }
++
++    def terminate_descent_and_contact(self, observations):
++        """Observe signed descent through both altitude bands, followed by native contact/disarm."""
++        # Signed NED velocity and independent altitude/time checks: abs(vz) could accept a climb.
++        self.wait_mode(29, timeout=5)
++        started = self.get_sim_time()
++        while self.get_sim_time_cached() - started < 35:
++            message = self.assert_receive_message('GLOBAL_POSITION_INT', timeout=2)
++            if message.relative_alt * 0.001 < 1:
++                break
++            self.assert_armed()
++        samples = [[], []]
++        for message in observations:
++            altitude = message.relative_alt * 0.001
++            for index, (low, high) in enumerate(((12, 18), (1, 5))):
++                if low <= altitude <= high:
++                    descent = message.vz * 0.01
++                    if descent < 2.0:
++                        raise NotAchievedException(f"Termination descent below 2 m/s: {descent:.2f} at {altitude:.2f}m")
++                    samples[index].append((message.time_boot_ms * 0.001, altitude))
++        for group in samples:
++            if len(group) < 3 or group[-1][0] - group[0][0] < 0.5:
++                raise NotAchievedException("Termination did not cover both high and final descent bands")
++            elapsed = group[-1][0] - group[0][0]
++            observed = (group[0][1] - group[-1][1]) / elapsed
++            if observed < 2.0:
++                raise NotAchievedException(f"Independent altitude descent below 2 m/s: {observed:.2f}")
++            self.progress(f"Termination band: {len(group)} samples, {elapsed:.2f}s, altitude rate {observed:.2f}m/s")
++        self.wait_disarmed(timeout=20)
++
++    def terminate_legacy_land(self):
++        """Action 43 retains native LAND, abort and mode escape without the action 44 latch."""
++        self.start_subtest("Legacy AFS action 43 remains reversible and lands at the ordinary rate")
++        self.set_parameter('AFS_TERM_ACTION', 43)
++        self.takeoff(20, mode='LOITER')
++        self.run_cmd(mavutil.mavlink.MAV_CMD_DO_FLIGHTTERMINATION, p1=1)
++        self.wait_mode('LAND')
++        self.assert_armed()
++        self.wait_altitude(14, 16, relative=True)
++        self.run_cmd(mavutil.mavlink.MAV_CMD_DO_FLIGHTTERMINATION, p1=0)
++        if self.get_parameter('AFS_TERMINATE') != 0:
++            raise NotAchievedException("Legacy termination abort did not clear the request")
++        self.change_mode('ALT_HOLD')
++        self.delay_sim_time(2)
++        self.assert_armed()
++        self.assert_mode_is('ALT_HOLD')
++        self.change_mode('LAND')
++        self.wait_altitude(3, 5, relative=True)
++        first = self.assert_receive_message('GLOBAL_POSITION_INT')
++        self.delay_sim_time(1)
++        last = self.assert_receive_message('GLOBAL_POSITION_INT')
++        for message in (first, last):
++            if not 0 < message.vz * 0.01 < 1:
++                raise NotAchievedException("Legacy LAND lost the configured slow descent")
++        elapsed = (last.time_boot_ms - first.time_boot_ms) * 0.001
++        rate = (first.relative_alt - last.relative_alt) * 0.001 / elapsed
++        if not 0 < rate < 1:
++            raise NotAchievedException(f"Legacy LAND altitude rate is not slow: {rate:.2f}m/s")
++        self.progress(f"Legacy action 43 LAND altitude rate: {rate:.2f}m/s")
++        self.wait_disarmed()
++        self.set_parameter('AFS_TERM_ACTION', 44)
++
++    def terminate_missing_receiver_channel(self):
++        """A receiver shrinking16to8channels must not reuse a cached LOW on dedicated channel9."""
++        self.start_subtest("Dedicated input omitted from current receiver packet")
++        self.set_rc(9, 1000)
++        short_input = None
++        self.context_push()
++        try:
++            self.set_parameters({'RC7_OPTION': 0, 'RC9_OPTION': 187})
++            self.wait_ready_to_arm()
++            short_input = self.send_eight_channel_rc_packet()
++            self.wait_message_field_values('RC_CHANNELS', {'chancount': 8}, timeout=5)
++            self.assert_arm_failure('Termination requires one valid dedicated')
++            self.run_cmd(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, p1=1, p2=2989,
++                         want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++            if self.armed():
++                raise NotAchievedException("Missing receiver channel admitted arming")
++        finally:
++            if short_input is not None:
++                self.restore_sixteen_channel_rc_input(short_input)
++            self.context_pop()
++            self.wait_ready_to_arm()
++
++    def Terminate(self):
++        """Native AFS controlled termination; requires the custom feature-enabled build."""
++        self.context_push()
++        try:
++            self.set_rc(5, 1000)
++            self.set_rc(7, 1000)
++            self.set_parameters(self.terminate_parameters())
++            self.wait_ready_to_arm()
++            self.check_termination_input_arming()
++            self.terminate_missing_receiver_channel()
++            self.start_subtest('Invalid native mode switch admission before debounce')
++            self.assert_arm_failure_on_raw_rc_edge(5, 750, 'Termination requires')
++            self.set_rc(5, 1000)
++            self.set_rc(7, 1000)
++            self.wait_ready_to_arm()
++            self.start_subtest("Pending termination request rejects normal and forced arming")
++            self.set_parameter('AFS_TERMINATE', 1)
++            self.assert_arm_failure('Termination request active')
++            self.run_cmd(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, p1=1, p2=2989,
++                         want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++            if self.armed():
++                raise NotAchievedException("Pending termination request allowed arming")
++            self.set_parameter('AFS_TERMINATE', 0)
++            self.wait_ready_to_arm()
++            self.start_subtest("Mandatory invalid-rate arming rejection")
++            self.set_parameter('AFS_TERM_RATE', 1.9)
++            self.assert_arm_failure('Controlled termination unavailable')
++            self.run_cmd(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, p1=1, p2=2989,
++                         want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++            self.set_parameter('AFS_TERM_RATE', 2.2)
++            self.set_rc(5, 1000)
++            self.set_rc(7, 1000)
++            self.wait_ready_to_arm()
++            self.start_subtest("Ordinary LAND retains its slow final descent")
++            self.takeoff(20, mode='LOITER')
++            self.change_mode('LAND')
++            self.wait_altitude(3, 5, relative=True)
++            message = self.assert_receive_message('GLOBAL_POSITION_INT')
++            if not 0 < message.vz * 0.01 < 1:
++                raise NotAchievedException("Ordinary LAND did not retain the configured slow descent")
++            self.wait_disarmed()
++            self.terminate_legacy_land()
++            for trigger in ('gcs', 'mode', 'switch', 'aux-invalid', 'aux-missing', 'no-pulses', 'auto-rc',
++                            'failsafe-pwm', 'protocol-flag', 'fence', 'position-loss'):
++                self.start_subtest(f"Controlled termination trigger: {trigger}")
++                self.context_push()
++                short_input = None
++                try:
++                    self.reboot_sitl()
++                    self.set_heartbeat_rate(self.speedup)
++                    self.set_rc(5, 1000)
++                    self.set_rc(7, 1000)
++                    self.set_parameters(self.terminate_parameters())
++                    if trigger == 'protocol-flag':
++                        # Activation before 2s distinguishes the true flag from either 4s frame deadline.
++                        self.set_parameters({'AFS_RC_FAIL_TIME': 4.0, 'RC_FS_TIMEOUT': 4.0})
++                    if trigger == 'aux-missing':
++                        self.set_rc(9, 1000)
++                        self.set_parameters({'RC7_OPTION': 0, 'RC9_OPTION': 187})
++                    self.takeoff(45 if trigger == 'position-loss' else 30, mode='ALT_HOLD')
++                    observations = []
++
++                    def observe_descent(mav, message):
++                        if message.get_type() == 'GLOBAL_POSITION_INT':
++                            observations.append(message)
++                    self.install_message_hook_context(observe_descent)
++                    if trigger == 'auto-rc':
++                        self.upload_simple_relhome_mission([
++                            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 30),
++                            (mavutil.mavlink.MAV_CMD_NAV_LOITER_TIME, 0, 0, 30, {'p1': 60}),
++                            (mavutil.mavlink.MAV_CMD_NAV_LAND, 0, 0, 0),
++                        ])
++                        self.change_mode('AUTO')
++                        self.wait_current_waypoint(2)
++                    if trigger == 'gcs':
++                        for command in (self.run_cmd, self.run_cmd_int):
++                            command(mavutil.mavlink.MAV_CMD_DO_AUX_FUNCTION, p1=187, p2=2,
++                                    want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++                            self.assert_armed()
++                            self.assert_mode_is('ALT_HOLD')
++                        self.start_subsubtest("Unavailable entry never becomes an airborne disarm")
++                        for parameter, value in (('AFS_TERM_RATE', 1.9), ('AFS_TERM_RATE', 3.1), ('AFS_ENABLE', 0)):
++                            self.set_parameter(parameter, value)
++                            self.run_cmd(mavutil.mavlink.MAV_CMD_DO_FLIGHTTERMINATION, p1=1,
++                                         want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++                            self.assert_armed()
++                            self.assert_mode_is('ALT_HOLD')
++                            self.set_parameter(parameter, self.terminate_parameters()[parameter])
++                        self.start_subsubtest("GCS loss with native GCS failsafe enabled does not divert RC control")
++                        self.set_heartbeat_rate(0)
++                        self.delay_sim_time(5)
++                        self.assert_armed()
++                        self.assert_mode_is('ALT_HOLD')
++                        self.set_heartbeat_rate(self.speedup)
++                        self.run_cmd(mavutil.mavlink.MAV_CMD_DO_FLIGHTTERMINATION, p1=1)
++                    elif trigger == 'position-loss':
++                        self.run_cmd(mavutil.mavlink.MAV_CMD_DO_FLIGHTTERMINATION, p1=1)
++                        self.set_parameter('SIM_GPS1_ENABLE', 0)
++                        required = (mavutil.mavlink.ESTIMATOR_ATTITUDE |
++                                    mavutil.mavlink.ESTIMATOR_VELOCITY_VERT |
++                                    mavutil.mavlink.ESTIMATOR_POS_VERT_ABS)
++                        unavailable = (mavutil.mavlink.ESTIMATOR_POS_HORIZ_ABS |
++                                       mavutil.mavlink.ESTIMATOR_POS_HORIZ_REL)
++                        self.wait_ekf_flags(required, unavailable, timeout=12)
++                        self.set_rc(1, 1800)
++                        self.set_rc(2, 1800)
++                        self.wait_attitude(desroll=0, despitch=0, tolerance=5, timeout=3)
++                        self.assert_armed()
++                        self.assert_mode_is(29)
++                    elif trigger in ('aux-invalid', 'aux-missing'):
++                        started = self.get_sim_time()
++                        if trigger == 'aux-invalid':
++                            self.set_rc(7, 750)
++                        else:
++                            short_input = self.send_eight_channel_rc_packet()
++                            self.wait_message_field_values('RC_CHANNELS', {'chancount': 8}, timeout=5)
++                        status = self.assert_receive_message('SYS_STATUS')
++                        if not status.onboard_control_sensors_health & mavutil.mavlink.MAV_SYS_STATUS_SENSOR_RC_RECEIVER:
++                            raise PreconditionFailedException("Primary receiver became unhealthy in FTS-only fault")
++                        self.progress(f"Dedicated FTS fault {trigger}; native primary receiver remains healthy")
++                        self.wait_mode(29, timeout=5)
++                        if self.get_sim_time() - started > 5:
++                            raise NotAchievedException("Dedicated input fault termination exceeded5s")
++                    elif trigger == 'mode':
++                        self.change_mode(29)
++                    elif trigger == 'switch':
++                        self.set_rc(7, 1900)
++                    elif trigger == 'fence':
++                        self.set_parameter('FENCE_ALT_MAX', 20)
++                    else:
++                        overrides_sent = [0]
++                        if trigger == 'no-pulses':
++                            # Live ignored overrides must not refresh physical RC freshness.
++                            def overrides(mav, message):
++                                if message.get_type() == 'ATTITUDE':
++                                    overrides_sent[0] += 1
++                                    self.mav.mav.rc_channels_override_send(
++                                        mav.target_system, 1, 1500, 1500, 1500, 1500, 65535, 65535, 65535, 65535)
++                            self.install_message_hook_context(overrides)
++                        failure = {'no-pulses': 1, 'auto-rc': 1, 'failsafe-pwm': 2, 'protocol-flag': 3}[trigger]
++                        started = self.get_sim_time()
++                        self.set_parameter('SIM_RC_FAIL', failure)
++                        self.wait_mode(29, timeout=2 if trigger == 'protocol-flag' else 5)
++                        elapsed = self.get_sim_time() - started
++                        self.progress(f"RC trigger {trigger} observed TERMINATE after {elapsed:.2f}s")
++                        if trigger == 'no-pulses':
++                            if overrides_sent[0] < 2:
++                                raise NotAchievedException("Ignored override traffic was not actually sent during RC failure")
++                            self.progress(f"Live override messages during RC-loss activation: {overrides_sent[0]}")
++                        if trigger == 'protocol-flag' and elapsed >= 2:
++                            raise NotAchievedException("Protocol flag did not precede the no-frame deadlines")
++                    self.wait_mode(29, timeout=5)
++                    if trigger == 'switch':
++                        for pwm in (1500, 1000):
++                            self.set_rc(7, pwm)
++                            self.delay_sim_time(0.4)
++                            self.assert_armed()
++                            self.assert_mode_is(29)
++                    if trigger == 'gcs':
++                        self.start_subsubtest("Latch survives escape, abort, stick input and parameter changes")
++                        self.run_cmd(mavutil.mavlink.MAV_CMD_DO_SET_MODE,
++                                     p1=mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, p2=0,
++                                     want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++                        self.run_cmd(mavutil.mavlink.MAV_CMD_DO_FLIGHTTERMINATION, p1=0,
++                                     want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++                        self.set_parameters({'AFS_TERM_RATE': 0.5, 'AFS_TERM_ACTION': 42,
++                                             'AFS_ENABLE': 0, 'AFS_TERMINATE': 0})
++                        self.set_rc(1, 1800)
++                        self.set_rc(3, 1800)
++                    self.terminate_descent_and_contact(observations)
++                    if short_input is not None:
++                        self.restore_sixteen_channel_rc_input(short_input)
++                        short_input = None
++                    self.set_parameter('SIM_RC_FAIL', 0)
++                    self.set_rc(1, 1500)
++                    self.set_rc(2, 1500)
++                    self.set_rc(3, 1000)
++                    self.set_rc(5, 1000)
++                    self.set_rc(7, 1000)
++                    self.assert_arm_failure('Termination latched: reboot required')
++                finally:
++                    if short_input is not None:
++                        self.restore_sixteen_channel_rc_input(short_input)
++                    if self.mav.motors_armed():
++                        # Test cleanup must preserve the original failure, not claim airborne contact.
++                        self.reboot_sitl(force=True)
++                    self.set_heartbeat_rate(self.speedup)
++                    self.set_parameter('SIM_RC_FAIL', 0)
++                    self.set_rc(1, 1500)
++                    self.set_rc(2, 1500)
++                    self.set_rc(3, 1000)
++                    self.set_rc(5, 1000)
++                    self.set_rc(7, 1000)
++                    self.context_pop()
++        finally:
++            self.set_heartbeat_rate(self.speedup)
++            self.context_pop()
++            self.reboot_sitl(force=True)
++
+     def RCProtocolFailsafe(self):
+         '''ensure we failsafe when the RC protocol failsafe is set'''
+         self.takeoff(10, mode='LOITER')
+@@ -16723,6 +17017,7 @@ return update, 1000
+             self.MISSION_OPTION_CLEAR_MISSION_AT_BOOT,
+             self.SafetySwitch,
+             self.RCProtocolFailsafe,
++            self.Terminate,
+             self.BrakeZ,
+             self.MAV_CMD_DO_FLIGHTTERMINATION,
+             self.MAV_CMD_DO_LAND_START,
+@@ -16844,6 +17139,7 @@ return update, 1000
+ 
+     def disabled_tests(self):
+         return {
++            "Terminate": "Requires custom AP_COPTER_ADVANCED_FAILSAFE_ENABLED build; run explicitly",
+             "Parachute": "See https://github.com/ArduPilot/ardupilot/issues/4702",
+             "GroundEffectCompensation_takeOffExpected": "Flapping",
+             "GroundEffectCompensation_touchDownExpected": "Flapping",
+diff --git a/Tools/autotest/quadplane.py b/Tools/autotest/quadplane.py
+index 40b497d..960823a 100644
+--- a/Tools/autotest/quadplane.py
++++ b/Tools/autotest/quadplane.py
+@@ -12,6 +12,7 @@ import copy
+ 
+ from pymavlink import mavutil
+ from pymavlink.rotmat import Vector3
++from pymavlink.quaternion import Quaternion
+ 
+ import vehicle_test_suite
+ from vehicle_test_suite import Test
+@@ -730,6 +731,427 @@ class AutoTestQuadPlane(vehicle_test_suite.TestSuite):
+         self.context_pop()
+         self.wait_ready_to_arm()
+ 
++    def terminate_parameters(self):
++        """Commission the native tilt-tricopter, retaining slow ordinary QLAND."""
++        return {
++            "AHRS_OPTIONS": int(self.get_parameter('AHRS_OPTIONS')) | 2,
++            "AFS_ENABLE": 1, "AFS_TERM_ACTION": 44, "AFS_TERM_RATE": 2.2, "AFS_TERMINATE": 0,
++            "AFS_RC": 1, "AFS_RC_FAIL_TIME": 1, "AFS_GEOFENCE": 1,
++            "RC_OPTIONS": 2, "RC_FS_TIMEOUT": 1, "THR_FAILSAFE": 1,
++            "FS_GCS_ENABL": 1, "FS_LONG_TIMEOUT": 2, "MAV_GCS_SYSID": self.mav.source_system,
++            "FLTMODE1": 18, "FLTMODE6": 18, "RC7_OPTION": 187, "Q_WP_SPD_DN": 3,
++            # Synthetic tilttri commissioning: positive assist above AIRSPEED_MIN=13;
++            # the inherited generic threshold18 traps this model at its 15m/s assisted plateau.
++            "Q_ASSIST_SPEED": 14,
++            "FENCE_TYPE": 1, "FENCE_ALT_MAX": 120, "FENCE_ACTION": 0, "FENCE_ENABLE": 1,
++            "Q_LAND_FINAL_SPD": 0.5, "SIM_RC_FAIL": 0,
++        }
++
++    def terminate_descent_and_contact(self, observations, request_started):
++        """Require signed descent and independent altitude/time evidence before contact/disarm."""
++        self.wait_mode(29, timeout=5)
++        started = self.get_sim_time()
++        while self.get_sim_time_cached() - started < 45:
++            message = self.assert_receive_message('GLOBAL_POSITION_INT', timeout=2)
++            if message.relative_alt * 0.001 < 1:
++                break
++            self.assert_armed()
++        samples = [[], []]
++        for message in observations:
++            if message.time_boot_ms < request_started * 1000:
++                continue
++            altitude = message.relative_alt * 0.001
++            for index, (low, high) in enumerate(((12, 18), (1, 5))):
++                if low <= altitude <= high:
++                    descent = message.vz * 0.01
++                    if descent < 2:
++                        raise NotAchievedException(f"Termination descent {descent:.2f}m/s at {altitude:.2f}m")
++                    samples[index].append((message.time_boot_ms * 0.001, altitude))
++        for group in samples:
++            if len(group) < 3 or group[-1][0] - group[0][0] < 0.5:
++                raise NotAchievedException("Termination did not cover high and final descent bands")
++            elapsed = group[-1][0] - group[0][0]
++            observed = (group[0][1] - group[-1][1]) / elapsed
++            if observed < 2:
++                raise NotAchievedException(f"Independent termination descent {observed:.2f}m/s")
++            self.progress(f"Termination band: {len(group)} samples, {elapsed:.2f}s, {observed:.2f}m/s")
++        self.wait_disarmed(timeout=20)
++
++    def terminate_recovery_tracking(self):
++        """Require upright recovery and sustained tracking of the native thrust direction."""
++        angle_max = self.get_parameter('Q_A_ANGLE_MAX')
++        started = self.get_sim_time()
++        stable_since = None
++        previous_sample = None
++        last_heartbeat = self.mav.messages.get('HEARTBEAT')
++        heartbeat_at = None
++        last_report = 0
++        while self.get_sim_time_cached() - started < 20:
++            message = self.assert_receive_message('ATTITUDE', timeout=2)
++            target = self.mav.messages.get('ATTITUDE_TARGET')
++            heartbeat = self.mav.messages.get('HEARTBEAT')
++            if heartbeat is not last_heartbeat:
++                last_heartbeat = heartbeat
++                heartbeat_at = self.get_sim_time_cached()
++            if heartbeat_at is None:
++                continue
++            if self.get_sim_time_cached() - heartbeat_at > 2:
++                raise NotAchievedException("Recovery heartbeat became stale")
++            # Fresh state is checked without blocking for two new heartbeats per attitude sample.
++            if not self.armed(cached=True) or not self.mode_is(29, cached=True):
++                raise NotAchievedException("Recovery left armed TERMINATE")
++            if target is None or abs(message.time_boot_ms - target.time_boot_ms) > 100:
++                stable_since = None
++                continue
++            actual = Quaternion([message.roll, message.pitch, message.yaw]).transform([0, 0, 1])
++            desired = Quaternion(target.q).transform([0, 0, 1])
++            actual_norm = numpy.linalg.norm(actual)
++            norm = actual_norm * numpy.linalg.norm(desired)
++            if not math.isfinite(norm) or norm <= 0:
++                raise NotAchievedException("Invalid native attitude target during recovery")
++            dot = numpy.dot(actual, desired) / norm
++            error = math.degrees(math.acos(max(-1, min(1, dot))))
++            lean = math.degrees(math.acos(max(-1, min(1, actual[2] / actual_norm))))
++            now = message.time_boot_ms * 0.001
++            if previous_sample is not None and now - previous_sample > 0.2:
++                stable_since = None
++            previous_sample = now
++            # Native recovery prioritizes thrust direction; heading can settle later.
++            # Position braking legitimately demands bank, so level is not its target.
++            if lean <= angle_max and error <= 5:
++                if stable_since is None:
++                    stable_since = now
++                elif now - stable_since >= 1:
++                    self.progress(f"Native recovery thrust tracked for 1s: error {error:.2f}deg, lean {lean:.2f}deg")
++                    return
++            else:
++                stable_since = None
++            if now - last_report >= 1:
++                self.progress(f"Recovery thrust error {error:.2f}deg, lean {lean:.2f}deg (native limit {angle_max:.2f})")
++                last_report = now
++        raise NotAchievedException("Native recovery did not achieve sustained thrust direction tracking")
++
++    def Terminate(self):
++        """Native action44 on the front-two-motor tilt-tricopter; custom build only."""
++        self.customise_SITL_commandline(
++            [], model="quadplane-tilttri",
++            defaults_filepath=self.model_defaults_filepath("quadplane-tilttri"), wipe=True)
++        self.context_push()
++        try:
++            self.set_rc(5, 1000)
++            self.set_rc(7, 1000)
++            self.set_parameters(self.terminate_parameters())
++            for name, expected in {"Q_FRAME_CLASS": 7, "Q_TILT_MASK": 3, "Q_TILT_TYPE": 0,
++                                   "SERVO3_FUNCTION": 0, "SERVO12_FUNCTION": 41}.items():
++                if self.get_parameter(name) != expected:
++                    raise PreconditionFailedException(f"Unexpected tilt-tricopter {name}")
++            self.set_message_rate_hz(mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 10)
++            self.set_message_rate_hz(mavutil.mavlink.MAVLINK_MSG_ID_SERVO_OUTPUT_RAW, 20)
++            self.change_mode('QHOVER')
++            self.wait_ready_to_arm()
++            self.check_termination_input_arming()
++            self.start_subtest('Invalid native mode switch admission before debounce')
++            self.assert_arm_failure_on_raw_rc_edge(5, 750, 'Termination requires')
++            self.set_rc(5, 1000)
++            self.set_rc(7, 1000)
++            self.wait_ready_to_arm()
++            self.start_subtest("Pending termination request rejects normal and forced arming")
++            self.set_parameter('AFS_TERMINATE', 1)
++            self.assert_arm_failure('Termination request active')
++            self.run_cmd(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, p1=1, p2=2989,
++                         want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++            self.set_parameter('AFS_TERMINATE', 0)
++            self.wait_ready_to_arm()
++            self.start_subtest("Mandatory VTOL primary-EKF continuity commissioning")
++            options = int(self.get_parameter('AHRS_OPTIONS'))
++            self.set_parameter('AHRS_OPTIONS', options & ~2)
++            self.assert_arm_failure('Termination needs AHRS_OPTIONS bit1')
++            self.run_cmd(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, p1=1, p2=2989,
++                         want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++            self.set_parameter('AHRS_OPTIONS', options)
++            self.wait_ready_to_arm()
++            self.start_subtest("Mandatory admission rejects invalid rate")
++            self.set_parameter('AFS_TERM_RATE', 1.9)
++            self.assert_arm_failure('Controlled termination unavailable')
++            self.run_cmd(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, p1=1, p2=2989,
++                         want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++            self.set_parameter('AFS_TERM_RATE', 2.2)
++            self.wait_ready_to_arm()
++            self.set_rc(5, 1000)
++            self.set_rc(7, 1000)
++            for trigger in ('partial-tilt', 'gcs', 'mode', 'switch', 'forward', 'back', 'assist',
++                            'aux-invalid', 'aux-missing', 'no-pulses', 'auto-rc', 'failsafe-pwm', 'protocol-flag', 'fence',
++                            'position-loss', 'recovery', 'fixed-wing', 'fixed-wing-dcm'):
++                self.start_subtest(f"Tilt-tricopter termination: {trigger}")
++                self.context_push()
++                short_input = None
++                try:
++                    self.reboot_sitl()
++                    self.set_rc(5, 1000)
++                    self.set_rc(7, 1000)
++                    self.set_parameters(self.terminate_parameters())
++                    self.set_heartbeat_rate(self.speedup)
++                    for message_id, rate in ((mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 10),
++                                             (mavutil.mavlink.MAVLINK_MSG_ID_SERVO_OUTPUT_RAW, 20),
++                                             (mavutil.mavlink.MAVLINK_MSG_ID_EXTENDED_SYS_STATE, 10)):
++                        self.set_message_rate_hz(message_id, rate)
++                    if trigger == 'fixed-wing-dcm':
++                        # Isolate estimator-loss admission from the independent altitude-fence case.
++                        self.set_parameter('FENCE_ALT_MAX', 500)
++                    if trigger == 'protocol-flag':
++                        self.set_parameters({'AFS_RC_FAIL_TIME': 4, 'RC_FS_TIMEOUT': 4})
++                    if trigger == 'recovery':
++                        self.set_parameter('Q_PILOT_SPD_DN', 1)
++                        self.context_set_message_rate_hz(mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE_TARGET, 20)
++                        self.context_set_message_rate_hz(mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, 20)
++                    if trigger == 'aux-missing':
++                        self.set_rc(9, 1000)
++                        self.set_parameters({'RC7_OPTION': 0, 'RC9_OPTION': 187})
++                    self.takeoff(100 if trigger == 'assist' else
++                                 70 if trigger in ('forward', 'back', 'recovery', 'fixed-wing', 'fixed-wing-dcm')
++                                 else 45 if trigger == 'position-loss' else 35, mode='QHOVER', timeout=90)
++                    observations = []
++                    tilts = []
++
++                    def observe_descent(mav, message):
++                        if message.get_type() == 'GLOBAL_POSITION_INT':
++                            observations.append(message)
++                        elif message.get_type() == 'SERVO_OUTPUT_RAW' and message.port == 0:
++                            tilts.append((message.time_usec * 0.000001, message.servo12_raw))
++                    self.install_message_hook_context(observe_descent)
++                    self.context_collect('STATUSTEXT')
++                    if trigger == 'partial-tilt':
++                        # Native MANUAL declares transition complete while continuous tilts still slew.
++                        self.run_cmd(mavutil.mavlink.MAV_CMD_DO_SET_MODE,
++                                     p1=mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, p2=0)
++                        started = self.get_sim_time()
++                        while self.get_sim_time_cached() - started < 2:
++                            output = self.assert_receive_message('SERVO_OUTPUT_RAW')
++                            if 1100 < output.servo12_raw < 1800:
++                                self.progress(f"Request at partial front tilt PWM {output.servo12_raw}")
++                                break
++                        else:
++                            raise PreconditionFailedException("Did not observe native partial tilt")
++                    if trigger in ('forward', 'back', 'assist', 'fixed-wing', 'fixed-wing-dcm'):
++                        self.set_rc(3, 2000)
++                        self.run_cmd(mavutil.mavlink.MAV_CMD_DO_SET_MODE,
++                                     p1=mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, p2=5)
++                        if trigger == 'forward':
++                            self.wait_servo_channel_value(12, 1100, comparator=operator.gt)
++                        else:
++                            self.wait_extended_sys_state(mavutil.mavlink.MAV_VTOL_STATE_FW,
++                                                         mavutil.mavlink.MAV_LANDED_STATE_IN_AIR, timeout=60)
++                            self.wait_servo_channel_value(12, 2000, comparator=operator.eq)
++                            self.wait_servo_channel_value(8, self.get_parameter('Q_M_PWM_MIN'), timeout=15)
++                            self.wait_airspeed(self.get_parameter('Q_ASSIST_SPEED'), 50,
++                                              minimum_duration=1, timeout=15)
++                            if trigger == 'back':
++                                self.run_cmd(mavutil.mavlink.MAV_CMD_DO_SET_MODE,
++                                             p1=mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, p2=19)
++                                self.wait_servo_channel_value(12, 1900, comparator=operator.lt)
++                            elif trigger == 'assist':
++                                self.set_rc(3, 1000)
++                                self.wait_servo_channel_value(8, 1200, comparator=operator.gt, timeout=40)
++                    if trigger == 'auto-rc':
++                        self.upload_simple_relhome_mission([
++                            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 35),
++                            (mavutil.mavlink.MAV_CMD_NAV_LOITER_TIME, 0, 0, 35, {'p1': 60}),
++                            (mavutil.mavlink.MAV_CMD_NAV_VTOL_LAND, 0, 0, 0),
++                        ])
++                        self.change_mode('AUTO')
++                        self.wait_current_waypoint(2)
++                        self.run_cmd(mavutil.mavlink.MAV_CMD_DO_VTOL_TRANSITION,
++                                     p1=mavutil.mavlink.MAV_VTOL_STATE_MC)
++                        self.wait_extended_sys_state(mavutil.mavlink.MAV_VTOL_STATE_MC,
++                                                     mavutil.mavlink.MAV_LANDED_STATE_IN_AIR)
++                    if trigger == 'gcs':
++                        for command in (self.run_cmd, self.run_cmd_int):
++                            command(mavutil.mavlink.MAV_CMD_DO_AUX_FUNCTION, p1=187, p2=2,
++                                    want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++                            self.assert_armed()
++                            self.assert_mode_is('QHOVER')
++                        for parameter, value in (('AFS_TERM_RATE', 1.9), ('AFS_TERM_RATE', 3.1), ('AFS_ENABLE', 0)):
++                            self.set_parameter(parameter, value)
++                            self.run_cmd(mavutil.mavlink.MAV_CMD_DO_FLIGHTTERMINATION, p1=1,
++                                         want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++                            self.assert_armed()
++                            self.assert_mode_is('QHOVER')
++                            self.set_parameter(parameter, self.terminate_parameters()[parameter])
++                        self.set_heartbeat_rate(0)
++                        self.delay_sim_time(5)
++                        self.assert_armed()
++                        self.assert_mode_is('QHOVER')
++                        self.set_heartbeat_rate(self.speedup)
++                    if trigger == 'fixed-wing-dcm':
++                        # Keep ordinary fixed-wing DCM fallback enabled; only VTOL fallback is inhibited.
++                        if int(self.get_parameter('AHRS_OPTIONS')) & 1:
++                            raise PreconditionFailedException("Fixed-wing fallback must remain enabled for this case")
++                        self.set_parameter('SIM_GPS1_ENABLE', 0)
++                        # Explicit native backend selection models unavailable inertial navigation;
++                        # GPS loss alone can remain on EKF3 in FW with healthy airspeed.
++                        self.set_parameter('AHRS_EKF_TYPE', 0)
++                        self.wait_statustext('AHRS: DCM active', check_context=True, timeout=10)
++                        if self.get_parameter('AHRS_EKF_TYPE') != 0:
++                            raise PreconditionFailedException("Native DCM backend was not selected")
++                        self.wait_extended_sys_state(mavutil.mavlink.MAV_VTOL_STATE_FW,
++                                                     mavutil.mavlink.MAV_LANDED_STATE_IN_AIR)
++                        self.wait_servo_channel_value(12, 2000)
++                        self.wait_servo_channel_value(8, self.get_parameter('Q_M_PWM_MIN'))
++                        self.assert_armed()
++                        self.assert_mode_is('FBWA')
++                    if trigger == 'recovery':
++                        self.change_mode('QACRO')
++                        self.set_rc(1, 1900)
++                        self.wait_roll(120, 10)
++                    if trigger == 'assist':
++                        self.drain_mav()
++                        position = self.assert_receive_message('GLOBAL_POSITION_INT')
++                        self.progress(f'Assist pre-request altitude: {position.relative_alt * 0.001:.2f}m')
++                        if position.relative_alt < 35000:
++                            raise PreconditionFailedException('Assist acquisition left less than 35m before termination')
++                    started = self.get_sim_time()
++                    observations.clear()
++                    if trigger == 'mode':
++                        self.change_mode(29)
++                    elif trigger == 'switch':
++                        self.set_rc(7, 1900)
++                    elif trigger in ('aux-invalid', 'aux-missing'):
++                        if trigger == 'aux-invalid':
++                            self.set_rc(7, 750)
++                        else:
++                            short_input = self.send_eight_channel_rc_packet()
++                            self.wait_message_field_values('RC_CHANNELS', {'chancount': 8}, timeout=5)
++                        status = self.assert_receive_message('SYS_STATUS')
++                        if not status.onboard_control_sensors_health & mavutil.mavlink.MAV_SYS_STATUS_SENSOR_RC_RECEIVER:
++                            raise PreconditionFailedException('Primary receiver unhealthy in FTS-only fault')
++                        self.progress(f'Dedicated FTS fault {trigger}; native primary receiver remains healthy')
++                    elif trigger == 'fence':
++                        self.set_parameter('FENCE_ALT_MAX', 20)
++                    elif trigger in ('no-pulses', 'auto-rc', 'failsafe-pwm', 'protocol-flag'):
++                        overrides_sent = [0]
++                        if trigger == 'no-pulses':
++                            def overrides(mav, message):
++                                if message.get_type() == 'ATTITUDE':
++                                    overrides_sent[0] += 1
++                                    self.mav.mav.rc_channels_override_send(
++                                        mav.target_system, 1, 1500, 1500, 1500, 1500, 65535, 65535, 65535, 65535)
++                            self.install_message_hook_context(overrides)
++                        self.set_parameter('SIM_RC_FAIL', {'no-pulses': 1, 'auto-rc': 1,
++                                                          'failsafe-pwm': 2, 'protocol-flag': 3}[trigger])
++                    else:
++                        self.run_cmd(mavutil.mavlink.MAV_CMD_DO_FLIGHTTERMINATION, p1=1)
++                    self.wait_mode(29, timeout=2 if trigger == 'protocol-flag' else 5)
++                    if trigger == 'switch':
++                        for pwm in (1500, 1000):
++                            self.set_rc(7, pwm)
++                            self.delay_sim_time(0.4)
++                            self.assert_armed()
++                            self.assert_mode_is(29)
++                    elapsed = self.get_sim_time() - started
++                    if elapsed > 5 or (trigger == 'protocol-flag' and elapsed >= 2):
++                        raise NotAchievedException(f"Termination activation too late: {elapsed:.2f}s")
++                    if trigger == 'no-pulses' and overrides_sent[0] < 2:
++                        raise NotAchievedException("No live override traffic during physical RC loss")
++                    if trigger in ('fixed-wing', 'fixed-wing-dcm'):
++                        self.wait_statustext('Termination latched: fixed wing', check_context=True)
++                        for channel, function in ((1, 4), (2, 19), (4, 21)):
++                            if self.get_parameter(f'SERVO{channel}_FUNCTION') != function:
++                                raise PreconditionFailedException("Unexpected aerodynamic surface function")
++                            self.wait_servo_channel_value(channel, self.get_parameter(f'SERVO{channel}_MAX'))
++                        self.wait_disarmed(timeout=5)
++                        for channel in (5, 6, 8):
++                            self.wait_servo_channel_value(channel, self.get_parameter('Q_M_PWM_MIN'))
++                        continue
++                    self.wait_statustext('Termination latched: vertical', check_context=True, timeout=2)
++                    if trigger in ('gcs', 'recovery'):
++                        self.set_rc(1, 1800)
++                        self.set_rc(2, 1800)
++                        self.set_rc(3, 1800)
++                    if trigger == 'gcs':
++                        self.run_cmd(mavutil.mavlink.MAV_CMD_DO_SET_MODE,
++                                     p1=mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, p2=0,
++                                     want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++                        self.run_cmd(mavutil.mavlink.MAV_CMD_DO_FLIGHTTERMINATION, p1=0,
++                                     want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++                        self.set_parameters({'AFS_TERM_RATE': 0.5, 'AFS_TERM_ACTION': 42,
++                                             'AFS_ENABLE': 0, 'AFS_TERMINATE': 0})
++                    if trigger == 'position-loss':
++                        self.set_parameter('SIM_GPS1_ENABLE', 0)
++                        required = (mavutil.mavlink.ESTIMATOR_ATTITUDE |
++                                    mavutil.mavlink.ESTIMATOR_VELOCITY_VERT |
++                                    mavutil.mavlink.ESTIMATOR_POS_VERT_ABS)
++                        unavailable = (mavutil.mavlink.ESTIMATOR_POS_HORIZ_ABS |
++                                       mavutil.mavlink.ESTIMATOR_POS_HORIZ_REL)
++                        self.wait_ekf_flags(required, unavailable, timeout=12)
++                        primary = self.assert_receive_message('SYS_STATUS', timeout=2)
++                        if not primary.onboard_control_sensors_health & mavutil.mavlink.MAV_SYS_STATUS_AHRS:
++                            raise NotAchievedException("Current primary AHRS unavailable despite configured EKF flags")
++                        self.set_rc(1, 1800)
++                        self.set_rc(2, 1800)
++                        self.wait_attitude(desroll=0, despitch=0, tolerance=5, timeout=3)
++                    if trigger == 'recovery':
++                        self.terminate_recovery_tracking()
++                    self.terminate_descent_and_contact(observations, started)
++                    if short_input is not None:
++                        self.restore_sixteen_channel_rc_input(short_input)
++                        short_input = None
++                    if trigger in ('partial-tilt', 'forward', 'back', 'assist'):
++                        for before, after in zip(tilts, tilts[1:]):
++                            elapsed = after[0] - before[0]
++                            if elapsed > 0 and abs(after[1] - before[1]) > 1000 * elapsed + 20:
++                                raise NotAchievedException("Native tilt output jumped beyond continuous slew limit")
++                    self.set_parameter('SIM_RC_FAIL', 0)
++                    self.set_rc(5, 1000)
++                    self.set_rc(7, 1000)
++                    self.delay_sim_time(0.5)
++                    self.assert_arm_failure('Termination latched: reboot required')
++                finally:
++                    if short_input is not None:
++                        self.restore_sixteen_channel_rc_input(short_input)
++                    if self.mav.motors_armed():
++                        # Test-only cleanup preserves the original failure; never claim airborne contact.
++                        self.reboot_sitl(force=True)
++                    self.set_parameter('SIM_RC_FAIL', 0)
++                    self.set_rc(1, 1500)
++                    self.set_rc(2, 1500)
++                    self.set_rc(3, 1000)
++                    self.set_rc(5, 1000)
++                    self.set_rc(7, 1000)
++                    self.context_pop()
++            self.start_subtest("Ordinary QLAND retains its slow final descent")
++            self.reboot_sitl()
++            self.set_rc(5, 1000)
++            self.set_rc(7, 1000)
++            self.set_parameters(self.terminate_parameters())
++            self.takeoff(20, mode='QLOITER', timeout=90)
++            self.change_mode('QLAND')
++            self.wait_altitude(3, 5, relative=True)
++            message = self.assert_receive_message('GLOBAL_POSITION_INT')
++            if not 0 < message.vz * 0.01 < 1:
++                raise NotAchievedException("Ordinary QLAND did not retain slow final descent")
++            self.wait_disarmed(timeout=90)
++            self.start_subtest("Legacy action43 keeps ordinary QLAND and allows abort/escape")
++            self.set_parameters({'AFS_TERM_ACTION': 43, 'AFS_TERMINATE': 0})
++            self.takeoff(20, mode='QHOVER', timeout=90)
++            self.run_cmd(mavutil.mavlink.MAV_CMD_DO_FLIGHTTERMINATION, p1=1)
++            self.wait_mode('QLAND', timeout=5)
++            self.wait_altitude(3, 5, relative=True)
++            message = self.assert_receive_message('GLOBAL_POSITION_INT')
++            if not 0 < message.vz * 0.01 < 1:
++                raise NotAchievedException("Legacy43 changed ordinary QLAND descent")
++            self.assert_armed()
++            self.run_cmd(mavutil.mavlink.MAV_CMD_DO_FLIGHTTERMINATION, p1=0)
++            if self.get_parameter('AFS_TERMINATE') != 0:
++                raise NotAchievedException("Legacy43 abort did not clear the request")
++            self.change_mode('QHOVER')
++            self.assert_armed()
++            self.change_mode('QLAND')
++            self.wait_disarmed(timeout=90)
++        finally:
++            self.set_heartbeat_rate(self.speedup)
++            self.context_pop()
++            self.reboot_sitl(force=True)
++
+     def rc_defaults(self):
+         ret = super(AutoTestQuadPlane, self).rc_defaults()
+         ret[3] = 1000
+@@ -740,6 +1162,7 @@ class AutoTestQuadPlane(vehicle_test_suite.TestSuite):
+ 
+     def disabled_tests(self):
+         return {
++            "Terminate": "Requires custom AFS action44 build; run explicitly",
+             "FRSkyPassThrough": "Currently failing",
+             "CPUFailsafe": "servo channel values not scaled like ArduPlane",
+             "GyroFFT": "flapping test",
+@@ -3170,6 +3593,7 @@ class AutoTestQuadPlane(vehicle_test_suite.TestSuite):
+ 
+         ret = super(AutoTestQuadPlane, self).tests()
+         ret.extend([
++            self.Terminate,
+             self.FwdThrInVTOL,
+             self.AirMode,
+             self.TestMotorMask,
+diff --git a/Tools/autotest/vehicle_test_suite.py b/Tools/autotest/vehicle_test_suite.py
+index 3afce60..5a8e7a9 100644
+--- a/Tools/autotest/vehicle_test_suite.py
++++ b/Tools/autotest/vehicle_test_suite.py
+@@ -5842,6 +5842,29 @@ class TestSuite(abc.ABC):
+                 self.rc_thread = None
+                 raise ValueError("RC thread is dead")  # FIXME: type
+ 
++    def send_eight_channel_rc_packet(self):
++        """Replace the sole16-channel test producer with one native8-channel UDP packet."""
++        message = self.assert_receive_message('RC_CHANNELS')
++        if message.chancount != 16 or self.rc_thread is None:
++            raise PreconditionFailedException("Expected the normal16-channel RC producer")
++        saved = {i: getattr(message, f'chan{i}_raw') for i in range(1, 17)}
++        self.rc_thread_should_quit = True
++        self.rc_thread.join(timeout=2)
++        if self.rc_thread.is_alive():
++            self.rc_thread_should_quit = False
++            raise NotAchievedException("Normal RC producer did not stop")
++        self.rc_thread = None
++        output = mavutil.mavudp(f'127.0.0.1:{self.sitl_rcin_port()}', input=False)
++        output.write(struct.pack('<8H', *[saved[i] for i in range(1, 9)]))
++        return saved, output
++
++    def restore_sixteen_channel_rc_input(self, state):
++        saved, output = state
++        output.close()
++        self.rc_thread_should_quit = False
++        self.set_rc_from_map(saved)
++        self.wait_message_field_values('RC_CHANNELS', {'chancount': 16}, timeout=5)
++
+     def rc_thread_main(self):
+         chan16 = [1000] * 16
+ 
+@@ -8828,6 +8851,91 @@ class TestSuite(abc.ABC):
+             if self.mav.motors_armed():
+                 raise NotAchievedException("Armed when we shouldn't have")
+ 
++    def check_termination_input_arming(self):
++        """Synthetic channel7 is dedicated; actual aircraft channel selection remains native configuration."""
++        def reject(reason):
++            self.assert_arm_failure(reason)
++            self.run_cmd(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, p1=1, p2=2989,
++                         want_result=mavutil.mavlink.MAV_RESULT_FAILED)
++            if self.armed():
++                raise NotAchievedException("Dedicated termination input admitted arming")
++
++        self.start_subtest("Dedicated termination input commissioning and raw switch admission")
++        self.context_push()
++        try:
++            for parameters, reason in (
++                    ({'RC7_OPTION': 0}, 'Termination requires one valid dedicated'),
++                    ({'RC8_OPTION': 187}, 'Termination requires one valid dedicated'),
++                    ({'RC7_OPTION': 0, 'RC1_OPTION': 187}, 'Termination requires one valid dedicated'),
++                    ({'RC7_OPTION': 0, 'RC5_OPTION': 187}, 'Termination requires one valid dedicated'),
++                    ({'FLTMODE6': 29}, 'Termination must use dedicated')):
++                self.context_push()
++                try:
++                    self.set_parameters(parameters)
++                    reject(reason)
++                finally:
++                    self.context_pop()
++            for pwm in (1900, 1500, 750, 800, 2200):
++                self.set_rc(7, pwm)
++                reason = 'Termination RC input must be valid LOW' if pwm in (1900, 1500) else 'Termination requires one valid dedicated'
++                reject(reason)
++            self.set_rc(7, 1900)
++            self.reboot_sitl()
++            if self.get_parameter('AFS_TERMINATE') != 0:
++                raise NotAchievedException("Startup HIGH created a termination request")
++            reject('Termination RC input must be valid LOW')
++            self.set_rc(7, 1000)
++            self.wait_ready_to_arm()
++            self.assert_arm_failure_on_raw_rc_edge(7, 1900, 'Termination RC input must be valid LOW')
++            self.assert_arm_failure_on_raw_rc_edge(7, 750, 'Termination requires one valid dedicated')
++            self.set_rc(7, 1000)
++            self.wait_ready_to_arm()
++            if self.get_parameter('AFS_TERMINATE') != 0:
++                raise NotAchievedException("Safe LOW created a termination request")
++        finally:
++            self.set_rc(7, 1000)
++            self.context_pop()
++
++    def assert_arm_failure_on_raw_rc_edge(self, channel, pwm, expected_text):
++        """Attempt normal and forced arm on the first native packet, before mode debounce."""
++        self.context_push()
++        try:
++            self.set_parameter('LOG_DISARMED', 1)
++            self.context_set_message_rate_hz(mavutil.mavlink.MAVLINK_MSG_ID_RC_CHANNELS, 100)
++            edge = []
++            acknowledgements = []
++            reasons = []
++
++            def arm_on_input(mav, message):
++                if message.get_type() == 'RC_CHANNELS' and getattr(message, f'chan{channel}_raw') == pwm:
++                    if not edge:
++                        edge.append(message.time_boot_ms)
++                        self.send_cmd(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, p1=1)
++                        self.send_cmd(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, p1=1, p2=2989)
++                if edge and message.get_type() == 'COMMAND_ACK' and message.command == 400:
++                    acknowledgements.append(message.result)
++                if edge and message.get_type() == 'STATUSTEXT' and expected_text in message.text:
++                    reasons.append(message.text)
++            self.install_message_hook_context(arm_on_input)
++            self.drain_mav()
++            self.rc_queue.put({channel: pwm})
++            started = self.get_sim_time()
++            while len(acknowledgements) < 2 or not reasons:
++                if self.get_sim_time_cached() - started > 5:
++                    raise NotAchievedException(f"Raw RC edge admission incomplete: {edge}, {acknowledgements}, {reasons}")
++                self.mav.recv_match(blocking=True, timeout=1)
++                if any(result != mavutil.mavlink.MAV_RESULT_FAILED for result in acknowledgements):
++                    raise NotAchievedException(f"Raw RC {pwm} admitted normal/forced arm: {acknowledgements}")
++            heartbeat = self.wait_heartbeat(drain_mav=False)
++            if heartbeat.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED:
++                raise NotAchievedException("Raw switch admission left vehicle armed")
++            self.progress(f"Raw RC {pwm} at boot {edge[0]}ms rejected normal and forced arm: {acknowledgements}")
++        finally:
++            self.rc_queue.put({channel: 1000})
++            if self.mav.motors_armed():
++                self.reboot_sitl(force=True)
++            self.context_pop()
++
+     def assert_arm_failure(self, expected_statustext, timeout=5, ignore_prearm_failures: list = None):
+         if ignore_prearm_failures is None:
+             ignore_prearm_failures = []
+diff --git a/libraries/AP_AHRS/AP_AHRS.h b/libraries/AP_AHRS/AP_AHRS.h
+index ccb6ed0..30bd577 100644
+--- a/libraries/AP_AHRS/AP_AHRS.h
++++ b/libraries/AP_AHRS/AP_AHRS.h
+@@ -274,6 +274,15 @@ public:
+ 
+     bool have_inertial_nav() const;
+ 
++    // Native VTOL height control must not revert to DCM merely for horizontal navigation loss.
++    bool dcm_fallback_disabled_for_vtol() const {
++#if AP_AHRS_DCM_ENABLED
++        return option_set(Options::DISABLE_DCM_FALLBACK_VTOL);
++#else
++        return true;
++#endif
++    }
++
+     // return a ground velocity in meters/second, North/East/Down
+     // order. Must only be called if have_inertial_nav() is true
+     bool get_velocity_NED(Vector3f &vec) const WARN_IF_UNUSED;
+diff --git a/libraries/AP_AdvancedFailsafe/AP_AdvancedFailsafe.cpp b/libraries/AP_AdvancedFailsafe/AP_AdvancedFailsafe.cpp
+index 6cfa774..b0d1dc7 100644
+--- a/libraries/AP_AdvancedFailsafe/AP_AdvancedFailsafe.cpp
++++ b/libraries/AP_AdvancedFailsafe/AP_AdvancedFailsafe.cpp
+@@ -79,6 +79,7 @@ const AP_Param::GroupInfo AP_AdvancedFailsafe::var_info[] = {
+     // @Param: TERM_ACTION
+     // @DisplayName: Terminate action
+     // @Description: This can be used to force an action on flight termination. Normally this is handled by an external failsafe board, but you can setup ArduPilot to handle it here. Please consult the wiki for more information on the possible values of the parameter
++    // @Values: 0:External board only,42:Immediate termination,43:Land,44:Vehicle-supported controlled termination
+     // @User: Advanced
+     AP_GROUPINFO("TERM_ACTION", 6, AP_AdvancedFailsafe, _terminate_action, 0),
+ 
+@@ -141,13 +142,13 @@ const AP_Param::GroupInfo AP_AdvancedFailsafe::var_info[] = {
+ 
+     // @Param: RC_MAN_ONLY
+     // @DisplayName: Enable RC Termination only in manual control modes
+-    // @Description: If this parameter is set to 1, then an RC loss will only cause the plane to terminate in manual control modes. If it is 0, then the plane will terminate in any flight mode.
++    // @Description: If this parameter is set to 1, then an RC loss will only cause the plane to terminate in manual control modes. If it is 0, then the plane will terminate in any flight mode. Ignored for action 44, which uses RC loss in all modes.
+     // @User: Advanced
+     AP_GROUPINFO("RC_MAN_ONLY",    17, AP_AdvancedFailsafe, _rc_term_manual_only, 1),
+ 
+     // @Param: DUAL_LOSS
+     // @DisplayName: Enable dual loss terminate due to failure of both GCS and GPS simultaneously
+-    // @Description: This enables the dual loss termination part of the AFS system. If this parameter is 1 and both GPS and the ground control station fail simultaneously, this will be considered a "dual loss" and cause termination.
++    // @Description: This enables the dual loss termination part of the AFS system. If this parameter is 1 and both GPS and the ground control station fail simultaneously, this will be considered a "dual loss" and cause termination. Ignored for action 44; GCS loss does not trigger it.
+     // @User: Advanced
+     AP_GROUPINFO("DUAL_LOSS",      18, AP_AdvancedFailsafe, _enable_dual_loss, 1),
+ 
+@@ -175,22 +176,38 @@ const AP_Param::GroupInfo AP_AdvancedFailsafe::var_info[] = {
+ 
+     // @Param: GCS_TIMEOUT
+     // @DisplayName: GCS timeout
+-    // @Description: The time (in seconds) of persistent data link loss before GCS failsafe occurs. 
++    // @Description: The time (in seconds) of persistent data link loss before GCS failsafe occurs. Ignored for action 44; healthy RC retains control despite GCS loss.
+     // @User: Advanced
+     // @Units: s
+     AP_GROUPINFO("GCS_TIMEOUT", 22, AP_AdvancedFailsafe, _gcs_fail_time_seconds, 10),
+     
++    // @Param: TERM_RATE
++    // @DisplayName: Controlled termination descent rate
++    // @Description: Descent rate for supported vehicle action 44 only. Must be finite, at least 2 m/s and within the configured vertical controller capability. Captured once on entry; ordinary landing rates are unchanged.
++    // @Units: m/s
++    // @Increment: 0.1
++    // @User: Advanced
++    AP_GROUPINFO("TERM_RATE", 23, AP_AdvancedFailsafe, _controlled_descent_rate_ms, 2.2f),
++
+     AP_GROUPEND
+ };
+ 
+ // check for Failsafe conditions. This is called at 10Hz by the main
+ // ArduPlane code
+ void
+-AP_AdvancedFailsafe::check(uint32_t last_valid_rc_ms)
++AP_AdvancedFailsafe::check(uint32_t last_valid_rc_ms, bool rc_failsafe)
+ {
++    if (controlled_termination_active()) {
++        update_termination_outputs();
++        return;
++    }
+     if (!_enable) {
+         return;
+     }
++    if (controlled_termination_configured() &&
++        (!supports_controlled_termination() || !hal.util->get_soft_armed())) {
++        return;
++    }
+ 
+ #if AP_FENCE_ENABLED
+     // we always check for fence breach
+@@ -208,6 +225,20 @@ AP_AdvancedFailsafe::check(uint32_t last_valid_rc_ms)
+     // update max range check
+     max_range_update();
+ 
++    if (controlled_termination_configured()) {
++        // Receiver failsafe is already declared by RC input; otherwise bound loss by the last frame.
++        // GCS/GPS loss must not change this action's mode.
++        if (_enable_RC_fs && _rc_fail_time_seconds > 0 &&
++            (rc_failsafe || (AP_HAL::millis() - last_valid_rc_ms) > _rc_fail_time_seconds * 1000.0f)) {
++            if (!_terminate) {
++                GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "Controlled termination: RC loss");
++                _terminate.set_and_notify(1);
++            }
++        }
++        update_termination_outputs();
++        return;
++    }
++
+     enum control_mode mode = afs_mode();
+     
+     // check if RC termination is enabled
+@@ -336,14 +367,17 @@ AP_AdvancedFailsafe::check(uint32_t last_valid_rc_ms)
+         break;
+     }
+ 
+-    // if we are not terminating or if there is a separate terminate
+-    // pin configured then toggle the heartbeat pin at 10Hz
++    update_termination_outputs();
++}
++
++void AP_AdvancedFailsafe::update_termination_outputs()
++{
+     heartbeat();
+ 
+     // set the terminate pin
+     if (_terminate_pin != -1) {
+         hal.gpio->pinMode(_terminate_pin, HAL_GPIO_OUTPUT);
+-        hal.gpio->write(_terminate_pin, _terminate?1:0);
++        hal.gpio->write(_terminate_pin, (_terminate || controlled_termination_active()) ? 1 : 0);
+     }    
+ }
+ 
+@@ -358,7 +392,7 @@ AP_AdvancedFailsafe::heartbeat(void)
+ 
+     // if we are not terminating or if there is a separate terminate
+     // pin configured then toggle the heartbeat pin at 10Hz
+-    if (_heartbeat_pin != -1 && (_terminate_pin != -1 || !_terminate)) {
++    if (_heartbeat_pin != -1 && (_terminate_pin != -1 || !(_terminate || controlled_termination_active()))) {
+         _heartbeat_pin_value = !_heartbeat_pin_value;
+         hal.gpio->pinMode(_heartbeat_pin, HAL_GPIO_OUTPUT);
+         hal.gpio->write(_heartbeat_pin, _heartbeat_pin_value);
+@@ -446,6 +480,9 @@ bool AP_AdvancedFailsafe::should_use_comms_hold(void){
+  */
+ bool AP_AdvancedFailsafe::should_crash_vehicle(void)
+ {
++    if (controlled_termination_active()) {
++        return true;
++    }
+     if (!_enable) {
+         return false;
+     }
+@@ -460,7 +497,8 @@ bool AP_AdvancedFailsafe::should_crash_vehicle(void)
+     // _terminate may be set via parameters, or a mavlink command
+     if (_terminate &&
+         (_terminate_action == TERMINATE_ACTION_TERMINATE ||
+-         _terminate_action == TERMINATE_ACTION_LAND)) {
++         _terminate_action == TERMINATE_ACTION_LAND ||
++         (controlled_termination_configured() && supports_controlled_termination()))) {
+         // we are terminating
+         return true;
+     }
+@@ -469,9 +507,20 @@ bool AP_AdvancedFailsafe::should_crash_vehicle(void)
+     return false;
+ }
+ 
++bool AP_AdvancedFailsafe::controlled_parameters_valid() const
++{
++    return _enable && supports_controlled_termination() &&
++        isfinite(_controlled_descent_rate_ms.get()) && _controlled_descent_rate_ms >= 2.0f &&
++        _enable_geofence_fs && _enable_RC_fs && isfinite(_rc_fail_time_seconds.get()) &&
++        _rc_fail_time_seconds > 0 && _rc_fail_time_seconds <= 4.5f;
++}
++
+ // update GCS based termination
+ // returns true if AFS is in the desired termination state
+ bool AP_AdvancedFailsafe::gcs_terminate(bool should_terminate, const char *reason) {
++    if (controlled_termination_configured() && !supports_controlled_termination()) {
++        return false;
++    }
+     if (!_enable) {
+         GCS_SEND_TEXT(MAV_SEVERITY_INFO, "AFS not enabled, can't terminate the vehicle");
+         return false;
+diff --git a/libraries/AP_AdvancedFailsafe/AP_AdvancedFailsafe.h b/libraries/AP_AdvancedFailsafe/AP_AdvancedFailsafe.h
+index f2548bd..4399174 100644
+--- a/libraries/AP_AdvancedFailsafe/AP_AdvancedFailsafe.h
++++ b/libraries/AP_AdvancedFailsafe/AP_AdvancedFailsafe.h
+@@ -47,7 +47,8 @@ public:
+ 
+     enum terminate_action {
+         TERMINATE_ACTION_TERMINATE = 42,
+-        TERMINATE_ACTION_LAND      = 43
++        TERMINATE_ACTION_LAND      = 43,
++        TERMINATE_ACTION_CONTROLLED = 44
+     };
+ 
+     /* Do not allow copies */
+@@ -76,7 +77,7 @@ public:
+     bool enabled() { return _enable; }
+ 
+     // check that everything is OK
+-    void check(uint32_t last_valid_rc_ms);
++    void check(uint32_t last_valid_rc_ms, bool rc_failsafe = false);
+ 
+     // generate heartbeat msgs, so external failsafe boards are happy
+     // during sensor calibration
+@@ -89,7 +90,14 @@ public:
+     bool should_crash_vehicle(void);
+ 
+     // enables or disables a GCS based termination, returns true if AFS is in the desired termination state
+-    bool gcs_terminate(bool should_terminate, const char *reason);
++    virtual bool gcs_terminate(bool should_terminate, const char *reason);
++
++    bool controlled_termination_configured() const { return _terminate_action == TERMINATE_ACTION_CONTROLLED; }
++    bool termination_requested() const { return _terminate != 0; }
++    virtual bool supports_controlled_termination() const { return false; }
++    virtual bool controlled_termination_active() const { return false; }
++    float controlled_descent_rate_ms() const { return _controlled_descent_rate_ms; }
++    bool controlled_parameters_valid() const;
+ 
+     // called to set all outputs to termination state
+     virtual void terminate_vehicle(void) = 0;
+@@ -97,7 +105,7 @@ public:
+     // for holding parameters
+     static const struct AP_Param::GroupInfo var_info[];
+ 
+-    bool terminating_vehicle_via_landing() const {
++    virtual bool terminating_vehicle_via_landing() const {
+         return _terminate_action == TERMINATE_ACTION_LAND;
+     };
+ 
+@@ -120,6 +128,7 @@ protected:
+     AP_Int8 _terminate_pin;
+     AP_Int8 _terminate;
+     AP_Int8 _terminate_action;
++    AP_Float _controlled_descent_rate_ms;
+ 
+     // waypoint numbers to jump to on failsafe conditions
+     AP_Int8 _wp_comms_hold;
+@@ -181,6 +190,7 @@ private:
+     }
+ 
+     bool gps_altitude_ok() const;
++    void update_termination_outputs();
+ };
+ 
+ namespace AP {
+diff --git a/libraries/RC_Channel/RC_Channel.cpp b/libraries/RC_Channel/RC_Channel.cpp
+index 77592d2..638672b 100644
+--- a/libraries/RC_Channel/RC_Channel.cpp
++++ b/libraries/RC_Channel/RC_Channel.cpp
+@@ -48,6 +48,7 @@ extern const AP_HAL::HAL& hal;
+ #include <AP_ServoRelayEvents/AP_ServoRelayEvents.h>
+ #include <SRV_Channel/SRV_Channel.h>
+ #include <AP_Arming/AP_Arming.h>
++#include <AP_AdvancedFailsafe/AP_AdvancedFailsafe.h>
+ #include <AP_Avoidance/AP_Avoidance.h>
+ #include <AP_GPS/AP_GPS.h>
+ #include <AC_Fence/AC_Fence.h>
+@@ -252,6 +253,7 @@ const AP_Param::GroupInfo RC_Channel::var_info[] = {
+     // @Values{Plane}: 184: System ID Chirp
+     // @Values{Copter, Rover, Plane, Blimp, Sub}:  185:Mount Roll/Pitch Lock
+     // @Values{Copter, Rover, Plane, Blimp, Sub}:  186:Mount POI Lock
++    // @Values{Copter, Plane}: 187:Controlled Termination (physical RC only)
+     // @Values{Rover}: 201:Roll
+     // @Values{Rover}: 202:Pitch
+     // @Values{Rover}: 207:MainSail
+@@ -519,7 +521,7 @@ bool RC_Channel::in_min_dz() const
+ 
+ void RC_Channel::set_override(const uint16_t v, const uint32_t timestamp_ms)
+ {
+-    if (!rc().gcs_overrides_enabled()) {
++    if (!rc().gcs_overrides_enabled() || rc().option_is_enabled(RC_Channels::Option::IGNORE_OVERRIDES)) {
+         return;
+     }
+ 
+@@ -593,7 +595,7 @@ void RC_Channel::reset_mode_switch()
+ }
+ 
+ // read a 6 position switch
+-bool RC_Channel::read_6pos_switch(int8_t& position)
++bool RC_Channel::decode_6pos_switch(int8_t& position) const
+ {
+     // calculate position of 6 pos switch
+     const uint16_t pulsewidth = get_radio_in();
+@@ -615,13 +617,14 @@ bool RC_Channel::read_6pos_switch(int8_t& position)
+         position = 5;
+     }
+ 
+-    if (!debounce_completed(position)) {
+-        return false;
+-    }
+-
+     return true;
+ }
+ 
++bool RC_Channel::read_6pos_switch(int8_t& position)
++{
++    return decode_6pos_switch(position) && debounce_completed(position);
++}
++
+ void RC_Channel::read_mode_switch()
+ {
+     int8_t position;
+@@ -665,6 +668,7 @@ void RC_Channel::init_aux_function(const AUX_FUNC ch_option, const AuxSwitchPos
+     // init channel options
+     switch (ch_option) {
+     // the following functions do not need to be initialised:
++    case AUX_FUNC::TERMINATE:
+ #if AP_ARMING_ENABLED
+     case AUX_FUNC::ARMDISARM:
+     case AUX_FUNC::ARMDISARM_AIRMODE:
+@@ -1030,6 +1034,7 @@ bool RC_Channel::read_aux()
+ bool RC_Channel::init_position_on_first_radio_read(AUX_FUNC func) const
+ {
+     switch (func) {
++    case AUX_FUNC::TERMINATE:
+ #if AP_ARMING_ENABLED
+     case AUX_FUNC::ARMDISARM_AIRMODE:
+     case AUX_FUNC::ARMDISARM:
+@@ -1493,6 +1498,22 @@ bool RC_Channel::do_aux_function(const AuxFuncTrigger &trigger)
+     const AuxSwitchPos &ch_flag = trigger.pos;
+ 
+     switch (ch_option) {
++    case AUX_FUNC::TERMINATE: {
++        // Init never activates it; MAVLink, mission and scripting cannot impersonate the RC input.
++        if (trigger.source != AuxFuncTrigger::Source::RC) {
++            return false;
++        }
++        if (ch_flag != AuxSwitchPos::HIGH) {
++            return true; // LOW and MIDDLE do not release an existing termination latch.
++        }
++#if AP_ADVANCEDFAILSAFE_ENABLED
++        auto *afs = AP_AdvancedFailsafe::get_singleton();
++        return afs != nullptr && afs->enabled() && afs->controlled_termination_configured() &&
++            afs->supports_controlled_termination() && afs->gcs_terminate(true, "RC termination switch");
++#else
++        return false;
++#endif
++    }
+ #if AP_FENCE_ENABLED
+     case AUX_FUNC::FENCE:
+         do_aux_function_fence(ch_flag);
+@@ -2080,6 +2101,31 @@ RC_Channel::AuxSwitchPos RC_Channel::get_stick_gesture_pos() const
+     return RC_Channel::AuxSwitchPos::MIDDLE;
+ }
+ 
++RC_Channel *RC_Channels::get_termination_input()
++{
++    RC_Channel *input = nullptr;
++    for (uint8_t i = 0; i < NUM_RC_CHANNELS; i++) {
++        RC_Channel *candidate = channel(i);
++        if (candidate != nullptr && candidate->option == (int16_t)RC_Channel::AUX_FUNC::TERMINATE) {
++            if (input != nullptr) {
++                return nullptr;
++            }
++            input = candidate;
++        }
++    }
++    if (input == nullptr || input->ch() > get_valid_channel_count() ||
++        input == &get_roll_channel() || input == &get_pitch_channel() ||
++        input == &get_yaw_channel() || input == &get_throttle_channel() ||
++        input == flight_mode_channel()) {
++        return nullptr;
++    }
++    const int16_t pwm = input->get_radio_in();
++    if (pwm <= RC_Channel::RC_MIN_LIMIT_PWM || pwm >= RC_Channel::RC_MAX_LIMIT_PWM) {
++        return nullptr;
++    }
++    return input;
++}
++
+ RC_Channel *RC_Channels::find_channel_for_option(const RC_Channel::AUX_FUNC option)
+ {
+     for (uint8_t i=0; i<NUM_RC_CHANNELS; i++) {
+diff --git a/libraries/RC_Channel/RC_Channel.h b/libraries/RC_Channel/RC_Channel.h
+index 22f20c7..99a6499 100644
+--- a/libraries/RC_Channel/RC_Channel.h
++++ b/libraries/RC_Channel/RC_Channel.h
+@@ -372,6 +372,7 @@ public:
+ #if AP_MOUNT_POI_LOCK_ENABLED
+         MOUNT_POI_LOCK =     186,  // Lock mount target to current ROI seen and switch mount to GPS Targeting mode
+ #endif  // AP_MOUNT_POI_LOCK_ENABLED
++        TERMINATE =         187,  // Private native controlled termination; physical RC HIGH only
+         // inputs from 200 will eventually used to replace RCMAP
+         ROLL =               201, // roll input
+         PITCH =              202, // pitch input
+@@ -549,6 +550,7 @@ private:
+     float pwm_to_range_dz(uint16_t dead_zone) const;
+ 
+     bool read_3pos_switch(AuxSwitchPos &ret) const WARN_IF_UNUSED;
++    bool decode_6pos_switch(int8_t& position) const WARN_IF_UNUSED;
+     bool read_6pos_switch(int8_t& position) WARN_IF_UNUSED;
+ 
+     // Structure used to detect and debounce switch changes
+@@ -639,6 +641,8 @@ public:
+     uint16_t get_override_mask() const;
+ 
+     class RC_Channel *find_channel_for_option(const RC_Channel::AUX_FUNC option);
++    // Current dedicated FTS input, including receiver presence; LOW is an arming-only requirement.
++    RC_Channel *get_termination_input();
+     bool duplicate_options_exist();
+     void convert_options(const RC_Channel::AUX_FUNC old_option, const RC_Channel::AUX_FUNC new_option);
+ 
+@@ -648,6 +652,8 @@ public:
+     // mode switch handling
+     void reset_mode_switch();
+     virtual void read_mode_switch();
++    // Current input selection, without advancing the flight-mode debounce state.
++    bool get_raw_flight_mode_switch_position(int8_t& position) const WARN_IF_UNUSED;
+ 
+     virtual bool in_rc_failsafe() const { return true; };
+     virtual bool has_valid_input() const;
+diff --git a/libraries/RC_Channel/RC_Channels.cpp b/libraries/RC_Channel/RC_Channels.cpp
+index 212fb2b..9a622b7 100644
+--- a/libraries/RC_Channel/RC_Channels.cpp
++++ b/libraries/RC_Channel/RC_Channels.cpp
+@@ -229,6 +229,12 @@ void RC_Channels::reset_mode_switch()
+     c->reset_mode_switch();
+ }
+ 
++bool RC_Channels::get_raw_flight_mode_switch_position(int8_t& position) const
++{
++    const RC_Channel *channel = flight_mode_channel();
++    return has_valid_input() && channel != nullptr && channel->decode_6pos_switch(position);
++}
++
+ void RC_Channels::read_mode_switch()
+ {
+     if (!has_valid_input()) {
+diff --git a/ArduCopter/mode_terminate.cpp b/ArduCopter/mode_terminate.cpp
+new file mode 100644
+index 0000000..6a2e42c
+--- /dev/null
++++ b/ArduCopter/mode_terminate.cpp
+@@ -0,0 +1,69 @@
++#include "Copter.h"
++
++#if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
++
++bool ModeTerminate::enabled() const
++{
++    return g2.afs.enabled() && g2.afs.controlled_termination_configured() &&
++        g2.afs.supports_controlled_termination();
++}
++
++bool ModeTerminate::init(bool ignore_checks)
++{
++    if (_latched) {
++        return true;
++    }
++    if (!motors->armed() || !enabled() || !g2.afs.controlled_termination_available()) {
++        return false;
++    }
++
++    _descent_rate_ms = g2.afs.controlled_descent_rate_ms();
++    _control_position = copter.position_ok();
++    if (_control_position) {
++        pos_control->NE_set_max_speed_accel_m(wp_nav->get_default_speed_NE_ms(), wp_nav->get_wp_acceleration_mss());
++        pos_control->NE_set_correction_speed_accel_m(wp_nav->get_default_speed_NE_ms(), wp_nav->get_wp_acceleration_mss());
++        pos_control->NE_init_controller();
++    }
++    pos_control->D_set_max_speed_accel_m(_descent_rate_ms, wp_nav->get_default_speed_up_ms(), wp_nav->get_accel_D_mss());
++    pos_control->D_set_correction_speed_accel_m(_descent_rate_ms, wp_nav->get_default_speed_up_ms(), wp_nav->get_accel_D_mss());
++    if (!pos_control->D_is_active()) {
++        pos_control->D_init_controller();
++    }
++    _latched = true;
++    g2.afs.mark_controlled_termination();
++    GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "Controlled termination latched %.2f m/s", (double)_descent_rate_ms);
++    return true;
++}
++
++void ModeTerminate::run()
++{
++    // Keep the native contact detector, spool-down and landed disarm behavior.
++    if (copter.ap.land_complete && motors->get_spool_state() == AP_Motors::SpoolState::GROUND_IDLE) {
++        copter.arming.disarm(AP_Arming::Method::LANDED);
++    }
++    if (is_disarmed_or_landed()) {
++        make_safe_ground_handling();
++        return;
++    }
++
++    if ((!copter.ekf_alt_ok() || !ahrs.healthy()) && millis() - _last_fault_ms > 1000) {
++        _last_fault_ms = millis();
++        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "Termination estimate unavailable");
++    }
++    motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
++    if (_control_position && copter.position_ok()) {
++        Vector2f velocity_ne;
++        Vector2f acceleration_ne;
++        pos_control->input_vel_accel_NE_m(velocity_ne, acceleration_ne);
++        pos_control->NE_update_controller();
++        attitude_control->input_thrust_vector_rate_heading_rads(pos_control->get_thrust_vector(), 0.0f);
++    } else {
++        _control_position = false;
++        attitude_control->input_euler_angle_roll_pitch_euler_rate_yaw_rad(0.0f, 0.0f, 0.0f);
++    }
++    // No pilot repositioning, precision-landing pause or ordinary LAND rate change.
++    pos_control->D_set_pos_target_from_climb_rate_ms(-_descent_rate_ms);
++    pos_control->D_update_controller();
++}
++
++#endif // AP_COPTER_ADVANCED_FAILSAFE_ENABLED
+diff --git a/ArduPlane/mode_terminate.cpp b/ArduPlane/mode_terminate.cpp
+new file mode 100644
+index 0000000..2c0d43a
+--- /dev/null
++++ b/ArduPlane/mode_terminate.cpp
+@@ -0,0 +1,61 @@
++#include "Plane.h"
++
++#if HAL_QUADPLANE_ENABLED && AP_ADVANCEDFAILSAFE_ENABLED
++
++bool ModeTerminate::prepare()
++{
++    if (_latched) {
++        return true;
++    }
++    if (!plane.arming.is_armed() || !plane.afs.controlled_termination_configured() || !quadplane.available()) {
++        return false;
++    }
++    // Capture before mode changes; aerodynamic termination does not require vertical navigation.
++    const bool vertical = quadplane.termination_is_vertical();
++    if (!plane.afs.controlled_termination_available(vertical)) {
++        return false;
++    }
++    _vertical = vertical;
++    _descent_rate_ms = plane.afs.controlled_descent_rate_ms();
++    return true;
++}
++
++bool ModeTerminate::_enter()
++{
++    if (_latched) {
++        return true;
++    }
++    if (_vertical) {
++        if (!ModeQLand::_enter()) {
++            return false;
++        }
++        pos_control->D_set_max_speed_accel_m(_descent_rate_ms, quadplane.pilot_speed_z_max_up_ms, quadplane.pilot_accel_z_mss);
++        pos_control->D_set_correction_speed_accel_m(_descent_rate_ms, quadplane.pilot_speed_z_max_up_ms, quadplane.pilot_accel_z_mss);
++    }
++    _latched = true;
++    plane.afs.mark_controlled_termination();
++    GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "Termination latched: %s", _vertical ? "vertical" : "fixed wing");
++    return true;
++}
++
++void ModeTerminate::update()
++{
++    if (_vertical) {
++        ModeQLand::update();
++    }
++}
++
++void ModeTerminate::run()
++{
++    if (!_vertical) {
++        // Native AFS owns aerodynamic outputs, including motor shutdown.
++        return;
++    }
++    if (!quadplane.termination_estimate_available() && AP_HAL::millis() - _last_fault_ms > 1000) {
++        _last_fault_ms = AP_HAL::millis();
++        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "Termination estimate unavailable");
++    }
++    ModeQLand::run();
++}
++
++#endif // HAL_QUADPLANE_ENABLED && AP_ADVANCEDFAILSAFE_ENABLED

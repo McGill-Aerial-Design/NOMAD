@@ -18,9 +18,6 @@ namespace NOMAD.MissionPlanner
         private EmbeddedVideoPlayer _videoPlayer;
         private ActuatorControlPanel _actuatorPanel;
 
-        public NOMADVideoView(NOMADConfig config)
-            : this(config, System.Threading.CancellationToken.None) { }
-
         internal NOMADVideoView(NOMADConfig config, System.Threading.CancellationToken shutdown)
             : this(config, shutdown, () => new GStreamerVideoPipeline()) { }
 

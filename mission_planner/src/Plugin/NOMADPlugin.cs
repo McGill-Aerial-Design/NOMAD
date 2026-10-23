@@ -38,6 +38,7 @@ namespace NOMAD.MissionPlanner
         private NOMADProfiles _profiles;
         private NotificationService _notificationService;
         private FenceSetupInput _fenceSetupInput;
+        private TerminationController _termination;
         private MAVLinkConnectionManager _connectionManager;  // Plugin-owned router
         private NomadJoystickService _joystickService;        // Physical joysticks → gimbal + camera tilt
         private GimbalArrowKeyFilter _gimbalArrowKeyFilter;    // Mission Planner-wide arrow key nudges
@@ -72,6 +73,7 @@ namespace NOMAD.MissionPlanner
 
                 GimbalController.ApplyProfile(_config);
                 OutputController.Initialize(_config);
+                _termination = new TerminationController(_config);
                 PayloadController.ApplyProfile(_config);
                 OutputController.ConnectionChanged += GimbalController.InvalidateInput;
                 if (Host?.MainForm != null) { Host.MainForm.FormClosed += OnHostClosed; }
@@ -194,6 +196,8 @@ namespace NOMAD.MissionPlanner
         public override bool Loop()
         {
             OutputController.RefreshConnection();
+            _termination?.UpdateBinding();
+            UpdateTerminationMenu();
             return true;
         }
 
@@ -249,6 +253,9 @@ namespace NOMAD.MissionPlanner
 
         private void StopCustomControls()
         {
+            RemoveTerminationMenu();
+            _termination?.Dispose();
+            _termination = null;
             try { _gimbalArrowKeyFilter?.Dispose(); }
             catch (Exception error) { Log.Warn("Keyboard cleanup failed: " + error.Message); }
             _gimbalArrowKeyFilter = null;
@@ -304,6 +311,8 @@ namespace NOMAD.MissionPlanner
                     _config = _profiles.Selected.Config;
                     GimbalController.ApplyProfile(_config);
                     OutputController.Initialize(_config);
+                    _termination?.Dispose();
+                    _termination = new TerminationController(_config);
                     PayloadController.ApplyProfile(_config);
                     _gimbalArrowKeyFilter = new GimbalArrowKeyFilter(_profiles);
                     AudioAlerts.ApplyConfig(_config);

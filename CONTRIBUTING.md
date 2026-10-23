@@ -11,5 +11,5 @@ host doubles, loopback routing or an ACK. Installation and aircraft testing requ
 separate authorization; build scripts must not perform them.
 
 Report security issues through [SECURITY.md](SECURITY.md). Source and legal notices
-remain under the repository [LICENSE](LICENSE); retained third-party license texts
-are documented in [NOTICE](NOTICE).
+are described by the plugin [LICENSE](LICENSE) and current firmware/dependency
+boundaries in [NOTICE](NOTICE).

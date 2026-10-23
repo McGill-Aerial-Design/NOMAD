@@ -14,7 +14,8 @@ internal static partial class VideoLifetimeTests
 {
     private static void PlaybackControlsAttached()
     {
-        using (var player = new EmbeddedVideoPlayer("fake", "rtsp://video.invalid/stream", true,
+        using (var player = new EmbeddedVideoPlayer("fake",
+            new VideoInputProfile { Name = "Test input", Url = "rtsp://video.invalid/stream" }, true,
             CancellationToken.None, () => new FakeVideoPipeline()))
         {
             foreach (var label in new[] { "Play", "Stop", "Full screen", "Take snapshot" })
@@ -106,7 +107,8 @@ internal static partial class VideoLifetimeTests
     private static void HandleRecreation()
     {
         var fake = new FakeVideoPipeline();
-        using (var player = new EmbeddedVideoPlayer("fake", "rtsp://video.invalid/stream", false, CancellationToken.None, () => fake))
+        using (var player = new EmbeddedVideoPlayer("fake",
+            new VideoInputProfile { Name = "Test input", Url = "rtsp://video.invalid/stream" }, false, CancellationToken.None, () => fake))
         {
             var handle = player.Handle;
             Wait(fake.ReadEntered, "automatic start");
@@ -216,7 +218,8 @@ internal static partial class VideoLifetimeTests
     {
         var fake = new FakeVideoPipeline();
         using (var shutdown = new CancellationTokenSource())
-        using (var player = new EmbeddedVideoPlayer("fake", "rtsp://video.invalid/stream", true, shutdown.Token, () => fake))
+        using (var player = new EmbeddedVideoPlayer("fake",
+            new VideoInputProfile { Name = "Test input", Url = "rtsp://video.invalid/stream" }, true, shutdown.Token, () => fake))
         {
             var handle = player.Handle;
             player.StartStream();
@@ -249,7 +252,8 @@ internal static partial class VideoLifetimeTests
     private static void CheckCancelledView(CancellationToken token)
     {
         int creates = 0;
-        using (var player = new EmbeddedVideoPlayer("fake", "rtsp://video.invalid/stream", true, token, () =>
+        using (var player = new EmbeddedVideoPlayer("fake",
+            new VideoInputProfile { Name = "Test input", Url = "rtsp://video.invalid/stream" }, true, token, () =>
         {
             ++creates;
             return new FakeVideoPipeline();

@@ -16,17 +16,16 @@ Builds/tests do not install software, change operator settings or control aircra
    profile. Review mappings and calibration before enabling custom controls.
 
 Host reference assemblies, binaries and installed dependencies are not copied into
-NOMAD artifacts. Video requires the host's installed GStreamer support. The old
-multi-component deployment/rollback framework and its installer wrapper are removed;
-there is no automatic activation, service installation or rollback guarantee.
+NOMAD artifacts. Video requires the host's installed GStreamer support. Keep the
+previous reviewed DLL available for manual restoration with Mission Planner closed.
 
 ## Saved aircraft profiles
 
 NOMAD stores profiles in `%LOCALAPPDATA%/Mission Planner/plugins/nomad_aircraft_profiles.json`.
-Current-schema single-profile files at the legacy path remain supported; retired
-runtime port/credential and management endpoint fields are discarded in memory. Older
-schemas with unknown fields are rejected untouched and need explicit reviewed migration.
-Loading never rewrites the file.
+Only the current profile collection schema is accepted. Unknown or invalid fields
+are rejected; loading never converts or rewrites the file. If the primary file is
+absent, its current-format `.bak` can be loaded. With neither file present, NOMAD
+starts with a fresh profile.
 Explicit Save replaces atomically with a `.bak`; cancelled/failed saves preserve the
 previous saved collection. Keep profiles private: connection URLs can contain sensitive
 details even though runtime credentials are no longer stored/exported.
@@ -34,9 +33,8 @@ details even though runtime credentials are no longer stored/exported.
 Each profile owns optional aircraft notes, gimbal mode/rate, calibrated payload
 outputs, HID mappings, links and video. Aircraft notes are operator labels, not live
 readbacks. Configure ordinary RC arming and flight modes through Mission Planner and
-ArduPilot. Retired NOMAD RC-role fields load and validate in memory but are omitted
-on the next explicit save/export; loading does not rewrite their source. New profiles
-start without inherited payload mappings. Copy/import/export are drafts until Save.
+ArduPilot. New profiles start without inherited payload mappings. Copy/import/export
+use the current schema and remain drafts until Save.
 Open settings from the NOMAD menu or sidebar. The persistent Editing label identifies
 the draft aircraft; Save activates it. Profile actions contains reset, load and export.
 Links, Video, Payloads and Inputs belong to that draft; Preferences contains alerts
@@ -63,19 +61,18 @@ In NOMAD → Fence Setup, choose the published polygon or paste/review coordinat
 then Stage. Review the native Plan fence draft, use native Write, then Read to verify
 the aircraft fence. Configure fence enable/type and other failsafes through MP.
 
-NOMAD does not modify normal LAND or QLAND settings. Competition termination needs
-a separate onboard mechanism for the aircraft and flight phase; changing ordinary
-landing rates is not that mechanism. No competition termination implementation or
-qualification is provided by fence draft staging. See [safety](safety.md#native-fence-setup-takeover-and-termination).
+NOMAD does not modify normal LAND or QLAND settings. The optional
+[native termination](native-termination.md) extension provides a separate onboard
+mode and a confirmed NOMAD menu action. It requires the matching custom firmware
+and actual aircraft commissioning; fence draft staging provides neither.
 
 ## Video inputs
 
 Settings → Video stores named inputs for the selected aircraft. Add an input, enter
 its name and source URL, and choose it from the dropdown. Save applies that selection
 to the HUD, Dashboard preview and Video view; Cancel leaves the active configuration
-unchanged. Remove the final input to leave video unconfigured. Existing `VideoUrl`
-settings load as a named Default input without rewriting their file; the next save
-uses the named-input format. Older plugin versions cannot read that new format.
+unchanged. Remove the final input to leave video unconfigured. Profiles use
+`VideoInputs` and `SelectedVideoInputName`; imports must use that same current schema.
 
 RTSP negotiates the video codec supported by the installed GStreamer decoder. Select
 TCP or UDP transport and a 0..5000 ms jitter buffer. UDP source URLs such as
@@ -97,14 +94,7 @@ and preferred link ID in the Links settings, using the reviewed ELRS primary
 and LTE secondary topology. An empty link list opens no physical connection.
 Connect Mission Planner with UDPCl to `127.0.0.1` and the profile's local router port.
 The plugin owns sockets/serial handles and closes them on profile replacement/unload.
-It does not start an external router process or stop an installed legacy service.
-An operator must separately retire any old runtime/router deployment before installing
-this replacement; this repository change performs no infrastructure transition.
-
-Aircraft-side serial fan-out still uses separately reviewed deployment settings:
-[router configuration](../infra/transport/mavlink_router/main.conf) and
-[systemd unit](../infra/systemd/nomad-mavlink-router.service). Their addresses/device
-paths are placeholders. This plugin does not install or alter that aircraft service.
+Aircraft-side telemetry endpoints and video/network services are commissioned separately.
 
 ## Gimbal, payload and input
 
@@ -125,5 +115,5 @@ Use Safe/Stop and wait for the native result before disconnecting or closing MP.
 Unload attempts best-effort Safe; it cannot guarantee return delivery, cancel a native
 helper already executing, or prove physical de-energization. Onboard repeats retain
 native controller return behavior. Keep physical emergency procedures and ArduPilot
-failsafes independently qualified. NOMAD termination is unavailable: no LAND/disarm
-recipe substitutes for an approved aircraft mechanism.
+failsafes independently qualified. Stock LAND/disarm is not a substitute for the
+separate [native termination](native-termination.md) mechanism or aircraft acceptance.

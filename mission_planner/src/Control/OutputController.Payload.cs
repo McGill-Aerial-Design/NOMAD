@@ -50,7 +50,7 @@ namespace NOMAD.MissionPlanner
                 finally { lock (Gate) { _payloadBusy = false; } }
             }
 
-            internal async Task<float> ReadTrimAsync(int channel)
+            internal async Task<float> ReadParameterAsync(string name)
             {
                 Task<float> task;
                 lock (Gate)
@@ -58,7 +58,7 @@ namespace NOMAD.MissionPlanner
                     if (!IsCurrent || _payloadBusy || Connection.giveComport)
                     { throw new InvalidOperationException("Aircraft changed or Mission Planner payload request is busy."); }
                     _payloadBusy = true;
-                    try { task = Connection.GetParamAsync(System, Component, "SERVO" + channel + "_TRIM"); }
+                    try { task = Connection.GetParamAsync(System, Component, name); }
                     catch { _payloadBusy = false; throw; }
                 }
                 try { return await task.ConfigureAwait(false); }

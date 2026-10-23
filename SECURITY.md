@@ -3,9 +3,8 @@
 ## Current trust boundary
 
 NOMAD runs inside the local Mission Planner operator process and uses its selected
-connection and native APIs. It does not supply an authenticated IPC service,
-independent client credentials, aircraft-wide authority arbiter or durable command
-audit. The plugin-owned router exposes its MP consumer on loopback; physical
+connection and native APIs. Its custom controls validate the captured target and
+local input lifetime. The plugin-owned router exposes its MP consumer on loopback; physical
 telemetry links and host/controller configuration need separate review.
 
 Protect the ground computer, plugin installation, operator profiles, firmware and

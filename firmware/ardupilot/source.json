@@ -1,0 +1,100 @@
+{
+  "repository": "https://github.com/ArduPilot/ardupilot.git",
+  "revision": "fb773567896014da007bca58358704d4a0d8516f",
+  "version": "4.7.2",
+  "board": "CubeOrangePlus",
+  "apj_board_id": 1063,
+  "patch": "controlled-termination.patch",
+  "patch_sha256": "4beb471e4b1fc769d6285c09c44fbd1618fab81caac0b13ca4c69a3a121d2be8",
+  "license": "GPL-3.0-or-later",
+  "private_mode_id": 29,
+  "controlled_action": 44,
+  "private_rc_option": 187,
+  "scripting_enabled": false,
+  "submodules": [
+    {
+      "path": "modules/ChibiOS",
+      "revision": "d103983f4362e5506bcf7062ccacf345fc0c0859"
+    },
+    {
+      "path": "modules/CrashDebug",
+      "revision": "599965086437137ec0fe66e185611f43f335f889"
+    },
+    {
+      "path": "modules/CrashDebug/CrashCatcher",
+      "revision": "4cf6e11df3a081b0f573a7834ed8e1e4000af73e"
+    },
+    {
+      "path": "modules/CrashDebug/CrashCatcher/CppUTest",
+      "revision": "011f371fdb5d7e441fb023be67295783e053df4a"
+    },
+    {
+      "path": "modules/CrashDebug/mri",
+      "revision": "b35c89451b41a45b7f5b580acaff555315ac88e2"
+    },
+    {
+      "path": "modules/CrashDebug/mri/CppUTest",
+      "revision": "011f371fdb5d7e441fb023be67295783e053df4a"
+    },
+    {
+      "path": "modules/DroneCAN/DSDL",
+      "revision": "04e0e818b06c180eb1720fcdf16484d0f12895ee"
+    },
+    {
+      "path": "modules/DroneCAN/dronecan_dsdlc",
+      "revision": "de47a8972b7d8c59e50c3acfab5754db29798caa"
+    },
+    {
+      "path": "modules/DroneCAN/libcanard",
+      "revision": "601ed35467e0ac38819df17cd7c918de19f62d58"
+    },
+    {
+      "path": "modules/DroneCAN/libcanard/drivers/avr/avr-can-lib",
+      "revision": "9c6bc9118de66d6edaf1b8539e2b9717ba26d123"
+    },
+    {
+      "path": "modules/DroneCAN/pydronecan",
+      "revision": "08cda37aaf2958657399606653b99ceb5a6beae0"
+    },
+    {
+      "path": "modules/Micro-CDR",
+      "revision": "3d1b17703c7cf4f22def2910bc845bdb5152d7b5"
+    },
+    {
+      "path": "modules/Micro-XRCE-DDS-Client",
+      "revision": "97175304425c5bee87c6fddd99de1ef8d0c394dc"
+    },
+    {
+      "path": "modules/gbenchmark",
+      "revision": "d572f4777349d43653b21d6c2fc63020ab326db2"
+    },
+    {
+      "path": "modules/gsoap",
+      "revision": "e1f690585d4803402584962bfaa8240ecaf1db30"
+    },
+    {
+      "path": "modules/gtest",
+      "revision": "c5fed93f941865a0e912e9baf46ded713506590a"
+    },
+    {
+      "path": "modules/littlefs",
+      "revision": "34be692aafaaf4319a18e415b08aa4332697408b"
+    },
+    {
+      "path": "modules/lwip",
+      "revision": "a6bf350c679ed8ba042ad58bf81cc540d61bb605"
+    },
+    {
+      "path": "modules/mavlink",
+      "revision": "288b907c384a892c8519bfe271682424b1e1a3a0"
+    },
+    {
+      "path": "modules/mavlink/pymavlink",
+      "revision": "ec06837a50688b5974094876c3c9d1b8bf86629d"
+    },
+    {
+      "path": "modules/waf",
+      "revision": "35eadbb64e2052099a853b571e507c33032b392c"
+    }
+  ]
+}

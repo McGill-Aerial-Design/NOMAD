@@ -62,17 +62,17 @@ try {
     $config.AutoStartHudVideo = $false
     Assert-NativeSitlProfileSafe $config
 
-    # Exercise real profile selection and fallback parsing in build-only files.
+    # Exercise real profile selection and backup parsing in build-only files.
     $directory = Join-Path $root ('build/tests/native-preflight-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $directory | Out-Null
-    $paths = [object[]]@('profiles.json', 'profiles.json.bak', 'legacy.json', 'legacy.json.bak')
+    $paths = [object[]]@('profiles.json', 'profiles.json.bak')
     for ($index = 0; $index -lt $paths.Count; $index++) { $paths[$index] = [string](Join-Path $directory $paths[$index]) }
     $load = $profilesType.GetMethod('LoadFromPaths', [Reflection.BindingFlags]'Static,NonPublic')
     $config = New-SafeConfig
     $config.RouterClientEnabled = $true
     $profiles = $profilesType.GetConstructor([type[]]@($configType)).Invoke([object[]]@($config))
-    foreach ($index in 0..3) {
-        $value = if ($index -lt 2) { $profiles } else { $config }
+    foreach ($index in 0..1) {
+        $value = $profiles
         $json = [Newtonsoft.Json.JsonConvert]::SerializeObject($value)
         [IO.File]::WriteAllText($paths[$index], $json)
         $loaded = $load.Invoke($null, $paths)
@@ -80,7 +80,7 @@ try {
         if ([IO.File]::ReadAllText($paths[$index]) -cne $json) { throw 'Preflight loading rewrote a fixture.' }
         Remove-Item -LiteralPath $paths[$index]
     }
-    Write-Host 'Native preflight passed: disabled settings, every startup owner, six bindings and four profile candidates.'
+    Write-Host 'Native preflight passed: disabled settings, every startup owner, six bindings and two profile candidates.'
     Write-Host 'No plugin Init/Start, child process or operator file writes were performed.'
 } finally {
     [AppDomain]::CurrentDomain.remove_AssemblyResolve($resolver)

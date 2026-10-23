@@ -173,18 +173,7 @@ try {
     . (Join-Path $PSScriptRoot 'test_setup_editors.ps1')
     Invoke-SetupEditorTests $plugin $configType
 
-    # Legacy source migration is in-memory only; every current save has one named source of truth.
-    $legacyVideo = Load-Config '{"VideoUrl":"rtsp://synthetic:credential@video.invalid/live"}'
-    if ($legacyVideo.SelectedVideoInputName -ne 'Default' -or $legacyVideo.VideoInputs.Count -ne 1 -or
-        $legacyVideo.SelectedVideoInput.Url -ne 'rtsp://synthetic:credential@video.invalid/live') {
-        throw 'Legacy video URL was lost during named-input migration.'
-    }
-    $videoExport = Join-Path $temporary 'video-export.json'
-    $legacyVideo.ExportToFile($videoExport)
-    if ([IO.File]::ReadAllText($videoExport).Contains('"VideoUrl"')) { throw 'Video export retained two sources of truth.' }
-    $videoCopy = $loadMethod.Invoke($null, [object[]]@([string]$videoExport)).Clone()
-    if ($videoCopy.SelectedVideoInput.Url -ne $legacyVideo.SelectedVideoInput.Url) { throw 'Video save/load/clone lost the source.' }
-    foreach ($json in @('{}', '{"VideoUrl":""}', '{"VideoInputs":[],"SelectedVideoInputName":""}')) {
+    foreach ($json in @('{}', '{"VideoInputs":[],"SelectedVideoInputName":""}')) {
         $empty = Load-Config $json
         if ($null -ne $empty.SelectedVideoInput -or $empty.VideoInputs.Count -ne 0) { throw 'Empty video acquired a source.' }
     }
@@ -195,7 +184,7 @@ try {
         $video.SelectedVideoInput.DropOldFrames -or $video.SelectedVideoInput.RtspTransport -ne 'UDP') {
         throw 'Named receiver settings did not retain their boundary values.'
     }
-    foreach ($json in @('{"VideoUrl":null}', '{"VideoUrl":1}', '{"VideoUrl":"","VideoInputs":[]}',
+    foreach ($json in @(
         '{"VideoInputs":null}', '{"VideoInputs":{}}', '{"VideoInputs":[null]}',
         '{"VideoInputs":[{}]}', '{"SelectedVideoInputName":1}', '{"SelectedVideoInput":null}',
         '{"VideoInputs":[],"SelectedVideoInputName":"missing"}',
@@ -222,78 +211,37 @@ try {
     $profileDeserialize = $profilesType.GetMethod('Deserialize', [Reflection.BindingFlags]'Static,NonPublic')
     $profilePrefix = '{"Aircraft":[{"Id":"00000000000000000000000000000001","Config":'
     $profileSuffix = '}],"SelectedId":"00000000000000000000000000000001"}'
-    $nestedVideo = $profileDeserialize.Invoke($null, [object[]]@($profilePrefix +
-        '{"AircraftName":"Synthetic","VideoUrl":"udp://5600"}' + $profileSuffix))
-    if ($nestedVideo.Selected.Config.SelectedVideoInput.Url -ne 'udp://5600') { throw 'Aircraft profile missed legacy video migration.' }
     $rejected = $false
     try {
         $profileDeserialize.Invoke($null, [object[]]@($profilePrefix +
             '{"AircraftName":"Synthetic","VideoInputs":[{"Name":"A","Url":false}]}' + $profileSuffix)) | Out-Null
     } catch { $rejected = $true }
     if (!$rejected) { throw 'Aircraft profile bypassed nested video token validation.' }
-    Write-Host 'Named video migration, save/load/clone, strict nested validation and limits passed.'
+    Write-Host 'Named video strict nested validation and limits passed.'
 
-    $config = Load-Config '{"CoreRuntimePort":14631,"RouterLocalPort":14620,"ManagementPort":14621,"CoreClientCredential":"test-only-credential"}'
+    $config = Load-Config '{"RouterLocalPort":14620}'
     if ($config.RouterLocalPort -ne 14620) { throw 'Saved Mission Planner router endpoint changed.' }
-    $export = Join-Path $temporary 'export.json'
-    $config.ExportToFile($export)
-    if ([IO.File]::ReadAllText($export).Contains('test-only-credential')) { throw 'Export leaked client credential.' }
-    foreach ($field in @('Payloads','Actuators','RouterMode','RouterEnabled','JoystickCameraTiltEnabled','JoystickZedEnabled','SerialJoystickEnabled','SlamCameraFovDeg')) {
+    foreach ($field in @('UnknownSetting', 'UnknownVideoSetting')) {
         Assert-ThrowsMessage ('{"' + $field + '":null}') $field
     }
+    $export = Join-Path $temporary 'export.json'
+    $config.ExportToFile($export)
+    $configCopy = $loadMethod.Invoke($null, [object[]]@([string]$export)).Clone()
+    if ($configCopy.RouterLocalPort -ne 14620) { throw 'Configuration export/load/clone lost the router port.' }
+    $videoExport = Join-Path $temporary 'video-export.json'
+    $video.ExportToFile($videoExport)
+    $videoCopy = $loadMethod.Invoke($null, [object[]]@([string]$videoExport)).Clone()
+    if ($videoCopy.SelectedVideoInput.Url -ne $video.SelectedVideoInput.Url) { throw 'Video export/load/clone lost the source.' }
     Assert-ThrowsMessage '{"RouterLocalPort":0}' 'ports'
     Assert-ThrowsMessage '{"JoystickButtonIndices":[0,1,2,3,4,128]}' 'between 0 and 127'
     Assert-ThrowsMessage '{"JoystickButtonIndices":[0,1,2,3,4,5.5]}' 'integers'
-    $freedButton = Load-Config '{"JoystickButtonIndices":[6,1,2,3,4,5],"JoystickSw1UpAction":"a:activate"}'
-    if ($freedButton.JoystickButtonIndices[0] -ne 6) { throw 'The removed monitor still reserved its former default button.' }
     foreach ($button in @(0, 127)) {
-        $retiredPath = Join-Path $temporary ('retired-monitor-' + $button + '.json')
-        $retiredJson = '{"JoystickTerminationButtonIndex":' + $button +
-            ',"JoystickKillSwitchEnabled":true,"JoystickButtonIndices":[' + $button +
-            ',1,2,3,4,5],"JoystickSw1UpAction":"a:activate"}'
-        [IO.File]::WriteAllText($retiredPath, $retiredJson)
-        $retired = $loadMethod.Invoke($null, [object[]]@([string]$retiredPath))
-        if ($retired.JoystickButtonIndices[0] -ne $button -or $retired.JoystickSw1UpAction -ne 'a:activate' -or
-            [IO.File]::ReadAllText($retiredPath) -cne $retiredJson) {
-            throw 'Retired termination monitoring reserved a payload button or changed its input file.'
-        }
-        $retiredExport = Join-Path $temporary ('retired-monitor-export-' + $button + '.json')
-        $retired.ExportToFile($retiredExport)
-        $saved = [IO.File]::ReadAllText($retiredExport)
-        if ($saved.Contains('JoystickTerminationButtonIndex') -or $saved.Contains('JoystickKillSwitchEnabled')) {
-            throw 'Current configuration export persisted unused termination monitor settings.'
-        }
+        $mapped = Load-Config ('{"JoystickButtonIndices":[' + $button +
+            ',1,2,3,4,5],"JoystickSw1UpAction":"a:activate"}')
+        if ($mapped.JoystickButtonIndices[0] -ne $button) { throw 'HID button boundary was changed.' }
     }
-    foreach ($invalid in @('{"JoystickKillSwitchEnabled":"true"}', '{"JoystickKillSwitchEnabled":1}',
-        '{"JoystickKillSwitchEnabled":null}', '{"JoystickTerminationButtonIndex":"0"}',
-        '{"JoystickTerminationButtonIndex":0.5}', '{"JoystickTerminationButtonIndex":null}')) {
-        Assert-ThrowsMessage $invalid 'must be'
-    }
-    foreach ($invalid in @('{"JoystickTerminationButtonIndex":-1}', '{"JoystickTerminationButtonIndex":128}',
-        '{"JoystickTerminationButtonIndex":999999999999999999999}')) {
-        Assert-ThrowsMessage $invalid 'between 0 and 127'
-    }
-    foreach ($field in @('joystickKillSwitchEnabled', 'joystickTerminationButtonIndex', 'JoystickTerminationEnabled')) {
-        Assert-ThrowsMessage ('{"' + $field + '":true}') $field
-    }
-    Assert-ThrowsMessage '{"JoystickKillSwitchEnabled":true,"JoystickKillSwitchEnabled":false}' 'already exists'
-    Assert-ThrowsMessage '{"JoystickTerminationButtonIndex":0,"JoystickTerminationButtonIndex":1}' 'already exists'
     Assert-ThrowsMessage '{"JoystickButtonIndices":[0,0,2,3,4,5],"JoystickSw1UpAction":"a:activate","JoystickSw1DownAction":"b:activate"}' 'unique'
-    Assert-ThrowsMessage '{"CoreRuntimePort":14611,"CoreRuntimePort":14612}' 'already exists'
-    $loadPaths = $configType.GetMethod('LoadFromPaths', [Reflection.BindingFlags]'Static,NonPublic')
-    $primary = Join-Path $temporary 'primary.json'
-    $backup = Join-Path $temporary 'backup.json'
-    $backupText = '{"CoreRuntimePort":14632}'
-    [IO.File]::WriteAllText($backup, $backupText)
-    foreach ($invalid in @('{"RouterMode":"Embedded"}', '{"JoystickTerminationButtonIndex":999999999999999999999}', '', '{')) {
-        [IO.File]::WriteAllText($primary, $invalid)
-        $rejected = $false
-        try { $loadPaths.Invoke($null, [object[]]@($primary, $backup)) | Out-Null } catch { $rejected = $true }
-        if (-not $rejected) { throw 'Invalid primary fell back to a backup/default configuration.' }
-        if ([IO.File]::ReadAllText($primary) -cne $invalid -or [IO.File]::ReadAllText($backup) -cne $backupText) {
-            throw 'Invalid primary load modified operator files.'
-        }
-    }
+    Assert-ThrowsMessage '{"RouterLocalPort":14611,"RouterLocalPort":14612}' 'already exists'
     foreach ($json in @('{"RouterLinks":null}', '{"RouterLinks":[{"Id":"x","Port":1.5}]}',
         '{"RouterLinks":[{"Id":"x","Enabled":"true"}]}', '{"RouterLinks":[{"Id":"x","port":14750}]}',
         '{"RouterLinks":[{"Id":"x","Port":14750,"Unexpected":1}]}', '{"RouterPreferredLink":5}')) {

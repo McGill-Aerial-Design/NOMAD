@@ -12,9 +12,9 @@ Mission Planner and its installed dependencies are supplied by the host installa
 not bundled into the NOMAD DLL artifact. Retain their applicable notices when
 redistributing any such software separately.
 
-Historical MAVSDK implementation license texts are retained in licenses/mavsdk-phase-a.
-The archived source and dependency provenance remain on the MAVSDK-Archive branch;
-MAVSDK and its C++ dependencies are no longer built or linked into the current plugin.
+The optional ArduPilot firmware patch is a separate GPL-licensed component in
+firmware/ardupilot. Its upstream notice and complete corresponding source must
+accompany firmware delivery. It is not linked into the NOMAD plugin DLL.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

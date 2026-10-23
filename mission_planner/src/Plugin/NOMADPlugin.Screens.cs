@@ -41,16 +41,6 @@ namespace NOMAD.MissionPlanner
                     mainSwitcher = viewField.GetValue(null);
                 }
 
-                if (mainSwitcher == null)
-                {
-                    var viewProp = Host.MainForm.GetType().GetField("View",
-                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                    if (viewProp != null)
-                    {
-                        mainSwitcher = viewProp.GetValue(null);
-                    }
-                }
-
                 if (mainSwitcher != null)
                 {
                     var screenType = mainSwitcher.GetType().GetNestedType("Screen",

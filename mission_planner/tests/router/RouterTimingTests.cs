@@ -40,7 +40,7 @@ internal static partial class GroundRouterTests
             config.Links = config.Links.Take(2).ToList();
             config.Consumers = config.Consumers.Take(1).ToList();
             config.StatsTickMs = 250;
-            config.HeartbeatTimeoutSec = 3;
+            config.PacketTimeoutSec = 3;
             config.FailoverCooldownSec = 2;
             config.PreferredLinkReconnectDelaySec = 1;
             Router = new GroundLinkRouter(config, Clock.Source);

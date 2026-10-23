@@ -8,5 +8,5 @@ autopilot; ordinary flight controls and missions remain Mission Planner-owned.
 - [Development](development.md): build and meaningful software gates.
 - [Operations](operations.md): manual closed-MP installation, profiles and safe/stop limits.
 - [Safety](safety.md) and [qualification](qualification.md): obligations and evidence limits.
-- [PRD](prd.md), [CONOPS inventory](conops-requirements.md), [AEAC integration](aeac-2027.md):
+- [PRD](prd.md) and [CONOPS inventory](conops-requirements.md):
   stable requirements, organizer questions and work requiring separate acceptance.

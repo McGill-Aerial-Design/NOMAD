@@ -211,7 +211,7 @@ namespace NOMAD.MissionPlanner
         }
 
         private bool Usable(PhysicalLink link, double now) => link != null && link.Config.Enabled &&
-            link.Stats.IsOpen && (now - link.LastPacket) < _cfg.HeartbeatTimeoutSec;
+            link.Stats.IsOpen && (now - link.LastPacket) < _cfg.PacketTimeoutSec;
 
         private void Tick(double now)
         {

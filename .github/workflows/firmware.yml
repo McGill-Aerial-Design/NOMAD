@@ -1,0 +1,169 @@
+name: Firmware qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag at the selected NOMAD commit; empty builds artifacts only
+        required: false
+        default: ''
+        type: string
+  pull_request:
+    paths:
+      - 'firmware/**'
+      - 'scripts/release/build_firmware.py'
+      - 'scripts/release/firmware-requirements.txt'
+      - 'tests/test_firmware_release.py'
+      - '.github/workflows/firmware.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify existing release tag before building
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]*', tag):
+              raise SystemExit('Use a conventional existing tag name')
+          subprocess.run(['git', 'check-ref-format', 'refs/tags/' + tag], check=True)
+          actual = subprocess.check_output(['git', 'rev-parse', '--verify', 'refs/tags/' + tag + '^{commit}'], text=True).strip()
+          if actual != os.environ['GITHUB_SHA']:
+              raise SystemExit('Existing remote tag does not resolve to selected NOMAD commit')
+          PY
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runner build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential ccache gawk git pkg-config python3-dev libxml2-dev libxslt1-dev zlib1g-dev
+          python -m pip install -r scripts/release/firmware-requirements.txt
+      - name: Acquire reviewed ARM toolchain
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/gcc-arm-none-eabi.tar.bz2"
+          curl --fail --location --retry 3 --output "$archive" https://firmware.ardupilot.org/Tools/STM32-tools/gcc-arm-none-eabi-10-2020-q4-major-x86_64-linux.tar.bz2
+          printf '%s  %s\n' '21134caa478bbf5352e239fbc6e2da3038f8d2207e089efc96c3b55f1edcd618' "$archive" | sha256sum --check --strict
+          tar -xjf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gcc-arm-none-eabi-10-2020-q4-major/bin" >> "$GITHUB_PATH"
+      - name: Check firmware packager
+        run: python -m unittest discover -s tests -p test_firmware_release.py -v
+      - name: Build and run all mandatory qualification gates
+        run: python scripts/release/build_firmware.py --work "$RUNNER_TEMP/firmware-work" --jobs 4
+      - name: Retain diagnostic evidence separately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-diagnostics
+          path: |
+            ${{ runner.temp }}/firmware-work/diagnostics/
+            ${{ runner.temp }}/firmware-work/results.json
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Retain qualified release package
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-release
+          path: ${{ runner.temp }}/firmware-work/release/
+          if-no-files-found: error
+          retention-days: 14
+
+  draft-release:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware-release
+          path: firmware-release
+      - name: Verify package, current remote tag and absence of existing release
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, importlib.util, json, os, pathlib, re, subprocess, urllib.error, urllib.parse, urllib.request
+          tag, repository = os.environ['RELEASE_TAG'], os.environ['GH_REPO']
+          if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]*', tag):
+              raise SystemExit('Invalid tag')
+          subprocess.run(['git', 'check-ref-format', 'refs/tags/' + tag], check=True)
+          actual = subprocess.check_output(['git', 'rev-parse', '--verify', 'refs/tags/' + tag + '^{commit}'], text=True).strip()
+          if actual != os.environ['GITHUB_SHA']:
+              raise SystemExit('Existing remote tag changed or differs from selected commit')
+          spec = importlib.util.spec_from_file_location('firmware', 'scripts/release/build_firmware.py')
+          firmware = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(firmware)
+          root = pathlib.Path('firmware-release')
+          manifest = json.loads((root / 'manifest.json').read_text())
+          if not firmware.overall_pass(manifest['gates']):
+              raise SystemExit('Mandatory gate is missing or failed')
+          if manifest['provenance']['nomad']['base_revision'] != os.environ['GITHUB_SHA']:
+              raise SystemExit('Package NOMAD commit mismatch')
+          allowlist = {'arducopter.apj', 'arduplane.apj', 'arducopter.bin', 'arduplane.bin',
+                       'arducopter.elf', 'arduplane.elf', 'complete-corresponding-source.tar.gz',
+                       'source.json', 'controlled-termination.patch', 'COPYING.txt', 'native-termination.md',
+                       'source-content.json', 'build_firmware.py', 'firmware-requirements.txt', 'firmware.yml',
+                       'NOMAD-build-support-LICENSE.txt',
+                       'manifest.json', 'release-notes.md', 'SHA256SUMS'}
+          if {p.name for p in root.iterdir()} != allowlist or not all(p.is_file() and not p.is_symlink() for p in root.iterdir()):
+              raise SystemExit('Release assets differ from explicit allowlist')
+          checksums = {}
+          for line in (root / 'SHA256SUMS').read_text().splitlines():
+              checksum, name = line.split('  ', 1)
+              if name not in allowlist or name in checksums:
+                  raise SystemExit('Unsafe or duplicate checksum entry')
+              checksums[name] = checksum
+              if firmware.digest(root / name) != checksum:
+                  raise SystemExit('Asset checksum mismatch: ' + name)
+          if set(checksums) != allowlist - {'SHA256SUMS'}:
+              raise SystemExit('Incomplete release checksums')
+          request = urllib.request.Request('https://api.github.com/repos/' + repository + '/releases/tags/' + urllib.parse.quote(tag, safe=''),
+                                           headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
+          try:
+              urllib.request.urlopen(request).close()
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+          else:
+              raise SystemExit('Release already exists; refusing to replace release or assets')
+          PY
+      - name: Create draft prerelease with explicit verified assets
+        shell: bash
+        run: |
+          cd firmware-release
+          gh release create "$RELEASE_TAG" --draft --prerelease --verify-tag --title "$RELEASE_TAG" --notes-file release-notes.md \
+            arducopter.apj arduplane.apj arducopter.bin arduplane.bin arducopter.elf arduplane.elf \
+            complete-corresponding-source.tar.gz source.json controlled-termination.patch COPYING.txt \
+            native-termination.md source-content.json build_firmware.py firmware-requirements.txt firmware.yml \
+            NOMAD-build-support-LICENSE.txt \
+            manifest.json release-notes.md SHA256SUMS

@@ -190,9 +190,8 @@ v1.0. Appendix E pp33-35 explicitly labels its advice non-binding, including
 scored proposal plan, not a newly invented flight requirement. Table 9 is reused
 for Phase 2 totals and Phase 3 scoring; citations include page numbers.
 
-No CONOPS requirement selects MAVSDK, Jetson, ROS, LTE, Walksnail, a mission
-camera, ZED, ESP32, Cube Orange, Here4, RTK or VIO. These remain project decisions
-or deferred choices in PRD. Event-driven competition uploads from the preview
+Hardware, networking and software implementation choices remain project decisions
+in the PRD rather than CONOPS mandates. Event-driven competition uploads from the preview
 are not confirmed here. No prediction horizon, right-of-way algorithm, alert UI,
 traffic freshness bound or mandated autonomous avoidance maneuver is specified.
 Do not infer those from the cylindrical exclusion-zone obligation.

@@ -101,7 +101,7 @@ internal static class RouterStatusUiTests
     private static void DashboardSummary()
     {
         using (var manager = new MAVLinkConnectionManager())
-        using (var view = new NOMADDashboardView(new NOMADConfig(), manager))
+        using (var view = new NOMADDashboardView(new NOMADConfig(), manager, System.Threading.CancellationToken.None))
         {
             typeof(NOMADDashboardView).GetMethod("UpdateLinksCard", PrivateInstance).Invoke(view, null);
             var label = (Label)typeof(NOMADDashboardView).GetField("_lblLinks", PrivateInstance).GetValue(view);

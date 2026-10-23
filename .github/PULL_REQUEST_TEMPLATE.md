@@ -1,6 +1,6 @@
 ## Change
 
-Describe the concrete problem and resulting behavior. State intentional compatibility breaks.
+Describe the concrete problem and resulting behavior. State API or configuration changes.
 
 ## Validation
 
