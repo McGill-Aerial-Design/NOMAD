@@ -32,7 +32,7 @@ jobs:
           packages: gcc-g++=13.4.0-1 python312 python312-pip git procps gettext binutils
           add-to-path: false
       - name: Build the pinned Copter simulator
-        shell: C:\cygwin\bin\bash.exe -eo pipefail '{0}'
+        shell: C:\cygwin\bin\bash.exe -eo pipefail -o igncr '{0}'
         run: |
           export PATH=/usr/bin:$(cygpath "$SYSTEMROOT")/system32
           cd "$(cygpath -u "$GITHUB_WORKSPACE")"
