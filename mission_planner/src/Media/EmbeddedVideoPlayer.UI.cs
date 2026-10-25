@@ -82,13 +82,15 @@ namespace NOMAD.MissionPlanner
 
         private void OnVideoPaint(object sender, PaintEventArgs e)
         {
-            if (_videoBox.Image == null)
+            var box = (PictureBox)sender;
+            if (box.Image == null)
             {
                 return;
             }
 
-            int centerX = _videoBox.Width / 2;
-            int centerY = _videoBox.Height / 2;
+            PaintDetections(box, e.Graphics);
+            int centerX = box.Width / 2;
+            int centerY = box.Height / 2;
             const int arm = 18;
             const int gap = 5;
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
@@ -147,6 +149,8 @@ namespace NOMAD.MissionPlanner
                 SizeMode = PictureBoxSizeMode.Zoom,
             };
             _fullscreenBox.DoubleClick += (s, e) => ToggleFullscreen();
+            _fullscreenBox.Paint += OnVideoPaint;
+            AttachSelectionMouse(_fullscreenBox);
 
             _fullscreenBox.Image = _displayFrame;
 
@@ -181,11 +185,8 @@ namespace NOMAD.MissionPlanner
             input.Validate();
             var wasPlaying = _isPlaying;
             StopStream();
-            _input = new VideoInputProfile
-            {
-                Name = input.Name, Url = input.Url, RtspTransport = input.RtspTransport,
-                LatencyMs = input.LatencyMs, QueueMaxBuffers = input.QueueMaxBuffers, DropOldFrames = input.DropOldFrames,
-            };
+            _input = input.Copy();
+            _session.ConfigureDetection(_session.DetectionEnabled, _input.DetectorModelProfilePath);
             if (wasPlaying) { StartStream(); }
         }
 

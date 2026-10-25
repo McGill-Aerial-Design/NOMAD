@@ -4,14 +4,14 @@ NOMAD runs inside Mission Planner as one C#/.NET Framework 4.8 plugin.
 The reviewed host version is stored in `scripts/release/mission-planner-target.json`.
 
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph Ground[Mission Planner process]
     HID[NOMAD UI and custom HID] --> Controls[Profile-bound controllers]
     Controls --> MP[Native Mission Planner APIs and active connection]
     Flight[Native flight UI and missions] --> MP
     MP <-->|UDPCl when enabled| Router[Optional in-process link router]
   end
-  MP <-->|Direct USB or telemetry| AP[ArduPilot on the Cube: flight controllers and native failsafes]
+  MP <-->|Direct USB or telemetry| AP[ArduPilot: flight and native failsafes]
   Router <-->|Configured physical links| AP
   RC[Physical RC and termination input] --> AP
   AP --- Terminate[Optional native TERMINATE firmware extension]
@@ -23,7 +23,7 @@ owns stabilization, navigation execution and native failsafes. NOMAD never start
 Mission Planner's HID RC override loop merely to read custom input devices.
 
 `NOMADPlugin` owns the host lifecycle and registers the menus/screens. `Config/`,
-`Control/`, `Input/`, `Media/` and `Views/` are logical source groups compiled into
+`Control/`, `Input/`, `Media/`, `Vision/` and `Views/` are logical source groups compiled into
 that same DLL, not separately running services. The C# router sources under
 `infra/transport/ground_router/` are also compiled into the plugin. `OutputController`
 is the internal guard for dispatch through the current host target.
@@ -72,7 +72,69 @@ a saved label does not establish either.
 Ordinary RC arming and flight-mode configuration belongs to Mission Planner and
 ArduPilot. NOMAD has no corresponding channel settings or automatic discovery.
 
-Video uses Mission Planner's installed GStreamer support. Fence setup validates one
+Video uses Mission Planner's installed GStreamer support. Optional detection runs
+on the existing decoder worker. One owning frame envelope carries its image,
+immutable detections, sequence and local receipt timestamps through the latest-frame
+slot into the player. HUD and Dashboard playback do not run inference.
+
+`IVideoDetector` is the model boundary. Its YOLOX adapter owns preprocessing,
+ONNX Runtime inference and class-aware suppression. `IVisualTracker` independently
+owns visual region tracking; its CSRT adapter follows the exact image region selected
+by the operator, without requiring detector matches. The video player owns explicit
+selection, tracking lifetime and presentation, and sends through the existing
+`GimbalController`/`OutputController` native path. There is no separate vision
+service or aircraft-control transport. Different YOLOX weights and labels use a
+validated JSON profile; a different model architecture implements the same detector
+interface without changing tracking or native dispatch. One pending selection owns
+a clone of the displayed image. The decode worker alone initializes, updates and
+disposes the tracker, and publishes its region with the matching current frame.
+Source/selection revisions reject superseded results; a shared gimbal claim prevents
+embedded and popped-out Video pages from controlling the mount simultaneously.
+
+The DLL embeds pinned CPU runtime binaries, model and notices. Detection lazily
+extracts verified assets into the host's user-data vision cache. Model loading and
+inference support cancellation; detector failure leaves plain video and region
+tracking available. CSRT calls have no native cancellation API: input is bounded
+to a 640-pixel longest edge, command eligibility retires immediately, and late
+results are discarded before worker shutdown.
+Tracking requires calibrated limits/FOV, latest-frame buffering and fresh selected
+aircraft telemetry. Identity-bound fresh ATTITUDE yaw supplies wrapped body-rotation
+compensation inside the same calibrated rate limit; image feedback handles residual
+error. The heading reference advances only on submission. Manual input and session changes invalidate pending requests;
+uncertain submissions retire tracking. An already-dispatched native helper may finish.
+Observations pair the displayed image with its detections and separately labeled
+aircraft position and last submitted tracking request. They do not infer target location.
+
+### Tracking motion compensation
+
+The image supplies a camera ray from the selected region's center and calibrated
+focal length. Rotating that ray by the requested camera pitch gives pitch and
+azimuth error; a horizontal pixel offset is not the same as yaw at a downward
+camera pitch. Image correction uses a conservative gain of 1/s.
+
+Between fresh `ATTITUDE` messages, heading is predicted from body gyro rates:
+
+```text
+headingRate = (sin(roll) * pitchRate + cos(roll) * yawRate) / cos(pitch)
+headingNow = wrap(heading + headingRate * packetAge)
+yawStep = clamp(imageYawError * dt - aircraftHeadingChange, -rate * dt, rate * dt)
+```
+
+The implementation avoids extrapolation near the pitch singularity, rejects
+invalid or half-second-old attitude and caps `dt` at 0.2 s. It wraps heading
+differences across north and retains rate-clipped compensation until a later
+submission; hitting a travel limit clears that remainder. Pitch and combined yaw
+steps share the configured per-axis rate bound and absolute travel limits.
+No second aircraft-rotation correction is added through reported mount pose.
+
+Decoder receipt time does not identify exposure time. Combining a delayed image
+with the latest gimbal orientation would mix different camera poses; increasing
+gain does not resolve that timing error. The native mount backend may also report
+requested or cached angles rather than fresh measurements. See
+[mount integration](integrations.md#aircraft-mounts-and-mavlink) for the native
+targeting boundary and CADDX behavior.
+
+Fence setup validates one
 inclusion polygon and selects Fence in the native Plan editor. A plugin-owned session
 preserves unsaved Mission/Fence/Rally rows across mode changes without changing aircraft
 caches. Staging never uploads; native Write/Read owns fence transfer. The page separately
@@ -84,8 +146,11 @@ native descent limit, and supported RC/fence triggers. It never changes ordinary
 LAND/QLAND rates or selects a dedicated RC channel.
 NOMAD does not evaluate local outline crossings or claim containment. Unsaved coordinate
 text/order and inactive editor drafts remain in memory for the plugin session; save
-needed drafts before unloading the plugin. Alerts/audio and video do not become flight
-authority. The optional [native termination](native-termination.md) entry uses the
+needed drafts before unloading the plugin. Alerts and visual tracking do not command
+aircraft movement. The optional [native termination](native-termination.md) entry uses the
 same captured host target and an advertised aircraft mode; policy/execution remain
-onboard. Competition server, perception and takeover integrations remain outside
+onboard. Competition server, autonomous target pursuit and takeover integrations remain outside
 this implementation; requirements remain in [PRD](prd.md).
+
+See [video and tracking](video.md) for calibration and operator workflow, and
+[ecosystem integration](integrations.md) for aircraft mounts and companion services.

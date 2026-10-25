@@ -170,6 +170,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public void Deactivate()
         {
+            _videoView?.StopTracking();
             StopUpdateTimer();
         }
 
@@ -189,6 +190,7 @@ namespace NOMAD.MissionPlanner
             // Remove current view
             if (_currentView != null)
             {
+                if (ReferenceEquals(_currentView, _videoView)) { _videoView.StopTracking(); }
                 _viewContainer.Controls.Remove(_currentView);
                 // Don't dispose - keep cached for quick switching
             }

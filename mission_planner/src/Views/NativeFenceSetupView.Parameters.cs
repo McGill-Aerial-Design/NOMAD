@@ -63,7 +63,7 @@ namespace NOMAD.MissionPlanner
             try
             {
                 _parameters = new FenceParameters(config);
-                await _parameters.ReadAsync();
+                await _parameters.ReadAsync(Termination);
                 if (Active) { await _parameters.ReadTerminationAsync(Termination); }
                 if (!Active) { return; }
                 foreach (var parameter in _parameters.Parameters) { AddParameter(parameter); }

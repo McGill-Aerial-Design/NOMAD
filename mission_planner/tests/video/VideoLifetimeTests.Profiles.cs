@@ -103,12 +103,18 @@ internal static partial class VideoLifetimeTests
             GetField<TextBox>(form, "_txtVideoName").Text = "Renamed";
             GetField<TextBox>(form, "_txtVideoUrl").Text = "rtsp://edited.invalid/live";
             GetField<NumericUpDown>(form, "_numVideoLatency").Value = 700;
+            GetField<NumericUpDown>(form, "_numVisionFov").Value = 110;
+            GetField<NumericUpDown>(form, "_numVisionRate").Value = 60;
+            GetField<CheckBox>(form, "_chkTrackingCalibrated").Checked = true;
             selector.SelectedIndex = 1;
             Check(GetField<TextBox>(form, "_txtVideoUrl").Text == "rtsp://second.invalid/live",
                 "Switching named video input did not load its independent fields.");
             GetField<NumericUpDown>(form, "_numVideoQueue").Value = 9;
             selector.SelectedIndex = 0;
             Check(GetField<TextBox>(form, "_txtVideoName").Text == "Renamed" &&
+                GetField<NumericUpDown>(form, "_numVisionFov").Value == 110 &&
+                GetField<NumericUpDown>(form, "_numVisionRate").Value == 60 &&
+                GetField<CheckBox>(form, "_chkTrackingCalibrated").Checked &&
                 GetField<TextBox>(form, "_txtVideoUrl").Text == "rtsp://edited.invalid/live" &&
                 GetField<NumericUpDown>(form, "_numVideoLatency").Value == 700 &&
                 form.Config.SelectedVideoInputName == "Renamed" && form.Config.VideoInputs[1].QueueMaxBuffers == 9,
@@ -127,7 +133,9 @@ internal static partial class VideoLifetimeTests
             var flags = BindingFlags.Instance | BindingFlags.NonPublic;
             typeof(NOMADSettingsForm).GetMethod("SaveSettings", flags).Invoke(form, null);
             var saved = form.Config.Clone();
-            Check(saved.SelectedVideoInput.Name == "Renamed" && saved.SelectedVideoInput.LatencyMs == 700,
+            Check(saved.SelectedVideoInput.Name == "Renamed" && saved.SelectedVideoInput.LatencyMs == 700 &&
+                saved.SelectedVideoInput.TrackingCalibrated && saved.SelectedVideoInput.HorizontalFovDeg == 110 &&
+                saved.SelectedVideoInput.TrackingMaxRateDegSec == 60,
                 "Saved/clone video input selection or settings were lost.");
             typeof(NOMADSettingsForm).GetMethod("RemoveVideoInput", flags).Invoke(form, null);
             typeof(NOMADSettingsForm).GetMethod("RemoveVideoInput", flags).Invoke(form, null);

@@ -3,7 +3,7 @@
 // ============================================================
 // Plugin-owned ground-router tests
 // ============================================================
-// Compiled with infra/transport/ground_router, the plugin owner, and src/UI/Log.cs
+// Compiled with infra/transport/ground_router and the plugin owner
 // by scripts/build/test_ground_router.ps1 (plain csc, no test
 // framework — exits non-zero on failure).
 // Run via `pixi run test-ground-router-logic`.

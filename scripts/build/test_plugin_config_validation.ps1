@@ -3,6 +3,7 @@
 # Test Mission Planner's current configuration validation using the built plugin.
 
 $ErrorActionPreference = 'Stop'
+& (Join-Path $PSScriptRoot 'test_plugin_storage.ps1')
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $pluginPath = Join-Path $repoRoot 'mission_planner\src\bin\Release\NOMADPlugin.dll'
 $missionPlannerDir = Join-Path ${env:ProgramFiles(x86)} 'Mission Planner'

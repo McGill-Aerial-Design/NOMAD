@@ -37,6 +37,7 @@ test-plugin-gimbal-ui = "powershell -NoProfile -ExecutionPolicy Bypass -File scr
 test-plugin-ui = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_ui.ps1"
 test-plugin-router-ui = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_router_ui.ps1"
 test-plugin-video = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_video.ps1"
+test-plugin-vision = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_vision.ps1"
 
 test-plugin-termination = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_termination.ps1"
 test-plugin-geometry = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_geometry.ps1"

@@ -103,3 +103,17 @@ def test_internal_markdown_links_resolve() -> None:
                     )
 
     assert not errors, "\n".join(errors)
+
+
+def test_published_docs_do_not_link_outside_site() -> None:
+    docs = ROOT / "docs"
+    for source in docs.rglob("*.md"):
+        for match in LINK_PATTERN.finditer(markdown_body(source)):
+            url = urlsplit(html.unescape(match.group(1).strip()))
+            if url.scheme or url.netloc or not url.path:
+                continue
+            target = (source.parent / unquote(url.path)).resolve()
+            assert target.is_relative_to(docs), (
+                f"{source.relative_to(ROOT)} links outside the published site: {url.path}; "
+                "use the repository URL for source files"
+            )

@@ -18,6 +18,9 @@ internal static partial class VideoLifetimeTests
             new VideoInputProfile { Name = "Test input", Url = "rtsp://video.invalid/stream" }, true,
             CancellationToken.None, () => new FakeVideoPipeline()))
         {
+            Check(FindVideoButton(player, "Fly with keyboard and mouse") == null &&
+                typeof(EmbeddedVideoPlayer).GetField("_flyButton", BindingFlags.Instance | BindingFlags.NonPublic) == null,
+                "Removed flight control is present in the player");
             foreach (var label in new[] { "Play", "Stop", "Full screen", "Take snapshot" })
             {
                 var button = FindVideoButton(player, label);
@@ -26,11 +29,30 @@ internal static partial class VideoLifetimeTests
                 Check(!string.IsNullOrWhiteSpace(GetField<ToolTip>(player, "_videoToolTips").GetToolTip(button)),
                     $"Playback control {label} has no explanatory tooltip");
             }
-            player.Size = new Size(100, 200);
+            player.Size = new Size(100, 450);
             player.PerformLayout();
             var toolbar = player.Controls.Find("VideoToolbar", true)[0];
             Check(toolbar.Height > 45 && toolbar.Height < player.Height,
                 "Narrow video toolbar failed to wrap its controls into available width");
+        }
+    }
+
+    private static void VideoToggleButtonSizing()
+    {
+        using (var player = new EmbeddedVideoPlayer(new VideoInputProfile { Name = "Sizing", Url = "udp://@:5600" },
+            true, CancellationToken.None, () => new FakeVideoPipeline()))
+        using (var enlarged = new Font("Segoe UI", 18))
+        {
+            player.Size = new Size(900, 600);
+            var button = GetField<Button>(player, "_detectButton");
+            button.Font = enlarged;
+            button.Text = "Detect on";
+            button.Parent.PerformLayout(); player.PerformLayout();
+            Size preferred = button.GetPreferredSize(Size.Empty);
+            Size text = TextRenderer.MeasureText(button.Text, enlarged, Size.Empty, TextFormatFlags.SingleLine);
+            Check(button.Width >= preferred.Width && button.Height >= preferred.Height &&
+                button.ClientSize.Width >= text.Width && button.ClientSize.Height >= text.Height,
+                "Detect on clipped or wrapped at enlarged font size");
         }
     }
 

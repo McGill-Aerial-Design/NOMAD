@@ -17,6 +17,12 @@ namespace NOMAD.MissionPlanner
         private Button _btnRemoveVideo;
         private VideoInputProfile _editingVideoInput;
         private bool _loadingVideo;
+        private TextBox _txtVisionModel;
+        private CheckBox _chkTrackingCalibrated;
+        private NumericUpDown _numVisionFov, _numVisionPitchMin, _numVisionPitchMax;
+        private NumericUpDown _numVisionYawMin, _numVisionYawMax, _numVisionRate;
+        private ComboBox _cmbVisionPitchSign, _cmbVisionYawSign;
+        private Button _btnVisionModelBrowse;
 
         private TabPage CreateVideoTab()
         {
@@ -53,10 +59,10 @@ namespace NOMAD.MissionPlanner
             AddLabel(tab, "Decode queue (frames):", 20, y);
             _numVideoQueue = AddNumericUpDown(tab, 180, y, 100, 1, 120, 1);
             y += 32;
-            _chkVideoDrop = AddCheckBox(tab, "Drop old frames when receiver buffers are full", 20, y);
+            _chkVideoDrop = AddCheckBox(tab, "Drop old frames", 20, y);
             y += 32;
 
-            _chkAutoStartHudVideo = AddCheckBox(tab, "Auto-start video on HUD", 20, y);
+            _chkAutoStartHudVideo = AddCheckBox(tab, "Start video on HUD", 20, y);
             y += 35;
             var info = ControlFactory.Button("Receiver help ⓘ", width: 150, height: 28);
             info.Location = new Point(20, y);
@@ -72,8 +78,55 @@ namespace NOMAD.MissionPlanner
             _toolTips.SetToolTip(_chkVideoDrop, "Drop older decode-queue frames and bound RTSP jitter buffering when full.");
             info.Click += (sender, args) => _toolTips.Show(help, info, 0, info.Height, 15000);
             tab.Controls.Add(info);
+            y += 40;
+            AddVisionSettings(tab, ref y);
 
             return tab;
+        }
+
+        private void AddVisionSettings(TabPage tab, ref int y)
+        {
+            AddSectionLabel(tab, "Vision and gimbal calibration", ref y);
+            AddLabel(tab, "Model profile (optional):", 20, y);
+            _txtVisionModel = AddTextBox(tab, 180, y, 340);
+            _btnVisionModelBrowse = ControlFactory.Button("Browse", width: 85, height: 27);
+            _btnVisionModelBrowse.Location = new Point(530, y);
+            _btnVisionModelBrowse.Click += (sender, args) =>
+            {
+                using (var dialog = new OpenFileDialog { Filter = "Vision model profile (*.json)|*.json" })
+                { if (dialog.ShowDialog(this) == DialogResult.OK) { _txtVisionModel.Text = dialog.FileName; } }
+            };
+            tab.Controls.Add(_btnVisionModelBrowse);
+            _toolTips.SetToolTip(_txtVisionModel, "Empty uses the bundled vehicle detector. A model profile declares its format and SHA256.");
+            y += 32;
+            _chkTrackingCalibrated = AddCheckBox(tab, "Camera and mount calibrated", 20, y);
+            _toolTips.SetToolTip(_chkTrackingCalibrated,
+                "Confirm the camera's field of view, mount travel limits and pitch/yaw directions are calibrated " +
+                "before enabling automatic gimbal tracking.");
+            y += 32;
+            AddLabel(tab, "Horizontal FOV (deg):", 20, y);
+            _numVisionFov = AddNumericUpDown(tab, 180, y, 85, 5, 170, 90);
+            _toolTips.SetToolTip(_numVisionFov,
+                "Rectilinear camera with square pixels and fixed zoom. Vertical FOV is derived from the image aspect ratio. " +
+                "Verify pitch/yaw signs and physical limits before enabling tracking.");
+            y += 32;
+            AddLabel(tab, "Pitch limits (deg):", 20, y);
+            _numVisionPitchMin = AddNumericUpDown(tab, 180, y, 75, -90, 90, -90);
+            _numVisionPitchMax = AddNumericUpDown(tab, 270, y, 75, -90, 90, 90);
+            _numVisionPitchMin.AccessibleName = "Minimum pitch in degrees";
+            _numVisionPitchMax.AccessibleName = "Maximum pitch in degrees";
+            _cmbVisionPitchSign = AddComboBox(tab, 365, y, 140, new[] { "Normal (+1)", "Reverse (-1)" });
+            y += 32;
+            AddLabel(tab, "Yaw limits (deg):", 20, y);
+            _numVisionYawMin = AddNumericUpDown(tab, 180, y, 75, -90, 90, -90);
+            _numVisionYawMax = AddNumericUpDown(tab, 270, y, 75, -90, 90, 90);
+            _numVisionYawMin.AccessibleName = "Minimum yaw in degrees";
+            _numVisionYawMax.AccessibleName = "Maximum yaw in degrees";
+            _cmbVisionYawSign = AddComboBox(tab, 365, y, 140, new[] { "Normal (+1)", "Reverse (-1)" });
+            y += 32;
+            AddLabel(tab, "Tracking rate (deg/s):", 20, y);
+            _numVisionRate = AddNumericUpDown(tab, 180, y, 85, 1, 60, 10);
+            y += 32;
         }
 
         private void LoadVideoSettings(VideoInputProfile editing = null)
@@ -99,8 +152,21 @@ namespace NOMAD.MissionPlanner
             _numVideoLatency.Value = input?.LatencyMs ?? 100;
             _numVideoQueue.Value = input?.QueueMaxBuffers ?? 1;
             _chkVideoDrop.Checked = input?.DropOldFrames ?? true;
+            _txtVisionModel.Text = input?.DetectorModelProfilePath ?? "";
+            _chkTrackingCalibrated.Checked = input?.TrackingCalibrated ?? false;
+            _numVisionFov.Value = input?.HorizontalFovDeg ?? 90;
+            _numVisionPitchMin.Value = input?.PitchMinDeg ?? -90;
+            _numVisionPitchMax.Value = input?.PitchMaxDeg ?? 90;
+            _numVisionYawMin.Value = input?.YawMinDeg ?? -90;
+            _numVisionYawMax.Value = input?.YawMaxDeg ?? 90;
+            _numVisionRate.Value = input?.TrackingMaxRateDegSec ?? 10;
+            _cmbVisionPitchSign.SelectedIndex = input?.PitchSign == -1 ? 1 : 0;
+            _cmbVisionYawSign.SelectedIndex = input?.YawSign == -1 ? 1 : 0;
             foreach (var control in new Control[] { _txtVideoName, _txtVideoUrl, _cmbVideoTransport,
-                _numVideoLatency, _numVideoQueue, _chkVideoDrop, _btnRemoveVideo })
+                _numVideoLatency, _numVideoQueue, _chkVideoDrop, _btnRemoveVideo, _txtVisionModel,
+                _chkTrackingCalibrated, _numVisionFov, _numVisionPitchMin, _numVisionPitchMax,
+                _numVisionYawMin, _numVisionYawMax, _numVisionRate, _cmbVisionPitchSign, _cmbVisionYawSign,
+                _btnVisionModelBrowse })
             { control.Enabled = input != null; }
         }
 
@@ -113,6 +179,13 @@ namespace NOMAD.MissionPlanner
                 RtspTransport = (string)_cmbVideoTransport.SelectedItem,
                 LatencyMs = (int)_numVideoLatency.Value, QueueMaxBuffers = (int)_numVideoQueue.Value,
                 DropOldFrames = _chkVideoDrop.Checked,
+                DetectorModelProfilePath = _txtVisionModel.Text.Trim(), TrackingCalibrated = _chkTrackingCalibrated.Checked,
+                HorizontalFovDeg = (int)_numVisionFov.Value,
+                PitchMinDeg = (int)_numVisionPitchMin.Value, PitchMaxDeg = (int)_numVisionPitchMax.Value,
+                YawMinDeg = (int)_numVisionYawMin.Value, YawMaxDeg = (int)_numVisionYawMax.Value,
+                PitchSign = _cmbVisionPitchSign.SelectedIndex == 1 ? -1 : 1,
+                YawSign = _cmbVisionYawSign.SelectedIndex == 1 ? -1 : 1,
+                TrackingMaxRateDegSec = (int)_numVisionRate.Value,
             };
             input.Validate();
             if (Config.VideoInputs.Any(other => !ReferenceEquals(other, _editingVideoInput) &&

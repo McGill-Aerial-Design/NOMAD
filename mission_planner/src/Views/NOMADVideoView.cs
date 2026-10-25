@@ -84,7 +84,7 @@ namespace NOMAD.MissionPlanner
             {
                 controlsSection.Controls.Add(new Label
                 {
-                    Text = "No payloads configured. Add mappings in Settings → Payloads.",
+                    Text = "Add payloads in Settings → Payloads.",
                     ForeColor = TEXT_SECONDARY, Dock = DockStyle.Top, Height = 60,
                 });
             }
@@ -97,6 +97,7 @@ namespace NOMAD.MissionPlanner
         }
 
         public void UpdateData() { _videoHost?.RefreshInput(); }
+        internal void StopTracking() => _videoHost?.Player?.StopTracking();
 
         protected override void Dispose(bool disposing)
         {

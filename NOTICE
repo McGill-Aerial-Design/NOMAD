@@ -8,6 +8,27 @@ and contributors (https://github.com/McGill-Aerial-Design/NOMAD).
 Third-party components
 ----------------------
 
+The NOMAD DLL embeds ONNX Runtime 1.31.0 (Microsoft, MIT), its supplied third-party
+notices, and the YOLOX Nano COCO model from Megvii-BaseDetection/YOLOX 0.1.1rc0
+(Apache-2.0). The unmodified model SHA256 is
+c789161ed43c8269fcd4e67c67eeeb4e80c622da2eb296a20bc6007bd18a0b7d.
+Pinned source URLs and archive/file checksums are in scripts/build/prepare_vision.ps1.
+ONNX Runtime source revision: 402979ac1bef89dcd55add41eaa7277c407599eb.
+The embedded NOMAD.Vision.ONNX-RUNTIME-LICENSE.txt, ONNX-RUNTIME-NOTICES.txt and
+YOLOX-LICENSE.txt resources retain the complete upstream licenses and notices;
+the plugin extracts them beside its owned per-user runtime cache when vision starts.
+Upstream projects: https://github.com/microsoft/onnxruntime and
+https://github.com/Megvii-BaseDetection/YOLOX.
+
+Region tracking additionally embeds OpenCvSharp4 4.10.0.20241108 and its Windows
+x64 OpenCvSharpExtern library (OpenCV 4.10.0). OpenCvSharp/OpenCV use Apache-2.0;
+the native library includes separately licensed third-party components and Intel
+IPP. Complete upstream notices and the Intel IPP EULA are retained in
+mission_planner/third_party and embedded as NOMAD.Vision.OpenCvSharp-NOTICES.txt
+and NOMAD.Vision.OPENCV-IPP-EULA.rtf, extracted beside the owned tracker cache.
+This software is based in part on the work of the Independent JPEG Group.
+No FFmpeg DLL is included in the NOMAD artifact.
+
 Mission Planner and its installed dependencies are supplied by the host installation,
 not bundled into the NOMAD DLL artifact. Retain their applicable notices when
 redistributing any such software separately.

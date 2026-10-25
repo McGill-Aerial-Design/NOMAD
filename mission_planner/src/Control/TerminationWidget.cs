@@ -81,7 +81,7 @@ namespace NOMAD.MissionPlanner
         private void Sample(object sender, EventArgs args)
         {
             if (_confirming) { return; }
-            bool eligible = CanInteract();
+            bool eligible = _canInteract();
             bool left = eligible && (GetAsyncKeyState(0xA0) & 0x8000) != 0;
             bool right = eligible && (GetAsyncKeyState(0xA1) & 0x8000) != 0;
             SampleState(eligible, left, right, _clock.ElapsedMilliseconds);
@@ -103,8 +103,9 @@ namespace NOMAD.MissionPlanner
                 _waitingForRelease = false;
                 PendingReview = ConfirmAndRequestAsync();
             }
-            else if (!_busy && _gesture.Update(_controller?.CanRequest == true, left, right, milliseconds))
-            { PendingReview = PrepareReviewAsync(); }
+            else if (!_busy && _gesture.Update(_controller?.CanRequest == true,
+                left, right, milliseconds))
+            { PrepareReview(); }
             RefreshStatus();
         }
 
@@ -120,7 +121,7 @@ namespace NOMAD.MissionPlanner
             finally { _busy = false; RefreshStatus(); }
         }
 
-        private async Task PrepareReviewAsync()
+        private void PrepareReview()
         {
             if (_busy || _controller == null || !_canInteract()) { return; }
             _busy = true;
@@ -128,7 +129,6 @@ namespace NOMAD.MissionPlanner
             _error = null;
             try
             {
-                await _controller.CheckAsync();
                 if (_reviewCancelled || !_canInteract() ||
                     !_controller.TryCaptureRequest(out _generation, out _mode)) { return; }
                 _target = _controller.TargetDescription;
@@ -185,7 +185,7 @@ namespace NOMAD.MissionPlanner
             else if (_busy) { summary = "Checking support…"; }
             else if (_controller?.Observed == true) { summary = "Observed · reboot required"; }
             else if (_controller?.Supported == true && !_controller.Armed) { summary = "Supported · disarmed"; }
-            else if (_controller?.CanRequest == true) { summary = "Hover here, then press both Shift keys."; }
+            else if (_controller?.CanRequest == true) { summary = "Hover · press/release both Shifts to review"; }
             _status.Text = summary;
             _toolTip.SetToolTip(this, detail);
             _toolTip.SetToolTip(_status, detail);

@@ -139,6 +139,9 @@ function New-TestFixture {
         Copy-Item -LiteralPath $SourceBuildScript -Destination $fixture.Script
         Copy-Item -LiteralPath (Join-Path (Split-Path $SourceBuildScript) 'windows_build_tools.ps1') `
             -Destination (Split-Path $fixture.Script)
+        # This fixture tests dispatch and installation isolation; detector tests prepare real pinned inputs.
+        [IO.File]::WriteAllText((Join-Path (Split-Path $fixture.Script) 'prepare_vision.ps1'),
+            "Write-Host 'Synthetic pinned vision preparation'" + [Environment]::NewLine)
         [IO.File]::WriteAllText((Join-Path $fixture.Project 'NOMADPlugin.csproj'), '<Project />')
         New-ReleaseIdentityFixture -Fixture $fixture -SourceBuildScript $SourceBuildScript
         [IO.File]::WriteAllText((Join-Path $fixture.Install 'MissionPlanner.exe'), 'installation sentinel')

@@ -1,7 +1,7 @@
 # Operations
 
 Use the reviewed Mission Planner version in
-[`mission-planner-target.json`](../scripts/release/mission-planner-target.json).
+[`mission-planner-target.json`](https://github.com/McGill-Aerial-Design/NOMAD/blob/main/scripts/release/mission-planner-target.json).
 Builds/tests do not install software, change operator settings or control aircraft.
 
 ## Plugin installation
@@ -42,7 +42,13 @@ previous reviewed DLL available for manual restoration with Mission Planner clos
 
 ## Saved aircraft profiles
 
-NOMAD stores profiles in `%LOCALAPPDATA%/Mission Planner/plugins/nomad_aircraft_profiles.json`.
+By default, NOMAD stores profiles in
+`%LOCALAPPDATA%/Mission Planner/plugins/nomad_aircraft_profiles.json` and its rolling
+diagnostic log in `plugins/NOMAD/nomad.log` under that same Mission Planner root.
+When the host explicitly sets an absolute custom user-data directory before
+loading NOMAD, both profiles and logging use `plugins/` under Mission Planner's
+resolved user-data directory, including its application-name subdirectory.
+An invalid explicit root is rejected; it never falls back to operator storage.
 Only the current profile collection schema is accepted. Unknown or invalid fields
 are rejected; loading never converts or rewrites the file. If the primary file is
 absent, its current-format `.bak` can be loaded. With neither file present, NOMAD
@@ -128,32 +134,11 @@ Click the top NOMAD item to open its page. While already there, left-click opens
 the dropdown without resetting the current view; right-click opens that dropdown
 from any page. The dropdown contains settings/tools, not the termination action.
 
-## Video inputs
+## Video and tracking
 
-Settings → Video stores named inputs for the selected aircraft. Add an input, enter
-its name and source URL, then Save the definitions. Browsing or editing an input in
-Settings does not change playback. Choose the active input from the top-right of
-the Dashboard preview or Video player; that choice is saved for the aircraft and
-updates HUD video and both NOMAD views. A stopped player stays stopped.
-Renaming the active definition preserves its selection; removing it chooses the
-first remaining input. Remove the final input to leave video unconfigured. Profiles use
-`VideoInputs` and `SelectedVideoInputName`; imports must use that same current schema.
-
-![Video page with active input selection beside playback controls](images/video-page.png)
-
-
-RTSP negotiates the video codec supported by the installed GStreamer decoder. Select
-TCP or UDP transport and a 0..5000 ms jitter buffer. UDP source URLs such as
-`udp://@:5600` listen for RTP/H.264 on the explicit port; RTSP settings do not affect
-those inputs. Camera and MediaMTX URLs, including addresses reachable through
-Tailscale, are ordinary operator inputs; NOMAD does not set up their server or network.
-
-The decoded-frame queue holds 1..120 frames. Drop old frames discards old queue
-frames and bounds RTSP jitter buffering; disabling it lets the decode queue apply
-backpressure. The display and native appsink still keep only the latest frame, so
-this is not lossless recording. These receiver settings do not set end-to-end delay,
-bitrate, resolution or encoded quality; configure those at the camera or encoder.
-URLs can contain credentials: review profile exports before sharing them.
+Add named camera inputs in **Settings → Video**, then choose the active input on
+Dashboard or Video. The [video guide](video.md) covers receiver buffering, selection,
+gimbal calibration, local detection, observations and replacement model profiles.
 
 ## ELRS and LTE links
 

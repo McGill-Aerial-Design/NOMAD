@@ -3,7 +3,7 @@
 The product is a C#/.NET Framework 4.8 DLL for the reviewed Mission Planner host
 in `scripts/release/mission-planner-target.json`. Windows builds require Visual
 Studio/MSBuild, its Roslyn compiler and the .NET Framework targeting pack, plus
-that installed host's reference assemblies. Python/Pixi serves checks/docs only.
+that installed host's reference assemblies. Python/Pixi serves development and simulator tooling only.
 The optional aircraft firmware has separate [native build/check instructions](native-termination.md).
 
 ## Build without installation
@@ -16,8 +16,10 @@ The script cleans/builds Release, writes source SHA/MP target identity under
 `build/release/` and leaves `mission_planner/src/bin/Release/NOMADPlugin.dll`.
 The plugin release version is defined once in `scripts/build/build_plugin_windows.ps1`
 and embedded in the assembly, file, informational and Mission Planner display versions.
-All host references are non-copy-local. The artifact contains no host/dependency
-binaries and the script never writes an MP installation. Direct IDE builds use
+All host references are non-copy-local. The artifact embeds the pinned CPU vision
+runtime, model and their notices, and the script never writes an MP installation.
+`prepare_vision.ps1` verifies the archive and individual asset SHA256 values in its
+build cache before compilation. The installed plugin performs no downloads. Direct IDE builds use
 fallback development metadata if generated identity is absent; record the actual
 checked source and local changes with any artifact. Installation is a separate
 explicit [closed-MP operation](operations.md#plugin-installation).
@@ -55,6 +57,7 @@ pixi run test-plugin-gimbal
 pixi run test-plugin-payload
 pixi run test-plugin-native-preflight
 pixi run test-plugin-config-validation
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build/test_plugin_storage.ps1
 pixi run test-plugin-geometry # coordinate validation and actual native Fence AddCommand staging
 pixi run test-plugin-fence # actual native editor mode switching and synthetic parameter read/write peer
 pixi run test-plugin-audio
@@ -64,11 +67,16 @@ pixi run test-plugin-gimbal-ui
 pixi run test-plugin-ui
 pixi run test-plugin-router-ui
 pixi run test-plugin-video
+pixi run test-plugin-vision
 pixi run test-plugin-termination
 ```
 
 Configuration validation includes the aircraft-profile suite; use
 `pixi run test-aircraft-profiles` alone for a focused profile check.
+The storage check uses fresh CLR processes for default, custom and invalid host
+user-data settings. It checks the default path without opening operator files;
+custom profile save/backup/load and logging use owned directories. An invalid
+explicit custom root must fail without falling back to operator storage.
 Termination uses the built DLL and actual MP assemblies with an owned synthetic loopback peer, without
 installing the plugin or launching MP. It checks native capability discovery, readbacks, command ACKs,
 fresh heartbeat naming and target retirement; it does not qualify aircraft termination or touchdown.
@@ -82,6 +90,22 @@ button/axis detection, held/noisy baseline rejection, timeout, loss and connecti
 opening; they do not acquire an operator device. Router covers parser, dedup/failover, one MP egress,
 parameter pinning and ownership disposal. Geometry/video/profile tests retain
 invalid-input and lifecycle fault cases.
+
+Vision checks run the pinned CPU model and verify preprocessing, decoding,
+invalid profiles/tensors, native load/inference cancellation and recovery. Video
+checks exercise matching frame ownership, selection clone replacement, cancellation/failure,
+native tracker loss, bounded angle steps, click/drag geometry, observations and manual/source
+retirement. The UI clears an unready initialization after two seconds. Readiness still
+requires a fresh matching result; stale results and timeout admit no gimbal commands.
+Tracking response checks independently project a world target through delayed camera
+motion, aircraft yaw reversals and additive/opposing translation. They verify
+downward-camera geometry, mirrored-image calibration, rate bounds and settling.
+CSRT checks follow moving/scaling texture and require loss without automatic
+reacquisition when it disappears. Optional `-TrackingFrames` and `-TrackingGroundTruth`
+arguments to `test_plugin_vision.ps1` require 120 aligned PNG/ground-truth frames and
+all 119 subsequent updates without reseeding. Keep external benchmark media in ignored
+test storage with its provenance. Detector scores and synthetic centering do not
+establish performance on another camera, scene or physical mount.
 
 ## Documentation screenshots
 
@@ -177,7 +201,7 @@ pixi run precommit
 
 Python tests retain document links and source requirement provenance. CI runs the
 actual Windows product gates and uploads the DLL and offline setup; Linux runs Python/docs checks.
-The separate [firmware workflow](../.github/workflows/firmware.yml) runs native
+The separate [firmware workflow](https://github.com/McGill-Aerial-Design/NOMAD/blob/main/.github/workflows/firmware.yml) runs native
 qualification and prepares source-bound CubeOrangePlus packages. Its focused
 packager integrity tests are included in `test-python`; those unit tests do not
 substitute for the full [native build/release procedure](native-termination.md#build-and-release-automation).

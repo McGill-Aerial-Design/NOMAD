@@ -80,8 +80,10 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        internal async Task ReadAsync()
+        internal async Task ReadAsync(TerminationController termination = null)
         {
+            _termination = termination;
+            if (termination != null) { await termination.WaitForDiscoveryAsync().ConfigureAwait(false); }
             Parameters.Clear();
             var mav = _target.Connection.MAVlist[_target.System, _target.Component];
             string firmware = mav.cs.firmware.ToString();
@@ -122,6 +124,7 @@ namespace NOMAD.MissionPlanner
         {
             int verified = 0;
             string pending = "none";
+            bool refreshTermination = false;
             try
             {
                 if (changes.Count == 0) { return "No aircraft settings changed."; }
@@ -133,6 +136,7 @@ namespace NOMAD.MissionPlanner
                     if (!await CheckTerminationChangesAsync(changes, true).ConfigureAwait(false))
                     { return "Controlled termination settings or native capability are invalid; no parameters were sent."; }
                     _termination.RetireConfiguredSupport();
+                    refreshTermination = true;
                 }
                 float? Candidate(string name) => changes.TryGetValue(name, out float value) ? value :
                     Parameters.Where(p => p.Name == name).Select(p => (float?)p.Value).FirstOrDefault();
@@ -171,6 +175,10 @@ namespace NOMAD.MissionPlanner
                 lock (_gate) { _requiresRead = true; }
                 return $"Stopped at {pending}; {verified} setting(s) verified. " + error.Message +
                     " The current setting may have changed; read again before retrying. No rollback was attempted.";
+            }
+            finally
+            {
+                if (refreshTermination) { _termination.RefreshConfiguredSupport(); }
             }
         }
 

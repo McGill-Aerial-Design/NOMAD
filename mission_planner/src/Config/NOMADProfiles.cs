@@ -18,8 +18,7 @@ namespace NOMAD.MissionPlanner
 
     public sealed class NOMADProfiles
     {
-        private static readonly string DirectoryPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Mission Planner", "plugins");
+        private static readonly string DirectoryPath = NOMADStorage.PluginsDirectory;
         private string _path = Path.Combine(DirectoryPath, "nomad_aircraft_profiles.json");
 
         public List<AircraftProfile> Aircraft { get; set; } = new List<AircraftProfile>();

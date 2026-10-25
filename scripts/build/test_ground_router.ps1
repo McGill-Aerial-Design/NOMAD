@@ -3,7 +3,7 @@
 # ============================================================
 # Plugin-owned router and lifecycle stress tests
 # ============================================================
-# Compiles the routing stack, plugin owner, and Log.cs
+# Compiles the routing stack and plugin owner
 # together with the test runner using the Roslyn csc bundled
 # with Visual Studio's MSBuild — no .NET SDK or test-framework
 # packages required. The tests run the router against real
@@ -25,7 +25,6 @@ $csc = Find-RoslynCompiler
 # ---- Compile ----
 $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\MAVLinkConnectionManager.cs'),
-    (Join-Path $repoRoot 'mission_planner\src\UI\Log.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\router\GroundRouterTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\router\GroundRouterTests.Harness.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\router\GroundRouterTests.Router.cs'),

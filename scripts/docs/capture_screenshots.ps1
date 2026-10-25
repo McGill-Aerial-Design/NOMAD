@@ -58,7 +58,7 @@ $notificationType.GetProperty('Shared').SetValue($null, $notifications)
 try {
     foreach ($view in @(@('Dashboard', 'dashboard.png'), @('Boundaries', 'fence-setup.png'))) {
         $config = New-PluginObject 'NOMADConfig'
-        $config.AircraftName = 'Demo Copter'
+        $config.AircraftName = 'Example Copter'
         $config.AutoStartHudVideo = $config.AudioAlerts = $config.AltitudeCallouts = $false
         $screenType = $plugin.GetType('NOMAD.MissionPlanner.NOMADMainScreen')
         if ($view[0] -eq 'Boundaries') {
@@ -74,7 +74,7 @@ try {
         Capture $screen $view[1]
     }
     $config = New-PluginObject 'NOMADConfig'
-    $config.AircraftName = 'Demo Copter'
+    $config.AircraftName = 'Example Copter'
     $config.AutoStartHudVideo = $config.AudioAlerts = $config.AltitudeCallouts = $false
     foreach ($camera in @(@('Edge T3 receiver (example)', 'rtsp://camera.example.invalid:8554/live'),
         @('Jetson / Tailscale (example)', 'rtsp://jetson.example.invalid:8554/camera'))) {

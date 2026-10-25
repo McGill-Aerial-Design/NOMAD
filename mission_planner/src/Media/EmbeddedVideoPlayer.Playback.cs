@@ -34,6 +34,7 @@ namespace NOMAD.MissionPlanner
         public void StopStream()
         {
             ValidateUiThread();
+            RetireTracking("Video stopped");
             try
             {
                 _session.Stop();

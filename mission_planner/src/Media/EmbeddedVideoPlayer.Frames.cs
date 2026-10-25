@@ -21,19 +21,25 @@ namespace NOMAD.MissionPlanner
             var frame = _session.TakeFrame();
             if (frame != null)
             {
-                var old = _displayFrame;
-                _displayFrame = frame;
-                _videoBox.Image = frame;
+                var old = _displayedVideoFrame;
+                _displayedVideoFrame = frame;
+                _displayFrame = frame.Image;
+                _videoBox.Image = frame.Image;
                 if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
                 {
-                    _fullscreenBox.Image = frame;
+                    _fullscreenBox.Image = frame.Image;
                 }
                 old?.Dispose();
-                _lblStatus.Text = $"Streaming {frame.Width}x{frame.Height}";
+                _lblStatus.Text = $"Streaming {frame.Image.Width}x{frame.Image.Height}";
                 _lblStatus.ForeColor = Color.LimeGreen;
+                UpdateVisionFrame(frame);
+                _videoBox.Invalidate();
+                _fullscreenBox?.Invalidate();
             }
+            UpdateVisionStatus();
             if (_session.State == VideoState.Stopped)
             {
+                RetireTracking("Video ended; select again after restarting");
                 ClearVideoDisplayAndDisposeBuffers();
                 _frameTimer.Stop();
                 _lblStatus.Text = _session.Error == null ? "Stopped" : $"Error: {_session.Error}";
@@ -51,7 +57,9 @@ namespace NOMAD.MissionPlanner
             {
                 _videoBox.Image = null;
             }
-            _displayFrame?.Dispose();
+            if (_displayedVideoFrame != null) { _displayedVideoFrame.Dispose(); }
+            else { _displayFrame?.Dispose(); }
+            _displayedVideoFrame = null;
             _displayFrame = null;
         }
     }
