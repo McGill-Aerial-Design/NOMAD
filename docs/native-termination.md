@@ -9,7 +9,20 @@ Source is pinned to ArduPilot 4.7.2 commit
 `fb773567896014da007bca58358704d4a0d8516f`. Both builds target **CubeOrangePlus**,
 APJ board ID **1063**. CubeOrange is a different target; do not interchange images.
 The patch, source identity and GPL notice are in
-[`firmware/ardupilot`](../firmware/ardupilot/README.md).
+[`firmware/ardupilot`](https://github.com/McGill-Aerial-Design/NOMAD/tree/main/firmware/ardupilot).
+
+## Setup sequence
+
+1. Review the board, pinned source and [onboard behavior](#onboard-behavior) before
+   selecting firmware. Physical installation and flight qualification are separate operations.
+2. With props removed and the aircraft disarmed, complete the
+   [aircraft setup](#aircraft-setup): dedicated radio input, native receiver/fence
+   settings, descent capability and supported AFS configuration/readback.
+3. Reconnect the selected Mission Planner aircraft and inspect the Dashboard's
+   discovered support. Follow [ground operation](#ground-operation) for the deliberate
+   gesture and aircraft confirmation; support discovery alone sends no termination.
+4. Complete the aircraft-specific acceptance work in [evidence limits](#evidence-limits).
+   A software ACK or observed mode is not measured descent or touchdown.
 
 ## Onboard behavior
 
@@ -37,9 +50,11 @@ once on entry. Actual descent and airframe tuning still require measurement.
 ## Aircraft setup
 
 NOMAD → Fence Setup → Controlled termination can read/configure the supported
-`AFS_*` settings below when the matching firmware advertises selectable `TERMINATE`
+`AFS_*` settings below when the matching firmware advertises a valid `TERMINATE`
 and freshly exposes the private `AFS_TERM_RATE` parameter. Stock firmware keeps
-ordinary fence setup available and leaves this subgroup unavailable. NOMAD does not
+ordinary fence setup available and leaves this subgroup unavailable. A disabled
+extension can be configured while disarmed; activation still requires a fresh,
+selectable advertisement and valid AFS settings. NOMAD does not
 choose or write an RC channel; remaining commissioning settings use native Mission
 Planner parameters and fence tools. Configure/read back the actual aircraft with
 props removed before separately authorized physical qualification.
@@ -55,7 +70,7 @@ written before enabling AFS, and each value is independently read back. Enabling
 requires controlled action/rate, both RC/fence trigger parameters present and enabled,
 and a present valid RC timeout. A failed or uncertain write stops subsequent changes
 and requires another Read, preserving
-earlier writes. The Dashboard action checks support again before a subsequent TERMINATE request.
+earlier writes. Applying settings schedules another background support check before activation is available.
 
 | Native setting | Action-44 commissioning requirement |
 |---|---|
@@ -81,12 +96,17 @@ show private values numerically; use Full Parameter List and explicit write/read
 
 ## Ground operation
 
-Select the live aircraft and open **NOMAD → Dashboard**. The TERMINATE widget's
-**Check** button verifies the selectable native `TERMINATE` advertisement and
-freshly reads `AFS_ENABLE`, `AFS_TERM_ACTION` and `AFS_TERM_RATE`. Hover over the
+NOMAD automatically discovers termination support when the selected aircraft connects,
+after Mission Planner's native connection is ready. It enumerates native mode records
+by index, verifies a coherent selectable `TERMINATE` advertisement, then reads
+`AFS_ENABLE`, `AFS_TERM_ACTION` and `AFS_TERM_RATE`. A new connection, selected aircraft
+or detected controller reboot retires that result and starts discovery again.
+The Dashboard widget's **Check** button retries discovery explicitly if needed.
+A valid disabled extension can be configured while disarmed in Fence Setup;
+activation still requires a selectable mode and the configured AFS readbacks. Hover over the
 widget with the NOMAD window in the foreground, release both Shift keys, then
 press left and right Shift within 750 ms of one another. Both must be down together.
-The widget rechecks support; keep the pointer over it and the window focused, then
+The gesture uses the verified connection result without starting discovery. Keep the pointer over it and the window focused, then
 release both Shift keys to open the aircraft confirmation. Leaving the widget or
 losing focus before that dialog cancels the review. Held keys cannot repeat it.
 
@@ -134,14 +154,14 @@ These commands neither flash hardware nor build a bootloader.
 
 ## Build and release automation
 
-The [firmware workflow](../.github/workflows/firmware.yml) runs the same Linux
-[build script](../scripts/release/build_firmware.py) used for local qualification.
+The [firmware workflow](https://github.com/McGill-Aerial-Design/NOMAD/blob/main/.github/workflows/firmware.yml) runs the same Linux
+[build script](https://github.com/McGill-Aerial-Design/NOMAD/blob/main/scripts/release/build_firmware.py) used for local qualification.
 Relevant firmware pull requests build packages with read-only repository access.
 Manual runs also accept an optional `release_tag`.
 
 The environment is Ubuntu 24.04, Python 3.12 and GNU Arm Embedded 10.2.1. The
 workflow verifies the toolchain archive checksum and installs the reviewed direct
-Python dependencies from [firmware-requirements.txt](../scripts/release/firmware-requirements.txt).
+Python dependencies from [firmware-requirements.txt](https://github.com/McGill-Aerial-Design/NOMAD/blob/main/scripts/release/firmware-requirements.txt).
 These direct pins are not a complete transitive or bit-for-bit reproducibility
 guarantee; the manifest records the actual installed versions and compiler identity.
 

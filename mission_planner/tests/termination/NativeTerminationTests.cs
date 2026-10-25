@@ -69,8 +69,18 @@ internal static class NativeTerminationTests
         {
             using (var peer = new Peer())
             {
-                peer.CheckSupport();
                 Require(peer.CanRequest, "Valid advertised native contract was unavailable");
+                Require(string.Join(",", peer.DiscoveryIndices) == "1,2,3",
+                    "Connection did not automatically discover the complete indexed list before operator input");
+                Require(peer.ParameterReads == 3 && peer.ModeCommands == 0,
+                    "Connection discovery did not read the three native settings without activation");
+                peer.TrailingNameBytes = true;
+                Require(peer.CheckSupport() && peer.CanRequest,
+                    "Bytes after the first mode-name NUL prevented native C-string discovery");
+                peer.TrailingNameBytes = false;
+                peer.ModeProperties = (uint)MAVLink.MAV_MODE_PROPERTY.ADVANCED;
+                Require(peer.CheckSupport() && peer.CanRequest, "Advanced selectable TERMINATE was rejected");
+                peer.ModeProperties = 0;
                 peer.Announce = false;
                 Require(!peer.CheckSupport() && !peer.CanRequest && !peer.Status.Contains("supported"),
                     "Missing fresh advertisement reused previous eligibility or claimed support");
@@ -86,9 +96,11 @@ internal static class NativeTerminationTests
                 peer.Selectable = true;
                 peer.Mode = 16777217;
                 Require(!peer.CheckSupport(), "Inexact float mode ID passed discovery");
+                Require(!peer.CheckConfiguration(), "Inexact float mode ID exposed configuration");
                 peer.Mode = 29;
                 peer.Mode = 256;
                 Require(!peer.CheckSupport(), "Mode ID overflowed native uint8 mode API");
+                Require(!peer.CheckConfiguration(), "Overflowed mode ID exposed configuration");
                 peer.Mode = 29;
                 peer.Rate = float.NaN;
                 Require(!peer.CheckSupport(), "NaN native rate passed support check");
@@ -129,6 +141,10 @@ internal static class NativeTerminationTests
                 Require(peer.Connection.MAV.cs.mode == knownMode, "Disposed observer still changed native mode naming");
             }
             NegativeScenarios();
+            IndexedDiscoveryScenarios();
+            ConfigurationDiscoveryScenarios();
+            ConnectionDiscoveryScenarios();
+            DiscoveryBusyScenarios();
             WidgetReviewScenarios();
             Console.WriteLine("PASS actual MP discovery/readback/ACK/observation/name/lifecycle loopback checks");
         }
@@ -172,6 +188,16 @@ internal static class NativeTerminationTests
             peer.Connection.giveComport = true;
             Require(peer.Request(captured).Contains("no termination sent"), "Native busy request was dispatched");
             peer.Connection.giveComport = false;
+            var busy = Output.GetField("_payloadBusy", HiddenStatic);
+            try
+            {
+                busy.SetValue(null, true);
+                string outcome = peer.Request(captured);
+                Require(outcome.Contains("busy") && outcome.Contains("no termination sent") &&
+                    !outcome.Contains("uncertain") && peer.ModeCommands == 0,
+                    "Known pre-dispatch contention reported uncertainty or sent termination");
+            }
+            finally { busy.SetValue(null, false); }
             peer.Connection.ReadOnly = true;
             Require(peer.Request(captured).Contains("no termination sent") && peer.ModeCommands == 0,
                 "ReadOnly/invalid contract/unarmed/stale input emitted an activation");
@@ -199,14 +225,268 @@ internal static class NativeTerminationTests
         }
     }
 
+    private static void IndexedDiscoveryScenarios()
+    {
+        foreach (string scenario in new[] { "Missing", "Conflict", "WrongIndex", "ChangedCount", "ZeroCount", "Index255" })
+        {
+            using var peer = new Peer();
+            peer.MissingMode = scenario == "Missing";
+            peer.ConflictingMode = scenario == "Conflict";
+            peer.WrongIndex = scenario == "WrongIndex";
+            peer.ChangedCount = scenario == "ChangedCount";
+            peer.ZeroCount = scenario == "ZeroCount";
+            peer.InvalidIndex = scenario == "Index255" ? (byte)255 : (byte)0;
+            Require(!peer.CheckSupport() && !peer.CanRequest && peer.ModeCommands == 0,
+                "Invalid indexed discovery passed: " + scenario);
+            Require(!peer.CheckConfiguration() && !peer.CanConfigure,
+                "Invalid indexed discovery exposed configuration: " + scenario);
+            Require(!peer.DiscoveryIndices.Contains(0), "Indexed discovery used the incomplete all-modes request");
+        }
+        using (var peer = new Peer())
+        {
+            peer.HoldDiscovery = true;
+            var pending = peer.BeginCheck();
+            Require(peer.DiscoverySeen.Wait(2000), "Indexed request did not reach the held second record");
+            Output.GetMethod("Initialize", HiddenStatic).Invoke(null, new object[] { peer.Config });
+            peer.ReleaseDiscovery.Set();
+            Require(!peer.Complete(pending) && !peer.CanRequest && peer.ModeCommands == 0,
+                "Retired indexed discovery published support or activation");
+        }
+        foreach (bool previouslyChecked in new[] { false, true })
+        {
+            using var peer = new Peer();
+            if (previouslyChecked) { Require(peer.CheckSupport(), "Unsolicited conflict fixture lacked support"); }
+            peer.HoldDiscovery = true;
+            var pending = peer.BeginCheck();
+            Require(peer.DiscoverySeen.Wait(2000), "Conflict check did not reach its pending index");
+            peer.ConflictingMode = true;
+            peer.SendModeRecord(3);
+            peer.ConflictingMode = false;
+            peer.ReleaseDiscovery.Set();
+            Require(!peer.Complete(pending) && !peer.CanRequest,
+                "Out-of-order conflicting TERMINATE retained support");
+        }
+        using (var peer = new Peer(initial =>
+            { initial.InvalidFirstMode = initial.ConflictingMode = true; initial.Mode = 28; }))
+        {
+            Require(!peer.CheckSupport() && !peer.CanRequest && !peer.DiscoveryIndices.Contains(3),
+                "Invalid TERMINATE was overwritten by a later valid TERMINATE");
+        }
+        using (var peer = new Peer())
+        {
+            peer.Announce = false;
+            var pending = peer.BeginCheck();
+            peer.Pump(100);
+            peer.ObserveStaleMode();
+            Require(!peer.Complete(pending) && !peer.CanRequest,
+                "Stale AVAILABLE_MODES record established discovery");
+        }
+        Console.WriteLine("PASS indexed discovery missing/conflict/index/count/retirement guards");
+    }
+
+    private static void ConfigurationDiscoveryScenarios()
+    {
+        using (var peer = new Peer())
+        {
+            peer.Enabled = 0;
+            peer.Action = 42;
+            peer.Rate = 1.9f;
+            peer.Selectable = false;
+            peer.SendHeartbeat(0, false); peer.Pump(100);
+            Require(peer.CheckConfiguration() && peer.CanConfigure && !peer.CanRequest,
+                "Disabled native extension could not be commissioned while safely disarmed");
+            Require(!peer.CheckSupport() && peer.CanConfigure && !peer.CanRequest,
+                "Configuration support became activation authority");
+            peer.SendHeartbeat(0, true); peer.Pump(100);
+            Require(!peer.CanConfigure && !peer.CanRequest, "Armed nonselectable capability allowed configuration or activation");
+            peer.SendHeartbeat(29, false); peer.Pump(100);
+            Require(!peer.CanConfigure, "Observed TERMINATE allowed configuration");
+        }
+        using (var peer = new Peer())
+        {
+            Require(peer.CheckSupport(), "Missing-name fixture did not establish its initial capability");
+            peer.MissingMode = true;
+            Require(!peer.CheckConfiguration() && !peer.CanConfigure && !peer.CanRequest,
+                "Retained mode ID substituted for TERMINATE missing from the current enumeration");
+        }
+        using (var peer = new Peer())
+        {
+            peer.ConflictingMode = peer.SameTerminationMode = peer.FirstNonselectable = true;
+            peer.SendHeartbeat(0, false); peer.Pump(100);
+            Require(!peer.CheckSupport() && !peer.CanRequest && peer.CheckConfiguration() && peer.CanConfigure,
+                "Later selectable duplicate overrode a nonselectable TERMINATE or blocked commissioning");
+        }
+        Console.WriteLine("PASS native capability commissioning without activation authority");
+    }
+
+    private static void DiscoveryBusyScenarios()
+    {
+        using var peer = new Peer();
+        object target = Controller.GetField("_target", HiddenInstance).GetValue(peer.ControllerInstance);
+        var read = target.GetType().GetMethod("ReadParameterAsync", HiddenInstance);
+        var retry = Controller.GetMethod("ReadWhenAvailableAsync", HiddenInstance).MakeGenericMethod(typeof(float));
+        var busy = Output.GetField("_payloadBusy", HiddenStatic);
+        int attempts = 0, reads = peer.ParameterReads;
+        Func<Task<float>> request = async () =>
+        {
+            attempts++;
+            if (attempts == 1) { busy.SetValue(null, true); }
+            try { return await (Task<float>)read.Invoke(target, new object[] { "AFS_ENABLE" }); }
+            finally { if (attempts == 1) { busy.SetValue(null, false); } }
+        };
+        float result = peer.Complete((Task<float>)retry.Invoke(peer.ControllerInstance,
+            new object[] { target, request, Stopwatch.StartNew() }));
+        Require(result == 1 && attempts == 2 && peer.ParameterReads == reads + 1 && peer.ModeCommands == 0,
+            "Pre-dispatch native contention failed recovery or replayed an already sent parameter request");
+        attempts = 0;
+        request = () => { attempts++; return Task.FromException<float>(new InvalidOperationException("Native read failed")); };
+        bool failed = false;
+        try { peer.Complete((Task<float>)retry.Invoke(peer.ControllerInstance,
+            new object[] { target, request, Stopwatch.StartNew() })); }
+        catch (InvalidOperationException) { failed = true; }
+        Require(failed && attempts == 1 && peer.ParameterReads == reads + 1 && peer.ModeCommands == 0,
+            "A failure after native admission was retried as pre-dispatch busy");
+        Console.WriteLine("PASS known pre-dispatch busy recovery; no replay of admitted or uncertain native operations");
+    }
+
+    private static void ConnectionDiscoveryScenarios()
+    {
+        using (var peer = new Peer(initial => { initial.ModeCount = 40; initial.DiscoveryDelayMilliseconds = 250; }))
+        {
+            Require(peer.CanRequest && peer.DiscoveryIndices.Count == 40 && peer.ParameterReads == 3,
+                "A complete connection-time mode list was cut off by the former action-time discovery budget");
+        }
+        using (var peer = new Peer())
+        {
+            var captured = peer.Capture();
+            int reads = peer.ParameterReads, discoveries = peer.DiscoveryIndices.Count;
+            peer.SendParameter("AFS_ENABLE", 0); peer.Pump(100);
+            Require(!peer.CanRequest && peer.Request(captured).Contains("no termination sent"),
+                "A cached native configuration change retained termination authority");
+            peer.SendParameter("AFS_ENABLE", 1); peer.Pump(100);
+            peer.SendParameter("AFS_TERM_RATE", float.NaN); peer.Pump(100);
+            Require(!peer.CanRequest && peer.ModeCommands == 0 && peer.ParameterReads == reads &&
+                peer.DiscoveryIndices.Count == discoveries,
+                "Invalid cached configuration admitted a request or started request-time discovery");
+        }
+        using (var peer = new Peer())
+        {
+            var captured = peer.Capture();
+            Controller.GetMethod("RetireConfiguredSupport", HiddenInstance).Invoke(peer.ControllerInstance, null);
+            Controller.GetMethod("RefreshConfiguredSupport", HiddenInstance).Invoke(peer.ControllerInstance, null);
+            peer.WaitDiscovery();
+            Require(peer.CanRequest && peer.Request(captured).Contains("no termination sent") && peer.ModeCommands == 0,
+                "A pre-configuration confirmation became valid after automatic rediscovery");
+        }
+        using (var peer = new Peer(initial =>
+            { initial.StartBusy = true; initial.SendBoundHeartbeat = false; }, waitForDiscovery: false))
+        {
+            peer.Pump(150);
+            Require(peer.DiscoveryIndices.Count == 0 && !peer.CanRequest,
+                "Connection discovery used the native port before startup completed");
+            peer.Connection.giveComport = false;
+            peer.Pump(150);
+            Require(peer.DiscoveryIndices.Count == 0 && !peer.CanRequest,
+                "Connection discovery started before the selected aircraft heartbeat");
+            peer.SendHeartbeat(0);
+            peer.WaitDiscovery();
+            Require(peer.CanRequest && peer.DiscoveryIndices.Count == 3 && peer.ParameterReads == 3,
+                "Delayed heartbeat/native startup prevented automatic discovery");
+        }
+        using (var peer = new Peer(initial => initial.HoldDiscovery = true, waitForDiscovery: false))
+        {
+            Require(peer.DiscoverySeen.Wait(2000), "Automatic binding scan did not reach the held second index");
+            for (int repeat = 0; repeat < 10; repeat++) { peer.UpdateBinding(); }
+            var concurrent = peer.BeginCheck();
+            Require(!concurrent.IsCompleted && !peer.CanRequest,
+                "Concurrent Check bypassed the pending automatic discovery");
+            peer.ReleaseDiscovery.Set();
+            Require(peer.Complete(concurrent), "Concurrent Check did not join automatic connection discovery");
+            peer.WaitDiscovery();
+            Require(string.Join(",", peer.DiscoveryIndices) == "1,2,3" && peer.ParameterReads == 3,
+                "Binding updates or concurrent Check duplicated automatic capability discovery");
+        }
+        foreach (bool changeTarget in new[] { false, true })
+        {
+            using var peer = new Peer();
+            var original = peer.Capture();
+            peer.HoldDiscovery = true;
+            if (changeTarget)
+            {
+                peer.SendHeartbeat(0, true, 202); peer.Pump(100);
+                peer.System = 202;
+                peer.Connection.sysidcurrent = 202;
+            }
+            else { peer.ReplaceStream(); }
+            peer.UpdateBinding();
+            Require(!peer.CanRequest, "A replacement stream/selected target inherited activation support");
+            peer.SendHeartbeat(0); peer.Pump(100);
+            Require(peer.DiscoverySeen.Wait(2000), "New binding did not automatically rediscover its target");
+            peer.ReleaseDiscovery.Set();
+            peer.WaitDiscovery();
+            Require(peer.CanRequest && peer.DiscoveryIndices.Count == 6 && peer.ParameterReads == 6,
+                "New binding did not complete exactly one independent capability/configuration scan");
+            Require(peer.Request(original).Contains("no termination sent") && peer.ModeCommands == 0,
+                "A new binding inherited the original captured confirmation");
+        }
+        using (var peer = new Peer(initial => initial.HoldRate = true, waitForDiscovery: false))
+        {
+            Require(peer.RateSeen.Wait(2000), "Automatic scan did not reach held parameter readback");
+            Output.GetMethod("Initialize", HiddenStatic).Invoke(null, new object[] { peer.Config });
+            peer.UpdateBinding();
+            Require(!peer.CanRequest, "New generation inherited an unfinished scan");
+            peer.ReleaseRate.Set();
+            peer.SendHeartbeat(0);
+            peer.WaitDiscovery();
+            Require(peer.CanRequest && peer.DiscoveryIndices.Count == 6 && peer.ParameterReads == 6 &&
+                peer.ModeCommands == 0, "Retired readback overlapped, replaced or prevented the new binding scan");
+        }
+        using (var peer = new Peer())
+        {
+            var original = peer.Capture();
+            peer.SendBootTime(uint.MaxValue - 1000); peer.Pump(50);
+            peer.SendBootTime(500); peer.Pump(50);
+            Require(peer.CanRequest && peer.DiscoveryIndices.Count == 3,
+                "Normal unsigned uptime wrap was treated as a firmware reboot");
+            peer.SendBootTime(60000); peer.Pump(100);
+            peer.HoldDiscovery = true;
+            peer.SendBootTime(100); peer.Pump(100);
+            Require(!peer.CanRequest, "Detected firmware reboot retained cached support");
+            peer.SendHeartbeat(0); peer.Pump(100);
+            Require(peer.DiscoverySeen.Wait(2000), "Same-stream reboot did not schedule fresh capability discovery");
+            peer.ReleaseDiscovery.Set();
+            peer.WaitDiscovery();
+            Require(peer.CanRequest && peer.DiscoveryIndices.Count == 6 && peer.ParameterReads == 6,
+                "Same-stream firmware reboot did not rediscover support");
+            Require(peer.Request(original).Contains("no termination sent") && peer.ModeCommands == 0,
+                "A pre-reboot captured confirmation became valid after rediscovery");
+            peer.Rate = 1;
+            Controller.GetMethod("RetireConfiguredSupport", HiddenInstance).Invoke(peer.ControllerInstance, null);
+            Controller.GetMethod("RefreshConfiguredSupport", HiddenInstance).Invoke(peer.ControllerInstance, null);
+            peer.WaitDiscovery();
+            Require(!peer.CanRequest && peer.DiscoveryIndices.Count == 9 && peer.ParameterReads == 9,
+                "Configuration writes did not automatically revalidate and reject unsupported settings");
+        }
+        Console.WriteLine("PASS automatic discovery; startup, duplicate/join, stream/target/generation/boot/config retirement");
+    }
+
     private static void WidgetReviewScenarios()
     {
         var widgetType = typeof(NOMADConfig).Assembly.GetType("NOMAD.MissionPlanner.TerminationWidget", true);
-        foreach (string scenario in new[] { "Cancel", "OK", "FocusLoss", "ReleaseFocusLoss", "Retired", "SessionEnded" })
+        foreach (string scenario in new[] { "Cancel", "OK", "NoPrecheck", "Unsupported", "Disarmed", "Unknown",
+            "FocusLoss", "ReleaseFocusLoss", "Retired", "SessionEnded", "Stale" })
         {
-            using var peer = new Peer();
+            using var peer = new Peer(initial =>
+            {
+                initial.Selectable = scenario != "Unsupported";
+                initial.Armed = scenario != "Disarmed";
+                initial.Announce = scenario != "Unknown";
+            });
             using var shutdown = new CancellationTokenSource();
-            Require(peer.CheckSupport(), "Widget fixture did not establish native support");
+            if (scenario == "Stale") { peer.Pump(3600); }
+            Require(peer.CanRequest == (scenario != "Unsupported" && scenario != "Disarmed" &&
+                scenario != "Unknown" && scenario != "Stale"), "Automatic widget fixture support was wrong: " + scenario);
+            int discoveries = peer.DiscoveryIndices.Count, reads = peer.ParameterReads;
             bool eligible = true;
             int confirmations = 0;
             Func<IWin32Window, string, DialogResult> confirm = (owner, target) =>
@@ -227,16 +507,11 @@ internal static class NativeTerminationTests
             var pending = widgetType.GetProperty("PendingReview", HiddenInstance);
             update(true, false, false, 0);
             update(true, true, false, 10);
-            peer.HoldRate = scenario == "FocusLoss";
             update(true, true, true, 20);
-            if (peer.HoldRate)
+            if (scenario == "FocusLoss")
             {
-                var deadline = Stopwatch.StartNew();
-                while (!peer.RateSeen.IsSet && deadline.ElapsedMilliseconds < 5000) { peer.Pump(10); Application.DoEvents(); }
-                Require(peer.RateSeen.IsSet, "Widget check did not reach held synthetic readback");
                 eligible = false;
                 update(false, true, true, 30);
-                peer.ReleaseRate.Set();
             }
             FinishWidget(peer, (Task)pending.GetValue(widget));
             Require(peer.ModeCommands == 0 && confirmations == 0, "Widget dispatched or confirmed before key release");
@@ -248,11 +523,16 @@ internal static class NativeTerminationTests
             }
             update(eligible, false, false, 40);
             FinishWidget(peer, (Task)pending.GetValue(widget));
-            Require(confirmations == (scenario == "FocusLoss" || scenario == "ReleaseFocusLoss" ? 0 : 1), "Widget confirmation count was wrong: " + scenario);
-            Require(peer.ModeCommands == (scenario == "OK" ? 1 : 0), "Widget command count was wrong: " + scenario);
+            bool blocked = scenario == "FocusLoss" || scenario == "ReleaseFocusLoss" ||
+                scenario == "Unsupported" || scenario == "Disarmed" || scenario == "Unknown" || scenario == "Stale";
+            Require(confirmations == (blocked ? 0 : 1), "Widget confirmation count was wrong: " + scenario);
+            Require(peer.ModeCommands == (scenario == "OK" || scenario == "NoPrecheck" ? 1 : 0),
+                "Widget command count was wrong: " + scenario);
             update(eligible, true, true, 50);
             FinishWidget(peer, (Task)pending.GetValue(widget));
             Require(peer.ModeCommands <= 1, "Held/repeated widget input replayed termination");
+            Require(peer.DiscoveryIndices.Count == discoveries && peer.ParameterReads == reads,
+                "Gesture/confirmation/request performed capability or parameter discovery: " + scenario);
             if (scenario == "Cancel")
             {
                 peer.SendHeartbeat(0, false); peer.Pump(100);
@@ -262,7 +542,7 @@ internal static class NativeTerminationTests
                     "Verified disarmed support still looked unavailable in the Dashboard widget");
             }
         }
-        Console.WriteLine("PASS sampled Dashboard review Cancel/OK/focus-loss/retired-target/session gates");
+        Console.WriteLine("PASS Dashboard cached support only; unknown/unsupported/disarmed/stale, release/focus/target/session gates");
     }
 
     private static void FinishWidget(Peer peer, Task task)
@@ -278,51 +558,89 @@ internal static class NativeTerminationTests
         internal readonly NOMADConfig Config = new NOMADConfig { AircraftName = "Synthetic loopback" };
         internal readonly MAVLinkInterface Connection = new MAVLinkInterface();
         private readonly TcpListener _listener = new TcpListener(IPAddress.Loopback, 0);
-        private readonly TcpClient _server;
-        private readonly Thread _worker;
+        private TcpClient _server;
+        private Thread _worker;
         private readonly object _sendGate = new object();
         private readonly MAVLink.MavlinkParse _encoder = new MAVLink.MavlinkParse();
-        private readonly TcpSerial _serial = new TcpSerial { autoReconnect = false };
+        private TcpSerial _serial = new TcpSerial { autoReconnect = false };
         private volatile bool _stopping;
         private Exception _failure;
         private object _controller;
         internal bool Announce = true, Selectable = true, AfterAck, Accept = true, DiscoveryAccepted = true;
         internal bool MissingRate, HoldModeAck, HoldRate;
+        internal bool MissingMode, ConflictingMode, WrongIndex, ChangedCount, ZeroCount, HoldDiscovery, InvalidFirstMode;
+        internal bool TrailingNameBytes, Armed = true;
+        internal bool SameTerminationMode, FirstNonselectable;
+        internal bool StartBusy, SendBoundHeartbeat = true;
+        internal byte ModeCount = 3;
+        internal int DiscoveryDelayMilliseconds;
+        internal byte InvalidIndex;
+        internal uint ModeProperties;
+        internal readonly List<int> DiscoveryIndices = new List<int>();
         internal float Enabled = 1, Action = 44;
         internal readonly ManualResetEventSlim ModeSeen = new ManualResetEventSlim();
         internal readonly ManualResetEventSlim ReleaseModeAck = new ManualResetEventSlim();
         internal readonly ManualResetEventSlim RateSeen = new ManualResetEventSlim();
         internal readonly ManualResetEventSlim ReleaseRate = new ManualResetEventSlim();
+        internal readonly ManualResetEventSlim DiscoverySeen = new ManualResetEventSlim();
+        internal readonly ManualResetEventSlim ReleaseDiscovery = new ManualResetEventSlim();
         internal uint Mode = 29;
+        internal byte System = 201;
         internal float Rate = 2.2f;
-        internal int ModeCommands, FlightTerminationCommands;
+        internal int ModeCommands, FlightTerminationCommands, ParameterReads;
         internal float LastCommandMode, LastCommandFlags;
 
-        internal Peer()
+        internal Peer(Action<Peer> configure = null, bool waitForDiscovery = true)
         {
+            configure?.Invoke(this);
             _listener.Start();
             _serial.client = new TcpClient("127.0.0.1", ((IPEndPoint)_listener.LocalEndpoint).Port);
             _server = _listener.AcceptTcpClient();
             Connection.BaseStream = _serial;
-            Connection.sysidcurrent = 201;
+            Connection.sysidcurrent = System;
             // Avoid MP's unrelated camera/gimbal auto-discovery for component 1 in this focused synthetic peer.
             Connection.compidcurrent = 42;
             _server.ReceiveTimeout = 100;
             _worker = new Thread(Respond) { IsBackground = true };
             _worker.Start();
-            SendHeartbeat(0); Pump(100);
+            SendHeartbeat(0, Armed); Pump(100);
             Output.GetField("CurrentConnection", HiddenStatic).SetValue(null, new Func<MAVLinkInterface>(() => Connection));
             Output.GetMethod("Initialize", HiddenStatic).Invoke(null, new object[] { Config });
+            Connection.giveComport = StartBusy;
             _controller = Activator.CreateInstance(Controller, HiddenInstance, null, new object[] { Config }, null);
-            SendHeartbeat(0); Pump(100);
+            if (SendBoundHeartbeat) { SendHeartbeat(0, Armed); }
+            Pump(100);
+            if (waitForDiscovery) { WaitDiscovery(); }
         }
 
         internal object ControllerInstance => _controller;
+        internal void ReplaceStream()
+        {
+            _stopping = true;
+            _server.Close();
+            Require(_worker.Join(2000), "Old stream peer did not stop");
+            var replacement = new TcpSerial { autoReconnect = false,
+                client = new TcpClient("127.0.0.1", ((IPEndPoint)_listener.LocalEndpoint).Port) };
+            _server = _listener.AcceptTcpClient();
+            _server.ReceiveTimeout = 100;
+            Connection.BaseStream = replacement;
+            _serial = replacement;
+            _stopping = false;
+            _worker = new Thread(Respond) { IsBackground = true };
+            _worker.Start();
+        }
+        internal void UpdateBinding() => Controller.GetMethod("UpdateBinding", HiddenInstance).Invoke(_controller, null);
+        internal void WaitDiscovery() => FinishWidget(this, (Task)Controller.GetField("_bindingDiscovery", HiddenInstance)
+            .GetValue(_controller));
         internal bool CanRequest => (bool)Controller.GetProperty("CanRequest", HiddenInstance).GetValue(_controller);
         internal string Status => (string)Controller.GetProperty("Status", HiddenInstance).GetValue(_controller);
         internal bool CheckSupport() => Finish((Task<bool>)Controller.GetMethod("CheckAsync", HiddenInstance)
             .Invoke(_controller, null));
         internal Task<bool> BeginCheck() => (Task<bool>)Controller.GetMethod("CheckAsync", HiddenInstance).Invoke(_controller, null);
+        internal bool CheckConfiguration() => Finish((Task<bool>)Controller.GetMethod("CheckConfigurationAsync", HiddenInstance)
+            .Invoke(_controller, null));
+        internal bool CanConfigure => (bool)Controller.GetMethod("CanConfigure", HiddenInstance).Invoke(_controller,
+            new[] { Output.GetProperty("Generation", HiddenStatic).GetValue(null) });
         internal object[] Capture()
         {
             var args = new object[] { 0L, 0U };
@@ -366,6 +684,7 @@ internal static class NativeTerminationTests
                     if (packet == null) { continue; }
                     if (packet.msgid == (uint)MAVLink.MAVLINK_MSG_ID.PARAM_REQUEST_READ)
                     {
+                        Interlocked.Increment(ref ParameterReads);
                         var request = packet.ToStructure<MAVLink.mavlink_param_request_read_t>();
                         string name = Encoding.ASCII.GetString(request.param_id).TrimEnd('\0');
                         if (name == "AFS_TERM_RATE" && MissingRate) { continue; }
@@ -384,10 +703,17 @@ internal static class NativeTerminationTests
                         bool discovery = command.command == (ushort)MAVLink.MAV_CMD.REQUEST_MESSAGE && command.param1 == 435;
                         bool setMode = command.command == (ushort)MAVLink.MAV_CMD.DO_SET_MODE;
                         if (!discovery && !setMode && command.command != 185) { continue; }
-                        Require(command.target_system == 201 && command.target_component == 42,
+                        Require(command.target_system == System && command.target_component == 42,
                             $"Wrong synthetic target: command {command.command}, system {command.target_system}, component {command.target_component}");
-                        if (discovery) { Require(command.param2 == 0, "Discovery did not request all AVAILABLE_MODES records"); }
-                        if (discovery && Announce && !AfterAck) { SendMode(); }
+                        if (discovery)
+                        {
+                            Require(command.param2 >= 0 && command.param2 <= 255 && command.param2 == (int)command.param2,
+                                "Discovery index was outside native uint8 range");
+                            DiscoveryIndices.Add((int)command.param2);
+                            if (HoldDiscovery && command.param2 == 2)
+                            { DiscoverySeen.Set(); Require(ReleaseDiscovery.Wait(5000), "Held indexed discovery deadline"); }
+                        }
+                        if (discovery && Announce && !AfterAck) { SendModeRecord((byte)command.param2); }
                         if (command.command == (ushort)MAVLink.MAV_CMD.DO_SET_MODE)
                         {
                             ModeCommands++;
@@ -399,8 +725,8 @@ internal static class NativeTerminationTests
                         if (command.command == 185) { FlightTerminationCommands++; }
                         Send(MAVLink.MAVLINK_MSG_ID.COMMAND_ACK, new MAVLink.mavlink_command_ack_t
                         { command = command.command, result = (byte)((discovery ? DiscoveryAccepted : Accept) ? 0 : 2) });
-                        if (discovery && Announce && AfterAck) { SendMode(); }
-                        SendHeartbeat(0);
+                        if (discovery && Announce && AfterAck) { SendModeRecord((byte)command.param2); }
+                        SendHeartbeat(0, Armed);
                     }
                 }
                 catch (IOException) { }
@@ -410,20 +736,69 @@ internal static class NativeTerminationTests
             }
         }
 
-        internal void SendMode() => Send(MAVLink.MAVLINK_MSG_ID.AVAILABLE_MODES,
-            new MAVLink.mavlink_available_modes_t { custom_mode = Mode, mode_index = 1, number_modes = 1,
-                properties = Selectable ? 0U : 1U, mode_name = Encoding.ASCII.GetBytes("TERMINATE".PadRight(35, '\0')) });
+        internal void SendMode() => SendModeRecord(2);
+        internal void SendBootTime(uint milliseconds) => Send(MAVLink.MAVLINK_MSG_ID.SYSTEM_TIME,
+            new MAVLink.mavlink_system_time_t { time_boot_ms = milliseconds });
 
-        internal void SendHeartbeat(uint mode, bool armed = true, byte system = 201) => Send(MAVLink.MAVLINK_MSG_ID.HEARTBEAT,
+        internal void SendModeRecord(byte requestedIndex)
+        {
+            if (DiscoveryDelayMilliseconds > 0)
+            { Thread.Sleep(DiscoveryDelayMilliseconds); SendHeartbeat(0, Armed); }
+            // Match the pinned firmware: index zero emits only the first, non-TERMINATE record.
+            byte index = requestedIndex == 0 ? (byte)1 : requestedIndex;
+            bool terminate = (index == 2 && !MissingMode) || (index == 3 && ConflictingMode);
+            byte responseIndex = InvalidIndex != 0 ? InvalidIndex : WrongIndex ? (byte)(index + 1) : index;
+            Send(MAVLink.MAVLINK_MSG_ID.AVAILABLE_MODES, new MAVLink.mavlink_available_modes_t
+            {
+                custom_mode = InvalidFirstMode && index == 2 ? 256U :
+                    terminate ? (index == 3 && !SameTerminationMode ? Mode + 1 : Mode) : index == 1 ? 27U : 9U,
+                mode_index = responseIndex,
+                number_modes = ZeroCount ? (byte)0 : ChangedCount && index == 2 ? (byte)4 : ModeCount,
+                properties = ModeProperties | (terminate && (!Selectable || (FirstNonselectable && index == 2)) ?
+                    (uint)MAVLink.MAV_MODE_PROPERTY.NOT_USER_SELECTABLE : 0U),
+                mode_name = Encoding.ASCII.GetBytes((terminate ?
+                    (TrailingNameBytes ? "TERMINATE\0TERM\0\0Controlled terminat" : "TERMINATE") :
+                    index == 1 ? "Auto RTL" : "Land")
+                    .PadRight(35, '\0')),
+            });
+        }
+
+        internal void ObserveStaleMode()
+        {
+            byte[] bytes;
+            lock (_sendGate)
+            {
+                bytes = _encoder.GenerateMAVLinkPacket20(MAVLink.MAVLINK_MSG_ID.AVAILABLE_MODES,
+                    new MAVLink.mavlink_available_modes_t { custom_mode = 29, mode_index = 1, number_modes = 1,
+                        mode_name = Encoding.ASCII.GetBytes("TERMINATE".PadRight(35, '\0')) }, false, 201, 42, -1);
+            }
+            var packet = new MAVLink.MAVLinkMessage(bytes, DateTime.UtcNow.AddSeconds(-4));
+            var target = Controller.GetField("_target", HiddenInstance).GetValue(_controller);
+            Controller.GetMethod("Observe", HiddenInstance).Invoke(_controller,
+                new object[] { target, Connection.MAV, packet });
+        }
+
+        internal void SendHeartbeat(uint mode, bool armed = true, byte system = 0)
+        {
+            if (system == 0 || system == System) { Armed = armed; }
+            Send(MAVLink.MAVLINK_MSG_ID.HEARTBEAT,
             new MAVLink.mavlink_heartbeat_t { autopilot = (byte)MAVLink.MAV_AUTOPILOT.ARDUPILOTMEGA,
                 type = (byte)MAVLink.MAV_TYPE.QUADROTOR, base_mode = (byte)(armed ? 129 : 1), custom_mode = mode,
                 mavlink_version = 3 }, system);
+        }
 
-        private void Send(MAVLink.MAVLINK_MSG_ID id, object payload, byte system = 201)
+        internal void SendParameter(string name, float value) => Send(MAVLink.MAVLINK_MSG_ID.PARAM_VALUE,
+            new MAVLink.mavlink_param_value_t
+            {
+                param_id = Encoding.ASCII.GetBytes(name.PadRight(16, '\0')), param_value = value,
+                param_count = 3, param_index = 0, param_type = 9,
+            });
+
+        private void Send(MAVLink.MAVLINK_MSG_ID id, object payload, byte system = 0)
         {
             lock (_sendGate)
             {
-                byte[] bytes = _encoder.GenerateMAVLinkPacket20(id, payload, false, system, 42, -1);
+                byte[] bytes = _encoder.GenerateMAVLinkPacket20(id, payload, false, system == 0 ? System : system, 42, -1);
                 _server.GetStream().Write(bytes, 0, bytes.Length);
             }
         }
@@ -438,12 +813,13 @@ internal static class NativeTerminationTests
         {
             DisposeController();
             _stopping = true;
-            ReleaseModeAck.Set(); ReleaseRate.Set();
+            ReleaseModeAck.Set(); ReleaseRate.Set(); ReleaseDiscovery.Set();
             _server.Close();
             Connection.Close();
             Require(_worker.Join(2000), "Loopback peer did not stop");
             _listener.Stop();
             ModeSeen.Dispose(); ReleaseModeAck.Dispose(); RateSeen.Dispose(); ReleaseRate.Dispose();
+            DiscoverySeen.Dispose(); ReleaseDiscovery.Dispose();
         }
     }
 }

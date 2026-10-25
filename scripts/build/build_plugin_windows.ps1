@@ -29,6 +29,8 @@ Write-Host "  Found: $msbuild" -ForegroundColor Green
 Write-Host ""
 
 # Step 2: Clean previous build
+& (Join-Path $PSScriptRoot 'prepare_vision.ps1')
+if (-not $?) { throw 'Pinned vision input preparation failed.' }
 Write-Host "[2/4] Cleaning previous build..." -ForegroundColor Yellow
 & $msbuild $ProjectFile /t:Clean /p:Configuration=$Configuration /v:minimal /nologo
 $cleanExitCode = $LASTEXITCODE

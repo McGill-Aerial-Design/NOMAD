@@ -67,7 +67,7 @@ internal static class NativeFenceParametersTests
             using (var controller = (IDisposable)Create("FenceParameters", peer.Config))
             {
                 peer.Controller = controller;
-                peer.Finish((Task)Call(controller, "ReadAsync"));
+                peer.Finish((Task)Call(controller, "ReadAsync", (object)null));
                 var parameters = Field<IList>(controller, "Parameters");
                 Check(parameters.Count == 3, "Only aircraft-supported fence parameters are exposed");
                 object enabled = parameters.Cast<object>().Single(p => Field<string>(p, "Name") == "FENCE_ENABLE");
@@ -84,7 +84,7 @@ internal static class NativeFenceParametersTests
                 Check(peer.Writes == writes && armed.Contains("0 setting(s) verified"), "Armed aircraft refuses writes");
                 controller.Dispose();
                 peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
-                peer.Finish((Task)Call(peer.Controller, "ReadAsync"));
+                peer.Finish((Task)Call(peer.Controller, "ReadAsync", (object)null));
                 peer.Heartbeat(false); peer.Pump(40);
                 string applied = peer.Apply(new Dictionary<string, float> { ["FENCE_MARGIN"] = 4 });
                 Check(applied.StartsWith("Verified 1") && peer.Values["FENCE_MARGIN"] == 4 && peer.Writes == writes + 1,
@@ -98,7 +98,7 @@ internal static class NativeFenceParametersTests
                 peer.IgnoreValue = false;
                 peer.Controller.Dispose();
                 peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
-                peer.Finish((Task)Call(peer.Controller, "ReadAsync"));
+                peer.Finish((Task)Call(peer.Controller, "ReadAsync", (object)null));
                 peer.Heartbeat(false); peer.Pump(40);
                 peer.Connection.ReadOnly = true;
                 string retired = peer.Apply(new Dictionary<string, float> { ["FENCE_ENABLE"] = 1 });
@@ -106,14 +106,14 @@ internal static class NativeFenceParametersTests
                 peer.Connection.ReadOnly = false;
                 peer.Controller.Dispose();
                 peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
-                peer.Finish((Task)Call(peer.Controller, "ReadAsync"));
+                peer.Finish((Task)Call(peer.Controller, "ReadAsync", (object)null));
                 peer.Heartbeat(false); peer.Pump(40);
                 Thread.Sleep(3600);
                 string stale = peer.Apply(new Dictionary<string, float> { ["FENCE_ENABLE"] = 1 });
                 Check(peer.Writes == writes + 2 && stale.Contains("0 setting(s) verified"), "Expired disarmed heartbeat refuses writes");
                 peer.Controller.Dispose();
                 peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
-                peer.Finish((Task)Call(peer.Controller, "ReadAsync"));
+                peer.Finish((Task)Call(peer.Controller, "ReadAsync", (object)null));
                 peer.Heartbeat(false); peer.Pump(40);
                 peer.RetireAfterWrite = true;
                 string partial = peer.Apply(new Dictionary<string, float> { ["FENCE_MARGIN"] = 6, ["FENCE_ENABLE"] = 1 });
@@ -131,14 +131,14 @@ internal static class NativeFenceParametersTests
         using (var shared = (IDisposable)Create("TerminationController", peer.Config))
         {
             peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
-            peer.Finish((Task)Call(peer.Controller, "ReadAsync"));
+            peer.Finish((Task)Call(peer.Controller, "ReadAsync", shared));
             peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
-            Check(Field<IList>(peer.Controller, "Parameters").Count == 3 && peer.ModeRequests == 0,
-                "Stock aircraft without unique custom parameter retains ordinary Fence and sends no discovery/writes");
+            Check(Field<IList>(peer.Controller, "Parameters").Count == 3 && peer.ModeRequests == 1 && peer.Writes == 0,
+                "Automatic stock-aircraft discovery preserves ordinary Fence without extension settings/writes");
             peer.AddTermination(false, 1.9f, 0);
             peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
             var parameters = Field<IList>(peer.Controller, "Parameters");
-            Check(parameters.Count == 9 && peer.ModeRequests == 1 && peer.Writes == 0,
+            Check(parameters.Count == 9 && peer.ModeRequests == 2 && peer.Writes == 0,
                 "Advertised disabled extension exposes supported settings without enabling it");
             object action = parameters.Cast<object>().Single(p => Field<string>(p, "Name") == "AFS_TERM_ACTION");
             Check(Field<IList>(action, "Options").Count == 1 && (bool)Call(action, "Allows", 44f) &&
@@ -186,7 +186,7 @@ internal static class NativeFenceParametersTests
             Render(parameters, peer.Config, directory);
             peer.Controller.Dispose();
             peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
-            peer.Finish((Task)Call(peer.Controller, "ReadAsync"));
+            peer.Finish((Task)Call(peer.Controller, "ReadAsync", shared));
             peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
             peer.Heartbeat(false); peer.Pump(30);
             peer.IgnoreValue = true;
@@ -201,19 +201,23 @@ internal static class NativeFenceParametersTests
             peer.AddTermination(true);
             peer.Announce = false;
             peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
-            peer.Finish((Task)Call(peer.Controller, "ReadAsync"));
+            peer.Finish((Task)Call(peer.Controller, "ReadAsync", shared));
             peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
             Check(Field<IList>(peer.Controller, "Parameters").Count == 3 && peer.Writes == 0,
                 "Custom parameter alone without native mode advertisement never exposes configuration");
-            peer.Announce = true;
+        }
+        using (var peer = new Peer(true))
+        using (var shared = (IDisposable)Create("TerminationController", peer.Config))
+        {
+            peer.AddTermination(true);
             peer.Selectable = false;
+            peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
+            peer.Finish((Task)Call(peer.Controller, "ReadAsync", shared));
             peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
-            Check(Field<IList>(peer.Controller, "Parameters").Count == 3 && peer.Writes == 0,
-                "Nonselectable native advertisement never exposes controlled configuration");
-            peer.Selectable = true;
-            peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
-            Check(Field<IList>(peer.Controller, "Parameters").Count == 9,
-                "Advertised QuadPlane extension exposes configuration: " + peer.Controller.GetType().GetProperty("TerminationStatus", Hidden).GetValue(peer.Controller));
+            Check(Field<IList>(peer.Controller, "Parameters").Count == 9 && peer.Writes == 0 &&
+                !(bool)shared.GetType().GetProperty("CanRequest", Hidden).GetValue(shared),
+                "Disabled nonselectable QuadPlane extension exposes commissioning, not activation: " +
+                peer.Controller.GetType().GetProperty("TerminationStatus", Hidden).GetValue(peer.Controller));
             var rate = Field<IList>(peer.Controller, "Parameters").Cast<object>().Single(p => Field<string>(p, "Name") == "AFS_TERM_RATE");
             Check(Field<double>(rate, "Maximum") == 3 && peer.ReadNames.Contains("Q_WP_SPD_DN") && !peer.ReadNames.Contains("WP_SPD_DN"),
                 "QuadPlane reads its own native descent capability in metres per second");
@@ -228,7 +232,7 @@ internal static class NativeFenceParametersTests
         {
             peer.AddTermination(false);
             peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
-            peer.Finish((Task)Call(peer.Controller, "ReadAsync"));
+            peer.Finish((Task)Call(peer.Controller, "ReadAsync", shared));
             peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
             peer.Heartbeat(false); peer.Pump(30);
             peer.LowerLimitAfterWrite = true;
@@ -401,6 +405,7 @@ internal static class NativeFenceParametersTests
         private readonly object _send = new object();
         private volatile bool _stop;
         private bool _armedState;
+        private long _lastHeartbeat;
         private Exception _failure;
         internal IDisposable Controller;
         internal int Writes, Packets, ModeRequests, OtherCommands;
@@ -424,12 +429,18 @@ internal static class NativeFenceParametersTests
             Output.GetMethod("Initialize", Static).Invoke(null, new object[] { Config });
         }
 
-        internal void Finish(Task task)
+        internal void Finish(Task task, [System.Runtime.CompilerServices.CallerLineNumber] int line = 0)
         {
             var clock = Stopwatch.StartNew();
             while (!task.IsCompleted && clock.ElapsedMilliseconds < 12000) { Pump(10); }
             Check(task.IsCompleted, "Native Fence helper exceeded fixture deadline");
-            task.GetAwaiter().GetResult();
+            try { task.GetAwaiter().GetResult(); }
+            catch (Exception error)
+            {
+                throw new Exception($"Fence fixture line={line}, nativeBusy={Connection.giveComport}, " +
+                    $"payloadBusy={Output.GetField("_payloadBusy", Static).GetValue(null)}, " +
+                    $"generation={Output.GetProperty("Generation", Static).GetValue(null)}", error);
+            }
         }
         internal string Apply(Dictionary<string, float> changes)
         {
@@ -450,6 +461,8 @@ internal static class NativeFenceParametersTests
             var clock = Stopwatch.StartNew();
             while (clock.ElapsedMilliseconds < milliseconds)
             {
+                if ((Stopwatch.GetTimestamp() - Interlocked.Read(ref _lastHeartbeat)) / (double)Stopwatch.Frequency > 1)
+                { Heartbeat(_armedState); }
                 if (!Connection.giveComport && _serial.BytesToRead > 0) { Connection.readPacket(); }
                 else { Thread.Sleep(1); }
                 if (_failure != null) { throw new Exception("Synthetic peer failed", _failure); }
@@ -498,8 +511,10 @@ internal static class NativeFenceParametersTests
                         {
                             ModeRequests++;
                             if (Announce) { Send(MAVLink.MAVLINK_MSG_ID.AVAILABLE_MODES, new MAVLink.mavlink_available_modes_t
-                            { custom_mode = 29, mode_index = 1, number_modes = 1, properties = Selectable ? 0U : 1U,
-                                mode_name = Encoding.ASCII.GetBytes("TERMINATE".PadRight(35, '\0')) }); }
+                            { custom_mode = Values.ContainsKey("AFS_TERM_RATE") ? 29U : 0U, mode_index = 1, number_modes = 1,
+                                properties = Selectable ? 0U : (uint)MAVLink.MAV_MODE_PROPERTY.NOT_USER_SELECTABLE,
+                                mode_name = Encoding.ASCII.GetBytes((Values.ContainsKey("AFS_TERM_RATE") ?
+                                    "TERMINATE" : "STABILIZE").PadRight(35, '\0')) }); }
                         }
                         else { OtherCommands++; }
                         Send(MAVLink.MAVLINK_MSG_ID.COMMAND_ACK, new MAVLink.mavlink_command_ack_t
@@ -515,6 +530,7 @@ internal static class NativeFenceParametersTests
         }
         internal void Heartbeat(bool armed)
         {
+            Interlocked.Exchange(ref _lastHeartbeat, Stopwatch.GetTimestamp());
             _armedState = armed;
             Send(MAVLink.MAVLINK_MSG_ID.HEARTBEAT, new MAVLink.mavlink_heartbeat_t
             { autopilot = (byte)MAVLink.MAV_AUTOPILOT.ARDUPILOTMEGA, type = (byte)AircraftType,

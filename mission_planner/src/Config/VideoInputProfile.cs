@@ -2,6 +2,7 @@
 // Copyright 2026 The NOMAD Authors
 using System;
 using System.Linq;
+using System.IO;
 using Newtonsoft.Json;
 
 namespace NOMAD.MissionPlanner
@@ -14,6 +15,18 @@ namespace NOMAD.MissionPlanner
         public int LatencyMs { get; set; } = 100;
         public int QueueMaxBuffers { get; set; } = 1;
         public bool DropOldFrames { get; set; } = true;
+        public string DetectorModelProfilePath { get; set; } = "";
+        public bool TrackingCalibrated { get; set; }
+        public int HorizontalFovDeg { get; set; } = 90;
+        public int PitchMinDeg { get; set; } = -90;
+        public int PitchMaxDeg { get; set; } = 90;
+        public int YawMinDeg { get; set; } = -90;
+        public int YawMaxDeg { get; set; } = 90;
+        public int PitchSign { get; set; } = 1;
+        public int YawSign { get; set; } = 1;
+        public int TrackingMaxRateDegSec { get; set; } = 10;
+
+        internal VideoInputProfile Copy() => (VideoInputProfile)MemberwiseClone();
 
         internal void Validate()
         {
@@ -24,6 +37,16 @@ namespace NOMAD.MissionPlanner
             { throw new JsonSerializationException("Video RTSP transport must be TCP or UDP."); }
             if (LatencyMs < 0 || LatencyMs > 5000 || QueueMaxBuffers < 1 || QueueMaxBuffers > 120)
             { throw new JsonSerializationException("Video latency must be 0..5000 ms and queue size 1..120 frames."); }
+            if (DetectorModelProfilePath == null || DetectorModelProfilePath.Length > 1024 ||
+                DetectorModelProfilePath.Any(char.IsControl) || HorizontalFovDeg < 5 || HorizontalFovDeg > 170 ||
+                (DetectorModelProfilePath != "" && (!Path.IsPathRooted(DetectorModelProfilePath) ||
+                    Path.GetPathRoot(DetectorModelProfilePath).Length < 3)) ||
+                PitchMinDeg < -90 || PitchMaxDeg > 90 || PitchMinDeg >= PitchMaxDeg ||
+                YawMinDeg < GimbalCommand.YAW_MIN_DEG || YawMaxDeg > GimbalCommand.YAW_MAX_DEG ||
+                YawMinDeg >= YawMaxDeg ||
+                (PitchSign != -1 && PitchSign != 1) || (YawSign != -1 && YawSign != 1) ||
+                TrackingMaxRateDegSec < 1 || TrackingMaxRateDegSec > 60)
+            { throw new JsonSerializationException("Review vision FOV, pitch/yaw limits, signs and rate (1..60 deg/s)."); }
             try
             {
                 if (Url?.StartsWith("udp://", StringComparison.OrdinalIgnoreCase) == true)

@@ -197,7 +197,7 @@ internal static class PayloadTests
     private static void StopAndFaults()
     {
         var fixture = Reset(Definition("pump", "RelayPulse", 1));
-        OutputController.SendGimbalAsync(2, 0, 0, OutputController.Generation, null).GetAwaiter().GetResult();
+        OutputController.SendGimbalTargetAsync(2, 0, 0, 0, OutputController.Generation, null).GetAwaiter().GetResult();
         fixture.Connection.Commands.Clear();
         var held = new TaskCompletionSource<bool>();
         fixture.Connection.Send = command => command.Kind == MAVLink.MAV_CMD.DO_REPEAT_RELAY ? held.Task : Task.FromResult(true);
@@ -205,7 +205,7 @@ internal static class PayloadTests
         var safe = fixture.Owner.ActAsync("pump", "safe");
         Check(!safe.IsCompleted && fixture.Connection.Commands.Count == 2 && PayloadController.HasPendingWork,
             "Safe raced unfinished native activation/retries or settings could retire it");
-        var gimbal = OutputController.SendGimbalAsync(2, 0, 0, OutputController.Generation, null).GetAwaiter().GetResult();
+        var gimbal = OutputController.SendGimbalTargetAsync(2, 0, 0, 0, OutputController.Generation, null).GetAwaiter().GetResult();
         Check(!gimbal.Submitted && fixture.Connection.Commands.Count == 2, "Gimbal interfered with native payload ACK helper");
         held.SetResult(true); Wait(pending); Wait(safe);
         Check(fixture.Connection.Commands.Count == 3 && fixture.Connection.Commands[2].Kind == MAVLink.MAV_CMD.DO_SET_RELAY &&

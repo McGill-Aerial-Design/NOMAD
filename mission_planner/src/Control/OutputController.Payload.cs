@@ -7,6 +7,10 @@ namespace NOMAD.MissionPlanner
 {
     internal static partial class OutputController
     {
+        internal sealed class NativeRequestBusyException : InvalidOperationException
+        {
+            internal NativeRequestBusyException() : base("Mission Planner is busy with a native request.") { }
+        }
         internal sealed class NativeTarget
         {
             internal MAVLinkInterface Connection;
@@ -28,6 +32,11 @@ namespace NOMAD.MissionPlanner
                 }
             }
 
+            internal bool NativeRequestBusy
+            {
+                get { lock (Gate) { return _payloadBusy || Connection.giveComport; } }
+            }
+
             internal async Task<bool> SendAsync(MAVLink.MAV_CMD command, float p1, float p2,
                 float p3 = 0, float p4 = 0, Func<bool> current = null)
             {
@@ -38,7 +47,7 @@ namespace NOMAD.MissionPlanner
                     {
                         throw new InvalidOperationException("Aircraft or input changed; no new command was sent.");
                     }
-                    if (_payloadBusy || Connection.giveComport) { throw new InvalidOperationException("Mission Planner is busy with a native request."); }
+                    if (_payloadBusy || Connection.giveComport) { throw new NativeRequestBusyException(); }
                     _payloadBusy = true;
                     try
                     {
@@ -55,8 +64,8 @@ namespace NOMAD.MissionPlanner
                 Task<float> task;
                 lock (Gate)
                 {
-                    if (!IsCurrent || _payloadBusy || Connection.giveComport)
-                    { throw new InvalidOperationException("Aircraft changed or Mission Planner payload request is busy."); }
+                    if (!IsCurrent) { throw new InvalidOperationException("Aircraft changed; no parameter request was sent."); }
+                    if (_payloadBusy || Connection.giveComport) { throw new NativeRequestBusyException(); }
                     _payloadBusy = true;
                     try { task = Connection.GetParamAsync(System, Component, name); }
                     catch { _payloadBusy = false; throw; }

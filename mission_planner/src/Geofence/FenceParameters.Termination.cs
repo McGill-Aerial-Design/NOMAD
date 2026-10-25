@@ -25,7 +25,7 @@ namespace NOMAD.MissionPlanner
             {
                 EnsureCurrentRead();
                 if (!await termination.CheckConfigurationAsync().ConfigureAwait(false))
-                { TerminationStatus = "Unavailable: no selectable native TERMINATE advertisement."; return; }
+                { TerminationStatus = "Unavailable: native TERMINATE capability could not be verified."; return; }
                 float limit = await _target.ReadParameterAsync(_descentLimit).ConfigureAwait(false);
                 EnsureCurrentRead();
                 if (!Finite(limit) || limit < 2)

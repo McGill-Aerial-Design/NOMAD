@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using MissionPlanner;
 namespace NOMAD.MissionPlanner
 {
-    internal enum GimbalRequestOutcome { NotSent, Submitted, Unknown }
+    internal enum GimbalRequestOutcome { NotSent, Submitted, Unknown, Busy }
     internal sealed class GimbalRequestResult
     {
         internal GimbalRequestOutcome Outcome
@@ -133,8 +133,8 @@ namespace NOMAD.MissionPlanner
                 _generation++;
             }
         }
-        internal static async Task<GimbalRequestResult> SendGimbalAsync(int mode, double? pitch, double? roll,
-            long generation, Func<bool> inputStillCurrent)
+        internal static async Task<GimbalRequestResult> SendGimbalTargetAsync(int mode, double? pitch, double? roll,
+            double yaw, long generation, Func<bool> inputStillCurrent)
         {
             RefreshConnection();
             MAVLinkInterface connection;
@@ -142,23 +142,29 @@ namespace NOMAD.MissionPlanner
             Task<bool> configure;
             lock (Gate)
             {
-                if (generation != _generation || _config == null || _payloadBusy || inputStillCurrent?.Invoke() == false)
+                if (generation != _generation || _config == null || inputStillCurrent?.Invoke() == false)
                 {
                     return Result(GimbalRequestOutcome.NotSent, "Gimbal input was retired; no command was sent.");
                 }
                 connection = _connection;
-                if (connection == null || !_open || connection.ReadOnly || connection.logreadmode || connection.giveComport ||
+                if (connection == null || !_open || connection.ReadOnly || connection.logreadmode ||
                     _system < 1 || _system > 255 || _component < 1 || _component > 255)
                 {
                     return Result(GimbalRequestOutcome.NotSent, "Select a live, writable Mission Planner aircraft.");
                 }
-                if (mode < 0 || mode > 3 || pitch.HasValue != roll.HasValue ||
+                if (mode < 0 || mode > 3 || pitch.HasValue != roll.HasValue || !Finite(yaw) ||
+                    yaw < GimbalCommand.YAW_MIN_DEG || yaw > GimbalCommand.YAW_MAX_DEG ||
+                    (!pitch.HasValue && yaw != 0) ||
+                    (pitch.HasValue && mode != (int)MountMode.MavlinkTargeting) ||
                     (pitch.HasValue && (!Finite(pitch.Value) || !Finite(roll.Value) ||
                     pitch < GimbalCommand.PITCH_MIN_DEG || pitch > GimbalCommand.PITCH_MAX_DEG ||
                     roll < GimbalCommand.ROLL_MIN_DEG || roll > GimbalCommand.ROLL_MAX_DEG)))
                 {
                     return Result(GimbalRequestOutcome.NotSent, "Invalid gimbal mode or target; no command was sent.");
                 }
+                // Busy is returned only before invoking any native command helper.
+                if (_payloadBusy || connection.giveComport)
+                { return Result(GimbalRequestOutcome.Busy, "Mission Planner is busy; no gimbal command was sent."); }
                 system = (byte)_system;
                 component = (byte)_component;
                 try
@@ -200,7 +206,7 @@ namespace NOMAD.MissionPlanner
                         {
                             return Result(GimbalRequestOutcome.Unknown, "Mount mode may have been sent; target input was retired.");
                         }
-                        connection.setMountControl(system, component, pitch.Value * 100, roll.Value * 100, 0, false);
+                        connection.setMountControl(system, component, pitch.Value * 100, roll.Value * 100, yaw * 100, false);
                     }
                 }
                 return Result(GimbalRequestOutcome.Submitted,

@@ -60,6 +60,15 @@
       <HintPath>$(MissionPlannerDir)\System.Memory.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="netstandard" />
+    <Reference Include="Microsoft.ML.OnnxRuntime">
+      <HintPath>..\..\build\vision\runtime\Microsoft.ML.OnnxRuntime.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="OpenCvSharp">
+      <HintPath>..\..\build\vision\runtime\OpenCvSharp.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
@@ -126,5 +135,24 @@
     <Compile Include="Plugin\ReleaseIdentity.cs" Condition="!Exists('..\..\build\release\ReleaseIdentity.cs')" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\build\vision\runtime\Microsoft.ML.OnnxRuntime.dll;
+      ..\..\build\vision\runtime\onnxruntime.dll;
+      ..\..\build\vision\runtime\onnxruntime_providers_shared.dll;
+      ..\..\build\vision\runtime\yolox_nano.onnx;
+      ..\..\build\vision\runtime\ONNX-RUNTIME-LICENSE.txt;
+      ..\..\build\vision\runtime\ONNX-RUNTIME-NOTICES.txt;
+      ..\..\build\vision\runtime\YOLOX-LICENSE.txt;
+      ..\..\build\vision\runtime\OpenCvSharp.dll;
+      ..\..\build\vision\runtime\OpenCvSharpExtern.dll;
+      ..\..\build\vision\runtime\OpenCvSharp-NOTICES.txt;
+      ..\..\build\vision\runtime\OPENCV-IPP-EULA.rtf">
+      <LogicalName>NOMAD.Vision.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+  <Target Name="CheckVisionInputs" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('..\..\build\vision\runtime\yolox_nano.onnx')"
+      Text="Run scripts/build/prepare_vision.ps1 to prepare the pinned vision inputs." />
+  </Target>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

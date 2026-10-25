@@ -10,6 +10,7 @@ namespace NOMAD.MissionPlanner
     // Native firmware owns entry checks, RC/fence responses, phase selection and the reboot latch.
     internal sealed class TerminationController : IDisposable
     {
+        private const int DiscoveryTimeoutMilliseconds = 30000;
         private readonly object _gate = new object();
         private readonly NOMADConfig _config;
         private OutputController.NativeTarget _target;
@@ -17,9 +18,15 @@ namespace NOMAD.MissionPlanner
         private int[] _subscriptions = Array.Empty<int>();
         private uint? _mode, _observedMode;
         private string _name, _outcome;
-        private TaskCompletionSource<bool> _discovery;
+        private TaskCompletionSource<MAVLink.mavlink_available_modes_t?> _discovery;
+        private TaskCompletionSource<bool> _checking;
+        private Task _bindingDiscovery = Task.CompletedTask;
+        private int _requestedIndex, _modeCount;
         private long _heartbeat;
+        private long _bindingRevision;
+        private uint? _bootMilliseconds;
         private bool _armed, _supported, _configurationSupported, _selectable, _busy, _disposed, _ambiguous;
+        private bool _seenTermination;
 
         internal TerminationController(NOMADConfig config)
         {
@@ -50,6 +57,8 @@ namespace NOMAD.MissionPlanner
                     packet => Observe(target, mav, packet), target.System, target.Component, false),
                 target.Connection.SubscribeToPacketType(MAVLink.MAVLINK_MSG_ID.AVAILABLE_MODES,
                     packet => Observe(target, mav, packet), target.System, target.Component, false),
+                target.Connection.SubscribeToPacketType(MAVLink.MAVLINK_MSG_ID.SYSTEM_TIME,
+                    packet => Observe(target, mav, packet), target.System, target.Component, false),
             };
             bool keep;
             lock (_gate)
@@ -57,7 +66,46 @@ namespace NOMAD.MissionPlanner
                 keep = ReferenceEquals(_target, target);
                 if (keep) { _subscriptions = ids; }
             }
-            if (!keep) { Unsubscribe(target, ids); }
+            if (!keep) { Unsubscribe(target, ids); return; }
+            ScheduleDiscovery(target);
+        }
+
+        private void ScheduleDiscovery(OutputController.NativeTarget target)
+        {
+            lock (_gate)
+            {
+                if (_disposed || target == null || !ReferenceEquals(_target, target)) { return; }
+                Task previous = _checking?.Task ?? _bindingDiscovery;
+                // Retired native helpers may still finish; do not overlap their scan with the new binding.
+                _bindingDiscovery = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await previous.ConfigureAwait(false);
+                        if (!target.IsCurrent) { return; }
+                        lock (_gate) { if (!ReferenceEquals(_target, target) || _disposed) { return; } }
+                        if (!await WaitForReadyAsync(target).ConfigureAwait(false)) { return; }
+                        await CheckNativeAsync(true, target).ConfigureAwait(false);
+                    }
+                    catch (Exception) { SetOutcome(target, "Support could not be verified. Check to retry."); }
+                });
+            }
+        }
+
+        private async Task<bool> WaitForReadyAsync(OutputController.NativeTarget target)
+        {
+            while (target.IsCurrent)
+            {
+                bool fresh;
+                lock (_gate)
+                {
+                    if (_disposed || !ReferenceEquals(_target, target)) { return false; }
+                    fresh = Fresh;
+                }
+                if (fresh && !target.NativeRequestBusy) { return true; }
+                await Task.Delay(100).ConfigureAwait(false);
+            }
+            return false;
         }
 
         private bool Observe(OutputController.NativeTarget target, MAVState mav, MAVLink.MAVLinkMessage packet)
@@ -65,27 +113,54 @@ namespace NOMAD.MissionPlanner
             // Never take OutputController's gate while holding our gate: native dispatch guards take the reverse order.
             if (!target.IsCurrent || !ReferenceEquals(target.Connection.MAV, mav) ||
                 packet.sysid != target.System || packet.compid != target.Component) { return true; }
+            if (packet.msgid == (uint)MAVLink.MAVLINK_MSG_ID.SYSTEM_TIME)
+            {
+                ObserveBoot(target, packet);
+                return true;
+            }
             lock (_gate)
             {
                 if (_disposed || !ReferenceEquals(_target, target)) { return true; }
                 if (packet.msgid == (uint)MAVLink.MAVLINK_MSG_ID.AVAILABLE_MODES)
                 {
+                    double age = (DateTime.UtcNow - packet.rxtime).TotalSeconds;
+                    if (packet.rxtime.Kind != DateTimeKind.Utc || age < 0 || age > 3.5) { return true; }
                     var mode = packet.ToStructure<MAVLink.mavlink_available_modes_t>();
-                    float encodedMode = mode.custom_mode;
-                    string name = Encoding.UTF8.GetString(mode.mode_name).TrimEnd('\0');
-                    if (!string.Equals(name, "TERMINATE", StringComparison.OrdinalIgnoreCase)) { return true; }
-                    _selectable = (mode.properties & 1U) == 0 && mode.custom_mode <= byte.MaxValue &&
-                        (double)encodedMode == mode.custom_mode;
-                    if (!_selectable) { _supported = _configurationSupported = false; }
-                    if (mode.custom_mode > byte.MaxValue || (double)encodedMode != mode.custom_mode)
+                    bool expected = _requestedIndex == 0 || mode.mode_index == _requestedIndex;
+                    if (mode.number_modes == 0 || mode.mode_index == 0 || mode.mode_index > mode.number_modes ||
+                        (_requestedIndex != 0 && _modeCount != 0 && mode.number_modes != _modeCount))
                     {
-                        _discovery?.TrySetResult(false);
+                        _supported = _configurationSupported = false;
+                        if (expected) { _discovery?.TrySetResult(null); }
                         return true;
                     }
-                    _ambiguous |= _mode.HasValue && _mode.Value != mode.custom_mode;
-                    _mode = mode.custom_mode;
-                    _name = name;
-                    _discovery?.TrySetResult(_selectable && !_ambiguous);
+                    float encodedMode = mode.custom_mode;
+                    int terminator = Array.IndexOf(mode.mode_name, (byte)0);
+                    string name = Encoding.UTF8.GetString(mode.mode_name, 0,
+                        terminator < 0 ? mode.mode_name.Length : terminator);
+                    if (string.Equals(name, "TERMINATE", StringComparison.OrdinalIgnoreCase))
+                    {
+                        bool validMode = mode.custom_mode <= byte.MaxValue && (double)encodedMode == mode.custom_mode;
+                        if (!validMode)
+                        {
+                            _selectable = _supported = _configurationSupported = false;
+                            _discovery?.TrySetResult(null);
+                            return true;
+                        }
+                        bool selectable = (mode.properties & (uint)MAVLink.MAV_MODE_PROPERTY.NOT_USER_SELECTABLE) == 0;
+                        if (_requestedIndex != 0) { _selectable &= selectable; }
+                        else { _selectable = selectable; }
+                        if (!selectable) { _supported = false; }
+                        _ambiguous |= _mode.HasValue && _mode.Value != mode.custom_mode;
+                        // Remember out-of-order IDs for conflicts without establishing selectability.
+                        if (expected || !_mode.HasValue) { _mode = mode.custom_mode; _name = name; }
+                        if (expected && _requestedIndex != 0) { _seenTermination = true; }
+                    }
+                    if (_requestedIndex != 0 && expected)
+                    {
+                        _modeCount = mode.number_modes;
+                        _discovery?.TrySetResult(mode);
+                    }
                 }
                 else
                 {
@@ -102,6 +177,27 @@ namespace NOMAD.MissionPlanner
                 }
             }
             return true;
+        }
+
+        private void ObserveBoot(OutputController.NativeTarget target, MAVLink.MAVLinkMessage packet)
+        {
+            double age = (DateTime.UtcNow - packet.rxtime).TotalSeconds;
+            if (packet.rxtime.Kind != DateTimeKind.Utc || age < 0 || age > 3.5) { return; }
+            uint boot = packet.ToStructure<MAVLink.mavlink_system_time_t>().time_boot_ms;
+            bool reboot;
+            lock (_gate)
+            {
+                if (_disposed || !ReferenceEquals(_target, target)) { return; }
+                reboot = _bootMilliseconds.HasValue && boot < _bootMilliseconds.Value &&
+                    !(_bootMilliseconds.Value > uint.MaxValue - 60000 && boot < 60000);
+                _bootMilliseconds = boot;
+                if (!reboot) { return; }
+                _supported = _configurationSupported = false;
+                _heartbeat = 0;
+                _bindingRevision++;
+            }
+            Invalidate();
+            UpdateBinding();
         }
 
         private bool Fresh => _heartbeat != 0 &&
@@ -123,7 +219,7 @@ namespace NOMAD.MissionPlanner
                     { return "TERMINATE observed. Reboot required."; }
                     if (_supported && !_armed) { return "TERMINATE supported; aircraft is not armed."; }
                     return _outcome ?? (_supported ? "TERMINATE supported."
-                        : "Check TERMINATE support.");
+                        : "TERMINATE support unverified; Check to retry.");
                 }
             }
         }
@@ -135,17 +231,48 @@ namespace NOMAD.MissionPlanner
 
         private bool CanSend(OutputController.NativeTarget target, uint? mode) =>
             !_disposed && ReferenceEquals(_target, target) && target != null && _supported && _selectable && !_ambiguous &&
-            mode.HasValue && _mode == mode && Fresh && _armed && _observedMode != mode;
+            mode.HasValue && _mode == mode && Fresh && _armed && _observedMode != mode && ConfigurationCurrent();
 
-        internal Task<bool> CheckAsync() => CheckNativeAsync(true);
-        internal Task<bool> CheckConfigurationAsync() => CheckNativeAsync(false);
+        private bool ConfigurationCurrent()
+        {
+            try
+            {
+                var parameters = _mav?.param;
+                if (parameters == null || !parameters.ContainsKey("AFS_ENABLE") ||
+                    !parameters.ContainsKey("AFS_TERM_ACTION") || !parameters.ContainsKey("AFS_TERM_RATE"))
+                { return false; }
+                float rate = (float)parameters["AFS_TERM_RATE"];
+                return (float)parameters["AFS_ENABLE"] == 1 && (float)parameters["AFS_TERM_ACTION"] == 44 &&
+                    !float.IsNaN(rate) && !float.IsInfinity(rate) && rate >= 2;
+            }
+            catch (Exception) { return false; }
+        }
+
+        internal Task<bool> CheckAsync() => CheckSupportAsync(true);
+        internal Task<bool> CheckConfigurationAsync() => CheckSupportAsync(false);
+
+        private async Task<bool> CheckSupportAsync(bool requireConfigured)
+        {
+            UpdateBinding();
+            Task automatic;
+            OutputController.NativeTarget target;
+            lock (_gate) { automatic = _bindingDiscovery; target = _target; }
+            if (automatic.IsCompleted) { return await CheckNativeAsync(requireConfigured, target).ConfigureAwait(false); }
+            await automatic.ConfigureAwait(false);
+            bool current = target?.IsCurrent == true;
+            lock (_gate)
+            {
+                return current && ReferenceEquals(_target, target) &&
+                    (requireConfigured ? _supported : _configurationSupported);
+            }
+        }
 
         internal bool CanConfigure(long generation)
         {
             lock (_gate)
             {
                 return !_disposed && !_busy && _target?.Generation == generation && _configurationSupported &&
-                    _selectable && !_ambiguous && Fresh && !_armed && !ObservedNow;
+                    !_ambiguous && Fresh && !_armed && !ObservedNow;
             }
         }
 
@@ -154,50 +281,161 @@ namespace NOMAD.MissionPlanner
             lock (_gate)
             {
                 _supported = false;
-                _outcome = "Termination settings changed; check support again before requesting TERMINATE.";
+                _bindingRevision++;
+                _outcome = "Termination settings are changing; activation unavailable.";
             }
         }
 
-        private async Task<bool> CheckNativeAsync(bool requireConfigured)
+        internal void RefreshConfiguredSupport() => ScheduleDiscovery(_target);
+
+        internal async Task WaitForDiscoveryAsync()
         {
             UpdateBinding();
+            Task automatic, checking;
             OutputController.NativeTarget target;
-            TaskCompletionSource<bool> discovery;
             lock (_gate)
             {
-                if (_disposed || _target == null || _busy) { return false; }
+                automatic = _bindingDiscovery;
+                checking = _checking?.Task ?? Task.CompletedTask;
                 target = _target;
-                _busy = true;
-                _supported = false;
-                _configurationSupported = false;
-                _selectable = false;
-                discovery = _discovery = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                _outcome = "Checking support...";
+            }
+            await automatic.ConfigureAwait(false);
+            await checking.ConfigureAwait(false);
+            // A retired controller's already-dispatched helper may still own the shared native request.
+            if (target != null) { await WaitForReadyAsync(target).ConfigureAwait(false); }
+        }
+
+        private async Task<bool> CheckNativeAsync(bool requireConfigured, OutputController.NativeTarget target)
+        {
+            TaskCompletionSource<bool> checking;
+            bool joining;
+            lock (_gate)
+            {
+                if (_disposed || target == null || !ReferenceEquals(_target, target) ||
+                    (_busy && _checking == null)) { return false; }
+                joining = _checking != null;
+                checking = _checking ?? new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (!joining)
+                {
+                    _checking = checking;
+                    _busy = true;
+                    _supported = false;
+                    _configurationSupported = false;
+                    _selectable = true;
+                    _seenTermination = false;
+                    _requestedIndex = _modeCount = 0;
+                    _discovery = null;
+                    _outcome = "Checking support...";
+                }
+            }
+            if (joining)
+            {
+                await checking.Task.ConfigureAwait(false);
+                bool current = target.IsCurrent;
+                lock (_gate)
+                {
+                    return current && ReferenceEquals(_target, target) &&
+                        (requireConfigured ? _supported : _configurationSupported);
+                }
             }
             try
             {
-                // Index zero requests all modes. Their records may arrive before or after the request ACK.
-                if (!await target.SendAsync(MAVLink.MAV_CMD.REQUEST_MESSAGE, 435, 0).ConfigureAwait(false))
-                { return SetOutcome(target, "Mode discovery was not accepted."); }
-                float enabled = await target.ReadParameterAsync("AFS_ENABLE").ConfigureAwait(false);
-                float action = await target.ReadParameterAsync("AFS_TERM_ACTION").ConfigureAwait(false);
-                float rate = await target.ReadParameterAsync("AFS_TERM_RATE").ConfigureAwait(false);
-                var completed = await Task.WhenAny(discovery.Task, Task.Delay(2500)).ConfigureAwait(false);
-                bool advertised = completed == discovery.Task && await discovery.Task.ConfigureAwait(false);
+                var clock = Stopwatch.StartNew();
+                bool advertised = await DiscoverModesAsync(target, clock).ConfigureAwait(false);
+                if (!advertised) { return SetOutcome(target, "Native capability discovery was incomplete or invalid."); }
+                if (!target.IsCurrent) { return false; }
+                float enabled = await ReadWhenAvailableAsync(target, () => target.ReadParameterAsync("AFS_ENABLE"), clock)
+                    .ConfigureAwait(false);
+                float action = await ReadWhenAvailableAsync(target, () => target.ReadParameterAsync("AFS_TERM_ACTION"), clock)
+                    .ConfigureAwait(false);
+                float rate = await ReadWhenAvailableAsync(target, () => target.ReadParameterAsync("AFS_TERM_RATE"), clock)
+                    .ConfigureAwait(false);
                 bool current = target.IsCurrent;
                 lock (_gate)
                 {
                     if (!current || !ReferenceEquals(_target, target)) { return false; }
                     _supported = advertised && _selectable && !_ambiguous && enabled == 1 && action == 44 &&
                         !float.IsNaN(rate) && !float.IsInfinity(rate) && rate >= 2;
-                    _configurationSupported = advertised && _selectable && !_ambiguous &&
+                    _configurationSupported = advertised && !_ambiguous &&
                         target.Connection.MAVlist[target.System, target.Component].param.ContainsKey("AFS_TERM_RATE");
                     _outcome = _supported ? null : "Termination is not configured or selectable.";
                     return requireConfigured ? _supported : _configurationSupported;
                 }
             }
             catch (Exception) { return SetOutcome(target, "Support could not be verified. No termination sent."); }
-            finally { lock (_gate) { if (ReferenceEquals(_target, target)) { _busy = false; } } }
+            finally
+            {
+                lock (_gate)
+                {
+                    if (ReferenceEquals(_target, target)) { _busy = false; _checking = null; }
+                    checking.TrySetResult(true);
+                }
+            }
+        }
+
+        private async Task<T> ReadWhenAvailableAsync<T>(OutputController.NativeTarget target, Func<Task<T>> read,
+            Stopwatch clock)
+        {
+            while (clock.ElapsedMilliseconds < DiscoveryTimeoutMilliseconds && target.IsCurrent)
+            {
+                lock (_gate)
+                {
+                    if (_disposed || !ReferenceEquals(_target, target))
+                    { throw new InvalidOperationException("Discovery aircraft changed."); }
+                }
+                if (!target.NativeRequestBusy)
+                {
+                    try { return await read().ConfigureAwait(false); }
+                    catch (OutputController.NativeRequestBusyException) { }
+                }
+                await Task.Delay(100).ConfigureAwait(false);
+            }
+            throw new InvalidOperationException("Native discovery connection did not become available.");
+        }
+
+        private async Task<bool> DiscoverModesAsync(OutputController.NativeTarget target, Stopwatch clock)
+        {
+            int count = 1;
+            try
+            {
+                // Request each index: pinned ArduPilot emits only the first record for index zero.
+                // Scan the complete list so a later conflicting TERMINATE cannot be accepted.
+                for (int index = 1; index <= count; index++)
+                {
+                    var reply = new TaskCompletionSource<MAVLink.mavlink_available_modes_t?>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                    lock (_gate)
+                    {
+                        if (!ReferenceEquals(_target, target) || _disposed) { return false; }
+                        _requestedIndex = index;
+                        _discovery = reply;
+                    }
+                    int remaining = DiscoveryTimeoutMilliseconds - (int)clock.ElapsedMilliseconds;
+                    if (remaining <= 0) { return false; }
+                    var request = ReadWhenAvailableAsync(target,
+                        () => target.SendAsync(MAVLink.MAV_CMD.REQUEST_MESSAGE, 435, index,
+                            current: () => { lock (_gate) { return ReferenceEquals(_target, target); } }), clock);
+                    if (await Task.WhenAny(request, Task.Delay(remaining)).ConfigureAwait(false) != request ||
+                        !await request.ConfigureAwait(false)) { return false; }
+                    remaining = Math.Min(2500, DiscoveryTimeoutMilliseconds - (int)clock.ElapsedMilliseconds);
+                    if (remaining <= 0 ||
+                        await Task.WhenAny(reply.Task, Task.Delay(remaining)).ConfigureAwait(false) != reply.Task)
+                    { return false; }
+                    var record = await reply.Task.ConfigureAwait(false);
+                    if (!record.HasValue || !target.IsCurrent) { return false; }
+                    count = record.Value.number_modes;
+                }
+                lock (_gate)
+                { return ReferenceEquals(_target, target) && _seenTermination && _mode.HasValue && !_ambiguous; }
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    if (ReferenceEquals(_target, target))
+                    { _requestedIndex = _modeCount = 0; _discovery = null; }
+                }
+            }
         }
 
         // Captured before the confirmation dialog; no future aircraft/profile may inherit that confirmation.
@@ -205,7 +443,7 @@ namespace NOMAD.MissionPlanner
         {
             lock (_gate)
             {
-                generation = _target?.Generation ?? -1;
+                generation = _target == null ? -1 : _bindingRevision;
                 mode = _mode ?? 0;
                 return !_busy && CanSend(_target, _mode);
             }
@@ -225,7 +463,7 @@ namespace NOMAD.MissionPlanner
             if (target.Connection.giveComport) { return "Mission Planner is busy; no termination sent."; }
             lock (_gate)
             {
-                if (_busy || !ReferenceEquals(_target, target) || target.Generation != generation || !CanSend(target, mode))
+                if (_busy || !ReferenceEquals(_target, target) || _bindingRevision != generation || !CanSend(target, mode))
                 { return "Aircraft, support or input changed; no termination sent."; }
                 _busy = true;
                 _outcome = "Termination request pending.";
@@ -236,9 +474,16 @@ namespace NOMAD.MissionPlanner
                     (float)MAVLink.MAV_MODE_FLAG.CUSTOM_MODE_ENABLED, mode,
                     current: () => { lock (_gate) { return CanSend(target, mode); } }).ConfigureAwait(false);
                 bool current = target.IsCurrent;
+                lock (_gate) { current &= ReferenceEquals(_target, target) && _bindingRevision == generation; }
                 string outcome = !current ? "Aircraft changed; original request outcome is uncertain. Do not replay." :
                     accepted ? "Command accepted; waiting for TERMINATE." :
                     "Termination request was not accepted.";
+                SetOutcome(target, outcome);
+                return outcome;
+            }
+            catch (OutputController.NativeRequestBusyException)
+            {
+                const string outcome = "Mission Planner is busy; no termination sent.";
                 SetOutcome(target, outcome);
                 return outcome;
             }
@@ -266,14 +511,20 @@ namespace NOMAD.MissionPlanner
                 target = _target;
                 subscriptions = _subscriptions;
                 _target = null;
+                _bindingRevision++;
+                _bootMilliseconds = null;
                 _mav = null;
                 _subscriptions = Array.Empty<int>();
                 _mode = _observedMode = null;
                 _name = _outcome = null;
                 _heartbeat = 0;
-                _discovery?.TrySetResult(false);
+                _discovery?.TrySetResult(null);
                 _discovery = null;
+                _bindingDiscovery = _checking?.Task ?? _bindingDiscovery;
+                _checking = null;
+                _requestedIndex = _modeCount = 0;
                 _armed = _supported = _configurationSupported = _selectable = _busy = _ambiguous = false;
+                _seenTermination = false;
             }
             Unsubscribe(target, subscriptions);
         }

@@ -1,26 +1,46 @@
 site_name: NOMAD
-site_description: Mission Planner profiles, custom controls and link routing
-repo_url: https://github.com/YoussGm3o8/NOMAD
+site_description: Aircraft profiles, video, custom controls and link routing for Mission Planner
+site_url: https://mcgill-aerial-design.github.io/NOMAD/
+repo_url: https://github.com/McGill-Aerial-Design/NOMAD
+repo_name: McGill-Aerial-Design/NOMAD
 theme:
   name: material
+  palette:
+    primary: red
+    accent: red
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
 markdown_extensions:
   - tables
   - admonition
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
 plugins:
   - search
 nav:
-  - Home: index.md
-  - Architecture: architecture.md
-  - Development: development.md
-  - Operations: operations.md
-  - Safety: safety.md
-  - Qualification: qualification.md
-  - Native termination: native-termination.md
-  - Product requirements: prd.md
-  - CONOPS traceability: conops-requirements.md
+  - Get started:
+      - Overview: index.md
+      - Installation and operation: operations.md
+  - Systems:
+      - Video and tracking: video.md
+      - Ecosystem integration: integrations.md
+      - Architecture: architecture.md
+  - Safety:
+      - Control boundaries: safety.md
+      - Native termination: native-termination.md
+      - Qualification: qualification.md
+  - Development:
+      - Build and checks: development.md
+      - Product requirements: prd.md
+      - CONOPS traceability: conops-requirements.md
 validation:
   links:
-    not_found: info
+    not_found: warn
     absolute_links: info
-    unrecognized_links: info
+    unrecognized_links: warn

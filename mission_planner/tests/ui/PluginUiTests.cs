@@ -59,6 +59,14 @@ internal static class PluginUiTests
             widget.SampleState(false, true, true, 0);
             Check(widget.PendingReview.IsCompleted, "An ineligible widget began a review.");
         }
+        int interactionSamples = 0;
+        using (var widget = new TerminationWidget(null, CancellationToken.None,
+            canInteract: () => { interactionSamples++; return false; }))
+        {
+            typeof(TerminationWidget).GetMethod("Sample", Hidden).Invoke(widget, new object[] { null, EventArgs.Empty });
+            Check(interactionSamples == 1 && widget.PendingReview.IsCompleted,
+                "Native timer bypassed the widget interaction predicate");
+        }
         Console.WriteLine("PASS native menu/navigation, actual host theme, gesture and inactive-widget checks");
     }
 
