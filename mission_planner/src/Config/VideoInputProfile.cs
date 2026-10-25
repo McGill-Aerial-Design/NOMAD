@@ -42,7 +42,8 @@ namespace NOMAD.MissionPlanner
                 (DetectorModelProfilePath != "" && (!Path.IsPathRooted(DetectorModelProfilePath) ||
                     Path.GetPathRoot(DetectorModelProfilePath).Length < 3)) ||
                 PitchMinDeg < -90 || PitchMaxDeg > 90 || PitchMinDeg >= PitchMaxDeg ||
-                YawMinDeg < -90 || YawMaxDeg > 90 || YawMinDeg >= YawMaxDeg ||
+                YawMinDeg < GimbalCommand.YAW_MIN_DEG || YawMaxDeg > GimbalCommand.YAW_MAX_DEG ||
+                YawMinDeg >= YawMaxDeg ||
                 (PitchSign != -1 && PitchSign != 1) || (YawSign != -1 && YawSign != 1) ||
                 TrackingMaxRateDegSec < 1 || TrackingMaxRateDegSec > 60)
             { throw new JsonSerializationException("Review vision FOV, pitch/yaw limits, signs and rate (1..60 deg/s)."); }

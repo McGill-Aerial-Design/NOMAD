@@ -115,6 +115,11 @@ internal static class NativeOutputTests
             Require(Complete(Track(limit, limit)).Submitted && connection.Pitch == limit * 100 &&
                 connection.Yaw == limit * 100 && connection.Roll == 0, "Tracking boundary target was rejected or remapped");
         }
+        foreach (float yaw in new[] { -180f, -170f, 170f, 180f })
+        {
+            Require(Complete(Track(yaw: yaw)).Submitted && connection.Yaw == yaw * 100,
+                "Calibrated wider-travel mount yaw was rejected or remapped");
+        }
         result = Complete(GimbalController.RequestPitchRollTargetAsync(-8, 4));
         Require(result.Submitted && connection.Pitch == -800 && connection.Roll == 400 && connection.Yaw == 0 &&
             GimbalController.TargetYawDeg == 0, "Manual roll was reinterpreted as tracking yaw");
@@ -123,7 +128,7 @@ internal static class NativeOutputTests
     }
     private static void MalformedTargets()
     {
-        foreach (double invalid in new[] { double.NaN, double.NegativeInfinity, double.PositiveInfinity, -90.01, 90.01 })
+        foreach (double invalid in new[] { double.NaN, double.NegativeInfinity, double.PositiveInfinity, -180.01, 180.01 })
         {
             var connection = Reset();
             var result = Complete(OutputController.SendGimbalTargetAsync(2, 0, 0, invalid,

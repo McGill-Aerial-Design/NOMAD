@@ -118,8 +118,10 @@ namespace NOMAD.MissionPlanner
             _cmbVisionPitchSign = AddComboBox(tab, 365, y, 140, new[] { "Normal (+1)", "Reverse (-1)" });
             y += 32;
             AddLabel(tab, "Yaw limits (deg):", 20, y);
-            _numVisionYawMin = AddNumericUpDown(tab, 180, y, 75, -90, 90, -90);
-            _numVisionYawMax = AddNumericUpDown(tab, 270, y, 75, -90, 90, 90);
+            _numVisionYawMin = AddNumericUpDown(tab, 180, y, 75,
+                (decimal)GimbalCommand.YAW_MIN_DEG, (decimal)GimbalCommand.YAW_MAX_DEG, -90);
+            _numVisionYawMax = AddNumericUpDown(tab, 270, y, 75,
+                (decimal)GimbalCommand.YAW_MIN_DEG, (decimal)GimbalCommand.YAW_MAX_DEG, 90);
             _numVisionYawMin.AccessibleName = "Minimum yaw in degrees";
             _numVisionYawMax.AccessibleName = "Maximum yaw in degrees";
             _cmbVisionYawSign = AddComboBox(tab, 365, y, 140, new[] { "Normal (+1)", "Reverse (-1)" });

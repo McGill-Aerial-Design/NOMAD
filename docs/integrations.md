@@ -29,6 +29,8 @@ requires ArduPilot 4.6 or later and compatible gimbal firmware 3.4 or later. For
 chosen serial port, set `SERIALx_PROTOCOL=8` and `SERIALx_BAUD=115` (115200 baud);
 the mount instance uses `MNTx_TYPE=13`. Follow that guide for wiring, reboot and
 gimbal configuration, then calibrate the actual camera and travel in NOMAD.
+The official GM3 setup lists yaw limits of -170/+170 degrees; NOMAD permits that
+range in the input's yaw calibration. Verify the installed hardware's limits.
 These values describe aircraft setup; NOMAD does not write them automatically.
 
 The [4.7.2 CADDX driver](https://github.com/ArduPilot/ardupilot/blob/Copter-4.7.2/libraries/AP_Mount/AP_Mount_CADDX.cpp)

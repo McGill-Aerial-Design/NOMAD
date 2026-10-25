@@ -49,7 +49,9 @@ Configure each input in **Settings → Video** before enabling tracking:
 - Confirm a rectilinear camera with fixed zoom and square pixels, and enter its
   horizontal field of view. Vertical geometry follows the image aspect ratio.
 - Enter pitch/yaw limits and image correction directions for the actual mount, then the maximum
-  requested-angle rate, from 1 to 60 degrees per second. Verify the calibration
+  requested-angle rate, from 1 to 60 degrees per second. Yaw calibration can use
+  -180 to +180 degrees; enter the mount's actual smaller travel where applicable.
+  New inputs start at -90 to +90 degrees. Verify the calibration
   before selecting its confirmation checkbox.
 - Enable **Drop old frames** with a **one-frame decode queue**. Start from a manual
   target within the calibrated limits.

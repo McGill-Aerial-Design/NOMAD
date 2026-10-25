@@ -105,6 +105,8 @@ internal static partial class VideoLifetimeTests
             GetField<NumericUpDown>(form, "_numVideoLatency").Value = 700;
             GetField<NumericUpDown>(form, "_numVisionFov").Value = 110;
             GetField<NumericUpDown>(form, "_numVisionRate").Value = 60;
+            GetField<NumericUpDown>(form, "_numVisionYawMin").Value = -170;
+            GetField<NumericUpDown>(form, "_numVisionYawMax").Value = 170;
             GetField<CheckBox>(form, "_chkTrackingCalibrated").Checked = true;
             selector.SelectedIndex = 1;
             Check(GetField<TextBox>(form, "_txtVideoUrl").Text == "rtsp://second.invalid/live",
@@ -135,7 +137,8 @@ internal static partial class VideoLifetimeTests
             var saved = form.Config.Clone();
             Check(saved.SelectedVideoInput.Name == "Renamed" && saved.SelectedVideoInput.LatencyMs == 700 &&
                 saved.SelectedVideoInput.TrackingCalibrated && saved.SelectedVideoInput.HorizontalFovDeg == 110 &&
-                saved.SelectedVideoInput.TrackingMaxRateDegSec == 60,
+                saved.SelectedVideoInput.TrackingMaxRateDegSec == 60 &&
+                saved.SelectedVideoInput.YawMinDeg == -170 && saved.SelectedVideoInput.YawMaxDeg == 170,
                 "Saved/clone video input selection or settings were lost.");
             typeof(NOMADSettingsForm).GetMethod("RemoveVideoInput", flags).Invoke(form, null);
             typeof(NOMADSettingsForm).GetMethod("RemoveVideoInput", flags).Invoke(form, null);

@@ -161,6 +161,14 @@ internal static partial class VideoLifetimeTests
         foreach (float invalid in new[] { float.NaN, float.PositiveInfinity, 181 })
         { Check(!VideoTrackingAngles.TryStep(input, imageSize, target, 0, 0, .1, out pitch, out yaw, invalid),
             "Invalid aircraft rotation admitted a tracking target"); }
+        input.YawMinDeg = -170; input.YawMaxDeg = 170;
+        Check(VideoTrackingAngles.TryStep(input, imageSize, target, 0, 169.9f, .1, out _, out yaw) && yaw == 170,
+            "Wider mount tracking exceeded its calibrated positive yaw limit");
+        Check(VideoTrackingAngles.TryStep(input, imageSize, new RectangleF(10, 60, 10, 10), 0, -169.9f,
+            .1, out _, out yaw) && yaw == -170,
+            "Wider mount tracking exceeded its calibrated negative yaw limit");
+        Check(!VideoTrackingAngles.TryStep(input, imageSize, target, 0, 170.1f, .1, out _, out _),
+            "The global yaw envelope replaced the actual profile's travel limit");
     }
 
     private static void VisionSelectionAndObservation()
@@ -248,7 +256,7 @@ internal static partial class VideoLifetimeTests
         foreach (var change in new Action<VideoInputProfile>[]
         {
             value => value.HorizontalFovDeg = 0, value => value.PitchMinDeg = 91,
-            value => value.YawMaxDeg = 91, value => value.PitchSign = 0,
+            value => value.YawMaxDeg = 181, value => value.YawMinDeg = -181, value => value.PitchSign = 0,
             value => value.TrackingMaxRateDegSec = 0, value => value.TrackingMaxRateDegSec = 61,
             value => value.DetectorModelProfilePath = "relative.json"
         })

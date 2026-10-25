@@ -31,8 +31,8 @@ namespace NOMAD.MissionPlanner
         public const float PITCH_MAX_DEG = 90f;
         public const float ROLL_MIN_DEG = -30f;
         public const float ROLL_MAX_DEG = 30f;
-        public const float YAW_MIN_DEG = -90f;
-        public const float YAW_MAX_DEG = 90f;
+        public const float YAW_MIN_DEG = -180f;
+        public const float YAW_MAX_DEG = 180f;
 
         // Shared stick rate limits (deg/s) for all stick-driven inputs.
         public const float DEFAULT_MAX_RATE_DEG_SEC = 60f;
