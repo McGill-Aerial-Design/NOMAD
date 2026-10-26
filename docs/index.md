@@ -46,6 +46,12 @@ services and companion computers fit. Use [safety](safety.md) and
 The [product requirements](prd.md) and [CONOPS inventory](conops-requirements.md)
 record competition obligations and unresolved decisions.
 
+## Future work
+
+Research directions are collected under [brainstorming and future work](brainstorming.md),
+with a [simulation planning-agent prompt](simulation-planning-prompt.md) for evaluating
+rendered and headless tests. They are separate from current product capabilities.
+
 ## Support
 
 For a reproducible issue, include the NOMAD source/version, Mission Planner version,
