@@ -13,7 +13,6 @@ theme:
     - navigation.top
     - search.suggest
     - search.highlight
-    - content.code.copy
 markdown_extensions:
   - tables
   - admonition
@@ -42,7 +41,6 @@ nav:
       - CONOPS traceability: conops-requirements.md
   - Future work:
       - Brainstorming: brainstorming.md
-      - Simulation planning prompt: simulation-planning-prompt.md
 validation:
   links:
     not_found: warn
