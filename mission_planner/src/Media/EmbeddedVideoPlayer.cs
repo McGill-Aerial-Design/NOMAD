@@ -28,13 +28,14 @@ namespace NOMAD.MissionPlanner
         internal EmbeddedVideoPlayer(VideoInputProfile input, bool showControls,
             CancellationToken shutdown, Func<IVideoPipeline> createPipeline, NOMADConfig aircraft = null,
             Func<string, CancellationToken, IVideoDetector> createDetector = null,
-            Func<CancellationToken, IVisualTracker> createTracker = null)
+            Func<CancellationToken, VisualTrackingMode, IVisualTracker> createTracker = null)
         {
             _input = input.Copy();
             _aircraft = aircraft;
             _showControls = showControls;
+            _trackingMode = input.TrackingMode == "Area" ? VisualTrackingMode.Area : VisualTrackingMode.Object;
             _session = new VideoSession(createPipeline, createDetector,
-                showControls ? createTracker ?? VisualTrackerFactory.Create : null);
+                showControls ? createTracker ?? VisualTrackerFactory.Create : null, aircraft, _input);
             _frameTimer = new System.Windows.Forms.Timer { Interval = 33 };
             _frameTimer.Tick += OnFrameTick;
             try

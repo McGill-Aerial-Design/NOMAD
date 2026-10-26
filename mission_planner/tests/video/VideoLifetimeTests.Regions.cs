@@ -12,6 +12,9 @@ internal static partial class VideoLifetimeTests
     private sealed class FakeVisualTracker : IVisualTracker
     {
         internal volatile bool Found = true;
+        internal volatile VisualTrackingState State = VisualTrackingState.Verified;
+        internal PointF? AimPoint;
+        internal VisualFrameContext LastContext;
         internal bool HoldUpdates;
         internal readonly ManualResetEventSlim Entered = new ManualResetEventSlim();
         internal readonly ManualResetEventSlim Release = new ManualResetEventSlim();
@@ -20,20 +23,24 @@ internal static partial class VideoLifetimeTests
         internal int Initializations, Updates, Disposals;
         private RectangleF _bounds;
         private readonly int _thread = Thread.CurrentThread.ManagedThreadId;
-        public void Initialize(Bitmap frame, RectangleF bounds, CancellationToken token)
+        public void Initialize(Bitmap frame, RectangleF bounds, CancellationToken token, VisualFrameContext context = default)
         {
             Check(Thread.CurrentThread.ManagedThreadId == _thread, "Tracker initialized outside its owner worker");
             token.ThrowIfCancellationRequested();
             Initializations++; InitializedImage = frame; InitialColor = frame.GetPixel(0, 0); _bounds = bounds;
         }
-        public bool TryUpdate(Bitmap frame, CancellationToken token, out RectangleF bounds)
+        public VisualTrackingResult Update(Bitmap frame, CancellationToken token, VisualFrameContext context = default)
         {
             Check(Thread.CurrentThread.ManagedThreadId == _thread, "Tracker updated outside its owner worker");
             Updates++; Entered.Set();
             if (HoldUpdates) { Wait(Release, "native visual update release"); }
             token.ThrowIfCancellationRequested();
-            bounds = _bounds;
-            return Found;
+            LastContext = context;
+            var state = Found ? State : VisualTrackingState.Lost;
+            return new VisualTrackingResult(state, state.ToString(),
+                state == VisualTrackingState.Verified ? _bounds : (RectangleF?)null,
+                state == VisualTrackingState.Verified ? AimPoint ?? new PointF(_bounds.X + _bounds.Width / 2,
+                    _bounds.Y + _bounds.Height / 2) : (PointF?)null);
         }
         public void Dispose()
         {
@@ -67,7 +74,7 @@ internal static partial class VideoLifetimeTests
     {
         var pipeline = new FakeVideoPipeline();
         var trackers = new List<FakeVisualTracker>();
-        using (var session = new VideoSession(() => pipeline, createTracker: token =>
+        using (var session = new VideoSession(() => pipeline, createTracker: (token, mode) =>
             { var tracker = new FakeVisualTracker(); trackers.Add(tracker); return tracker; }))
         {
             session.Start("fake"); Wait(pipeline.ReadEntered, "visual warmup");
@@ -102,7 +109,7 @@ internal static partial class VideoLifetimeTests
         pipeline = new FakeVideoPipeline();
         FakeVisualTracker active = null;
         using (var session = new VideoSession(() => pipeline,
-            createTracker: token => active = new FakeVisualTracker { HoldUpdates = true }))
+            createTracker: (token, mode) => active = new FakeVisualTracker { HoldUpdates = true }))
         {
             session.Start("fake"); Wait(pipeline.ReadEntered, "held visual source");
             pipeline.Frames.Add(SolidVideoImage(Color.Red));
@@ -139,7 +146,7 @@ internal static partial class VideoLifetimeTests
         FakeVisualTracker tracker = null;
         using var player = new EmbeddedVideoPlayer(new VideoInputProfile { Name = "Slow selection", Url = "udp://@:5600" },
             true, CancellationToken.None, () => pipeline,
-            createTracker: token => tracker = new FakeVisualTracker { HoldUpdates = true });
+            createTracker: (token, mode) => tracker = new FakeVisualTracker { HoldUpdates = true });
         form.Controls.Add(player); form.Show();
         player.StartStream(); Wait(pipeline.ReadEntered, "slow selection source");
         PlayerVisionFrame(player, pipeline, Color.Blue);

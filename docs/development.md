@@ -101,7 +101,14 @@ Tracking response checks independently project a world target through delayed ca
 motion, aircraft yaw reversals and additive/opposing translation. They verify
 downward-camera geometry, mirrored-image calibration, rate bounds and settling.
 CSRT checks follow moving/scaling texture and require loss without automatic
-reacquisition when it disappears. Optional `-TrackingFrames` and `-TrackingGroundTruth`
+reacquisition when it disappears. Area search prioritizes the optional coarse hint,
+then falls back globally in the same frame and independently checks another placement.
+Each frame performs at most three homography fits, each bounded to 750 RANSAC iterations,
+with at most 1000 descriptors per image at a 640-pixel maximum dimension. Native tests
+measure the fit count and latency while a persistent wrong hint leaves unique visual
+verification and gimbal command admission intact. A verified mismatch beyond that
+image-scaled search neighborhood disables the ground prior for the selection.
+Optional `-TrackingFrames` and `-TrackingGroundTruth`
 arguments to `test_plugin_vision.ps1` require 120 aligned PNG/ground-truth frames and
 all 119 subsequent updates without reseeding. Keep external benchmark media in ignored
 test storage with its provenance. Detector scores and synthetic centering do not
@@ -131,7 +138,7 @@ Review them visually and retain those distinctions in captions.
 To render the setup window without invoking installation:
 
 ```powershell
-powershell -STA -NoProfile -File scripts/docs/capture_installer_screenshot.ps1 -InstallerPath build/installer/NOMAD-0.4.1-Setup.exe
+powershell -STA -NoProfile -File scripts/docs/capture_installer_screenshot.ps1 -InstallerPath build/installer/NOMAD-0.5.0-Setup.exe
 ```
 
 ## Manual native simulator acceptance

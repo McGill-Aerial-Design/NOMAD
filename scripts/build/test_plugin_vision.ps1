@@ -32,10 +32,12 @@ try {
 }
 $exe = Join-Path $outDir 'VisionDetectorTests.exe'
 $sources = @('VideoDetection', 'VisionDetectorFactory', 'VisionModelProfile', 'VisionRuntime', 'YoloXVideoDetector',
-    'IVisualTracker', 'VisualTrackerFactory', 'CsrtVisualTracker') |
+    'IVisualTracker', 'VisualTrackerFactory', 'CsrtVisualTracker', 'FrozenAppearance', 'VisualTrackingImage',
+    'AreaVisualTracker', 'AreaVisualTracker.Matching') |
     ForEach-Object { Join-Path $repoRoot "mission_planner\src\Vision\$_.cs" }
 $sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisionDetectorTests.cs'
 $sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.cs'
+$sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.Area.cs'
 $resources = @(Get-ChildItem -LiteralPath $runtime -File | ForEach-Object {
     "/resource:$($_.FullName),NOMAD.Vision.$($_.Name)"
 })

@@ -1,7 +1,7 @@
 # Development checks for the Mission Planner plugin; nothing here installs it.
 [workspace]
 name = "nomad"
-version = "0.4.1"
+version = "0.5.0"
 description = "Mission Planner plugin development and documentation"
 channels = ["conda-forge"]
 platforms = ["linux-64", "win-64"]

@@ -28,19 +28,20 @@ namespace NOMAD.MissionPlanner
         internal static float HeadingChangeDegrees(float previousRadians, float currentRadians) =>
             (float)(Math.Atan2(Math.Sin(currentRadians - previousRadians), Math.Cos(currentRadians - previousRadians)) *
                 180 / Math.PI);
-        internal static bool TryStep(VideoInputProfile calibration, Size image, RectangleF target,
+        internal static bool TryStep(VideoInputProfile calibration, Size image, PointF target,
             float currentPitch, float currentYaw, double dt, out float pitch, out float yaw,
             float aircraftYawChange = 0)
         {
             pitch = currentPitch; yaw = currentYaw;
             if (!calibration.TrackingCalibrated || image.Width <= 0 || image.Height <= 0 ||
                 double.IsNaN(dt) || double.IsInfinity(dt) || dt <= 0 ||
+                !VideoDetection.Finite(target.X) || !VideoDetection.Finite(target.Y) ||
                 !VideoDetection.Finite(currentPitch) || !VideoDetection.Finite(currentYaw) ||
                 !VideoDetection.Finite(aircraftYawChange) || Math.Abs(aircraftYawChange) > 180 ||
                 currentPitch < calibration.PitchMinDeg || currentPitch > calibration.PitchMaxDeg ||
                 currentYaw < calibration.YawMinDeg || currentYaw > calibration.YawMaxDeg) { return false; }
-            double x = (target.X + target.Width / 2 - image.Width / 2.0) / image.Width;
-            double y = (target.Y + target.Height / 2 - image.Height / 2.0) / image.Height;
+            double x = (target.X - image.Width / 2.0) / image.Width;
+            double y = (target.Y - image.Height / 2.0) / image.Height;
             double focal = image.Width / (2 * Math.Tan(calibration.HorizontalFovDeg * Math.PI / 360));
             double right = Math.Abs(x) < .02 ? 0 : x * image.Width / focal * calibration.YawSign;
             double down = Math.Abs(y) < .02 ? 0 : y * image.Height / focal * calibration.PitchSign;

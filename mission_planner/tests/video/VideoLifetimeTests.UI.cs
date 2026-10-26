@@ -53,7 +53,45 @@ internal static partial class VideoLifetimeTests
             Check(button.Width >= preferred.Width && button.Height >= preferred.Height &&
                 button.ClientSize.Width >= text.Width && button.ClientSize.Height >= text.Height,
                 "Detect on clipped or wrapped at enlarged font size");
+            var tracking = GetField<Button>(player, "_trackButton");
+            tracking.Font = enlarged;
+            var fixedSize = tracking.Size;
+            foreach (string caption in new[] { "Start tracking", "Stop tracking", "Start tracking" })
+            {
+                tracking.Text = caption; tracking.Parent.PerformLayout();
+                text = TextRenderer.MeasureText(caption, enlarged);
+                Check(tracking.Size == fixedSize && !tracking.AutoSize && tracking.ClientSize.Width >= text.Width &&
+                    tracking.ClientSize.Height >= text.Height, "Tracking toggle resized or clipped when its state changed");
+            }
         }
+    }
+
+    private static void DisabledButtonsKeepContrast()
+    {
+        int clicks = 0;
+        foreach (var alignment in new[] { ContentAlignment.MiddleLeft, ContentAlignment.MiddleCenter,
+            ContentAlignment.MiddleRight })
+        using (var button = ControlFactory.Button("Track", (sender, args) => clicks++, width: 180, height: 32))
+        using (var image = new Bitmap(180, 32))
+        {
+            button.TextAlign = alignment; button.Enabled = false; button.CreateControl();
+            button.DrawToBitmap(image, new Rectangle(0, 0, 180, 32));
+            int count = 0, totalX = 0;
+            for (int y = 0; y < image.Height; y++)
+            for (int x = 0; x < image.Width; x++)
+            {
+                var color = image.GetPixel(x, y);
+                if (color.R >= 140 && color.G >= 140 && color.B >= 140)
+                { count++; totalX += x; }
+            }
+            Check(count > 10, "Disabled button text disappeared into the dark theme");
+            double center = totalX / (double)count;
+            Check(alignment == ContentAlignment.MiddleLeft ? center < 60 :
+                alignment == ContentAlignment.MiddleRight ? center > 120 : center > 65 && center < 115,
+                "Disabled themed button ignored text alignment");
+            button.PerformClick();
+        }
+        Check(clicks == 0, "Readable disabled button became actionable");
     }
 
     private static Button FindVideoButton(Control parent, string label)

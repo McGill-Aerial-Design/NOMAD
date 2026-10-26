@@ -108,6 +108,10 @@ internal static partial class VideoLifetimeTests
             GetField<NumericUpDown>(form, "_numVisionYawMin").Value = -170;
             GetField<NumericUpDown>(form, "_numVisionYawMax").Value = 170;
             GetField<CheckBox>(form, "_chkTrackingCalibrated").Checked = true;
+            GetField<ComboBox>(form, "_cmbTrackingMode").SelectedItem = "Area";
+            GetField<CheckBox>(form, "_chkGroundPrediction").Checked = true;
+            GetField<NumericUpDown>(form, "_numGroundPlaneHeight").Value = 12.5m;
+            GetField<NumericUpDown>(form, "_numCameraDelay").Value = 180;
             selector.SelectedIndex = 1;
             Check(GetField<TextBox>(form, "_txtVideoUrl").Text == "rtsp://second.invalid/live",
                 "Switching named video input did not load its independent fields.");
@@ -138,6 +142,8 @@ internal static partial class VideoLifetimeTests
             Check(saved.SelectedVideoInput.Name == "Renamed" && saved.SelectedVideoInput.LatencyMs == 700 &&
                 saved.SelectedVideoInput.TrackingCalibrated && saved.SelectedVideoInput.HorizontalFovDeg == 110 &&
                 saved.SelectedVideoInput.TrackingMaxRateDegSec == 60 &&
+                saved.SelectedVideoInput.TrackingMode == "Area" && saved.SelectedVideoInput.GroundPredictionEnabled &&
+                saved.SelectedVideoInput.GroundPlaneHeightMeters == 12.5 && saved.SelectedVideoInput.CameraDelayEstimateMs == 180 &&
                 saved.SelectedVideoInput.YawMinDeg == -170 && saved.SelectedVideoInput.YawMaxDeg == 170,
                 "Saved/clone video input selection or settings were lost.");
             typeof(NOMADSettingsForm).GetMethod("RemoveVideoInput", flags).Invoke(form, null);

@@ -18,7 +18,7 @@ namespace NOMAD.Documentation {
 }
 '@
 
-function Save-ControlImage([Windows.Forms.Control]$Control, [string]$ImagePath) {
+function Save-ControlImage([Windows.Forms.Control]$Control, [string]$ImagePath, [scriptblock]$BeforeDraw = $null) {
     $renderSize = if ($Control -is [Windows.Forms.Form]) { $Control.ClientSize } else {
         [Drawing.Size]::new(1180, 760)
     }
@@ -40,6 +40,7 @@ function Save-ControlImage([Windows.Forms.Control]$Control, [string]$ImagePath) 
         $renderForm.Show()
         $renderForm.PerformLayout()
         [Windows.Forms.Application]::DoEvents()
+        if ($BeforeDraw) { & $BeforeDraw }
         $renderBitmap = [Drawing.Bitmap]::new($renderSize.Width, $renderSize.Height)
         try {
             $renderForm.DrawToBitmap($renderBitmap, [Drawing.Rectangle]::new(0, 0, $renderSize.Width, $renderSize.Height))

@@ -17,7 +17,8 @@ internal static partial class VideoLifetimeTests
         internal readonly ManualResetEventSlim Entered = new ManualResetEventSlim();
         internal bool Fail, Hold, NativeCancellationError;
         internal int Disposals;
-        public string Identity => "owned fake detector";
+        internal string DetectorName = "owned fake detector";
+        public string Identity => DetectorName;
         public IReadOnlyList<VideoDetection> Detect(Bitmap frame, CancellationToken token)
         {
             Entered.Set();
@@ -53,9 +54,8 @@ internal static partial class VideoLifetimeTests
             { var detector = new FakeDetector(); detectors.Add(detector); return detector; }))
         {
             session.ConfigureDetection(true, ""); session.Start("fake");
-            pipeline.Frames.Add(new Bitmap(16, 8));
             long firstSequence;
-            using (var frame = NextVideoFrame(session))
+            using (var frame = DetectionFrame(session, pipeline, 16, 8, item => item.Detections.Count == 1))
             {
                 firstSequence = frame.Sequence;
                 Check(frame.Image.Width == 16 && frame.Detections.Count == 1 && frame.ReceivedUtc.Kind == DateTimeKind.Utc &&
@@ -65,8 +65,8 @@ internal static partial class VideoLifetimeTests
             using (var frame = NextVideoFrame(session))
             { Check(frame.Detections.Count == 0 && frame.Sequence > firstSequence, "Detect off retained old results"); }
             Check(detectors[0].Disposals == 1, "Disabled detector retained native resources");
-            session.ConfigureDetection(true, ""); pipeline.Frames.Add(new Bitmap(10, 6));
-            using (var frame = NextVideoFrame(session))
+            session.ConfigureDetection(true, "");
+            using (var frame = DetectionFrame(session, pipeline, 10, 6, item => item.Detections.Count == 1))
             { Check(frame.Detections.Count == 1 && detectors.Count == 2, "Detect on/off/on reused retired state"); }
             session.Stop();
             Check(detectors[1].Disposals == 1, "Stop retained its detector");
@@ -80,6 +80,9 @@ internal static partial class VideoLifetimeTests
             using (var session = new VideoSession(() => pipeline, (path, token) => detector))
             {
                 session.ConfigureDetection(true, ""); session.Start("fake"); pipeline.Frames.Add(image);
+                var deadline = Stopwatch.StartNew();
+                while (!detector.Entered.IsSet && deadline.Elapsed < TimeSpan.FromSeconds(5))
+                { pipeline.Frames.Add(new Bitmap(16, 8)); Thread.Sleep(5); }
                 Wait(detector.Entered, "held inference");
                 Wait(Task.Run(() => session.Stop()), "inference stop and join");
                 Check(session.TakeFrame() == null && session.Completion.IsCompleted && detector.Disposals == 1,
@@ -96,8 +99,8 @@ internal static partial class VideoLifetimeTests
         var detector = new FakeDetector { Fail = true };
         using (var session = new VideoSession(() => pipeline, (path, token) => detector))
         {
-            session.ConfigureDetection(true, ""); session.Start("fake"); pipeline.Frames.Add(new Bitmap(16, 8));
-            using (var frame = NextVideoFrame(session))
+            session.ConfigureDetection(true, ""); session.Start("fake");
+            using (var frame = DetectionFrame(session, pipeline, 16, 8, item => session.VisionError != null))
             {
                 Check(frame.Detections.Count == 0 && session.State == VideoState.Streaming && !session.DetectionEnabled &&
                     session.VisionError != null && !session.VisionError.Contains("private-model-path"),
@@ -124,7 +127,7 @@ internal static partial class VideoLifetimeTests
     {
         var input = new VideoInputProfile { TrackingCalibrated = true };
         var imageSize = new Size(100, 80);
-        var target = new RectangleF(80, 60, 10, 10);
+        var target = new PointF(85, 65);
         Check(VideoTrackingAngles.TryStep(input, imageSize, target, 0, 0, .1, out float pitch, out float yaw) &&
             pitch == -1 && yaw == 1, "Tracking rate/sign or pitch/yaw mapping changed");
         Check(VideoTrackingAngles.TryStep(input, imageSize, target, 0, 0, 100, out pitch, out yaw) &&
@@ -137,7 +140,7 @@ internal static partial class VideoLifetimeTests
         Check(!VideoTrackingAngles.TryStep(input, imageSize, target, 0, 0, .1, out pitch, out yaw) &&
             pitch == 0 && yaw == 0, "Tracking crossed absolute angle limits");
         input.PitchMinDeg = -90; input.YawMaxDeg = 90;
-        Check(!VideoTrackingAngles.TryStep(input, imageSize, new RectangleF(45, 35, 10, 10), 0, 0, .1,
+        Check(!VideoTrackingAngles.TryStep(input, imageSize, new PointF(50, 40), 0, 0, .1,
             out pitch, out yaw), "Centered target bypassed deadband");
         foreach (double invalid in new[] { double.NaN, double.PositiveInfinity, -1, 0 })
         { Check(!VideoTrackingAngles.TryStep(input, imageSize, target, 0, 0, invalid, out pitch, out yaw), "Invalid dt admitted tracking"); }
@@ -147,7 +150,7 @@ internal static partial class VideoLifetimeTests
         Check(!VideoTrackingAngles.TryStep(input, imageSize, target, 0, 0, .1, out pitch, out yaw) && pitch == 0,
             "Out-of-range manual target snapped into narrower calibration limits");
         input.PitchMaxDeg = 90; input.TrackingMaxRateDegSec = 30;
-        var smallError = new RectangleF(51, 38, 4, 4);
+        var smallError = new PointF(53, 40);
         float slower = 0, faster = 0;
         for (int index = 0; index < 10; index++)
         { VideoTrackingAngles.TryStep(input, imageSize, smallError, 0, slower, .1, out pitch, out slower); }
@@ -155,7 +158,7 @@ internal static partial class VideoLifetimeTests
         { VideoTrackingAngles.TryStep(input, imageSize, smallError, 0, faster, .05, out pitch, out faster); }
         Check(Math.Abs(slower - faster) < .001 && slower > 3 && slower < 4,
             "The same one-second image error produced frame-rate-dependent control gain");
-        Check(VideoTrackingAngles.TryStep(input, imageSize, new RectangleF(45, 35, 10, 10), 0, 0, .1,
+        Check(VideoTrackingAngles.TryStep(input, imageSize, new PointF(50, 40), 0, 0, .1,
             out pitch, out yaw, 90) && pitch == 0 && yaw == -3,
             "Aircraft yaw compensation bypassed the calibrated total rate");
         foreach (float invalid in new[] { float.NaN, float.PositiveInfinity, 181 })
@@ -164,7 +167,7 @@ internal static partial class VideoLifetimeTests
         input.YawMinDeg = -170; input.YawMaxDeg = 170;
         Check(VideoTrackingAngles.TryStep(input, imageSize, target, 0, 169.9f, .1, out _, out yaw) && yaw == 170,
             "Wider mount tracking exceeded its calibrated positive yaw limit");
-        Check(VideoTrackingAngles.TryStep(input, imageSize, new RectangleF(10, 60, 10, 10), 0, -169.9f,
+        Check(VideoTrackingAngles.TryStep(input, imageSize, new PointF(15, 65), 0, -169.9f,
             .1, out _, out yaw) && yaw == -170,
             "Wider mount tracking exceeded its calibrated negative yaw limit");
         Check(!VideoTrackingAngles.TryStep(input, imageSize, target, 0, 170.1f, .1, out _, out _),
@@ -179,7 +182,7 @@ internal static partial class VideoLifetimeTests
         var visual = new FakeVisualTracker();
         var detector = new FakeDetector();
         using (var player = new EmbeddedVideoPlayer(input, true, CancellationToken.None, () => pipeline,
-            createDetector: (path, token) => detector, createTracker: token => visual = new FakeVisualTracker()))
+            createDetector: (path, token) => detector, createTracker: (token, mode) => visual = new FakeVisualTracker()))
         {
             player.ObservationDirectory = directory;
             player.StartStream(); Wait(pipeline.ReadEntered, "selection source");
@@ -200,7 +203,10 @@ internal static partial class VideoLifetimeTests
             player.EnableDetection(true); PlayerVisionFrame(player, pipeline, Color.Red);
             player.EnableDetection(false);
             Check(player.RegionReady && player.SelectedRegion == selected, "Detector toggle retired an independent visual target");
-            detector.Fail = true; player.EnableDetection(true); PlayerVisionFrame(player, pipeline, Color.Red);
+            detector.Fail = true; player.EnableDetection(true);
+            var failureDeadline = Stopwatch.StartNew();
+            while (session.VisionError == null && failureDeadline.Elapsed < TimeSpan.FromSeconds(5))
+            { PlayerVisionFrame(player, pipeline, Color.Red); Thread.Sleep(5); }
             Check(player.RegionReady && session.VisionError != null && player.SelectedRegion == selected,
                 "Optional detector failure retired visual tracking");
             long savedSequence = player.DisplayedVideoFrame.Sequence;
@@ -240,7 +246,7 @@ internal static partial class VideoLifetimeTests
         var pipeline = new FakeVideoPipeline();
         using (var player = new EmbeddedVideoPlayer(new VideoInputProfile
             { Name = "Owned source", Url = "rtsp://owned.invalid/live" }, true, CancellationToken.None, () => pipeline,
-                createTracker: token => new FakeVisualTracker()))
+                createTracker: (token, mode) => new FakeVisualTracker()))
         {
             player.StartStream(); Wait(pipeline.ReadEntered, "EOF source");
             var session = GetField<VideoSession>(player, "_session");
@@ -258,7 +264,10 @@ internal static partial class VideoLifetimeTests
             value => value.HorizontalFovDeg = 0, value => value.PitchMinDeg = 91,
             value => value.YawMaxDeg = 181, value => value.YawMinDeg = -181, value => value.PitchSign = 0,
             value => value.TrackingMaxRateDegSec = 0, value => value.TrackingMaxRateDegSec = 61,
-            value => value.DetectorModelProfilePath = "relative.json"
+            value => value.DetectorModelProfilePath = "relative.json",
+            value => value.TrackingMode = "area", value => value.TrackingMode = null,
+            value => value.GroundPlaneHeightMeters = double.NaN, value => value.GroundPlaneHeightMeters = 10001,
+            value => value.CameraDelayEstimateMs = -1, value => value.CameraDelayEstimateMs = 2001
         })
         {
             var input = new VideoInputProfile { Name = "Owned", Url = "rtsp://owned.invalid/live" };
@@ -270,6 +279,15 @@ internal static partial class VideoLifetimeTests
             var document = new JObject { ["VideoInputs"] = new JArray(new JObject { [field] = new JArray() }) };
             ExpectInvalidVision(() => NOMADConfig.ValidateInputDocument(document));
         }
+        foreach (var field in new[] { "TrackingMode", "GroundPredictionEnabled", "GroundPlaneHeightMeters", "CameraDelayEstimateMs" })
+        {
+            var document = new JObject { ["VideoInputs"] = new JArray(new JObject { [field] = new JArray() }) };
+            ExpectInvalidVision(() => NOMADConfig.ValidateInputDocument(document));
+        }
+        var defaults = JsonConvert.DeserializeObject<VideoInputProfile>("{}");
+        Check(defaults.TrackingMode == "Object" && !defaults.GroundPredictionEnabled &&
+            defaults.GroundPlaneHeightMeters == 0 && defaults.CameraDelayEstimateMs == 0,
+            "Older video profiles did not retain conservative tracking defaults");
         var config = VideoConfig();
         config.SelectedVideoInput.TrackingCalibrated = true;
         config.SelectedVideoInput.HorizontalFovDeg = 110;

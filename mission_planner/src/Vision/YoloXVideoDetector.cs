@@ -51,7 +51,8 @@ namespace NOMAD.MissionPlanner
         {
             if (!metadata.IsTensor || metadata.ElementType != typeof(float) ||
                 !metadata.Dimensions.SequenceEqual(shape))
-            { throw new FormatException("YOLOX tensor type or dimensions do not match the profile."); }
+            { throw new FormatException("YOLOX requires a float tensor shaped [" + string.Join(",", shape) +
+                "]; the model declares [" + string.Join(",", metadata.Dimensions) + "]. Check input size, labels and raw grid export."); }
         }
 
         public IReadOnlyList<VideoDetection> Detect(Bitmap frame, CancellationToken token)

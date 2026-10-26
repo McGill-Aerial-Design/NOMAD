@@ -12,6 +12,9 @@ namespace NOMAD.MissionPlanner
     {
         private readonly NOMADConfig _config;
         private readonly Func<NOMADConfig, string, bool> _selectInput;
+        private readonly Func<NOMADConfig, string, string, bool> _selectModel;
+        private ComboBox _models;
+        private string _modelPath;
         private readonly ComboBox _selector;
         private readonly Label _empty;
         private readonly ToolTip _toolTip = new ToolTip();
@@ -20,10 +23,12 @@ namespace NOMAD.MissionPlanner
         internal EmbeddedVideoPlayer Player { get; }
 
         internal VideoInputPlayer(NOMADConfig config, bool showControls, CancellationToken shutdown,
-            Func<IVideoPipeline> createPipeline, Func<NOMADConfig, string, bool> selectInput)
+            Func<IVideoPipeline> createPipeline, Func<NOMADConfig, string, bool> selectInput,
+            Func<NOMADConfig, string, string, bool> selectModel = null)
         {
             _config = config;
             _selectInput = selectInput;
+            _selectModel = selectModel;
             Dock = DockStyle.Fill;
             BackColor = Color.Black;
             _empty = new Label
@@ -54,6 +59,7 @@ namespace NOMAD.MissionPlanner
                 _selector.Anchor = AnchorStyles.Top | AnchorStyles.Right;
                 _selector.Margin = new Padding(5);
                 Player.Toolbar.Controls.Add(_selector, 1, 0);
+                AddModelSelection(shutdown);
             }
             else
             {
@@ -86,10 +92,77 @@ namespace NOMAD.MissionPlanner
             _loading = true;
             try { _selector.SelectedItem = input?.Name ?? "No inputs"; }
             finally { _loading = false; }
-            if (_inputName == input?.Name) { return; }
+            if (_inputName == input?.Name)
+            {
+                RefreshModel(input);
+                return;
+            }
             if (_inputName != null && input != null) { Player?.UpdateInput(input); }
             _inputName = input?.Name;
             _empty.Visible = input == null;
+            RefreshModel(input);
+        }
+
+        private void AddModelSelection(CancellationToken shutdown)
+        {
+            _models = ControlFactory.Combo(Array.Empty<string>(), -1);
+            _models.Width = 220; _models.AccessibleName = "Detection model"; _models.Name = "DetectionModel";
+            _models.Enabled = _selectModel != null && !shutdown.IsCancellationRequested;
+            _toolTip.SetToolTip(_models, "Select the detection model for this camera. Video and generic region tracking continue.");
+            var row = (FlowLayoutPanel)Player.Toolbar.GetControlFromPosition(0, 1);
+            row.Controls.Add(_models);
+            var manage = ControlFactory.Button("Manage models", (sender, args) =>
+            {
+                try
+                {
+                    using (var dialog = new VisionModelsForm(_config.SelectedVideoInput?.DetectorModelProfilePath ?? ""))
+                    { dialog.ShowDialog(this); }
+                }
+                catch (Exception failure) when (failure is System.IO.IOException ||
+                    failure is UnauthorizedAccessException || failure is Newtonsoft.Json.JsonException ||
+                    failure is FormatException || failure is ArgumentException)
+                { _toolTip.SetToolTip(_models, "Model catalog unavailable; current selection and video continue."); }
+                _modelPath = null; RefreshModel(_config.SelectedVideoInput);
+            }, width: 115, height: 28);
+            manage.AccessibleName = "Manage detection models"; row.Controls.Add(manage);
+            _models.SelectedIndexChanged += (sender, args) =>
+            {
+                if (_loading || !(_models.SelectedItem is VisionModelChoice selected)) { return; }
+                var input = _config.SelectedVideoInput;
+                if (input == null || VisionModelCatalog.SamePath(input.DetectorModelProfilePath, selected.Path)) { return; }
+                if (_selectModel?.Invoke(_config, input.Name, selected.Path) != true)
+                {
+                    _toolTip.SetToolTip(_models, "Model selection was not saved. Review the active aircraft and try again.");
+                }
+                RefreshModel(_config.SelectedVideoInput);
+            };
+        }
+
+        private void RefreshModel(VideoInputProfile input)
+        {
+            if (_models == null || input == null) { return; }
+            bool changed = !VisionModelCatalog.SamePath(_modelPath, input.DetectorModelProfilePath);
+            if (!changed)
+            {
+                _loading = true;
+                try { _models.SelectedItem = _models.Items.Cast<VisionModelChoice>().Single(choice =>
+                    VisionModelCatalog.SamePath(choice.Path, input.DetectorModelProfilePath)); }
+                finally { _loading = false; }
+                return;
+            }
+            _loading = true;
+            try
+            {
+                _models.Items.Clear();
+                var choices = new VisionModelCatalog().SelectionChoices(input.DetectorModelProfilePath, out string error);
+                if (error != null) { _toolTip.SetToolTip(_models, error); }
+                _models.Items.AddRange(choices.ToArray());
+                _models.SelectedItem = choices.Single(choice =>
+                    VisionModelCatalog.SamePath(choice.Path, input.DetectorModelProfilePath));
+            }
+            finally { _loading = false; }
+            if (changed) { Player.UpdateDetectionModel(input.DetectorModelProfilePath); }
+            _modelPath = input.DetectorModelProfilePath;
         }
 
         protected override void Dispose(bool disposing)

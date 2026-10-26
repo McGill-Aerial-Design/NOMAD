@@ -89,6 +89,7 @@ namespace NOMAD.MissionPlanner
             }
 
             PaintDetections(box, e.Graphics);
+            PaintMotionEstimates(box, e.Graphics);
             int centerX = box.Width / 2;
             int centerY = box.Height / 2;
             const int arm = 18;
@@ -186,6 +187,8 @@ namespace NOMAD.MissionPlanner
             var wasPlaying = _isPlaying;
             StopStream();
             _input = input.Copy();
+            _session.ConfigureTracking(_input);
+            SetTrackingMode(_input.TrackingMode == "Area" ? VisualTrackingMode.Area : VisualTrackingMode.Object);
             _session.ConfigureDetection(_session.DetectionEnabled, _input.DetectorModelProfilePath);
             if (wasPlaying) { StartStream(); }
         }

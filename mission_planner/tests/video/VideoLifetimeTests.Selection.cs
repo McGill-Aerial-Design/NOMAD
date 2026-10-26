@@ -112,17 +112,34 @@ internal static partial class VideoLifetimeTests
             second.Pipeline == VideoPipeline.Build(config.VideoInputs[1]), "Selected input was not saved/applied to HUD.");
         Check((long)generationField.GetValue(null) == generation && ReferenceEquals(GetField<NOMADConfig>(plugin, "_config"), config),
             "Camera selection replaced the aircraft/output owner.");
+        var selectModel = typeof(NOMADPlugin).GetMethod("SelectActiveVideoModel", BindingFlags.Instance | BindingFlags.NonPublic);
+        string modelPath = Path.Combine(directory, "external-model.json");
+        Check((bool)selectModel.Invoke(plugin, new object[] { config, "Alternate", modelPath }) &&
+            config.SelectedVideoInput.DetectorModelProfilePath == modelPath &&
+            File.ReadAllText(path).Contains("external-model.json") && second.Starts == 1 &&
+            (long)generationField.GetValue(null) == generation,
+            "Model default was not persisted or restarted aircraft/video ownership");
+        Check(!(bool)selectModel.Invoke(plugin, new object[] { config, "Synthetic", "" }) &&
+            !(bool)selectModel.Invoke(plugin, new object[] { TwoInputs(), "Alternate", "" }),
+            "Stale aircraft/input selected a model");
         string blocked = Path.Combine(directory, "blocked");
         File.WriteAllText(blocked, "owned test blocker");
         SetField(profiles, "_path", Path.Combine(blocked, "profiles.json"));
+        Check(!(bool)selectModel.Invoke(plugin, new object[] { config, "Alternate", "" }) &&
+            config.SelectedVideoInput.DetectorModelProfilePath == modelPath && second.Starts == 1,
+            "Failed model persistence changed the selected default or source");
         Check(!(bool)select.Invoke(plugin, new object[] { config, "Synthetic" }) &&
             config.SelectedVideoInputName == "Alternate" && second.Starts == 1,
             "Failed profile persistence changed the active source/HUD.");
         Check(!(bool)select.Invoke(plugin, new object[] { TwoInputs(), "Synthetic" }), "A stale profile selected video.");
         SetField(plugin, "_savingSettings", true);
+        Check(!(bool)selectModel.Invoke(plugin, new object[] { config, "Alternate", "" }),
+            "Settings draft allowed a concurrent model selection");
         Check(!(bool)select.Invoke(plugin, new object[] { config, "Synthetic" }), "Settings draft allowed a concurrent selection.");
         SetField(plugin, "_savingSettings", false);
         shutdown.Cancel();
+        Check(!(bool)selectModel.Invoke(plugin, new object[] { config, "Alternate", "" }),
+            "Retired session selected a model");
         Check(!(bool)select.Invoke(plugin, new object[] { config, "Synthetic" }), "A retired session selected video.");
     }
 

@@ -9,7 +9,7 @@ using System.Linq;
 using System.Threading;
 using NOMAD.MissionPlanner;
 
-internal static class VisualTrackerTests
+internal static partial class VisualTrackerTests
 {
     private static int _checks;
 
@@ -21,8 +21,7 @@ internal static class VisualTrackerTests
             Check(VisionRuntime.BuiltinModelPath == null, "Visual tracking must load without the detector runtime.");
             using (var first = Frame(tile, 0))
             {
-                RectangleF ignored;
-                Check(!tracker.TryUpdate(first, CancellationToken.None, out ignored), "Uninitialized tracker has no target.");
+                Check(!tracker.Update(first, CancellationToken.None).Found, "Uninitialized tracker has no target.");
                 Throws<ArgumentException>(() => tracker.Initialize(first, new RectangleF(-1, 100, 100, 100),
                     CancellationToken.None), "Out-of-frame selection must fail.");
                 Throws<ArgumentException>(() => tracker.Initialize(first, new RectangleF(20, 20, 2, 2),
@@ -39,33 +38,33 @@ internal static class VisualTrackerTests
                 using (var frame = Frame(tile, index))
                 {
                     var elapsed = Stopwatch.StartNew();
-                    RectangleF bounds;
-                    Check(tracker.TryUpdate(frame, CancellationToken.None, out bounds),
-                        "CSRT must follow the moving textured region without detections.");
+                    var result = tracker.Update(frame, CancellationToken.None);
+                    Check(result.Found,
+                        "CSRT must follow the moving textured region without detections: frame " + index + ", " + result.Status);
                     long milliseconds = elapsed.ElapsedMilliseconds;
                     maximum = Math.Max(maximum, milliseconds); total += milliseconds;
-                    Check(Overlap(bounds, Truth(index)) > .45,
+                    Check(Overlap(result.Bounds.Value, Truth(index)) > .45,
                         "CSRT region must overlap the independently rendered moving/scaling target.");
                 }
             }
             using (var blank = Frame(null, 0))
             using (var targetReturns = Frame(tile, 10))
             {
-                RectangleF bounds;
-                Check(!tracker.TryUpdate(blank, CancellationToken.None, out bounds) && bounds.IsEmpty,
+                var lost = tracker.Update(blank, CancellationToken.None);
+                Check(!lost.Found && !lost.Bounds.HasValue && !lost.AimPoint.HasValue,
                     "Native CSRT confidence loss must return no target.");
-                Check(!tracker.TryUpdate(targetReturns, CancellationToken.None, out bounds),
+                Check(!tracker.Update(targetReturns, CancellationToken.None).Found,
                     "A lost target must never be reacquired automatically.");
                 tracker.Initialize(targetReturns, Truth(10), CancellationToken.None);
                 using (var resized = new Bitmap(800, 600))
-                { Check(!tracker.TryUpdate(resized, CancellationToken.None, out bounds), "Image-size change must retire tracking."); }
+                { Check(!tracker.Update(resized, CancellationToken.None).Found, "Image-size change must retire tracking."); }
                 tracker.Initialize(targetReturns, Truth(10), CancellationToken.None);
                 using (var canceled = new CancellationTokenSource())
                 {
                     canceled.Cancel();
-                    Throws<OperationCanceledException>(() => tracker.TryUpdate(targetReturns, canceled.Token, out bounds),
+                    Throws<OperationCanceledException>(() => tracker.Update(targetReturns, canceled.Token),
                         "Canceled tracking must publish no result.");
-                    Check(!tracker.TryUpdate(targetReturns, CancellationToken.None, out bounds),
+                    Check(!tracker.Update(targetReturns, CancellationToken.None).Found,
                         "Cancellation must retire the visual target.");
                 }
             }
@@ -77,13 +76,36 @@ internal static class VisualTrackerTests
             disposed.Dispose();
             using (var frame = Frame(null, 0))
             {
-                RectangleF bounds;
-                Throws<ObjectDisposedException>(() => disposed.TryUpdate(frame, CancellationToken.None, out bounds),
+                Throws<ObjectDisposedException>(() => disposed.Update(frame, CancellationToken.None),
                     "Disposed tracker must refuse frames.");
             }
         }
+        RejectObjectOccluder();
+        RejectFlatAppearanceReference();
+        AreaTracking();
         BenchmarkPerson();
         Console.WriteLine("PASS: " + _checks + " visual tracker checks.");
+    }
+
+    private static void RejectFlatAppearanceReference()
+    {
+        using (var color = new OpenCvSharp.Mat(64, 64, OpenCvSharp.MatType.CV_8UC3))
+        using (var gray = new OpenCvSharp.Mat())
+        {
+            for (int y = 0; y < 64; y++)
+            {
+                for (int x = 0; x < 64; x++)
+                { color.Set(y, x, (x + y) % 2 == 0 ? new OpenCvSharp.Vec3b(0, 0, 84) :
+                    new OpenCvSharp.Vec3b(0, 43, 0)); }
+            }
+            OpenCvSharp.Cv2.CvtColor(color, gray, OpenCvSharp.ColorConversionCodes.BGR2GRAY);
+            OpenCvSharp.Cv2.MeanStdDev(gray, out OpenCvSharp.Scalar _, out OpenCvSharp.Scalar deviation);
+            Check(deviation.Val0 == 0, "The constant-luminance colour fixture must have zero grayscale variance.");
+            Throws<ArgumentException>(() =>
+            {
+                using (var appearance = new FrozenAppearance(color, new OpenCvSharp.Rect(0, 0, 64, 64))) { }
+            }, "A constant appearance template must not produce a false perfect correlation.");
+        }
     }
 
     private static Bitmap Texture()
@@ -138,10 +160,10 @@ internal static class VisualTrackerTests
                 using (var frame = new Bitmap(files[index]))
                 {
                     var elapsed = Stopwatch.StartNew();
-                    RectangleF bounds;
-                    if (!tracker.TryUpdate(frame, CancellationToken.None, out bounds)) { break; }
+                    var result = tracker.Update(frame, CancellationToken.None);
+                    if (!result.Found) { break; }
                     maximum = Math.Max(maximum, elapsed.ElapsedMilliseconds);
-                    double overlap = Overlap(bounds, truth[index]);
+                    double overlap = Overlap(result.Bounds.Value, truth[index]);
                     minimum = Math.Min(minimum, overlap); sum += overlap; tracked++;
                 }
             }

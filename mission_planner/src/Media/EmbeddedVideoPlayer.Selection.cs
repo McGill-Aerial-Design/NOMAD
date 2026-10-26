@@ -58,6 +58,7 @@ namespace NOMAD.MissionPlanner
         {
             RectangleF? region = SelectedRegion;
             bool dragging = ReferenceEquals(box, _dragBox);
+            if (!dragging && _trackingMode == VisualTrackingMode.Area && !RegionReady) { return; }
             if (dragging && VideoGeometry.TryImageRegion(_dragStart, _dragEnd, _dragImageSize,
                 _dragViewport, out var drag)) { region = drag; }
             if (!region.HasValue) { return; }
@@ -67,6 +68,11 @@ namespace NOMAD.MissionPlanner
                 if (dragging || !RegionReady) { pen.DashStyle = DashStyle.Dash; }
                 graphics.DrawRectangle(pen, area.X + bounds.X * scale, area.Y + bounds.Y * scale,
                     bounds.Width * scale, bounds.Height * scale);
+                if (!dragging && RegionReady && _selectedAimPoint.HasValue)
+                {
+                    var point = _selectedAimPoint.Value;
+                    graphics.DrawEllipse(pen, area.X + point.X * scale - 3, area.Y + point.Y * scale - 3, 6, 6);
+                }
             }
         }
 

@@ -169,6 +169,23 @@ namespace NOMAD.MissionPlanner
             return true;
         }
 
+        private bool SelectActiveVideoModel(NOMADConfig config, string inputName, string path)
+        {
+            var input = config?.SelectedVideoInput;
+            if (!IsActiveSession(_videoShutdown) || _savingSettings || !ReferenceEquals(config, _config) ||
+                input == null || !string.Equals(input.Name, inputName, StringComparison.OrdinalIgnoreCase)) { return false; }
+            string previous = input.DetectorModelProfilePath;
+            input.DetectorModelProfilePath = path ?? "";
+            try { _profiles.Save(); }
+            catch (Exception error)
+            {
+                input.DetectorModelProfilePath = previous;
+                Log.Error("Detection model selection was not saved: " + error.Message);
+                return false;
+            }
+            return true;
+        }
+
         private static string BuildHudVideoPipeline(VideoInputProfile input)
         {
             return VideoPipeline.Build(input);

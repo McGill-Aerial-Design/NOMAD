@@ -29,6 +29,24 @@ namespace NOMAD.MissionPlanner
             }
         }
 
+        // Exercise the real model/hash/tensor checks without exposing native errors containing operator paths.
+        internal static void ValidateModel(VisionModelProfile profile, CancellationToken token)
+        {
+            try
+            {
+                profile.Validate();
+                VisionRuntime.EnsureLoaded(token);
+                using (CreateLoaded(profile, token)) { }
+            }
+            catch (Exception) when (token.IsCancellationRequested) { throw new OperationCanceledException(token); }
+            catch (FormatException error) { throw new InvalidOperationException(error.Message); }
+            catch (Exception error) when (!(error is OutOfMemoryException))
+            {
+                throw new InvalidOperationException("ONNX weights could not load. Check the local file, SHA256 and " +
+                    "raw YOLOX export; Windows x64 is required.");
+            }
+        }
+
         // ORT types must be resolved only after the embedded runtime loader is installed.
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static IVideoDetector CreateLoaded(VisionModelProfile profile, CancellationToken token)

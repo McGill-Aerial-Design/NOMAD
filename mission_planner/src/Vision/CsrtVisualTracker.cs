@@ -11,23 +11,21 @@ namespace NOMAD.MissionPlanner
     internal sealed class CsrtVisualTracker : IVisualTracker
     {
         private TrackerCSRT _tracker;
+        private FrozenAppearance _appearance;
         private System.Drawing.Size _imageSize;
         private bool _disposed;
 
         internal CsrtVisualTracker() { Cv2.SetNumThreads(2); }
 
-        public void Initialize(Bitmap frame, RectangleF bounds, CancellationToken token)
+        public void Initialize(Bitmap frame, RectangleF bounds, CancellationToken token,
+            VisualFrameContext context = default)
         {
             CheckDisposed();
             Clear();
             token.ThrowIfCancellationRequested();
-            ValidateFrame(frame);
-            if (!VideoDetection.Finite(bounds.X) || !VideoDetection.Finite(bounds.Y) ||
-                !VideoDetection.Finite(bounds.Width) || !VideoDetection.Finite(bounds.Height) ||
-                bounds.X < 0 || bounds.Y < 0 || bounds.Right > frame.Width || bounds.Bottom > frame.Height ||
-                bounds.Width < 1 || bounds.Height < 1)
-            { throw new ArgumentException("Select a region fully inside the current image."); }
-            using (var image = Scale(frame))
+            VisualTrackingImage.ValidateFrame(frame);
+            VisualTrackingImage.ValidateSelection(frame, bounds);
+            using (var image = VisualTrackingImage.Scale(frame))
             {
                 double scaleX = (double)image.Width / frame.Width, scaleY = (double)image.Height / frame.Height;
                 var box = new OpenCvSharp.Rect((int)(bounds.X * scaleX), (int)(bounds.Y * scaleY),
@@ -45,6 +43,7 @@ namespace NOMAD.MissionPlanner
                         // OpenCV's default CSRT PSR threshold is 0.035; Update returns false below it.
                         _tracker = TrackerCSRT.Create();
                         _tracker.Init(mat, box);
+                        _appearance = new FrozenAppearance(mat, box);
                         token.ThrowIfCancellationRequested();
                         _imageSize = frame.Size;
                     }
@@ -54,16 +53,15 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        public bool TryUpdate(Bitmap frame, CancellationToken token, out RectangleF bounds)
+        public VisualTrackingResult Update(Bitmap frame, CancellationToken token, VisualFrameContext context = default)
         {
             CheckDisposed();
-            bounds = RectangleF.Empty;
             if (token.IsCancellationRequested) { Clear(); }
             token.ThrowIfCancellationRequested();
-            ValidateFrame(frame);
-            if (_tracker == null) { return false; }
-            if (frame.Size != _imageSize) { Clear(); return false; }
-            using (var image = Scale(frame))
+            VisualTrackingImage.ValidateFrame(frame);
+            if (_tracker == null) { return Lost("Object lost; select it again"); }
+            if (frame.Size != _imageSize) { Clear(); return Lost("Image size changed; select the object again"); }
+            using (var image = VisualTrackingImage.Scale(frame))
             {
                 var bits = image.LockBits(new Rectangle(0, 0, image.Width, image.Height), ImageLockMode.ReadOnly,
                     PixelFormat.Format24bppRgb);
@@ -79,26 +77,20 @@ namespace NOMAD.MissionPlanner
                         token.ThrowIfCancellationRequested();
                         if (!found || box.Width < 1 || box.Height < 1 || box.X < 0 || box.Y < 0 ||
                             (long)box.X + box.Width > image.Width || (long)box.Y + box.Height > image.Height)
-                        { Clear(); return false; }
-                        bounds = new RectangleF((float)box.X * frame.Width / image.Width,
+                        { Clear(); return Lost("Object lost; select it again"); }
+                        if (!_appearance.Matches(mat, box))
+                        { Clear(); return Lost("Object appearance changed or was occluded; select it again"); }
+                        token.ThrowIfCancellationRequested();
+                        var bounds = new RectangleF((float)box.X * frame.Width / image.Width,
                             (float)box.Y * frame.Height / image.Height, (float)box.Width * frame.Width / image.Width,
                             (float)box.Height * frame.Height / image.Height);
-                        return true;
+                        return new VisualTrackingResult(VisualTrackingState.Verified, "Selected object verified", bounds,
+                            new PointF(bounds.X + bounds.Width / 2, bounds.Y + bounds.Height / 2));
                     }
                 }
                 catch { Clear(); throw; }
                 finally { image.UnlockBits(bits); }
             }
-        }
-
-        private static Bitmap Scale(Bitmap frame)
-        {
-            double scale = Math.Min(1, 640.0 / Math.Max(frame.Width, frame.Height));
-            var result = new Bitmap(Math.Max(1, (int)(frame.Width * scale)), Math.Max(1, (int)(frame.Height * scale)),
-                PixelFormat.Format24bppRgb);
-            using (var graphics = Graphics.FromImage(result))
-            { graphics.DrawImage(frame, new Rectangle(0, 0, result.Width, result.Height)); }
-            return result;
         }
 
         private static bool HasTexture(Bitmap image, OpenCvSharp.Rect box)
@@ -116,18 +108,13 @@ namespace NOMAD.MissionPlanner
             return maximum - minimum >= 12;
         }
 
-        private static void ValidateFrame(Bitmap frame)
-        {
-            if (frame == null) { throw new ArgumentNullException(nameof(frame)); }
-            if (frame.Width < 1 || frame.Height < 1 || frame.Width > 16384 || frame.Height > 16384 ||
-                (long)frame.Width * frame.Height > 64 * 1024 * 1024)
-            { throw new ArgumentException("Video frame exceeds visual tracking limits."); }
-        }
+        private static VisualTrackingResult Lost(string status) => new VisualTrackingResult(VisualTrackingState.Lost, status);
 
         private void CheckDisposed()
         { if (_disposed) { throw new ObjectDisposedException(nameof(CsrtVisualTracker)); } }
 
-        private void Clear() { _tracker?.Dispose(); _tracker = null; }
+        private void Clear()
+        { _tracker?.Dispose(); _tracker = null; _appearance?.Dispose(); _appearance = null; }
 
         public void Dispose()
         {

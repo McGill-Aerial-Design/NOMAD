@@ -21,9 +21,9 @@ internal static partial class VideoLifetimeTests
                 forward / (2.0 * TrackingImageSize.Height / TrackingImageSize.Width)));
     }
 
-    private static RectangleF TrackingRegion(PointF error, int pitchSign = 1, int yawSign = 1) =>
-        new RectangleF((.5f + error.X * yawSign) * TrackingImageSize.Width - 10,
-            (.5f + error.Y * pitchSign) * TrackingImageSize.Height - 10, 20, 20);
+    private static PointF TrackingRegion(PointF error, int pitchSign = 1, int yawSign = 1) =>
+        new PointF((.5f + error.X * yawSign) * TrackingImageSize.Width,
+            (.5f + error.Y * pitchSign) * TrackingImageSize.Height);
 
     private static void TrackingRayGeometry()
     {
@@ -57,7 +57,7 @@ internal static partial class VideoLifetimeTests
             out _, out float correctedYaw);
         Check(correctedYaw - 20 > .49f && correctedYaw - 20 <= .51f,
             "Downward-camera azimuth correction still uses the level-camera approximation");
-        VideoTrackingAngles.TryStep(normal, TrackingImageSize, new RectangleF(1000, 600, 20, 20), -89, 0, .1,
+        VideoTrackingAngles.TryStep(normal, TrackingImageSize, new PointF(1010, 610), -89, 0, .1,
             out float nearPolePitch, out float nearPoleYaw);
         Check(!float.IsNaN(nearPolePitch) && !float.IsNaN(nearPoleYaw) &&
             Math.Abs(nearPolePitch + 89) <= 3 && Math.Abs(nearPoleYaw) <= 3 && nearPolePitch >= -90,

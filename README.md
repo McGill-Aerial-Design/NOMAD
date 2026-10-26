@@ -40,6 +40,8 @@ See [operations](docs/operations.md) for profiles, links, fences and input contr
 and [video and tracking](docs/video.md) for cameras, detection, gimbal calibration,
 observations and model profiles. Ordinary aircraft flight remains in Mission Planner.
 
+![Video model selection and aircraft-facing heading marker](docs/images/video-heading.png)
+
 ## Build and contribute
 
 Install the reviewed Mission Planner host, Visual Studio's .NET desktop build tools,

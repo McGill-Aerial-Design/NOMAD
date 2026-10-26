@@ -17,12 +17,15 @@ namespace NOMAD.MissionPlanner
         private Button _btnRemoveVideo;
         private VideoInputProfile _editingVideoInput;
         private bool _loadingVideo;
-        private TextBox _txtVisionModel;
+        private ComboBox _cmbVisionModel;
         private CheckBox _chkTrackingCalibrated;
         private NumericUpDown _numVisionFov, _numVisionPitchMin, _numVisionPitchMax;
         private NumericUpDown _numVisionYawMin, _numVisionYawMax, _numVisionRate;
         private ComboBox _cmbVisionPitchSign, _cmbVisionYawSign;
         private Button _btnVisionModelBrowse;
+        private ComboBox _cmbTrackingMode;
+        private CheckBox _chkGroundPrediction;
+        private NumericUpDown _numGroundPlaneHeight, _numCameraDelay;
 
         private TabPage CreateVideoTab()
         {
@@ -87,17 +90,24 @@ namespace NOMAD.MissionPlanner
         private void AddVisionSettings(TabPage tab, ref int y)
         {
             AddSectionLabel(tab, "Vision and gimbal calibration", ref y);
-            AddLabel(tab, "Model profile (optional):", 20, y);
-            _txtVisionModel = AddTextBox(tab, 180, y, 340);
-            _btnVisionModelBrowse = ControlFactory.Button("Browse", width: 85, height: 27);
+            AddLabel(tab, "Detection model:", 20, y);
+            _cmbVisionModel = AddComboBox(tab, 180, y, 340, Array.Empty<string>());
+            _cmbVisionModel.AccessibleName = "Detection model";
+            _btnVisionModelBrowse = ControlFactory.Button("Manage", width: 85, height: 27);
             _btnVisionModelBrowse.Location = new Point(530, y);
             _btnVisionModelBrowse.Click += (sender, args) =>
             {
-                using (var dialog = new OpenFileDialog { Filter = "Vision model profile (*.json)|*.json" })
-                { if (dialog.ShowDialog(this) == DialogResult.OK) { _txtVisionModel.Text = dialog.FileName; } }
+                string current = (_cmbVisionModel.SelectedItem as VisionModelChoice)?.Path ?? "";
+                try { using (var dialog = new VisionModelsForm(current)) { dialog.ShowDialog(this); } }
+                catch (Exception failure) when (failure is System.IO.IOException ||
+                    failure is UnauthorizedAccessException || failure is Newtonsoft.Json.JsonException ||
+                    failure is FormatException || failure is ArgumentException)
+                { _toolTips.SetToolTip(_cmbVisionModel, "Model catalog unavailable; current selection is preserved."); }
+                LoadModelChoices(current);
             };
             tab.Controls.Add(_btnVisionModelBrowse);
-            _toolTips.SetToolTip(_txtVisionModel, "Empty uses the bundled vehicle detector. A model profile declares its format and SHA256.");
+            _toolTips.SetToolTip(_cmbVisionModel,
+                "Models are shared by this groundstation. Manage local YOLOX profiles; weights stay in place.");
             y += 32;
             _chkTrackingCalibrated = AddCheckBox(tab, "Camera and mount calibrated", 20, y);
             _toolTips.SetToolTip(_chkTrackingCalibrated,
@@ -129,6 +139,21 @@ namespace NOMAD.MissionPlanner
             AddLabel(tab, "Tracking rate (deg/s):", 20, y);
             _numVisionRate = AddNumericUpDown(tab, 180, y, 85, 1, 60, 10);
             y += 32;
+            AddLabel(tab, "Default tracking:", 20, y);
+            _cmbTrackingMode = AddComboBox(tab, 180, y, 140, new[] { "Object", "Area" }); y += 32;
+            _chkGroundPrediction = AddCheckBox(tab, "Use estimated ground-plane search hint", 20, y); y += 32;
+            AddLabel(tab, "Plane above HOME (m):", 20, y);
+            _numGroundPlaneHeight = AddNumericUpDown(tab, 180, y, 100, -10000, 10000, 0);
+            _numGroundPlaneHeight.DecimalPlaces = 1; y += 32;
+            AddLabel(tab, "Camera delay (ms):", 20, y);
+            _numCameraDelay = AddNumericUpDown(tab, 180, y, 100, 0, 2000, 0); y += 32;
+            _toolTips.SetToolTip(_chkGroundPrediction,
+                "Area search only: assumes a horizontal ground plane at the entered height relative to HOME. " +
+                "Leave off for walls, uneven terrain or unknown height. GPS/pose estimates never authorize steering.");
+            _toolTips.SetToolTip(_numGroundPlaneHeight,
+                "Explicit horizontal surface height relative to aircraft HOME, not height above the camera.");
+            _toolTips.SetToolTip(_numCameraDelay,
+                "Estimated camera/encoder delay before frame receipt; independent of receiver jitter buffering.");
         }
 
         private void LoadVideoSettings(VideoInputProfile editing = null)
@@ -154,8 +179,12 @@ namespace NOMAD.MissionPlanner
             _numVideoLatency.Value = input?.LatencyMs ?? 100;
             _numVideoQueue.Value = input?.QueueMaxBuffers ?? 1;
             _chkVideoDrop.Checked = input?.DropOldFrames ?? true;
-            _txtVisionModel.Text = input?.DetectorModelProfilePath ?? "";
+            LoadModelChoices(input?.DetectorModelProfilePath ?? "");
             _chkTrackingCalibrated.Checked = input?.TrackingCalibrated ?? false;
+            _cmbTrackingMode.SelectedItem = input?.TrackingMode ?? "Object";
+            _chkGroundPrediction.Checked = input?.GroundPredictionEnabled ?? false;
+            _numGroundPlaneHeight.Value = (decimal)(input?.GroundPlaneHeightMeters ?? 0);
+            _numCameraDelay.Value = input?.CameraDelayEstimateMs ?? 0;
             _numVisionFov.Value = input?.HorizontalFovDeg ?? 90;
             _numVisionPitchMin.Value = input?.PitchMinDeg ?? -90;
             _numVisionPitchMax.Value = input?.PitchMaxDeg ?? 90;
@@ -165,11 +194,20 @@ namespace NOMAD.MissionPlanner
             _cmbVisionPitchSign.SelectedIndex = input?.PitchSign == -1 ? 1 : 0;
             _cmbVisionYawSign.SelectedIndex = input?.YawSign == -1 ? 1 : 0;
             foreach (var control in new Control[] { _txtVideoName, _txtVideoUrl, _cmbVideoTransport,
-                _numVideoLatency, _numVideoQueue, _chkVideoDrop, _btnRemoveVideo, _txtVisionModel,
+                _numVideoLatency, _numVideoQueue, _chkVideoDrop, _btnRemoveVideo, _cmbVisionModel,
                 _chkTrackingCalibrated, _numVisionFov, _numVisionPitchMin, _numVisionPitchMax,
                 _numVisionYawMin, _numVisionYawMax, _numVisionRate, _cmbVisionPitchSign, _cmbVisionYawSign,
-                _btnVisionModelBrowse })
+                _btnVisionModelBrowse, _cmbTrackingMode, _chkGroundPrediction, _numGroundPlaneHeight, _numCameraDelay })
             { control.Enabled = input != null; }
+        }
+
+        private void LoadModelChoices(string path)
+        {
+            _cmbVisionModel.Items.Clear();
+            var choices = new VisionModelCatalog().SelectionChoices(path, out string error);
+            if (error != null) { _toolTips.SetToolTip(_cmbVisionModel, error); }
+            _cmbVisionModel.Items.AddRange(choices.ToArray());
+            _cmbVisionModel.SelectedItem = choices.Single(item => VisionModelCatalog.SamePath(item.Path, path));
         }
 
         private void SaveVideoInput()
@@ -181,7 +219,12 @@ namespace NOMAD.MissionPlanner
                 RtspTransport = (string)_cmbVideoTransport.SelectedItem,
                 LatencyMs = (int)_numVideoLatency.Value, QueueMaxBuffers = (int)_numVideoQueue.Value,
                 DropOldFrames = _chkVideoDrop.Checked,
-                DetectorModelProfilePath = _txtVisionModel.Text.Trim(), TrackingCalibrated = _chkTrackingCalibrated.Checked,
+                DetectorModelProfilePath = (_cmbVisionModel.SelectedItem as VisionModelChoice)?.Path ?? "",
+                TrackingCalibrated = _chkTrackingCalibrated.Checked,
+                TrackingMode = (string)_cmbTrackingMode.SelectedItem,
+                GroundPredictionEnabled = _chkGroundPrediction.Checked,
+                GroundPlaneHeightMeters = (double)_numGroundPlaneHeight.Value,
+                CameraDelayEstimateMs = (int)_numCameraDelay.Value,
                 HorizontalFovDeg = (int)_numVisionFov.Value,
                 PitchMinDeg = (int)_numVisionPitchMin.Value, PitchMaxDeg = (int)_numVisionPitchMax.Value,
                 YawMinDeg = (int)_numVisionYawMin.Value, YawMaxDeg = (int)_numVisionYawMax.Value,
