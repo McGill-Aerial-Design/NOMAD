@@ -84,11 +84,31 @@ internal static partial class VideoLifetimeTests
             }
         }
 
-        internal void Attitude(float radians, byte system = 201)
+        internal void Attitude(float radians, byte system = 201, uint boot = 1)
         {
             if (system == 201) { _heading = radians; _attitudeTicks = Stopwatch.GetTimestamp(); }
             Send(MAVLink.MAVLINK_MSG_ID.ATTITUDE,
-                new MAVLink.mavlink_attitude_t { time_boot_ms = 1, yaw = radians }, system);
+                new MAVLink.mavlink_attitude_t { time_boot_ms = boot, yaw = radians }, system);
+        }
+
+        internal void MotionPosition(double latitude, double longitude, double altitude, double homeAltitude,
+            byte fix = 3, uint boot = 1, bool sendHome = true)
+        {
+            if (sendHome) { Send(MAVLink.MAVLINK_MSG_ID.HOME_POSITION, new MAVLink.mavlink_home_position_t
+            { latitude = 450000000, longitude = 0, altitude = (int)(homeAltitude * 1000) }); }
+            Send(MAVLink.MAVLINK_MSG_ID.GPS_RAW_INT, new MAVLink.mavlink_gps_raw_int_t { fix_type = fix });
+            Send(MAVLink.MAVLINK_MSG_ID.GLOBAL_POSITION_INT, new MAVLink.mavlink_global_position_int_t
+            { lat = (int)(latitude * 1e7), lon = (int)(longitude * 1e7), alt = (int)(altitude * 1000),
+                relative_alt = (int)((altitude - homeAltitude) * 1000), time_boot_ms = boot });
+        }
+
+        internal void MotionMount(byte device, byte system = 201)
+        {
+            double yaw = 30 * Math.PI / 360, pitch = -45 * Math.PI / 360;
+            Send(MAVLink.MAVLINK_MSG_ID.GIMBAL_DEVICE_ATTITUDE_STATUS,
+                new MAVLink.mavlink_gimbal_device_attitude_status_t { gimbal_device_id = device, flags = 32,
+                    q = new[] { (float)(Math.Cos(yaw) * Math.Cos(pitch)), (float)(-Math.Sin(yaw) * Math.Sin(pitch)),
+                        (float)(Math.Cos(yaw) * Math.Sin(pitch)), (float)(Math.Sin(yaw) * Math.Cos(pitch)) } }, system);
         }
 
         internal void Until(Func<bool> condition, string diagnostic)

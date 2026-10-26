@@ -50,7 +50,7 @@ namespace NOMAD.MissionPlanner
             };
 
             _videoHost = new VideoInputPlayer(_config, true, _shutdown, _createPipeline,
-                NOMADMainScreen.SelectVideoInput);
+                NOMADMainScreen.SelectVideoInput, NOMADMainScreen.SelectVideoModel);
             videoPanel.Controls.Add(_videoHost);
 
             mainLayout.Controls.Add(videoPanel, 0, 0);

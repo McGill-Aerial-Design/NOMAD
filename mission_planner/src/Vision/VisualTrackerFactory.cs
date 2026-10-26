@@ -7,13 +7,16 @@ namespace NOMAD.MissionPlanner
 {
     internal static class VisualTrackerFactory
     {
-        internal static IVisualTracker Create(CancellationToken cancellationToken)
+        internal static IVisualTracker Create(CancellationToken cancellationToken,
+            VisualTrackingMode mode = VisualTrackingMode.Object)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (mode != VisualTrackingMode.Object && mode != VisualTrackingMode.Area)
+            { throw new ArgumentOutOfRangeException(nameof(mode)); }
             try
             {
                 VisionRuntime.EnsureOpenCvLoaded(cancellationToken);
-                return CreateLoaded();
+                return CreateLoaded(mode);
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested)
             { throw new OperationCanceledException(cancellationToken); }
@@ -22,6 +25,7 @@ namespace NOMAD.MissionPlanner
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static IVisualTracker CreateLoaded() { return new CsrtVisualTracker(); }
+        private static IVisualTracker CreateLoaded(VisualTrackingMode mode) =>
+            mode == VisualTrackingMode.Area ? (IVisualTracker)new AreaVisualTracker() : new CsrtVisualTracker();
     }
 }

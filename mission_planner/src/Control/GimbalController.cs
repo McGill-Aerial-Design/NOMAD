@@ -8,6 +8,7 @@
 // ============================================================
 
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using MissionPlanner;
@@ -83,6 +84,31 @@ namespace NOMAD.MissionPlanner
         private static long _modeRevision;
         private static long _manualRevision;
         private static long _trackingClaim;
+        internal sealed class SubmittedPose
+        {
+            internal long Generation { get; }
+            internal float Pitch { get; }
+            internal float Roll { get; }
+            internal float Yaw { get; }
+            internal long SubmittedTicks { get; }
+            internal long ChangedTicks { get; }
+            internal long Revision { get; }
+            internal SubmittedPose(long generation, float pitch, float roll, float yaw, long ticks, long changed,
+                long revision)
+            {
+                Generation = generation; Pitch = pitch; Roll = roll; Yaw = yaw;
+                SubmittedTicks = ticks; ChangedTicks = changed; Revision = revision;
+            }
+        }
+        private static SubmittedPose _lastSubmittedPose;
+        internal static SubmittedPose LastSubmittedPose
+        {
+            get
+            {
+                var pose = Volatile.Read(ref _lastSubmittedPose);
+                return pose?.Revision == Interlocked.Read(ref _modeRevision) ? pose : null;
+            }
+        }
         internal static long CurrentTrackingClaim => Interlocked.Read(ref _trackingClaim);
         internal static long ClaimTracking() => Interlocked.Increment(ref _trackingClaim);
         internal static long ManualRevision => Interlocked.Read(ref _manualRevision);
@@ -101,6 +127,7 @@ namespace NOMAD.MissionPlanner
         }
         internal static void InvalidateInput()
         {
+            Interlocked.Exchange(ref _lastSubmittedPose, null);
             Interlocked.Increment(ref _modeRevision);
             TargetPitchDeg = 0;
             TargetRollDeg = 0;
@@ -194,8 +221,23 @@ namespace NOMAD.MissionPlanner
                 {
                     return new GimbalRequestResult(GimbalRequestOutcome.NotSent, "Angle targets require MAVLink targeting.");
                 }
+                var previousPose = LastSubmittedPose;
                 var result = await OutputController.SendGimbalTargetAsync((int)mode, pitch, roll, yaw, generation,
                     Current).ConfigureAwait(false);
+                if (result.Outcome != GimbalRequestOutcome.Busy)
+                {
+                    SubmittedPose submitted = null;
+                    if (result.Submitted && pitch.HasValue && mode == MountMode.MavlinkTargeting &&
+                        generation == OutputController.Generation && Current())
+                    {
+                        long ticks = Stopwatch.GetTimestamp();
+                        long changed = previousPose != null && previousPose.Generation == generation &&
+                            previousPose.Pitch == pitch.Value && previousPose.Roll == roll.Value && previousPose.Yaw == yaw
+                            ? previousPose.ChangedTicks : ticks;
+                        submitted = new SubmittedPose(generation, pitch.Value, roll.Value, yaw, ticks, changed, revision);
+                    }
+                    Interlocked.Exchange(ref _lastSubmittedPose, submitted);
+                }
                 LastCommandStatus = result.Message;
                 if (!result.Submitted)
                 {

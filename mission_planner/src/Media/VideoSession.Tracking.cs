@@ -8,18 +8,20 @@ namespace NOMAD.MissionPlanner
 {
     internal sealed partial class VideoSession
     {
-        private readonly Func<CancellationToken, IVisualTracker> _createTracker;
+        private readonly Func<CancellationToken, VisualTrackingMode, IVisualTracker> _createTracker;
         private RegionSelection _pendingSelection;
         private CancellationTokenSource _selectionCancellation;
         private long _selectionRevision;
-        private bool _trackerReady, _selectionFound;
+        private bool _trackerReady, _selectionFound, _selectionActive;
         private string _trackerError;
         internal bool TrackerReady { get { lock (_gate) { return _trackerReady; } } }
         internal string TrackerError { get { lock (_gate) { return _trackerError; } } }
         internal bool IsRegionCurrent(long revision)
         { lock (_gate) { return _selectionFound && revision == _selectionRevision && _state == VideoState.Streaming; } }
+        internal bool HasRegion(long revision)
+        { lock (_gate) { return _selectionActive && revision == _selectionRevision && _state == VideoState.Streaming; } }
 
-        internal long RequestRegion(VideoFrame source, RectangleF bounds)
+        internal long RequestRegion(VideoFrame source, RectangleF bounds, VisualTrackingMode mode = VisualTrackingMode.Object)
         {
             if (source?.Fresh != true || !ValidRegion(bounds, source.Image.Size, true)) { return 0; }
             lock (_gate)
@@ -30,7 +32,8 @@ namespace NOMAD.MissionPlanner
                 RetireRegion();
                 _pendingSelection = new RegionSelection
                 { Image = clone, Bounds = bounds, Sequence = source.Sequence,
-                    Generation = source.Generation, ReceivedTicks = source.ReceivedTicks };
+                    Generation = source.Generation, ReceivedTicks = source.ReceivedTicks, Mode = mode };
+                _selectionActive = true;
                 ClearPendingFrame();
                 return _selectionRevision;
             }
@@ -42,6 +45,7 @@ namespace NOMAD.MissionPlanner
             {
                 ++_selectionRevision;
                 _selectionFound = false;
+                _selectionActive = false;
                 _selectionCancellation?.Cancel();
                 _pendingSelection?.Dispose(); _pendingSelection = null;
             }
@@ -60,6 +64,7 @@ namespace NOMAD.MissionPlanner
         {
             internal Bitmap Image;
             internal RectangleF Bounds;
+            internal VisualTrackingMode Mode;
             internal long Sequence, ReceivedTicks, Generation;
             public void Dispose() => Image.Dispose();
         }
@@ -73,6 +78,10 @@ namespace NOMAD.MissionPlanner
             private CancellationTokenSource _cancellation;
             private long _revision;
             private VideoRegionResult _lastResult;
+            private VisualTrackingMode _mode;
+            private GroundAreaAnchor _groundAnchor;
+            private RectangleF _referenceSelection;
+            private bool _groundPriorDisabled;
 
             internal RegionWorker(VideoSession owner, CancellationToken token)
             {
@@ -80,7 +89,7 @@ namespace NOMAD.MissionPlanner
                 if (owner._createTracker == null) { return; }
                 try
                 {
-                    _tracker = owner._createTracker(token);
+                    _tracker = owner._createTracker(token, VisualTrackingMode.Object);
                     lock (owner._gate) { owner._trackerReady = true; owner._trackerError = null; }
                 }
                 catch (OperationCanceledException) { token.ThrowIfCancellationRequested(); }
@@ -88,7 +97,7 @@ namespace NOMAD.MissionPlanner
                 { lock (owner._gate) { owner._trackerReady = false; owner._trackerError = "Visual tracking unavailable; video continues."; } }
             }
 
-            internal VideoRegionResult Update(Bitmap image, long received, long sequence)
+            internal VideoRegionResult Update(Bitmap image, long received, long sequence, VideoMotionSnapshot motion)
             {
                 RegionSelection selection;
                 long revision;
@@ -107,7 +116,9 @@ namespace NOMAD.MissionPlanner
                         if (age < 0 || age >= .5 || image.Size != selection.Image.Size || sequence <= selection.Sequence ||
                             selection.Generation != _owner.Generation)
                         { return Lost("Selection expired; select the current image again"); }
-                        _tracker = _tracker ?? _owner._createTracker(_token);
+                        _mode = selection.Mode;
+                        _referenceSelection = selection.Bounds;
+                        _tracker = _tracker ?? _owner._createTracker(_token, _mode);
                         _cancellation = CancellationTokenSource.CreateLinkedTokenSource(_token);
                         lock (_owner._gate)
                         {
@@ -117,16 +128,31 @@ namespace NOMAD.MissionPlanner
                         _tracker.Initialize(selection.Image, selection.Bounds, _cancellation.Token);
                     }
                     if (_tracker == null || _cancellation == null) { return _lastResult; }
-                    bool found = _tracker.TryUpdate(image, _cancellation.Token, out var bounds) &&
-                        ValidRegion(bounds, image.Size, false);
+                    PointF? hint = GroundHint(image.Size, motion);
+                    var result = _tracker.Update(image, _cancellation.Token, new VisualFrameContext(hint));
+                    bool found = result.Found && result.Bounds.HasValue && result.AimPoint.HasValue &&
+                        ValidRegion(result.Bounds.Value, image.Size, false) &&
+                        new RectangleF(0, 0, image.Width, image.Height).Contains(result.AimPoint.Value);
+                    if (result.Found && !found) { return Lost("Invalid visual result; select again"); }
                     _token.ThrowIfCancellationRequested();
                     lock (_owner._gate)
                     {
                         if (_revision != _owner._selectionRevision) { return null; }
                         _owner._selectionFound = found;
                     }
-                    if (!found) { return Lost("Target lost; select again"); }
-                    return _lastResult = new VideoRegionResult(_revision, true, bounds, "Target locked");
+                    if (result.State == VisualTrackingState.Lost) { return Lost(result.Status); }
+                    if (found && hint.HasValue)
+                    {
+                        float radius = VisualFrameContext.PriorSearchRadius(image.Size, _referenceSelection);
+                        if (Math.Abs(result.AimPoint.Value.X - hint.Value.X) > radius ||
+                            Math.Abs(result.AimPoint.Value.Y - hint.Value.Y) > radius)
+                        { _groundPriorDisabled = true; _groundAnchor = null; hint = null; }
+                    }
+                    if (found && _mode == VisualTrackingMode.Area && _owner._trackingProfile.GroundPredictionEnabled &&
+                        !_groundPriorDisabled && _groundAnchor == null && motion?.IsCurrent == true)
+                    { GroundProjection.TryCreateAnchor(_owner._trackingProfile, image.Size, result.AimPoint.Value,
+                        motion.Ground, _owner._trackingProfile.GroundPlaneHeightMeters, out _groundAnchor); }
+                    return _lastResult = new VideoRegionResult(_revision, _mode, result, hint);
                 }
                 catch (OperationCanceledException) { Clear(); _token.ThrowIfCancellationRequested(); return null; }
                 catch (Exception) { return Lost("Selection failed; choose a larger textured region"); }
@@ -138,9 +164,20 @@ namespace NOMAD.MissionPlanner
                 {
                     if (_revision != _owner._selectionRevision) { Clear(); return null; }
                     _owner._selectionFound = false;
+                    _owner._selectionActive = false;
                 }
                 Clear();
-                return _lastResult = new VideoRegionResult(_revision, false, null, status);
+                return _lastResult = new VideoRegionResult(_revision, _mode,
+                    new VisualTrackingResult(VisualTrackingState.Lost, status));
+            }
+
+            private PointF? GroundHint(Size image, VideoMotionSnapshot motion)
+            {
+                if (_mode != VisualTrackingMode.Area || !_owner._trackingProfile.GroundPredictionEnabled ||
+                    _groundPriorDisabled || motion?.IsCurrent != true) { return null; }
+                if (_groundAnchor != null && !ReferenceEquals(_groundAnchor.Epoch, motion.Epoch)) { _groundAnchor = null; }
+                return GroundProjection.TryProjectAnchor(_owner._trackingProfile, image, _groundAnchor,
+                    motion.Ground, out var point) ? point : (PointF?)null;
             }
 
             private void Clear()
@@ -148,6 +185,8 @@ namespace NOMAD.MissionPlanner
                 var source = _cancellation;
                 _cancellation = null;
                 _lastResult = null;
+                _groundAnchor = null;
+                _groundPriorDisabled = false;
                 lock (_owner._gate)
                 { if (ReferenceEquals(_owner._selectionCancellation, source)) { _owner._selectionCancellation = null; } }
                 try { _tracker?.Dispose(); }

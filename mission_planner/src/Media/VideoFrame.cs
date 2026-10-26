@@ -17,13 +17,15 @@ namespace NOMAD.MissionPlanner
         internal long ReceivedTicks { get; }
         internal DateTime ReceivedUtc { get; }
         internal string DetectorIdentity { get; }
+        internal long DetectionRevision { get; }
         internal VideoRegionResult Region { get; }
+        internal VideoMotionSnapshot Motion { get; }
         internal bool Fresh => AgeSeconds >= 0 && AgeSeconds < 0.5;
         internal double AgeSeconds => (Stopwatch.GetTimestamp() - ReceivedTicks) / (double)Stopwatch.Frequency;
 
         internal VideoFrame(Bitmap image, IReadOnlyList<VideoDetection> detections, long sequence,
             long generation, long receivedTicks, DateTime receivedUtc, string detectorIdentity,
-            VideoRegionResult region = null)
+            VideoRegionResult region = null, long detectionRevision = 0, VideoMotionSnapshot motion = null)
         {
             Image = image ?? throw new ArgumentNullException(nameof(image));
             var copy = (detections ?? Array.Empty<VideoDetection>()).ToArray();
@@ -36,7 +38,9 @@ namespace NOMAD.MissionPlanner
             ReceivedTicks = receivedTicks;
             ReceivedUtc = receivedUtc;
             DetectorIdentity = detectorIdentity ?? "";
+            DetectionRevision = detectionRevision;
             Region = region;
+            Motion = motion;
         }
 
         public void Dispose() => Image.Dispose();
@@ -45,11 +49,19 @@ namespace NOMAD.MissionPlanner
     internal sealed class VideoRegionResult
     {
         internal long Revision { get; }
-        internal bool Found { get; }
+        internal bool Found => State == VisualTrackingState.Verified;
+        internal VisualTrackingMode Mode { get; }
+        internal VisualTrackingState State { get; }
         internal RectangleF? Bounds { get; }
+        internal PointF? AimPoint { get; }
+        internal PointF? GroundSearchHint { get; }
         internal string Status { get; }
-        internal VideoRegionResult(long revision, bool found, RectangleF? bounds, string status)
-        { Revision = revision; Found = found; Bounds = bounds; Status = status; }
+        internal VideoRegionResult(long revision, VisualTrackingMode mode, VisualTrackingResult result,
+            PointF? groundSearchHint = null)
+        {
+            Revision = revision; Mode = mode; State = result.State; Bounds = result.Bounds;
+            AimPoint = result.AimPoint; Status = result.Status; GroundSearchHint = groundSearchHint;
+        }
     }
 
     internal static class VideoGeometry

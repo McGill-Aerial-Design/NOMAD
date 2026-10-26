@@ -34,15 +34,22 @@ namespace NOMAD.MissionPlanner
         private long _generation;
         private VideoState _state;
         private string _error;
+        private readonly NOMADConfig _trackingAircraft;
+        private VideoInputProfile _trackingProfile;
 
         public VideoSession(Func<IVideoPipeline> createPipeline,
             Func<string, CancellationToken, IVideoDetector> createDetector = null,
-            Func<CancellationToken, IVisualTracker> createTracker = null)
+            Func<CancellationToken, VisualTrackingMode, IVisualTracker> createTracker = null,
+            NOMADConfig trackingAircraft = null, VideoInputProfile trackingProfile = null)
         {
             _createPipeline = createPipeline;
             _createDetector = createDetector ?? VisionDetectorFactory.Create;
             _createTracker = createTracker;
+            _trackingAircraft = trackingAircraft; _trackingProfile = trackingProfile?.Copy() ?? new VideoInputProfile();
         }
+
+        internal void ConfigureTracking(VideoInputProfile profile)
+        { lock (_gate) { _trackingProfile = profile.Copy(); RetireRegion(); } }
 
         public VideoState State { get { lock (_gate) { return _state; } } }
         public string Error { get { lock (_gate) { return _error; } } }
@@ -57,6 +64,7 @@ namespace NOMAD.MissionPlanner
                 _detectionEnabled = enabled;
                 _modelProfilePath = modelProfilePath ?? "";
                 _visionError = null;
+                _detectionLoading = false;
                 ClearPendingFrame();
             }
         }
@@ -132,11 +140,9 @@ namespace NOMAD.MissionPlanner
 
         private void ReadFrames(IVideoPipeline pipeline, long generation, CancellationToken token)
         {
-            IVideoDetector detector = null;
-            CancellationTokenSource vision = null;
-            long detectorRevision = -1;
+            using (var detection = new DetectionWorker(this, token))
             using (var tracking = new RegionWorker(this, token))
-            try
+            using (var motionHistory = new VideoMotionHistory(_trackingAircraft))
             {
                 while (!token.IsCancellationRequested)
                 {
@@ -145,6 +151,8 @@ namespace NOMAD.MissionPlanner
                     VideoFrame processed = null;
                     long received = Stopwatch.GetTimestamp();
                     DateTime utc = DateTime.UtcNow;
+                    if (_trackingAircraft != null) { motionHistory.Capture(received); }
+                    var motion = motionHistory.Snapshot(received, _trackingProfile.CameraDelayEstimateMs);
                     long sequence = Interlocked.Increment(ref _sequence);
                     VideoRegionResult region = null;
                     long revision;
@@ -156,30 +164,21 @@ namespace NOMAD.MissionPlanner
                     string identity = "";
                     try
                     {
-                        region = tracking.Update(image, received, sequence);
-                        if (revision != detectorRevision)
+                        region = tracking.Update(image, received, sequence, motion);
+                        var detector = detection.Current(revision, enabled, path);
+                        lock (_gate)
                         {
-                            ReleaseDetector(ref detector, ref vision);
-                            detectorRevision = revision;
-                            if (enabled)
-                            {
-                                vision = CancellationTokenSource.CreateLinkedTokenSource(token);
-                                lock (_gate)
-                                {
-                                    if (revision != _detectionRevision) { vision.Cancel(); }
-                                    _visionCancellation = vision;
-                                }
-                                detector = _createDetector(path, vision.Token);
-                            }
+                            if (revision != _detectionRevision)
+                            { revision = _detectionRevision; enabled = _detectionEnabled; detector = null; }
                         }
                         if (enabled && detector != null)
                         {
-                            detections = detector.Detect(image, vision.Token);
+                            detections = detector.Detect(image, detection.Token);
                             identity = detector.Identity;
                         }
                         token.ThrowIfCancellationRequested();
                         processed = new VideoFrame(image, detections, sequence,
-                            generation, received, utc, identity, region);
+                            generation, received, utc, identity, region, revision, motion);
                         image = null;
                         lock (_gate)
                         {
@@ -193,41 +192,17 @@ namespace NOMAD.MissionPlanner
                     }
                     catch (Exception) when (!token.IsCancellationRequested)
                     {
-                        // Inference errors must not terminate plain playback or expose model/operator paths.
-                        lock (_gate)
-                        {
-                            if (revision == _detectionRevision)
-                            {
-                                _detectionEnabled = false;
-                                ++_detectionRevision;
-                                _visionError = "Vision unavailable; plain video continues. Review the model profile.";
-                            }
-                        }
+                        detection.Fail(revision);
                         if (image != null)
                         {
                             PublishVideoFrame(generation, new VideoFrame(image, Array.Empty<VideoDetection>(),
-                                sequence, generation, received, utc, "", region));
+                                sequence, generation, received, utc, "", region, DetectionRevision, motion));
                             image = null;
                         }
                     }
                     finally { processed?.Dispose(); image?.Dispose(); }
                 }
             }
-            finally
-            {
-                ReleaseDetector(ref detector, ref vision);
-            }
-        }
-
-        private void ReleaseDetector(ref IVideoDetector detector, ref CancellationTokenSource vision)
-        {
-            var resource = detector;
-            var source = vision;
-            detector = null; vision = null;
-            lock (_gate) { if (ReferenceEquals(_visionCancellation, source)) { _visionCancellation = null; } }
-            try { resource?.Dispose(); }
-            catch (Exception) { lock (_gate) { _visionError = "Vision cleanup failed; review the model before enabling again."; } }
-            finally { source?.Dispose(); }
         }
 
         internal void PublishFrame(long generation, Bitmap frame) =>

@@ -120,6 +120,17 @@ internal static class VisionDetectorTests
             Check(loaded.Model == Path.Combine(directory, "yolox_nano.onnx"), "Model paths resolve beside profile.");
             File.WriteAllText(loaded.Model, "invalid model");
             Throws<FormatException>(() => loaded.ReadModel(CancellationToken.None), "Model hash is checked before runtime parsing.");
+            loaded.Sha256 = VisionModelProfile.Hash(File.ReadAllBytes(loaded.Model));
+            try
+            {
+                VisionDetectorFactory.ValidateModel(loaded, CancellationToken.None);
+                throw new Exception("Invalid ONNX bytes passed the model editor's real load test.");
+            }
+            catch (InvalidOperationException error)
+            {
+                Check(error.Message.Contains("ONNX weights could not load") && !error.Message.Contains(directory),
+                    "Model test hid its actionable failure or exposed an operator path.");
+            }
             foreach (string invalidJson in new[]
             {
                 validJson.Replace("\"SchemaVersion\":1", "\"SchemaVersion\":1,\"Unexpected\":true"),
@@ -139,6 +150,13 @@ internal static class VisionDetectorTests
             profile.InputSize = 320;
             Throws<FormatException>(() => { using (new YoloXVideoDetector(profile, CancellationToken.None)) { } },
                 "Actual tensor metadata must match the selected profile.");
+            try
+            {
+                VisionDetectorFactory.ValidateModel(profile, CancellationToken.None);
+                throw new Exception("Wrong tensor profile passed the editor model test.");
+            }
+            catch (InvalidOperationException error)
+            { Check(error.Message.Contains("[1,3,320,320]"), "Model test did not identify the expected tensor shape."); }
         }
         finally { Directory.Delete(directory, true); }
     }

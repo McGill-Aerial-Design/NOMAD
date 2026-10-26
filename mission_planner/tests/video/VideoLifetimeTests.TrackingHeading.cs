@@ -18,7 +18,7 @@ internal static partial class VideoLifetimeTests
             var profile = new VideoInputProfile { Name = "Heading", Url = "udp://@:5600",
                 TrackingCalibrated = true, TrackingMaxRateDegSec = 60 };
             using (var player = new EmbeddedVideoPlayer(profile, true, CancellationToken.None, () => pipeline,
-                peer.Config, createTracker: token => new FakeVisualTracker()))
+                peer.Config, createTracker: (token, mode) => new FakeVisualTracker()))
             {
                 form.Controls.Add(player); form.Show();
                 player.StartStream(); Wait(pipeline.ReadEntered, "heading video");

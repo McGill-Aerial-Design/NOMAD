@@ -25,6 +25,8 @@ namespace NOMAD.MissionPlanner
                     var type = typeof(VideoInputProfile).GetProperty(field.Name)?.PropertyType;
                     bool valid = type == typeof(string) ? field.Value.Type == JTokenType.String :
                         type == typeof(int) ? field.Value.Type == JTokenType.Integer :
+                        type == typeof(double) ? (field.Value.Type == JTokenType.Integer ||
+                            field.Value.Type == JTokenType.Float) :
                         type == typeof(bool) && field.Value.Type == JTokenType.Boolean;
                     if (!valid) { throw new JsonSerializationException("Invalid video input field or type."); }
                 }

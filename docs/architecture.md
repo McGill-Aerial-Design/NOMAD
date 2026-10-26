@@ -79,20 +79,25 @@ slot into the player. HUD and Dashboard playback do not run inference.
 
 `IVideoDetector` is the model boundary. Its YOLOX adapter owns preprocessing,
 ONNX Runtime inference and class-aware suppression. `IVisualTracker` independently
-owns visual region tracking; its CSRT adapter follows the exact image region selected
-by the operator, without requiring detector matches. The video player owns explicit
+owns visual region tracking. Object mode combines CSRT with a frozen appearance
+check; Area mode matches an immutable planar reference with ORB and robust homography.
+Neither requires detector matches. The video player owns explicit
 selection, tracking lifetime and presentation, and sends through the existing
 `GimbalController`/`OutputController` native path. There is no separate vision
 service or aircraft-control transport. Different YOLOX weights and labels use a
 validated JSON profile; a different model architecture implements the same detector
-interface without changing tracking or native dispatch. One pending selection owns
+interface without changing tracking or native dispatch. The groundstation's named
+model catalog stores strict profile files and references weights in place. One pending selection owns
 a clone of the displayed image. The decode worker alone initializes, updates and
 disposes the tracker, and publishes its region with the matching current frame.
 Source/selection revisions reject superseded results; a shared gimbal claim prevents
 embedded and popped-out Video pages from controlling the mount simultaneously.
 
 The DLL embeds pinned CPU runtime binaries, model and notices. Detection lazily
-extracts verified assets into the host's user-data vision cache. Model loading and
+extracts verified assets into the host's user-data vision cache. One asynchronous
+constructor loads the latest requested model while decoding continues. Inference
+and its matching pixels remain on the decode worker. Revision tags prevent old
+model results from reaching overlays, selection or observations. Model loading and
 inference support cancellation; detector failure leaves plain video and region
 tracking available. CSRT calls have no native cancellation API: input is bounded
 to a 640-pixel longest edge, command eligibility retires immediately, and late
@@ -101,13 +106,47 @@ Tracking requires calibrated limits/FOV, latest-frame buffering and fresh select
 aircraft telemetry. Identity-bound fresh ATTITUDE yaw supplies wrapped body-rotation
 compensation inside the same calibrated rate limit; image feedback handles residual
 error. The heading reference advances only on submission. Manual input and session changes invalidate pending requests;
-uncertain submissions retire tracking. An already-dispatched native helper may finish.
+uncertain submissions disarm tracking. Area memory survives visual uncertainty,
+Stop and manual input; native/source/profile replacement clears it. Searching and
+Outside results never authorize commands. Three independent verified matches can
+resume an active intent after a visual pause, with a fresh heading baseline and
+zero accumulated yaw remainder. Stop/manual/stale input requires explicit rearming.
+An already-dispatched native helper may finish.
 Observations pair the displayed image with its detections and separately labeled
 aircraft position and last submitted tracking request. They do not infer target location.
 
+### Motion estimates and reference lifetime
+
+`VideoMotionHistory` reads the selected Mission Planner packet cache; it opens no
+transport and requests no telemetry. Immutable snapshots travel with their decoded
+frame and retain connection/stream/aircraft/profile validity. Heading remains
+independent of GPS availability. Primary mount selection follows the aircraft's
+mount configuration. Reported yaw obeys explicit MAVLink reference-frame flags;
+reported or commanded poses are labeled as estimates, not physical measurements.
+
+The bounded history retains original attitude/position receipt times and successful
+mount submissions. Camera-delay queries need genuine bracketing samples; heading
+wraps through north and submitted target steps are not interpolated into invented
+motor motion. A cached HOME is reference state checked against fresh altitude data;
+binding, reboot and HOME changes invalidate the corresponding ground estimate.
+
+Optional ground prediction intersects a calibrated camera ray with an explicitly
+declared horizontal plane relative to HOME. Current GPS/altitude reprojects the
+estimate into a coarse search region. Its local tangent model rejects near-pole
+coordinates, rays within five degrees of the horizon and ranges beyond 5 km.
+History supports 0–2000 ms declared delay, 128 samples and a three-second window;
+missing or stale data disables the hint while visual tracking remains available.
+
+A prior only changes search order. Failed local matching falls back globally in
+the same frame, retaining the independent second-placement ambiguity check. A
+contradictory unique visual result disables that ground prior for the selection;
+the anchor is not moved to manufacture agreement. Plane assumptions and unmeasured
+camera pose prevent the estimate from establishing a measured target coordinate or
+authorizing unseen-target steering. The heading marker is likewise a display aid.
+
 ### Tracking motion compensation
 
-The image supplies a camera ray from the selected region's center and calibrated
+The image supplies a camera ray from the canonical selected point and calibrated
 focal length. Rotating that ray by the requested camera pitch gives pitch and
 azimuth error; a horizontal pixel offset is not the same as yaw at a downward
 camera pitch. Image correction uses a conservative gain of 1/s.

@@ -11,7 +11,7 @@ namespace NOMAD.MissionPlanner
     {
         public static Button Button(string text, EventHandler onClick = null, Color? backColor = null, int width = 100, int height = 25)
         {
-            var btn = new Button
+            var btn = new ThemedButton
             {
                 Text = text,
                 FlatStyle = FlatStyle.Flat,
@@ -23,6 +23,32 @@ namespace NOMAD.MissionPlanner
             if (onClick != null)
                 btn.Click += onClick;
             return btn;
+        }
+
+        private sealed class ThemedButton : Button
+        {
+            protected override void OnPaint(PaintEventArgs args)
+            {
+                base.OnPaint(args);
+                if (Enabled || Image != null || string.IsNullOrEmpty(Text)) { return; }
+                // WinForms' system disabled-text palette has poor contrast on the dark host controls.
+                var area = ClientRectangle;
+                area.Inflate(-2, -2);
+                using (var background = new SolidBrush(BackColor)) { args.Graphics.FillRectangle(background, area); }
+                area = Rectangle.FromLTRB(Padding.Left + 2, Padding.Top + 2,
+                    Width - Padding.Right - 2, Height - Padding.Bottom - 2);
+                var flags = TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis;
+                if (!UseMnemonic) { flags |= TextFormatFlags.NoPrefix; }
+                if ((TextAlign & (ContentAlignment.TopCenter | ContentAlignment.MiddleCenter | ContentAlignment.BottomCenter)) != 0)
+                { flags |= TextFormatFlags.HorizontalCenter; }
+                else if ((TextAlign & (ContentAlignment.TopRight | ContentAlignment.MiddleRight | ContentAlignment.BottomRight)) != 0)
+                { flags |= TextFormatFlags.Right; }
+                if ((TextAlign & (ContentAlignment.MiddleLeft | ContentAlignment.MiddleCenter | ContentAlignment.MiddleRight)) != 0)
+                { flags |= TextFormatFlags.VerticalCenter; }
+                else if ((TextAlign & (ContentAlignment.BottomLeft | ContentAlignment.BottomCenter | ContentAlignment.BottomRight)) != 0)
+                { flags |= TextFormatFlags.Bottom; }
+                TextRenderer.DrawText(args.Graphics, Text, Font, area, NOMADTheme.TEXT_SECONDARY, flags);
+            }
         }
 
         public static Button ActionButton(string text, EventHandler onClick, Color backColor, int width = 70, int height = 25)

@@ -27,7 +27,7 @@ namespace NOMAD.MissionPlanner
                 json = Path.Combine(directory, name + ".json");
                 object[] transitions;
                 RectangleF? selected;
-                string label;
+                string label, selectionDetector;
                 long regionRevision;
                 float pitch, yaw;
                 long commandGeneration, commandVideoGeneration;
@@ -35,6 +35,7 @@ namespace NOMAD.MissionPlanner
                 {
                     transitions = _trackingEvents.ToArray(); selected = _selectedRegion;
                     label = _selectedLabel; regionRevision = _regionRevision;
+                    selectionDetector = _selectionDetectorIdentity;
                     pitch = _commandedPitch; yaw = _commandedYaw;
                     commandGeneration = _commandGeneration; commandVideoGeneration = _commandVideoGeneration;
                 }
@@ -42,13 +43,20 @@ namespace NOMAD.MissionPlanner
                     commandVideoGeneration == frame.Generation;
                 var metadata = new
                 {
-                    SchemaVersion = 1, SavedUtc = DateTime.UtcNow, InputName = _input.Name,
+                    SchemaVersion = 2, SavedUtc = DateTime.UtcNow, InputName = _input.Name,
                     frame.Sequence, frame.ReceivedUtc, LocalFrameAgeSeconds = frame.AgeSeconds,
-                    Width = frame.Image.Width, Height = frame.Image.Height, frame.DetectorIdentity,
-                    Detections = frame.Detections.Select(DetectionMetadata).ToArray(),
-                    SelectedTarget = selected.HasValue && frame.Region?.Revision == regionRevision && frame.Region.Found
-                        ? new { OptionalDetectorLabel = label, Tracker = "OpenCV CSRT", Found = true,
-                            Box = new { selected.Value.X, selected.Value.Y, selected.Value.Width, selected.Value.Height } }
+                    Width = frame.Image.Width, Height = frame.Image.Height,
+                    DetectorIdentity = CurrentDetections(frame) ? frame.DetectorIdentity : "",
+                    Detections = (CurrentDetections(frame) ? frame.Detections : Array.Empty<VideoDetection>())
+                        .Select(DetectionMetadata).ToArray(),
+                    SelectedTarget = selected.HasValue && frame.Region?.Revision == regionRevision
+                        ? new { OptionalDetectorLabel = label, SelectionDetectorIdentity = selectionDetector,
+                            Mode = frame.Region.Mode.ToString(), State = frame.Region.State.ToString(),
+                            Tracker = frame.Region.Mode == VisualTrackingMode.Area ? "OpenCV ORB planar reference" : "OpenCV CSRT",
+                            Found = frame.Region.Found, ReferenceRetained = _session.HasRegion(regionRevision),
+                            Box = frame.Region.Found ? frame.Region.Bounds : null,
+                            CanonicalAimPoint = frame.Region.Found ? frame.Region.AimPoint : null,
+                            EstimatedGroundSearchHint = frame.Motion?.IsCurrent == true ? frame.Region.GroundSearchHint : null }
                         : null,
                     AircraftPosition = ObservationAircraftPosition(),
                     TargetPosition = new { Available = false, Reason = "No target range or georeferencing is available." },

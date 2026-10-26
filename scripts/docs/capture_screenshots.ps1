@@ -38,9 +38,9 @@ function New-PluginObject([string]$name) {
     return [Activator]::CreateInstance($plugin.GetType('NOMAD.MissionPlanner.' + $name, $true))
 }
 $capturedPaths = [Collections.Generic.List[string]]::new()
-function Capture([Windows.Forms.Control]$control, [string]$filename) {
+function Capture([Windows.Forms.Control]$control, [string]$filename, [scriptblock]$beforeDraw = $null) {
     $imagePath = Join-Path $output $filename
-    Save-ControlImage $control $imagePath
+    Save-ControlImage $control $imagePath $beforeDraw
     $capturedPaths.Add($imagePath)
 }
 
@@ -83,6 +83,15 @@ try {
         $config.VideoInputs.Add($input)
     }
     $config.SelectedVideoInputName = $config.VideoInputs[0].Name
+    $visionProfileType = $plugin.GetType('NOMAD.MissionPlanner.VisionModelProfile', $true)
+    $people = $visionProfileType.GetMethod('Builtin', $static).Invoke($null, $null)
+    $people.Name = 'People'
+    $people.Model = 'C:\Models\yolox_nano.onnx'
+    $people.AllowedClasses = [int[]]@(0)
+    $catalogType = $plugin.GetType('NOMAD.MissionPlanner.VisionModelCatalog', $true)
+    $catalog = [Activator]::CreateInstance($catalogType, $private, $null, [object[]]@($null), $null)
+    $peoplePath = $catalogType.GetMethod('Save', $private).Invoke($catalog, [object[]]@($people, $null))
+    $config.SelectedVideoInput.DetectorModelProfilePath = $peoplePath
     $link = New-PluginObject 'LinkConfig'
     $link.Id = 'example-elrs'; $link.Name = 'ELRS telemetry'; $link.Port = 14550
     $link.BindAddress = '127.0.0.1'
@@ -118,6 +127,14 @@ try {
     $editor = [Activator]::CreateInstance($editorType, [Reflection.BindingFlags]'Instance,NonPublic',
         $null, [object[]]@($config, [int]0), $null)
     Capture $editor 'input-editor.png'
+    $modelEditorType = $plugin.GetType('NOMAD.MissionPlanner.VisionModelEditorForm', $true)
+    $modelEditor = [Activator]::CreateInstance($modelEditorType, $private, $null, [object[]]@($people), $null)
+    $modelEditor.ClientSize = [Drawing.Size]::new(760, 700)
+    Capture $modelEditor 'detection-model.png'
+    $modelsType = $plugin.GetType('NOMAD.MissionPlanner.VisionModelsForm', $true)
+    $models = [Activator]::CreateInstance($modelsType, $private, $null, [object[]]@($peoplePath, $catalog), $null)
+    $models.ClientSize = [Drawing.Size]::new(760, 540)
+    Capture $models 'detection-models.png'
     $outputType.GetMethod('Initialize', $static).Invoke($null, [object[]]@($config)) | Out-Null
     $payloadType.GetMethod('ApplyProfile', $static).Invoke($null, [object[]]@($config)) | Out-Null
     $selectMethod = $screenType.GetMethod('SetVideoInputSelection', $static)
@@ -128,14 +145,54 @@ try {
             return $true
         }, $selectMethod.GetParameters()[0].ParameterType)
     $selectMethod.Invoke($null, [object[]]@($selectCallback)) | Out-Null
+    $selectModelMethod = $screenType.GetMethod('SetVideoModelSelection', $static)
+    $selectModelCallback = [Management.Automation.LanguagePrimitives]::ConvertTo(
+        {
+            param($draft, $name, $profilePath)
+            foreach ($definition in $draft.VideoInputs) {
+                if ($definition.Name -eq $name) { $definition.DetectorModelProfilePath = $profilePath; return $true }
+            }
+            return $false
+        }, $selectModelMethod.GetParameters()[0].ParameterType)
+    $selectModelMethod.Invoke($null, [object[]]@($selectModelCallback)) | Out-Null
     $videoType = $plugin.GetType('NOMAD.MissionPlanner.NOMADVideoView', $true)
     $video = [Activator]::CreateInstance($videoType, [Reflection.BindingFlags]'Instance,NonPublic',
         $null, [object[]]@($config, [Threading.CancellationToken]::None), $null)
     Capture $video 'video-page.png'
+    $config.SelectedVideoInput.TrackingCalibrated = $true
+    $config.SelectedVideoInput.TrackingMode = 'Area'
+    $video = [Activator]::CreateInstance($videoType, $private,
+        $null, [object[]]@($config, [Threading.CancellationToken]::None), $null)
+    $videoHost = $videoType.GetField('_videoHost', $private).GetValue($video)
+    $player = $videoHost.GetType().GetProperty('Player', $private).GetValue($videoHost)
+    $sampleImage = [Drawing.Bitmap]::new((Join-Path $root 'mission_planner/tests/vision/vehicle.png'))
+    try {
+        Capture $video 'video-heading.png' {
+            $ticks = [Diagnostics.Stopwatch]::GetTimestamp()
+            $headingType = $plugin.GetType('NOMAD.MissionPlanner.VideoHeadingEstimate', $true)
+            $heading = [Activator]::CreateInstance($headingType, $private, $null,
+                [object[]]@([single]-65, 'Example camera target estimate', $ticks), $null)
+            $snapshotType = $plugin.GetType('NOMAD.MissionPlanner.VideoMotionSnapshot', $true)
+            $snapshot = [Activator]::CreateInstance($snapshotType, $private, $null,
+                [object[]]@([object]::new(), $null, $heading, [Func[bool]] { return $true }), $null)
+            $frameType = $plugin.GetType('NOMAD.MissionPlanner.VideoFrame', $true)
+            $detections = [Array]::CreateInstance($plugin.GetType('NOMAD.MissionPlanner.VideoDetection', $true), 0)
+            $image = [Drawing.Bitmap]::new($sampleImage)
+            $frame = [Activator]::CreateInstance($frameType, $private, $null,
+                [object[]]@($image, $detections, [long]1, [long]0, $ticks, [DateTime]::UtcNow, '', $null,
+                    [long]0, $snapshot), $null)
+            $player.GetType().GetField('_displayedVideoFrame', $private).SetValue($player, $frame)
+            $player.GetType().GetField('_displayFrame', $private).SetValue($player, $image)
+            $player.GetType().GetField('_videoBox', $private).GetValue($player).Image = $image
+            $player.GetType().GetField('_lblStatus', $private).GetValue($player).Text =
+                ('{0} x {1}' -f $image.Width, $image.Height)
+        }
+    } finally { $sampleImage.Dispose() }
 } finally {
     $payloadType.GetMethod('Shutdown', $static).Invoke($null, $null) | Out-Null
     $outputType.GetMethod('Shutdown', $static).Invoke($null, $null) | Out-Null
     $screenType.GetMethod('SetVideoInputSelection', $static).Invoke($null, [object[]]@($null)) | Out-Null
+    $screenType.GetMethod('SetVideoModelSelection', $static).Invoke($null, [object[]]@($null)) | Out-Null
     $screenType.GetMethod('SetFenceSetupInput', [Reflection.BindingFlags]'Static,NonPublic').Invoke(
         $null, [object[]]@($null)) | Out-Null
     $notificationType.GetProperty('Shared').SetValue($null, $previousNotifications)

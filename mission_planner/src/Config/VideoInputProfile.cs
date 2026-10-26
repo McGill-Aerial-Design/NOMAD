@@ -17,6 +17,10 @@ namespace NOMAD.MissionPlanner
         public bool DropOldFrames { get; set; } = true;
         public string DetectorModelProfilePath { get; set; } = "";
         public bool TrackingCalibrated { get; set; }
+        public string TrackingMode { get; set; } = "Object";
+        public bool GroundPredictionEnabled { get; set; }
+        public double GroundPlaneHeightMeters { get; set; }
+        public int CameraDelayEstimateMs { get; set; }
         public int HorizontalFovDeg { get; set; } = 90;
         public int PitchMinDeg { get; set; } = -90;
         public int PitchMaxDeg { get; set; } = 90;
@@ -37,6 +41,10 @@ namespace NOMAD.MissionPlanner
             { throw new JsonSerializationException("Video RTSP transport must be TCP or UDP."); }
             if (LatencyMs < 0 || LatencyMs > 5000 || QueueMaxBuffers < 1 || QueueMaxBuffers > 120)
             { throw new JsonSerializationException("Video latency must be 0..5000 ms and queue size 1..120 frames."); }
+            if ((TrackingMode != "Object" && TrackingMode != "Area") || CameraDelayEstimateMs < 0 ||
+                CameraDelayEstimateMs > 2000 || double.IsNaN(GroundPlaneHeightMeters) ||
+                double.IsInfinity(GroundPlaneHeightMeters) || Math.Abs(GroundPlaneHeightMeters) > 10000)
+            { throw new JsonSerializationException("Review tracking mode, plane height and camera delay (0..2000 ms)."); }
             if (DetectorModelProfilePath == null || DetectorModelProfilePath.Length > 1024 ||
                 DetectorModelProfilePath.Any(char.IsControl) || HorizontalFovDeg < 5 || HorizontalFovDeg > 170 ||
                 (DetectorModelProfilePath != "" && (!Path.IsPathRooted(DetectorModelProfilePath) ||
