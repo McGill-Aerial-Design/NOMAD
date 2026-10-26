@@ -48,9 +48,8 @@ record competition obligations and unresolved decisions.
 
 ## Future work
 
-Research directions are collected under [brainstorming and future work](brainstorming.md),
-with a [simulation planning-agent prompt](simulation-planning-prompt.md) for evaluating
-rendered and headless tests. They are separate from current product capabilities.
+Research directions are collected under [brainstorming and future work](brainstorming.md).
+They are separate from current product capabilities.
 
 ## Support
 

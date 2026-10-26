@@ -95,7 +95,7 @@ competition-cylinder oracle with native conflict decisions. Observe actual mode,
 mission sequence, waypoint completion and operator takeover across all intended
 flight phases. Preserve native failsafes and NOMAD's RC-loss/GCS-loss distinction.
 Traffic integration, DAA porting and any native avoidance-policy modification are
-separate work from the gimbal simulation test plan below.
+separate work from gimbal simulation testing.
 
 ## Simulation and firmware research leads
 
@@ -110,6 +110,3 @@ Use current source and reproducible version pins. In particular, the current
 last_letter README supersedes assumptions based on older fixed-wing/ROS-era pages.
 The linearized recipe is a control-research model, not evidence of nonlinear flight,
 transition or image-rendering fidelity.
-
-The [simulation planning-agent prompt](simulation-planning-prompt.md) turns these
-leads into a bounded comparison and automated-test planning task.
