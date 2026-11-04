@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#if MEDIA_WORKER
 using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -53,3 +54,21 @@ namespace NOMAD.MissionPlanner
         { return new YoloXVideoDetector(profile, token); }
     }
 }
+
+#else
+// SPDX-License-Identifier: Apache-2.0
+using System.Threading;
+namespace NOMAD.MissionPlanner
+{
+    internal static class VisionDetectorFactory
+    {
+        internal static IVideoDetector Create(string path, CancellationToken token) => new MediaWorkerDetector(path, token);
+        internal static void ValidateModel(VisionModelProfile profile, CancellationToken token)
+        {
+            profile.Validate();
+            using (var channel = MediaWorkerHost.Open(token))
+            { channel.Call(new MediaMessage { Operation = "validate", Text = Newtonsoft.Json.JsonConvert.SerializeObject(profile) }, token); }
+        }
+    }
+}
+#endif

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 using System;
+using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 using NOMAD.MissionPlanner;
 
@@ -20,6 +22,7 @@ namespace MissionPlanner
         public event EventHandler MavChanged;
         public event EventHandler CommsClose;
         public Func<Task<bool>> Configure = () => Task.FromResult(true);
+        public readonly ManualResetEventSlim ConfigureEntered = new ManualResetEventSlim();
         public int Modes, Targets;
         public byte LastSystem, LastComponent;
         public double Pitch, Roll, Yaw;
@@ -34,6 +37,7 @@ namespace MissionPlanner
             LastSystem = system;
             LastComponent = component;
             AcknowledgementRequested = requireack;
+            ConfigureEntered.Set();
             return Configure();
         }
         public void setMountControl(byte system, byte component, double pitch, double roll, double yaw, bool coordinates)
@@ -90,6 +94,56 @@ internal static class NativeOutputTests
         Require(task.Wait(TimeSpan.FromSeconds(2)), "Gimbal request did not finish within two seconds");
         return task.GetAwaiter().GetResult();
     }
+    private static void WaitForConfigure(MissionPlanner.MAVLinkInterface connection) =>
+        Require(connection.ConfigureEntered.Wait(2000), "Native configure did not enter within two seconds");
+    private static void DrainGimbal()
+    {
+        var inflight = typeof(GimbalController).GetField("_inflight",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Require(SpinWait.SpinUntil(() => (int)inflight.GetValue(null) == 0, 2000),
+            "Fire-and-forget gimbal request did not finish within two seconds");
+    }
+    private static void BlockingNativeHelpers()
+    {
+        foreach (bool mount in new[] { false, true })
+        {
+            var connection = Reset();
+            int caller = Thread.CurrentThread.ManagedThreadId;
+            using (var entered = new ManualResetEventSlim())
+            using (var release = new ManualResetEventSlim())
+            {
+                Action block = () =>
+                {
+                    Require(Thread.CurrentThread.ManagedThreadId != caller, "Native helper ran on its caller thread");
+                    entered.Set();
+                    Require(release.Wait(5000), "Blocking native fixture was not released");
+                };
+                if (mount) { connection.TargetDispatched = block; }
+                else { connection.Configure = () => { block(); return Task.FromResult(true); }; }
+                var watch = Stopwatch.StartNew();
+                var pending = Track();
+                Require(watch.ElapsedMilliseconds < 500, "Native helper blocked the gimbal request caller");
+                try
+                {
+                    Require(entered.Wait(2000), "Blocking native helper did not enter");
+                    var state = Task.Run(() => { OutputController.RefreshConnection(); return OutputController.Generation; });
+                    Require(state.Wait(500), "Native helper held the UI-visible output lock");
+                    Require(Send().Outcome == GimbalRequestOutcome.Busy, "Blocked native helper allowed another request");
+                    GimbalController.SetTargetAngles(0, 0);
+                    OutputController.Shutdown();
+                    OutputController.Initialize(new NOMADConfig());
+                    Require(Send().Outcome == GimbalRequestOutcome.Busy,
+                        "Retirement released a reservation still owned by a native helper");
+                }
+                finally { release.Set(); }
+                var result = Complete(pending);
+                Require(result.Outcome == (mount ? GimbalRequestOutcome.Submitted : GimbalRequestOutcome.Unknown) &&
+                    connection.Targets == (mount ? 1 : 0) && GimbalController.LastSubmittedPose == null,
+                    "Retired native completion replayed, published stale pose or claimed cancellation");
+                Require(Send().Submitted, "Completed native helper retained its reservation");
+            }
+        }
+    }
     private static void RefusesChangedTarget(Action<MissionPlanner.MAVLinkInterface> change, string scenario)
     {
         var connection = Reset();
@@ -126,6 +180,7 @@ internal static class NativeOutputTests
         Require(result.Submitted && connection.Pitch == -800 && connection.Roll == 400 && connection.Yaw == 0 &&
             GimbalController.TargetYawDeg == 0, "Manual roll was reinterpreted as tracking yaw");
         GimbalController.ApplyStick(1, 0, 10, 0.1f, true);
+        DrainGimbal();
         Require(connection.Roll == 300 && connection.Yaw == 0, "Manual stick roll convention changed");
     }
     private static void MalformedTargets()
@@ -166,9 +221,11 @@ internal static class NativeOutputTests
             "Manual three-axis screen target failed");
         GimbalController.MaxRateDegSec = 10;
         GimbalController.ApplyScreenStick(1, 0, .1f, true);
+        DrainGimbal();
         Require(connection.Pitch == -800 && connection.Roll == 400 && connection.Yaw == 1300,
             "Default screen horizontal input changed roll or lost the other target axes");
         GimbalArrowKeyFilter.TryHandleKey(System.Windows.Forms.Keys.Up);
+        DrainGimbal();
         Require(connection.Pitch == -600 && connection.Roll == 400 && connection.Yaw == 1300,
             "Screen arrow mapping disagrees with the pad or erased an unmapped axis");
         Require(Complete(GimbalController.RequestScreenTargetAsync(-90, 4, 13)).Submitted &&
@@ -180,9 +237,11 @@ internal static class NativeOutputTests
         OutputController.Initialize(config); GimbalController.ApplyProfile(config);
         GimbalController.MaxRateDegSec = 10;
         GimbalController.ApplyScreenStick(1, .5f, .1f, true);
+        DrainGimbal();
         Require(connection.Pitch == 0 && connection.Roll == -100 && connection.Yaw == -50,
             "Configured screen axes or independent inversion was ignored");
         GimbalArrowKeyFilter.TryHandleKey(System.Windows.Forms.Keys.Left);
+        DrainGimbal();
         Require(connection.Roll == 100 && connection.Yaw == -50,
             "Configured arrow axis or inversion was ignored");
         config.JoystickGimbalHorizontalInverted = config.JoystickGimbalVerticalInverted = false;
@@ -190,6 +249,7 @@ internal static class NativeOutputTests
         Require(Complete(GimbalController.RequestScreenTargetAsync(89, 29, 179)).Submitted,
             "Screen boundary fixture did not initialize");
         GimbalController.ApplyScreenStick(1, 1, .5f, true);
+        DrainGimbal();
         Require(connection.Pitch == 8900 && connection.Roll == 3000 && connection.Yaw == 18000,
             "Mapped screen target crossed an axis limit or changed the unselected pitch axis");
 
@@ -199,6 +259,7 @@ internal static class NativeOutputTests
         GimbalController.ApplyScreenStick(1, 0, .1f, true);
         Require(connection.Targets == targets, "Disabled screen axis dispatched a native request");
         GimbalController.ApplyScreenStick(0, 1, .1f, true);
+        DrainGimbal();
         Require(connection.Pitch == 600 && connection.Roll == 0 && connection.Yaw == 0,
             "One-axis gimbal configuration did not retain its enabled axis");
         foreach (float invalid in new[] { float.NaN, float.PositiveInfinity, 0, -.1f, .51f })
@@ -233,6 +294,7 @@ internal static class NativeOutputTests
             connection.Configure = () => held.Task;
             bool current = true;
             var pending = Track(current: () => current);
+            WaitForConfigure(connection);
             if (retired == "source") { current = false; }
             if (retired == "profile") { OutputController.Initialize(new NOMADConfig()); }
             if (retired == "readonly") { connection.ReadOnly = true; }
@@ -251,6 +313,7 @@ internal static class NativeOutputTests
         var held = new TaskCompletionSource<bool>();
         connection.Configure = () => held.Task;
         var pending = Track();
+        WaitForConfigure(connection);
         long revision = GimbalController.ManualRevision;
         Require(!Complete(Track()).Submitted && connection.Modes == 1 && connection.Targets == 0,
             "Concurrent tracking request dispatched while another was pending");
@@ -295,6 +358,7 @@ internal static class NativeOutputTests
         var held = new TaskCompletionSource<bool>();
         connection.Configure = () => held.Task;
         var pending = GimbalController.RequestPitchRollTargetAsync(-10, 3);
+        WaitForConfigure(connection);
         GimbalController.SetMode(MountMode.Neutral);
         held.SetResult(true);
         Require(Complete(pending).Outcome == GimbalRequestOutcome.Unknown && connection.Modes == 1 &&
@@ -308,6 +372,7 @@ internal static class NativeOutputTests
         connection.Configure = () => held.Task;
         long first = GimbalController.ClaimTracking();
         var pending = Track(current: () => first == GimbalController.CurrentTrackingClaim);
+        WaitForConfigure(connection);
         long second = GimbalController.ClaimTracking();
         held.SetResult(true);
         Require(second > first && Complete(pending).Outcome == GimbalRequestOutcome.Unknown && connection.Targets == 0,
@@ -330,6 +395,7 @@ internal static class NativeOutputTests
         ScreenAxisTargets();
         MalformedTargets();
         TrackingRetirement();
+        BlockingNativeHelpers();
         ManualOverride(() => GimbalController.RequestPitchRollTarget(0, 0), "Manual angle request");
         ManualOverride(() => GimbalController.SetMode(MountMode.Neutral), "Manual mode request");
         ManualOverride(() => GimbalController.NudgeTarget(2, 0), "Arrow nudge");
@@ -383,6 +449,7 @@ internal static class NativeOutputTests
         var held = new TaskCompletionSource<bool>();
         connection.Configure = () => held.Task;
         var pending = OutputController.SendGimbalTargetAsync(2, -12, 7, 0, OutputController.Generation, null);
+        WaitForConfigure(connection);
         var replacement = new MissionPlanner.MAVLinkInterface();
         MissionPlanner.MainV2.comPort = replacement;
         held.SetResult(true);

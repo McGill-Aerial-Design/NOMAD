@@ -1,6 +1,7 @@
 # Architecture and contributor guide
 
-NOMAD runs inside Mission Planner as one C#/.NET Framework 4.8 DLL. The reviewed
+NOMAD installs as one C#/.NET Framework 4.8 DLL inside Mission Planner. Its embedded
+private x64 media executable runs capture and native vision outside the host process. The reviewed
 host is pinned in [target metadata](https://github.com/McGill-Aerial-Design/NOMAD/blob/main/scripts/release/mission-planner-target.json).
 Use its actual APIs and the existing owners below when extending the plugin.
 
@@ -13,8 +14,9 @@ flowchart LR
   MP <-->|UDPCl| Router[Optional in-process router]
   Router <-->|configured telemetry links| AP
   RC[Physical RC] --> AP
-  Camera[Video input] --> Video[Decoder and local vision]
-  Video --> Controllers
+  Camera[Video input] --> Video[Owned media child: decoder and native vision]
+  Video -->|private pixels and results| Session[Parent media coordinator]
+  Session --> Controllers
 ```
 
 Mission Planner owns the connection and MAVLink reader. ArduPilot executes flight
@@ -34,7 +36,7 @@ unless shown otherwise.
 | Custom controls | `GimbalController`, `PayloadController`, `TerminationController`; `Input/` owns HID sampling and bindings |
 | Fence setup | `Geofence/`: polygon validation, native editor drafts and `FenceParameters` read/write/readback |
 | Telemetry and alerts | `Telemetry/BatteryHealth.cs`, `AltitudeUnits`, `Notifications/NotificationService` and `AudioAlerts` |
-| Video | `Media/VideoSession` owns pipeline/worker/frames; `SharedVideoCapture` shares local cameras; `EmbeddedVideoPlayer` owns selection and presentation |
+| Video | `Media/VideoSession` owns bounded analysis/display lanes; `MediaWorkerHost` owns the child; `SharedVideoCapture` shares each source; views own presentation |
 | Vision | `Vision/IVideoDetector`, `IVisualTracker`, `VisualTrackerFactory`: model and tracker boundaries |
 | Links | `Connectivity/MAVLinkConnectionManager` projects the router in `infra/transport/ground_router/` through `IRouterStatusProvider` |
 | Views | `Views/`, `Panels/`, `UI/ControlFactory`, `NOMADTheme`, `NOMADViewBase`, `UiAsync`; `IUpdatableView` is declared in `Plugin/NOMADMainScreen.cs` |
@@ -107,13 +109,35 @@ updates to an existing UI handle. Unsubscribe events and dispose timers, frames,
 capture leases and cancellation sources with their owner. Fence cached callbacks
 by the plugin session; hiding a view does not retire a shared owner.
 
-Video keeps matching pixels, detections and tracker results in a frame envelope.
-The decode worker alone initializes/updates/disposes vision. Model, selection and
-source revisions discard late results. Local camera viewers lease one capture per
-device; the last lease stops it. Network players own separate pipelines.
+Video capture, ONNX/OpenCV/DirectML and model validation execute in one private media
+child. It has no Mission Planner/MAVLink assembly reference or aircraft connection.
+The parent keeps telemetry history, ground-hint policy and validated native commands.
+Private current-user pipes carry bounded messages; fixed-capacity memory mappings
+carry pixels. The parent copies into owned, bounded reusable pixel storage before UI
+publication. Frame IDs/request epochs and parent source/model/selection revisions
+fence late results. Selected frames and exports retain immutable pixel leases.
+
+Capture, detection and tracking have independent lanes, each with latest-only pending
+work. A four-frame/100 ms alignment window emits matching overlays or plain video;
+late overlays never rewind displayed frames. Tracking consumes its own timestamped
+samples and retains the 500 ms source-age limit independently of display cadence.
+Each source has one native receiver across its camera, UDP or RTSP viewers.
+Native custom output helpers execute off UI, outside the short controller state lock,
+with one shared reservation held until actual native completion.
+
+Stop invalidates presentation and steering immediately. `VideoSession.Completion`
+observes asynchronous native cleanup; no UI caller joins a worker. The owned media
+job is terminated after hung work/cleanup, and a failed shared worker retries once
+into plain video. No target, model enable or tracking authority returns automatically.
+A second failure requires explicit Start/Retry. Ordinary invalid models disable only
+that feature. Already-admitted MP helpers may finish after retirement; no new neutral,
+hold or termination command is invented. Native MP transport and OS/driver failures
+remain outside the media fault boundary.
+
 Default Object tracking uses CPU CSRT; explicit GPU Object tracking uses EfficientTAM
-through DirectML. Area uses its own fixed-point tracker. GPU failure is reported.
-All tracking reaches the same guarded gimbal path and requires explicit activation.
+through DirectML. Area retains its fixed-point tracker. GPU runs sharing model sessions
+are serialized in the child. Algorithms, calibrations and acceptance obligations remain
+unchanged; process isolation does not qualify real-scene or physical tracking.
 
 Fence staging modifies a native editor draft; native Write/Read transfers it.
 Parameter changes separately require fresh disarmed state and readback. The optional

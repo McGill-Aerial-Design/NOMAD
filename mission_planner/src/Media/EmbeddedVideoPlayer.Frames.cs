@@ -9,6 +9,25 @@ namespace NOMAD.MissionPlanner
     {
         private void OnFrameTick(object sender, EventArgs e)
         {
+            try { RefreshFrame(); }
+            catch (Exception error)
+            {
+                _frameTimer.Stop();
+                Log.Error("Video view disabled after a callback failure: " + error);
+                try
+                {
+                    RetireTracking("Video view failed; restart video before selecting again");
+                    _session.Stop();
+                    ClearVideoDisplayAndDisposeBuffers();
+                    _lblStatus.Text = "Video unavailable; restart video";
+                    _lblStatus.ForeColor = Color.Red;
+                }
+                catch (Exception cleanup) { Log.Error("Video view cleanup failed: " + cleanup); }
+            }
+        }
+
+        private void RefreshFrame()
+        {
             if (IsDisposed)
             {
                 return;
@@ -32,13 +51,15 @@ namespace NOMAD.MissionPlanner
                 old?.Dispose();
                 _lblStatus.Text = $"Streaming {frame.Image.Width}x{frame.Image.Height}";
                 _lblStatus.ForeColor = Color.LimeGreen;
-                UpdateVisionFrame(frame);
                 _videoBox.Invalidate();
                 _fullscreenBox?.Invalidate();
             }
+            var sample = _session.TakeTrackingSample();
+            if (sample != null) { UpdateVisionSample(sample); }
             UpdateVisionStatus();
             if (_session.State == VideoState.Stopped)
             {
+                _playbackRequested = false;
                 RetireTracking("Video ended; select again after restarting");
                 ClearVideoDisplayAndDisposeBuffers();
                 _frameTimer.Stop();
@@ -58,7 +79,7 @@ namespace NOMAD.MissionPlanner
                 _videoBox.Image = null;
             }
             if (_displayedVideoFrame != null) { _displayedVideoFrame.Dispose(); }
-            else { _displayFrame?.Dispose(); }
+            else if (_displayFrame != null) { MediaPixels.Dispose(_displayFrame); }
             _displayedVideoFrame = null;
             _displayFrame = null;
         }

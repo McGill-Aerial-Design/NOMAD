@@ -19,18 +19,21 @@ pixi run test-plugin-installer
 
 The first command produces `mission_planner/src/bin/Release/NOMADPlugin.dll` and
 `build/release/plugin-build.json`, binding its hash to the base commit, product
-source hashes and reviewed host. The release version lives in
+source hashes, reviewed host and every embedded media bundle file. The release version lives in
 `scripts/build/build_plugin_windows.ps1`. Host references are non-copy-local.
 The installer build verifies that proof against the current source before
 embedding the DLL and notices into `build/installer/NOMAD-version-Setup.exe`.
-Direct IDE builds have fallback development identity; use the script for checked artifacts.
+The script builds the media worker before embedding it in the plugin. Direct IDE
+builds require a prepared bundle; use the script for checked artifacts.
 
 `prepare_vision.ps1` verifies pinned archives and every asset before compilation.
-The DLL embeds ONNX Runtime 1.24.4 (DirectML build), DirectML 1.15.4,
+The DLL embeds a hash-verified worker executable, configuration and existing private
+managed dependencies. The worker embeds ONNX Runtime 1.24.4 (DirectML build), DirectML 1.15.4,
 OpenCvSharp, YOLOX Nano, the EfficientTAM Ti512 export and license notices.
 Detection uses the CPU provider; GPU Object tracking is explicit per camera.
 The installed plugin extracts verified assets and performs no downloads.
-`VisionRuntime` isolates ONNX Runtime from MP's older loaded Visual C++ runtime;
+`VisionRuntime` retains native C-runtime isolation inside the child (GStreamer can
+also load a conflicting C runtime);
 it requires an installed System32 Visual C++ runtime 14.44 or later.
 Preserve that activation-context/load order when changing native dependencies.
 
@@ -59,6 +62,20 @@ Fixtures establish known state, perform one action and observe independent resul
 with deadlines and diagnostic failures. Retain invalid, boundary and fault cases.
 Use temporary storage and owned resources; no test should rewrite real profiles.
 Report passed, failed, skipped and unavailable separately.
+
+The video gate also starts the real embedded child with synthetic capture/inference
+fixtures. It holds constructors, initialization, update, capture and teardown, checks
+UI/preview deadlines at 30/60/120 FPS, injects process loss and verifies one plain-only
+recovery, shared receiver ownership, native parent-module exclusion and actual worker
+CPU inference. `-Filter <case substring>` runs a focused video case. Fixtures never
+open a camera or real aircraft. The parent pixel pool is bounded to 512 MiB allocated
+and 128 MiB idle; frame dimensions retain the existing 16,384/64M-pixel ceilings.
+
+The private worker checks heartbeat/frame progress at 2 s, selection initialization
+at 5 s, cold media runtime/model preparation at 120 s and cleanup at 2 s. Parent Stop never waits
+on these deadlines; background completion confirms resource retirement or owned
+process exit. Missing upstream samples keep the capture polling and do not trigger
+a restart loop. Cleanup and extraction preserve operator files.
 
 The vision gate checks the pinned CPU detector and native runtime load order.
 Set `NOMAD_TEST_TAM_MODEL` to a prepared EfficientTAM export folder for the optional

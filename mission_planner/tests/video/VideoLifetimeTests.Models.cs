@@ -89,7 +89,8 @@ internal static partial class VideoLifetimeTests
             session.ConfigureDetection(true, "C");
             using (var frame = DetectionFrame(session, pipeline, 20, 10, item => item.Detections.Count != 0))
             { Check(session.VisionError == null, "Explicit retry kept an obsolete model error"); }
-            session.Stop(); Check(recovered.Disposals == 1, "Shutdown retained the recovered model");
+            session.Stop(); Wait(session.Completion, "recovered model cleanup");
+            Check(recovered.Disposals == 1, "Shutdown retained the recovered model");
         }
         CheckClean(pipeline);
     }
@@ -123,12 +124,18 @@ internal static partial class VideoLifetimeTests
             CheckModelLabelImport(profile, directory);
             using (var manager = new VisionModelsForm(path, catalog))
             {
+                manager.ShowInTaskbar = false; manager.StartPosition = FormStartPosition.Manual;
+                manager.Location = new Point(-2000, -2000);
+                manager.Show();
                 var models = GetField<ListBox>(manager, "_models");
+                WaitUi(() => models.SelectedItem != null && !GetField<bool>(manager, "_preparing"),
+                    "asynchronous model manager catalog");
                 Check(((VisionModelChoice)models.SelectedItem).Path == path &&
                     GetField<Button>(manager, "_edit").Enabled && GetField<Button>(manager, "_remove").Enabled,
                     "Model manager lost the current managed selection or disabled its actions");
-                typeof(VisionModelsForm).GetMethod("RefreshModels", BindingFlags.Instance | BindingFlags.NonPublic)
-                    .Invoke(manager, new object[] { null });
+                WaitUi((System.Threading.Tasks.Task)typeof(VisionModelsForm)
+                    .GetMethod("RefreshModels", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(manager, new object[] { null }), "model manager refresh");
                 Check(((VisionModelChoice)models.SelectedItem).Path == path, "Catalog refresh reset the selection");
                 models.SelectedIndex = 0;
                 Check(!GetField<Button>(manager, "_edit").Enabled && !GetField<Button>(manager, "_export").Enabled &&
@@ -259,6 +266,7 @@ internal static partial class VideoLifetimeTests
             using (var player = new VideoInputPlayer(config, true, CancellationToken.None, () => pipeline, null))
             {
                 var models = GetField<ComboBox>(player, "_models");
+                WaitUi(() => models.SelectedItem != null, "unavailable optional model catalog");
                 Check(((VisionModelChoice)models.SelectedItem).Path == current,
                     "Oversized catalog tore down the Video selector or changed its default");
                 player.Player.StartStream(); Wait(pipeline.ReadEntered, "overflow plain video");
@@ -301,10 +309,15 @@ internal static partial class VideoLifetimeTests
                 { PlayerVisionFrame(player, pipeline, Color.Red); }
                 Check(player.SelectTargetAt(new Point(50, 40), new Size(100, 80)), "Model-A selection failed");
                 PlayerVisionFrame(player, pipeline, Color.Red);
+                long selectionRevision = GetField<long>(player, "_regionRevision");
                 player.UpdateDetectionModel(modelB); timeout.Restart();
-                while (player.DisplayedVideoFrame?.DetectorIdentity != "B" && timeout.Elapsed < TimeSpan.FromSeconds(5))
+                while ((player.DisplayedVideoFrame?.DetectorIdentity != "B" ||
+                    player.DisplayedVideoFrame?.Region?.Revision != selectionRevision ||
+                    player.DisplayedVideoFrame?.Region?.Found != true) && timeout.Elapsed < TimeSpan.FromSeconds(5))
                 { PlayerVisionFrame(player, pipeline, Color.Red); }
-                string path = player.SaveObservation();
+                Check(player.SelectedRegion.HasValue && player.DisplayedVideoFrame?.Region?.Revision == selectionRevision,
+                    "Model swap lost the selected reference: " + player.TrackingStatus);
+                string path = WaitUi(player.SaveObservationAsync(), "model-provenance observation write");
                 var metadata = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(Path.ChangeExtension(path, ".json")));
                 Check((string)metadata["DetectorIdentity"] == "B" &&
                     (string)metadata["SelectedTarget"]["SelectionDetectorIdentity"] == "A" &&
@@ -312,7 +325,11 @@ internal static partial class VideoLifetimeTests
                     "A model swap relabeled the frozen selection as recognized by the new detector");
             }
         }
-        finally { if (Directory.Exists(directory)) { Directory.Delete(directory, true); } }
+        finally
+        {
+            CheckClean(pipeline);
+            if (Directory.Exists(directory)) { Directory.Delete(directory, true); }
+        }
     }
 
     private static void CheckModelClassEditor(VisionModelProfile profile)
@@ -401,10 +418,15 @@ internal static partial class VideoLifetimeTests
         pipeline = new FakeVideoPipeline();
         string model = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "external-model.json");
         using (var host = new VideoInputPlayer(config, true, CancellationToken.None, () => pipeline, null,
-            (owner, name, path) => { if (save) { owner.SelectedVideoInput.DetectorModelProfilePath = path; } return save; }))
+            (owner, name, path) =>
+            {
+                if (save) { owner.SelectedVideoInput.DetectorModelProfilePath = path; }
+                return System.Threading.Tasks.Task.FromResult(save);
+            }))
         {
             host.Player.StartStream(); Wait(pipeline.ReadEntered, "model dropdown source");
             var selector = GetField<ComboBox>(host, "_models");
+            WaitUi(() => selector.SelectedItem != null, "initial model dropdown catalog");
             var choice = new VisionModelChoice(model, "External model"); selector.Items.Add(choice);
             selector.SelectedItem = choice;
             Check(((VisionModelChoice)selector.SelectedItem).Path == "" && config.SelectedVideoInput.DetectorModelProfilePath == "",
@@ -437,6 +459,7 @@ internal static partial class VideoLifetimeTests
             pipeline.Frames.Add(new Bitmap(20, 10));
             Wait(entered, "shutdown model constructor");
             Wait(System.Threading.Tasks.Task.Run(() => session.Stop()), "model constructor shutdown join");
+            Wait(session.Completion, "model constructor cleanup completion");
             Check(session.Completion.IsCompleted && detector.Disposals == 1 && session.TakeFrame() == null,
                 "Shutdown retained or published the obsolete constructed detector");
         }

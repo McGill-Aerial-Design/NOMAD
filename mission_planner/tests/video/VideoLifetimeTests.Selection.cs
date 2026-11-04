@@ -10,6 +10,40 @@ using NOMAD.MissionPlanner;
 
 internal static partial class VideoLifetimeTests
 {
+    private static void PendingPlaybackRestart()
+    {
+        foreach (bool cancel in new[] { false, true })
+        {
+            var first = new FakeVideoPipeline { HoldRead = true, LateFrame = new Bitmap(1, 1) };
+            var next = new FakeVideoPipeline();
+            int created = 0;
+            using (var player = new EmbeddedVideoPlayer(new VideoInputProfile { Name = "First", Url = "udp://@:5600" },
+                true, CancellationToken.None, () => ++created == 1 ? first : next))
+            {
+                player.StartStream(); Wait(first.ReadEntered, "pending restart original input");
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                player.UpdateInput(new VideoInputProfile { Name = "Intermediate", Url = "rtsp://intermediate.invalid/live" });
+                Check(clock.ElapsedMilliseconds < 100 && next.Starts == 0,
+                    "Input change waited for held native work or opened a replacement too early");
+                if (cancel) { player.StopStream(); }
+                else { player.UpdateInput(new VideoInputProfile { Name = "Latest", Url = "rtsp://latest.invalid/live" }); }
+                first.ReleaseRead.Set();
+                if (cancel)
+                {
+                    WaitUi(GetField<VideoSession>(player, "_session").Completion, "canceled restart cleanup");
+                    Application.DoEvents();
+                    Check(next.Starts == 0, "A queued restart survived Stop");
+                    player.StartStream();
+                }
+                WaitUi(() => next.ReadEntered.IsSet, "latest replacement startup");
+                Check(next.Starts == 1 && next.Pipeline.Contains(cancel ? "intermediate.invalid" : "latest.invalid"),
+                    "A retired input restart replaced the latest requested source");
+                CheckClean(first); CheckDisposed(first.LateFrame);
+            }
+            CheckClean(next);
+        }
+    }
+
     private static NOMADConfig TwoInputs()
     {
         var config = VideoConfig();
@@ -58,7 +92,7 @@ internal static partial class VideoLifetimeTests
         Check(oldSession.State == VideoState.Streaming && first.Disposals == 0,
             "Stopping the full view closed a receiver the preview still uses.");
         GetField<ComboBox>(preview, "_selector").SelectedItem = "Alternate";
-        Wait(second.ReadEntered, "replacement preview");
+        WaitUi(() => second.ReadEntered.IsSet, "replacement preview");
         full.RefreshInput();
         Check(ReferenceEquals(preview.Player, player) && player.Handle == handle,
             "Input selection recreated the player/control handle.");
@@ -112,26 +146,28 @@ internal static partial class VideoLifetimeTests
         video.Start(VideoPipeline.Build(config.SelectedVideoInput));
         Wait(first.ReadEntered, "HUD original input");
         Check((bool)select.Invoke(plugin, new object[] { config, "Alternate" }), "Owned input selection was rejected.");
-        Wait(second.ReadEntered, "HUD replacement input");
+        WaitUi(() => second.ReadEntered.IsSet, "HUD replacement input");
         CheckClean(first);
         Check(config.SelectedVideoInputName == "Alternate" && File.ReadAllText(path).Contains("Alternate") &&
             second.Pipeline == VideoPipeline.Build(config.VideoInputs[1]), "Selected input was not saved/applied to HUD.");
         Check((long)generationField.GetValue(null) == generation && ReferenceEquals(GetField<NOMADConfig>(plugin, "_config"), config),
             "Camera selection replaced the aircraft/output owner.");
         var selectModel = typeof(NOMADPlugin).GetMethod("SelectActiveVideoModel", BindingFlags.Instance | BindingFlags.NonPublic);
+        Func<NOMADConfig, string, string, bool> saveModel = (owner, name, model) =>
+            WaitUi((System.Threading.Tasks.Task<bool>)selectModel.Invoke(plugin, new object[] { owner, name, model }),
+                "model selection persistence");
         string modelPath = Path.Combine(directory, "external-model.json");
-        Check((bool)selectModel.Invoke(plugin, new object[] { config, "Alternate", modelPath }) &&
+        Check(saveModel(config, "Alternate", modelPath) &&
             config.SelectedVideoInput.DetectorModelProfilePath == modelPath &&
             File.ReadAllText(path).Contains("external-model.json") && second.Starts == 1 &&
             (long)generationField.GetValue(null) == generation,
             "Model default was not persisted or restarted aircraft/video ownership");
-        Check(!(bool)selectModel.Invoke(plugin, new object[] { config, "Synthetic", "" }) &&
-            !(bool)selectModel.Invoke(plugin, new object[] { TwoInputs(), "Alternate", "" }),
+        Check(!saveModel(config, "Synthetic", "") && !saveModel(TwoInputs(), "Alternate", ""),
             "Stale aircraft/input selected a model");
         string blocked = Path.Combine(directory, "blocked");
         File.WriteAllText(blocked, "owned test blocker");
         SetField(profiles, "_path", Path.Combine(blocked, "profiles.json"));
-        Check(!(bool)selectModel.Invoke(plugin, new object[] { config, "Alternate", "" }) &&
+        Check(!saveModel(config, "Alternate", "") &&
             config.SelectedVideoInput.DetectorModelProfilePath == modelPath && second.Starts == 1,
             "Failed model persistence changed the selected default or source");
         Check(!(bool)select.Invoke(plugin, new object[] { config, "Synthetic" }) &&
@@ -139,12 +175,12 @@ internal static partial class VideoLifetimeTests
             "Failed profile persistence changed the active source/HUD.");
         Check(!(bool)select.Invoke(plugin, new object[] { TwoInputs(), "Synthetic" }), "A stale profile selected video.");
         SetField(plugin, "_savingSettings", true);
-        Check(!(bool)selectModel.Invoke(plugin, new object[] { config, "Alternate", "" }),
+        Check(!saveModel(config, "Alternate", ""),
             "Settings draft allowed a concurrent model selection");
         Check(!(bool)select.Invoke(plugin, new object[] { config, "Synthetic" }), "Settings draft allowed a concurrent selection.");
         SetField(plugin, "_savingSettings", false);
         shutdown.Cancel();
-        Check(!(bool)selectModel.Invoke(plugin, new object[] { config, "Alternate", "" }),
+        Check(!saveModel(config, "Alternate", ""),
             "Retired session selected a model");
         Check(!(bool)select.Invoke(plugin, new object[] { config, "Synthetic" }), "A retired session selected video.");
     }

@@ -34,7 +34,7 @@ internal static partial class VideoLifetimeTests
             player.StartStream();
             Wait(first.ReadEntered, "explicit local capture Play");
             player.UpdateInput(CaptureInput(path.Replace("synthetic", "replacement")));
-            Wait(second.ReadEntered, "local capture device replacement");
+            WaitUi(() => second.ReadEntered.IsSet, "local capture device replacement");
             CheckClean(first);
             Check(second.Pipeline.Contains("replacement") && !second.Pipeline.Contains("synthetic"),
                 "Changing a capture device retained the previous device source");

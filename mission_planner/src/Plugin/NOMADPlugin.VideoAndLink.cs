@@ -11,6 +11,7 @@
 
 using System;
 using System.Drawing;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using MissionPlanner;
 using MissionPlanner.Utilities;
@@ -103,7 +104,7 @@ namespace NOMAD.MissionPlanner
                 _hudVideo?.Dispose();
                 var hud = global::MissionPlanner.GCSViews.FlightData.myhud;
                 _hudVideo = new HudVideoPlayer((Control)(object)hud, frame => hud.bgimage = frame,
-                    () => hud.bgimage, () => new GStreamerVideoPipeline());
+                    () => hud.bgimage, MediaWorkerPipeline.Create);
                 _hudVideo.Start(pipeline, VideoPipeline.ShareKey(input));
             }
             catch (Exception ex)
@@ -170,21 +171,29 @@ namespace NOMAD.MissionPlanner
             return true;
         }
 
-        private bool SelectActiveVideoModel(NOMADConfig config, string inputName, string path)
+        private async Task<bool> SelectActiveVideoModel(NOMADConfig config, string inputName, string path)
         {
             var input = config?.SelectedVideoInput;
             if (!IsActiveSession(_videoShutdown) || _savingSettings || !ReferenceEquals(config, _config) ||
                 input == null || !string.Equals(input.Name, inputName, StringComparison.OrdinalIgnoreCase)) { return false; }
-            string previous = input.DetectorModelProfilePath;
-            input.DetectorModelProfilePath = path ?? "";
-            try { _profiles.Save(); }
+            var session = _videoShutdown;
+            _savingSettings = true;
+            try
+            {
+                var snapshot = _profiles.Clone();
+                snapshot.Selected.Config.SelectedVideoInput.DetectorModelProfilePath = path ?? "";
+                await Task.Run(() => snapshot.Save());
+                if (!IsActiveSession(session) || !ReferenceEquals(config, _config) ||
+                    !ReferenceEquals(input, config.SelectedVideoInput)) { return false; }
+                input.DetectorModelProfilePath = path ?? "";
+                return true;
+            }
             catch (Exception error)
             {
-                input.DetectorModelProfilePath = previous;
                 Log.Error("Detection model selection was not saved: " + error.Message);
                 return false;
             }
-            return true;
+            finally { _savingSettings = false; }
         }
 
         private static string BuildHudVideoPipeline(VideoInputProfile input)

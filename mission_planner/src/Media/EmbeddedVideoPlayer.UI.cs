@@ -184,7 +184,7 @@ namespace NOMAD.MissionPlanner
         {
             ValidateUiThread();
             input.Validate();
-            var wasPlaying = _isPlaying;
+            var wasPlaying = _isPlaying || _playbackRequested;
             StopStream();
             _input = input.Copy();
             _session.ConfigureTracking(_input);
@@ -196,7 +196,7 @@ namespace NOMAD.MissionPlanner
         public void UpdateStreamUrl(string newUrl)
         {
             ValidateUiThread();
-            var wasPlaying = _isPlaying;
+            var wasPlaying = _isPlaying || _playbackRequested;
             StopStream();
             _input.SourceType = "Network";
             _input.CaptureDevicePath = "";

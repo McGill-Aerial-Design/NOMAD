@@ -19,7 +19,7 @@ namespace NOMAD.MissionPlanner
         private ActuatorControlPanel _actuatorPanel;
 
         internal NOMADVideoView(NOMADConfig config, System.Threading.CancellationToken shutdown)
-            : this(config, shutdown, () => new GStreamerVideoPipeline()) { }
+            : this(config, shutdown, MediaWorkerPipeline.Create) { }
 
         internal NOMADVideoView(NOMADConfig config, System.Threading.CancellationToken shutdown,
             Func<IVideoPipeline> createPipeline)

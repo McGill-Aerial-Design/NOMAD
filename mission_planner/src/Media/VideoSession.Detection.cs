@@ -54,7 +54,7 @@ namespace NOMAD.MissionPlanner
                         lock (_owner._gate)
                         {
                             _owner._visionCancellation = source;
-                            if (revision != _owner._detectionRevision) { source.Cancel(); }
+                            if (revision != _owner._detectionRevision) { CancelLater(source); }
                             else { _owner._detectionLoading = true; }
                         }
                         _load = Task.Run(() => Load(path, source.Token));
@@ -86,7 +86,6 @@ namespace NOMAD.MissionPlanner
 
             internal void Fail(long revision, Exception error)
             {
-                Log.Error("Detection model failed: " + error);
                 lock (_owner._gate)
                 {
                     if (revision != _owner._detectionRevision) { return; }
@@ -95,6 +94,7 @@ namespace NOMAD.MissionPlanner
                     ++_owner._detectionRevision;
                     _owner._visionError = "Selected model unavailable; video continues. Review the model or press Detect to retry.";
                 }
+                Log.Error("Detection model failed: " + error);
             }
 
             private void ClearSource()

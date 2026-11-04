@@ -64,6 +64,8 @@ namespace NOMAD.MissionPlanner {
 "@ | Set-Content -LiteralPath $csharpPath -Encoding UTF8
 
 $sourceHashes = Get-PluginSourceHashes $RepoRoot
+& (Join-Path $PSScriptRoot 'build_media_worker.ps1') -MSBuild $msbuild -RepoRoot $RepoRoot
+if (-not $?) { throw 'Private media worker build failed.' }
 
 # Step 3: Build project
 Write-Host "[3/4] Building plugin..." -ForegroundColor Yellow
@@ -96,7 +98,7 @@ foreach ($relative in $sourceHashes.Keys) {
     }
 }
 @{ schema=1; source=$sourceSha; host_target=$target; plugin_sha256=(Get-FileHash -LiteralPath $BuiltDll).Hash;
-    source_files=$sourceHashes } | ConvertTo-Json -Depth 4 |
+    source_files=$sourceHashes; media_bundle=(Get-Content -LiteralPath (Join-Path $RepoRoot 'build/media_worker/bundle.json') -Raw | ConvertFrom-Json) } | ConvertTo-Json -Depth 4 |
     Set-Content -LiteralPath (Join-Path $RepoRoot 'build/release/plugin-build.json') -Encoding UTF8
 Write-Host "  Plugin size: $($FileInfo.Length / 1KB) KB" -ForegroundColor Gray
 

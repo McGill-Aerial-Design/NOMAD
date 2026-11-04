@@ -142,6 +142,7 @@ function New-TestFixture {
         # This fixture tests dispatch and installation isolation; detector tests prepare real pinned inputs.
         [IO.File]::WriteAllText((Join-Path (Split-Path $fixture.Script) 'prepare_vision.ps1'),
             "Write-Host 'Synthetic pinned vision preparation'" + [Environment]::NewLine)
+        New-SyntheticMediaStep -Fixture $fixture
         [IO.File]::WriteAllText((Join-Path $fixture.Project 'NOMADPlugin.csproj'), '<Project />')
         New-ReleaseIdentityFixture -Fixture $fixture -SourceBuildScript $SourceBuildScript
         [IO.File]::WriteAllText((Join-Path $fixture.Install 'MissionPlanner.exe'), 'installation sentinel')
@@ -165,6 +166,28 @@ function New-TestFixture {
         Remove-TestFixture -Fixture $fixture
         throw
     }
+}
+
+function New-SyntheticMediaStep {
+    param([pscustomobject]$Fixture)
+    # Dispatch/proof fixtures use synthetic payloads; native vision has its own executable gate.
+    $source = @'
+param([string]$MSBuild, [string]$RepoRoot)
+$ErrorActionPreference = 'Stop'
+[IO.File]::AppendAllText($env:MOCK_MSBUILD_LOG, "media-worker=$RepoRoot" + [Environment]::NewLine)
+$output = Join-Path $RepoRoot 'build/media_worker'
+New-Item -ItemType Directory -Path $output -Force | Out-Null
+$bundle = [ordered]@{}
+foreach ($name in @('NOMADMediaWorker.exe', 'NOMADMediaWorker.exe.config', 'Newtonsoft.Json.dll',
+    'System.Memory.dll', 'System.Buffers.dll', 'System.Numerics.Vectors.dll',
+    'System.Runtime.CompilerServices.Unsafe.dll')) {
+    $path = Join-Path $output $name
+    [IO.File]::WriteAllText($path, 'Synthetic media fixture: ' + $name)
+    $bundle[$name] = (Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant()
+}
+$bundle | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'bundle.json') -Encoding UTF8
+'@
+    [IO.File]::WriteAllText((Join-Path (Split-Path $Fixture.Script) 'build_media_worker.ps1'), $source)
 }
 
 function Invoke-FixtureGit {
@@ -194,7 +217,11 @@ function New-NativeMsBuildTestDouble {
 
     $source = @'
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
+using System.Reflection.Emit;
+using System.Text;
 
 internal static class MockMsbuild
 {
@@ -230,11 +257,47 @@ internal static class MockMsbuild
 
         string outputDirectory = Path.Combine(Environment.CurrentDirectory, "bin", "Release");
         Directory.CreateDirectory(outputDirectory);
-        File.WriteAllText(Path.Combine(outputDirectory, "NOMADPlugin.dll"), "test artifact");
+        string repository = Directory.GetParent(Directory.GetParent(Environment.CurrentDirectory).FullName).FullName;
+        WritePayload(outputDirectory, Path.Combine(repository, "build", "media_worker"));
         string mutation = Environment.GetEnvironmentVariable("MOCK_SOURCE_MUTATION");
         if (mutation == "change") File.AppendAllText("NOMADPlugin.csproj", "changed during build");
         if (mutation == "add") File.WriteAllText("Unexpected.cs", "class Unexpected {}");
         return 0;
+    }
+
+    private static void WritePayload(string outputDirectory, string bundleDirectory)
+    {
+        string mutation = Environment.GetEnvironmentVariable("MOCK_BUNDLE_MUTATION");
+        var assembly = AppDomain.CurrentDomain.DefineDynamicAssembly(
+            new AssemblyName("SyntheticPlugin" + Guid.NewGuid().ToString("N")), AssemblyBuilderAccess.Save, outputDirectory);
+        var module = assembly.DefineDynamicModule("NOMADPlugin", "NOMADPlugin.dll");
+        module.DefineType("FixtureMarker", TypeAttributes.Public).CreateType();
+        var streams = new List<MemoryStream>();
+        try
+        {
+            foreach (string name in new[] { "NOMADMediaWorker.exe", "NOMADMediaWorker.exe.config", "Newtonsoft.Json.dll",
+                "System.Memory.dll", "System.Buffers.dll", "System.Numerics.Vectors.dll",
+                "System.Runtime.CompilerServices.Unsafe.dll", "bundle.json" })
+            {
+                byte[] bytes = File.ReadAllBytes(Path.Combine(bundleDirectory, name));
+                if (mutation == "payload" && name == "NOMADMediaWorker.exe")
+                    bytes = Encoding.UTF8.GetBytes("Corrupted synthetic media payload");
+                if (mutation == "worker-name" && name == "bundle.json")
+                    bytes = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(bytes)
+                        .Replace("\"NOMADMediaWorker.exe\"", "\"OtherWorker.exe\""));
+                AddResource(module, streams, "NOMAD.Media." + name, bytes);
+            }
+            if (mutation == "unlisted")
+                AddResource(module, streams, "NOMAD.Media.unlisted.bin", new byte[] { 1 });
+            assembly.Save("NOMADPlugin.dll");
+        }
+        finally { foreach (var stream in streams) stream.Dispose(); }
+    }
+
+    private static void AddResource(ModuleBuilder module, List<MemoryStream> streams, string name, byte[] bytes)
+    {
+        var stream = new MemoryStream(bytes); streams.Add(stream);
+        module.DefineManifestResource(name, stream, ResourceAttributes.Public);
     }
 
     private static bool HasTarget(string[] args, string target)
@@ -360,7 +423,8 @@ function Invoke-BuildScript {
         [string]$CleanExitCode,
         [string]$BuildExitCode,
         [switch]$SkipArtifact,
-        [string]$SourceMutation = ''
+        [string]$SourceMutation = '',
+        [string]$BundleMutation = ''
     )
 
     [IO.File]::WriteAllText($Fixture.MockLog, '')
@@ -368,9 +432,14 @@ function Invoke-BuildScript {
     $env:MOCK_BUILD_EXIT = $BuildExitCode
     $env:MOCK_SKIP_ARTIFACT = if ($SkipArtifact) { '1' } else { '0' }
     $env:MOCK_SOURCE_MUTATION = $SourceMutation
+    $env:MOCK_BUNDLE_MUTATION = $BundleMutation
 
-    $output = & $Fixture.PowerShell -NoProfile -ExecutionPolicy Bypass -File $Fixture.Script 2>&1
-    $exitCode = $LASTEXITCODE
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = & $Fixture.PowerShell -NoProfile -ExecutionPolicy Bypass -File $Fixture.Script 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previousPreference }
     $log = Get-Content -LiteralPath $Fixture.MockLog -Raw
 
     return [pscustomobject]@{
@@ -405,6 +474,10 @@ function Test-BuildOnlySuccess {
         -Message 'The script did not dispatch MSBuild from the project path with spaces'
     Assert-Contains -Text $result.Log -Expected '/t:Clean' -Message 'The clean target did not run'
     Assert-Contains -Text $result.Log -Expected '/t:Build' -Message 'The build target did not run'
+    $clean = $result.Log.IndexOf('/t:Clean', [StringComparison]::Ordinal)
+    $media = $result.Log.IndexOf('media-worker=', [StringComparison]::Ordinal)
+    $build = $result.Log.IndexOf('/t:Build', [StringComparison]::Ordinal)
+    Assert-Equal ($clean -lt $media -and $media -lt $build) $true 'Worker preparation must run after clean and before plugin build'
 
     if (-not (Test-Path -LiteralPath $Fixture.Artifact -PathType Leaf)) {
         throw "Build-only did not produce the expected artifact at $($Fixture.Artifact)"
@@ -432,6 +505,10 @@ function Test-BuildOnlySuccess {
     Assert-Equal $manifest.plugin_sha256 (Get-Sha256 $Fixture.Artifact) 'Build manifest omitted the actual DLL hash'
     Assert-Equal $manifest.source_files.'mission_planner\src\NOMADPlugin.csproj' `
         (Get-Sha256 (Join-Path $Fixture.Project 'NOMADPlugin.csproj')) 'Build manifest omitted its source inputs'
+    Assert-Equal @($manifest.media_bundle.PSObject.Properties).Count 7 'Build proof omitted its private media bundle'
+    Assert-Equal $manifest.media_bundle.'NOMADMediaWorker.exe' `
+        ((Get-Sha256 (Join-Path $Fixture.Repo 'build/media_worker/NOMADMediaWorker.exe')).ToLowerInvariant()) `
+        'Build proof omitted its worker payload hash'
 }
 
 function Test-SourceChangedDuringBuild {
@@ -463,7 +540,7 @@ function Test-BuildProof {
     foreach ($path in @($project, $proof, $target, $Fixture.Artifact)) {
         $originals[$path] = [IO.File]::ReadAllBytes($path)
     }
-    foreach ($mutation in @('change', 'add', 'payload', 'target', 'proof')) {
+    foreach ($mutation in @('change', 'add', 'payload', 'target', 'proof', 'media')) {
         try {
             switch ($mutation) {
                 'change' { [IO.File]::AppendAllText($project, '<!-- changed after build -->') }
@@ -471,10 +548,21 @@ function Test-BuildProof {
                 'payload' { [IO.File]::AppendAllText($Fixture.Artifact, 'changed payload') }
                 'target' { [IO.File]::WriteAllText($target, '{"version":"9.9.9"}') }
                 'proof' { [IO.File]::WriteAllText($proof, '{}') }
+                'media' {
+                    $changed = Get-Content -LiteralPath $proof -Raw | ConvertFrom-Json
+                    $changed.media_bundle.'NOMADMediaWorker.exe' = '0' * 64
+                    $changed | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $proof -Encoding UTF8
+                }
             }
             $refused = $false
             try { $null = Get-CurrentPluginBuild -RepoRoot $Fixture.Repo -PluginPath $Fixture.Artifact }
-            catch { $refused = $true }
+            catch {
+                if ($mutation -eq 'media') {
+                    Assert-Contains $_.Exception.Message 'Media bundle differs from its build proof' `
+                        'Media proof was refused for the wrong reason'
+                }
+                $refused = $true
+            }
             if (!$refused) { throw "Stale build proof accepted after $mutation." }
         } finally {
             foreach ($path in $originals.Keys) { [IO.File]::WriteAllBytes($path, $originals[$path]) }
@@ -482,7 +570,49 @@ function Test-BuildProof {
         }
     }
     $null = Get-CurrentPluginBuild -RepoRoot $Fixture.Repo -PluginPath $Fixture.Artifact
-    Write-Host 'Build proof rejects changed/added sources, payload, host target and invalid proof.'
+    Write-Host 'Build proof rejects changed/added sources, payload, host target and invalid plugin/media proof.'
+}
+
+function Test-EmbeddedMediaBundle {
+    param([pscustomobject]$Fixture)
+    . (Join-Path (Split-Path $Fixture.Script) 'windows_build_tools.ps1')
+    $proof = Join-Path $Fixture.Repo 'build/release/plugin-build.json'
+    $originalProof = [IO.File]::ReadAllBytes($proof)
+    $originalArtifact = [IO.File]::ReadAllBytes($Fixture.Artifact)
+    $messages = @{ payload = 'checksum mismatch'; unlisted = 'Unexpected embedded media resource';
+        'worker-name' = 'Invalid embedded media checksum' }
+    foreach ($mutation in @('payload', 'unlisted', 'worker-name')) {
+        try {
+            $result = Invoke-BuildScript -Fixture $Fixture -BundleMutation $mutation
+            Assert-ExitCode $result 0 "Synthetic bundle $mutation compilation"
+            $copy = Join-Path $Fixture.Tools ("Bundle-$mutation.dll")
+            Copy-Item -LiteralPath $Fixture.Artifact -Destination $copy
+            $refused = $false
+            try { $null = Get-CurrentPluginBuild -RepoRoot $Fixture.Repo -PluginPath $copy }
+            catch {
+                Assert-Contains $_.Exception.Message $messages[$mutation] 'Embedded bundle was refused for the wrong reason'
+                $refused = $true
+            }
+            if (!$refused) { throw "Embedded bundle accepted $mutation." }
+        } finally {
+            [IO.File]::WriteAllBytes($proof, $originalProof)
+            [IO.File]::WriteAllBytes($Fixture.Artifact, $originalArtifact)
+        }
+    }
+    Write-Host 'Embedded media checks reject changed payload bytes, unlisted resources and a renamed worker entry.'
+}
+
+function Test-WorkerBuildFailure {
+    param([pscustomobject]$Fixture)
+    $step = Join-Path (Split-Path $Fixture.Script) 'build_media_worker.ps1'
+    $original = [IO.File]::ReadAllBytes($step)
+    try {
+        [IO.File]::WriteAllText($step, "throw 'Synthetic media worker failure'")
+        $result = Invoke-BuildScript -Fixture $Fixture
+        Assert-ExitCode $result 1 'Media worker failure'
+        Assert-Contains $result.Output 'Synthetic media worker failure' 'Worker preparation failure was hidden'
+        Assert-Equal $result.Log.Contains('/t:Build') $false 'Plugin compilation ran after worker preparation failed'
+    } finally { [IO.File]::WriteAllBytes($step, $original) }
 }
 
 function Test-ChangedReviewedTarget {
@@ -563,6 +693,7 @@ function Save-ProcessEnvironment {
         BuildExit = [Environment]::GetEnvironmentVariable('MOCK_BUILD_EXIT', 'Process')
         SkipArtifact = [Environment]::GetEnvironmentVariable('MOCK_SKIP_ARTIFACT', 'Process')
         SourceMutation = [Environment]::GetEnvironmentVariable('MOCK_SOURCE_MUTATION', 'Process')
+        BundleMutation = [Environment]::GetEnvironmentVariable('MOCK_BUNDLE_MUTATION', 'Process')
         VsPath = [Environment]::GetEnvironmentVariable('MOCK_VS_PATH', 'Process')
         VsExit = [Environment]::GetEnvironmentVariable('MOCK_VS_EXIT', 'Process')
     }
@@ -580,6 +711,7 @@ function Restore-ProcessEnvironment {
     [Environment]::SetEnvironmentVariable('MOCK_BUILD_EXIT', $Original.BuildExit, 'Process')
     [Environment]::SetEnvironmentVariable('MOCK_SKIP_ARTIFACT', $Original.SkipArtifact, 'Process')
     [Environment]::SetEnvironmentVariable('MOCK_SOURCE_MUTATION', $Original.SourceMutation, 'Process')
+    [Environment]::SetEnvironmentVariable('MOCK_BUNDLE_MUTATION', $Original.BundleMutation, 'Process')
     [Environment]::SetEnvironmentVariable('MOCK_VS_PATH', $Original.VsPath, 'Process')
     [Environment]::SetEnvironmentVariable('MOCK_VS_EXIT', $Original.VsExit, 'Process')
 }
@@ -620,15 +752,17 @@ try {
     Test-ToolDiscovery -Fixture $fixture
     Test-BuildOnlySuccess -Fixture $fixture
     Test-BuildProof -Fixture $fixture
+    Test-EmbeddedMediaBundle -Fixture $fixture
     Test-ChangedReviewedTarget -Fixture $fixture
     Test-SourceChangedDuringBuild -Fixture $fixture
+    Test-WorkerBuildFailure -Fixture $fixture
     Test-BuildFailure -Fixture $fixture
     Test-CleanFailure -Fixture $fixture
     Test-MissingArtifact -Fixture $fixture
     Test-InstallationUnchanged -Fixture $fixture
 
     $summary = 'Tool discovery and build-only dispatch tests passed: artifact, paths with spaces, '
-    $summary += 'exact failures, and unchanged installation.'
+    $summary += 'private media bundle/proof, exact failures, and unchanged installation.'
     Write-Host $summary -ForegroundColor Green
 } finally {
     Restore-ProcessEnvironment -Original $originalEnvironment

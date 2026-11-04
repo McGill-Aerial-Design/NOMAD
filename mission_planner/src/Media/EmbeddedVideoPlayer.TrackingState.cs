@@ -23,7 +23,7 @@ namespace NOMAD.MissionPlanner
             {
                 ++_trackingRevision; _tracking = false; _trackingPaused = false;
                 _trackingTarget = null; _trackingMav = null; _trackingUnappliedYawChange = 0;
-                _regionReady = _regionReady && _displayedVideoFrame?.Fresh == true &&
+                _regionReady = _regionReady && _latestTrackingSample?.Fresh == true &&
                     _session.IsRegionCurrent(_regionRevision);
                 if (!_regionReady) { _selectedAimPoint = null; }
                 _lastStepTicks = _lastRequestTicks = 0;
@@ -41,7 +41,7 @@ namespace NOMAD.MissionPlanner
             _trackingStatus = reason;
         }
 
-        private bool ResumeTracking(VideoFrame frame)
+        private bool ResumeTracking(VideoTrackingSample sample)
         {
             long revision;
             OutputController.NativeTarget target;
@@ -58,12 +58,12 @@ namespace NOMAD.MissionPlanner
             {
                 if (!_tracking || !_trackingPaused || revision != _trackingRevision ||
                     !ReferenceEquals(target, _trackingTarget) || !ReferenceEquals(mav, _trackingMav) ||
-                    frame.Region?.Revision != _regionRevision || frame.Sequence != _latestSequence ||
-                    !_regionReady || !frame.Fresh) { return true; }
+                    sample.Region?.Revision != _regionRevision || sample.Sequence != _latestSequence ||
+                    !_regionReady || !sample.Fresh) { return true; }
                 if (!validHeading) { DisarmTracking("Aircraft attitude unavailable"); return true; }
                 _trackingAircraftHeading = heading; _trackingUnappliedYawChange = 0;
                 _trackingPitch = pitch; _trackingYaw = yaw;
-                _lastStepTicks = frame.ReceivedTicks; _lastRequestTicks = 0; _trackingPaused = false;
+                _lastStepTicks = sample.ReceivedTicks; _lastRequestTicks = 0; _trackingPaused = false;
                 _trackingStatus = "Target verified; tracking resumed"; RecordTrackingEvent("tracking-resumed");
             }
             return true;

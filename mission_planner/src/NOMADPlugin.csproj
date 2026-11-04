@@ -61,14 +61,6 @@
       <Private>False</Private>
     </Reference>
     <Reference Include="netstandard" />
-    <Reference Include="Microsoft.ML.OnnxRuntime">
-      <HintPath>..\..\build\vision\runtime\Microsoft.ML.OnnxRuntime.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="OpenCvSharp">
-      <HintPath>..\..\build\vision\runtime\OpenCvSharp.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
   </ItemGroup>
 
   <ItemGroup>
@@ -130,38 +122,19 @@
       AssemblyAttributes and prior build output are never compiled.
     -->
     <Compile Include="..\..\infra\transport\ground_router\*.cs" />
-        <Compile Include="**\*.cs" Exclude="obj\**\*.cs;bin\**\*.cs;Plugin\ReleaseIdentity.cs" />
+        <Compile Include="**\*.cs" Exclude="obj\**\*.cs;bin\**\*.cs;Plugin\ReleaseIdentity.cs;Vision\YoloXVideoDetector.cs;Vision\CsrtVisualTracker*.cs;Vision\AreaVisualTracker*.cs;Vision\EfficientTam*.cs;Vision\FrozenAppearance.cs;Vision\ObjectRecoveryReference.cs;Vision\ObjectForeground.cs;Vision\VisualTrackingImage.cs;Vision\GpuAdapter.cs" />
     <Compile Include="..\..\build\release\ReleaseIdentity.cs" Condition="Exists('..\..\build\release\ReleaseIdentity.cs')" />
     <Compile Include="Plugin\ReleaseIdentity.cs" Condition="!Exists('..\..\build\release\ReleaseIdentity.cs')" />
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="..\..\build\vision\runtime\Microsoft.ML.OnnxRuntime.dll;
-      ..\..\build\vision\runtime\onnxruntime.dll;
-      ..\..\build\vision\runtime\onnxruntime_providers_shared.dll;
-      ..\..\build\vision\runtime\DirectML.dll;
-      ..\..\build\vision\runtime\DirectML-LICENSE.txt;
-      ..\..\build\vision\runtime\DirectML-NOTICES.txt;
-      ..\..\build\vision\runtime\yolox_nano.onnx;
-      ..\..\build\vision\runtime\ONNX-RUNTIME-LICENSE.txt;
-      ..\..\build\vision\runtime\ONNX-RUNTIME-NOTICES.txt;
-      ..\..\build\vision\runtime\YOLOX-LICENSE.txt;
-      ..\..\build\vision\runtime\OpenCvSharp.dll;
-      ..\..\build\vision\runtime\OpenCvSharpExtern.dll;
-      ..\..\build\vision\runtime\OpenCvSharp-NOTICES.txt;
-      ..\..\build\vision\runtime\OPENCV-IPP-EULA.rtf;
-      ..\..\build\vision\runtime\encoder.onnx;
-      ..\..\build\vision\runtime\memory_attention.onnx;
-      ..\..\build\vision\runtime\decoder.onnx;
-      ..\..\build\vision\runtime\memory_encoder.onnx;
-      ..\..\build\vision\runtime\constants.bin;
-      ..\..\build\vision\runtime\EfficientTAM-LICENSE.txt">
-      <LogicalName>NOMAD.Vision.%(Filename)%(Extension)</LogicalName>
+    <EmbeddedResource Include="..\..\build\media_worker\bundle.json;..\..\build\media_worker\NOMADMediaWorker.exe;..\..\build\media_worker\NOMADMediaWorker.exe.config;..\..\build\media_worker\Newtonsoft.Json.dll;..\..\build\media_worker\System.Memory.dll;..\..\build\media_worker\System.Buffers.dll;..\..\build\media_worker\System.Numerics.Vectors.dll;..\..\build\media_worker\System.Runtime.CompilerServices.Unsafe.dll">
+      <LogicalName>NOMAD.Media.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
-  <Target Name="CheckVisionInputs" BeforeTargets="PrepareForBuild">
-    <Error Condition="!Exists('..\..\build\vision\runtime\yolox_nano.onnx') Or !Exists('..\..\build\vision\runtime\encoder.onnx')"
-      Text="Run scripts/build/prepare_vision.ps1 to prepare the pinned vision inputs." />
+  <Target Name="CheckMediaInputs" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('..\..\build\media_worker\bundle.json')"
+      Text="Build the media worker using scripts/build/build_plugin_windows.ps1." />
   </Target>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

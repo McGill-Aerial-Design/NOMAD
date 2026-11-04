@@ -38,6 +38,14 @@ foreach ($resource in @(@('NOMAD.Payload.dll', $manifest.plugin_sha256),
     finally { $stream.Dispose(); $algorithm.Dispose() }
     if ($hash -ne $resource[1]) { throw ('Embedded resource differs: ' + $resource[0]) }
 }
+. (Join-Path $PSScriptRoot 'windows_build_tools.ps1')
+$payloadPath = [IO.Path]::GetTempFileName()
+try {
+    $payload = $assembly.GetManifestResourceStream('NOMAD.Payload.dll')
+    $output = [IO.File]::Create($payloadPath)
+    try { $payload.CopyTo($output) } finally { $output.Dispose(); $payload.Dispose() }
+    $null = Get-EmbeddedMediaBundle -PluginPath $payloadPath
+} finally { Remove-Item -LiteralPath $payloadPath -Force }
 $allowed = @('mscorlib','System','System.Core','System.Windows.Forms','System.Drawing')
 foreach ($reference in $assembly.GetReferencedAssemblies()) {
     if ($allowed -notcontains $reference.Name) { throw ('Non-framework setup dependency: ' + $reference.Name) }
@@ -82,4 +90,4 @@ try {
     $form.PerformLayout()
     if ($form.Text -ne 'NOMAD Setup') { throw 'Setup window failed to construct.' }
 } finally { $form.Dispose() }
-Write-Output 'Installer package passed: embedded DLL/licenses, version/hash, framework-only references, administrator manifest and UI construction. No installation invoked.'
+Write-Output 'Installer package passed: embedded DLL/media bundle/licenses, version/hash, framework-only references, administrator manifest and UI construction. No installation invoked.'

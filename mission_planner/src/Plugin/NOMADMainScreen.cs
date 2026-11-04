@@ -17,6 +17,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using MissionPlanner;
 using MissionPlanner.Controls;
@@ -90,12 +91,12 @@ namespace NOMAD.MissionPlanner
         private static System.Threading.CancellationToken _videoShutdown;
         private static Action _showSettings;
         private static Func<NOMADConfig, string, bool> _selectVideoInput;
-        private static Func<NOMADConfig, string, string, bool> _selectVideoModel;
-        internal static Func<NOMADConfig, string, string, bool> SelectVideoModel => _selectVideoModel == null
-            ? null : (Func<NOMADConfig, string, string, bool>)SelectCurrentVideoModel;
-        private static bool SelectCurrentVideoModel(NOMADConfig config, string input, string path) =>
-            _selectVideoModel?.Invoke(config, input, path) == true;
-        internal static void SetVideoModelSelection(Func<NOMADConfig, string, string, bool> selectModel)
+        private static Func<NOMADConfig, string, string, Task<bool>> _selectVideoModel;
+        internal static Func<NOMADConfig, string, string, Task<bool>> SelectVideoModel => _selectVideoModel == null
+            ? null : (Func<NOMADConfig, string, string, Task<bool>>)SelectCurrentVideoModel;
+        private static Task<bool> SelectCurrentVideoModel(NOMADConfig config, string input, string path) =>
+            _selectVideoModel?.Invoke(config, input, path) ?? Task.FromResult(false);
+        internal static void SetVideoModelSelection(Func<NOMADConfig, string, string, Task<bool>> selectModel)
         { _selectVideoModel = selectModel; }
         internal static Func<NOMADConfig, string, bool> SelectVideoInput => _selectVideoInput == null
             ? null : (Func<NOMADConfig, string, bool>)SelectCurrentVideoInput;

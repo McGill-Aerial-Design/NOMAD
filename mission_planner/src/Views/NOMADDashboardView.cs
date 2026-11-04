@@ -38,7 +38,7 @@ namespace NOMAD.MissionPlanner
 
         public NOMADDashboardView(NOMADConfig config, MAVLinkConnectionManager connectionManager,
             System.Threading.CancellationToken videoShutdown)
-            : this(config, connectionManager, videoShutdown, () => new GStreamerVideoPipeline()) { }
+            : this(config, connectionManager, videoShutdown, MediaWorkerPipeline.Create) { }
 
         internal NOMADDashboardView(NOMADConfig config, MAVLinkConnectionManager connectionManager,
             System.Threading.CancellationToken videoShutdown, Func<IVideoPipeline> createPipeline)

@@ -51,7 +51,7 @@ $resources += Get-ChildItem -LiteralPath (Join-Path $repoRoot 'mission_planner/t
 $references = @('/r:System.Drawing.dll', "/r:$mpDir\Newtonsoft.Json.dll", "/r:$mpDir\System.Memory.dll",
     "/r:$runtime\Microsoft.ML.OnnxRuntime.dll", "/r:$runtime\OpenCvSharp.dll",
     '/r:C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8\Facades\netstandard.dll')
-& $compiler /nologo /target:exe /platform:x64 /langversion:latest "/out:$exe" @references @resources @sources
+& $compiler /nologo /target:exe /platform:x64 /define:MEDIA_WORKER /langversion:latest "/out:$exe" @references @resources @sources
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 foreach ($name in @('Newtonsoft.Json', 'System.Memory', 'System.Buffers', 'System.Numerics.Vectors',
     'System.Runtime.CompilerServices.Unsafe')) {

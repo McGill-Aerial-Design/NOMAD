@@ -1,6 +1,6 @@
 # Video and tracking
 
-Video, detection and tracking run locally inside Mission Planner. Tracking moves
+Video, detection and tracking run locally in a private child owned by the Mission Planner plugin. Tracking moves
 the gimbal; aircraft flight and payload operation remain separate operator actions.
 
 ## Video inputs
@@ -158,8 +158,29 @@ Imported relative weight paths resolve beside the JSON. A damaged/missing model
 leaves plain video available without silently substituting another model.
 
 Model changes clear old boxes immediately; only the latest load may publish.
-Loading leaves video running; inference shares the decode worker and may reduce cadence.
+Loading and inference use independent latest-frame lanes. Live video continues while
+analysis is pending; overlays appear only on their matching pixels. Overlay alignment
+adds at most 100 ms of deliberate preview delay, and slow work falls back to plain
+frames. Plain HUD video bypasses alignment. Tracking uses independently delivered
+results with the original receipt age; receiving an old result never makes it fresh.
 After failure, select a valid model and press Detect to retry.
 Supported exports are raw YOLOX grid ONNX, static float NCHW BGR 0-255,
 top-left letterboxing/padding 114 and strides 8/16/32. Hash/tensor checks remain
 required. Other architectures need an `IVideoDetector` adapter.
+
+## Media failure and recovery
+
+A decoder or native vision crash/hang retires automatic tracking and affects all
+NOMAD media views together. Mission Planner retains aircraft connectivity and ordinary
+controls. One automatic restart restores plain video with detection/tracking off;
+select a fresh target and press Track explicitly to resume. A second worker failure
+requires Start/Retry. Saved profiles/model choices are not rewritten during recovery.
+Cold GPU loading stays visible as Loading tracker; if the selected image expires
+during loading, select a current image after the model is ready.
+Model validation errors keep plain video available without choosing another model.
+
+Stop and view closure invalidate steering immediately and clean up asynchronously.
+An already-submitted MP mount request may still finish, and the last mount setpoint
+may remain active. Worker loss does not send a neutral/hold/termination command.
+A stalled MP-native request can keep custom outputs busy until it actually completes.
+GPU driver faults and system resource exhaustion can still affect the wider machine.

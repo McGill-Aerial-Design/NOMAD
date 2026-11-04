@@ -2,11 +2,15 @@
 // Copyright 2026 The NOMAD Authors
 using System;
 using System.Drawing;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace NOMAD.MissionPlanner
 {
     public partial class EmbeddedVideoPlayer
     {
+        private long _playbackRevision;
+        private volatile bool _playbackRequested;
         private string BuildGStreamerPipeline()
         {
             return VideoPipeline.Build(_input);
@@ -15,8 +19,21 @@ namespace NOMAD.MissionPlanner
         public void StartStream()
         {
             ValidateUiThread();
+            if (IsDisposed || _session.State == VideoState.Disposed) { return; }
+            _playbackRequested = true;
+            long revision = Interlocked.Increment(ref _playbackRevision);
+            _ = StartWhenReadyAsync(revision);
+        }
+
+        private async Task StartWhenReadyAsync(long revision)
+        {
             try
             {
+                if (_session.State == VideoState.Stopping ||
+                    (_session.State == VideoState.Stopped && !_session.Completion.IsCompleted))
+                { await _session.Completion; }
+                if (IsDisposed || !_playbackRequested || revision != Volatile.Read(ref _playbackRevision) ||
+                    _session.State == VideoState.Disposed) { return; }
                 if (_session.Start(BuildGStreamerPipeline(), VideoPipeline.ShareKey(_input)))
                 {
                     _frameTimer.Start();
@@ -24,16 +41,24 @@ namespace NOMAD.MissionPlanner
                     _lblStatus.ForeColor = Color.Yellow;
                 }
             }
-            catch (Exception error) when (error is FormatException || error is Newtonsoft.Json.JsonSerializationException)
+            catch (Exception error)
             {
-                _lblStatus.Text = error.Message;
-                _lblStatus.ForeColor = Color.Red;
+                Log.Error("Video could not start: " + error);
+                if (!IsDisposed && revision == Volatile.Read(ref _playbackRevision))
+                {
+                    _playbackRequested = false;
+                    _lblStatus.Text = error is FormatException || error is Newtonsoft.Json.JsonSerializationException
+                        ? error.Message : "Video could not start; review the input and try again";
+                    _lblStatus.ForeColor = Color.Red;
+                }
             }
         }
 
         public void StopStream()
         {
             ValidateUiThread();
+            _playbackRequested = false;
+            long revision = Interlocked.Increment(ref _playbackRevision);
             RetireTracking("Video stopped");
             try
             {
@@ -46,9 +71,18 @@ namespace NOMAD.MissionPlanner
             }
             if (!IsDisposed)
             {
-                _lblStatus.Text = _session.Error == null ? "Stopped" : $"Error: {_session.Error}";
+                _lblStatus.Text = "Stopping…";
                 _lblStatus.ForeColor = _session.Error == null ? Color.Gray : Color.Red;
+                _ = UpdateStoppedStatusAsync(revision);
             }
+        }
+
+        private async Task UpdateStoppedStatusAsync(long revision)
+        {
+            try { await _session.Completion; }
+            catch (Exception error) { Log.Error("Video cleanup failed: " + error); }
+            if (!IsDisposed && !_playbackRequested && revision == Volatile.Read(ref _playbackRevision))
+            { _lblStatus.Text = _session.Error == null ? "Stopped" : $"Error: {_session.Error}"; }
         }
     }
 }

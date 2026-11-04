@@ -4,13 +4,16 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
+using System.Threading;
 
 namespace NOMAD.MissionPlanner
 {
-    // One owner carries the image and its inference results together, including through replacement and shutdown.
+    // Retained envelopes share immutable pixels; each consumer releases its own envelope.
     internal sealed class VideoFrame : IDisposable
     {
-        internal Bitmap Image { get; }
+        private readonly SharedImage _image;
+        private int _disposed;
+        internal Bitmap Image => _image.Image;
         internal IReadOnlyList<VideoDetection> Detections { get; }
         internal long Sequence { get; }
         internal long Generation { get; }
@@ -27,11 +30,12 @@ namespace NOMAD.MissionPlanner
             long generation, long receivedTicks, DateTime receivedUtc, string detectorIdentity,
             VideoRegionResult region = null, long detectionRevision = 0, VideoMotionSnapshot motion = null)
         {
-            Image = image ?? throw new ArgumentNullException(nameof(image));
+            if (image == null) { throw new ArgumentNullException(nameof(image)); }
             var copy = (detections ?? Array.Empty<VideoDetection>()).ToArray();
             if (copy.Any(detection => detection == null || detection.Bounds.Right > image.Width ||
                 detection.Bounds.Bottom > image.Height))
             { throw new ArgumentException("Detection exceeds its image."); }
+            _image = new SharedImage(image);
             Detections = Array.AsReadOnly(copy);
             Sequence = sequence;
             Generation = generation;
@@ -43,7 +47,72 @@ namespace NOMAD.MissionPlanner
             Motion = motion;
         }
 
-        public void Dispose() => Image.Dispose();
+        private VideoFrame(VideoFrame source)
+        {
+            _image = source._image;
+            _image.Retain();
+            Detections = source.Detections;
+            Sequence = source.Sequence;
+            Generation = source.Generation;
+            ReceivedTicks = source.ReceivedTicks;
+            ReceivedUtc = source.ReceivedUtc;
+            DetectorIdentity = source.DetectorIdentity;
+            DetectionRevision = source.DetectionRevision;
+            Region = source.Region;
+            Motion = source.Motion;
+        }
+
+        internal VideoFrame Retain()
+        {
+            if (Volatile.Read(ref _disposed) != 0) { throw new ObjectDisposedException(nameof(VideoFrame)); }
+            return new VideoFrame(this);
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0) { _image.Release(); }
+        }
+
+        private sealed class SharedImage
+        {
+            internal readonly Bitmap Image;
+            private int _references = 1;
+            internal SharedImage(Bitmap image) { Image = image; }
+            internal void Retain()
+            {
+                int count;
+                do
+                {
+                    count = Volatile.Read(ref _references);
+                    if (count == 0) { throw new ObjectDisposedException(nameof(VideoFrame)); }
+                } while (Interlocked.CompareExchange(ref _references, count + 1, count) != count);
+            }
+            internal void Release()
+            { if (Interlocked.Decrement(ref _references) == 0) { MediaPixels.Dispose(Image); } }
+        }
+    }
+
+    internal sealed class VideoTrackingSample
+    {
+        internal Size ImageSize { get; }
+        internal long Sequence { get; }
+        internal long Generation { get; }
+        internal long ReceivedTicks { get; }
+        internal DateTime ReceivedUtc { get; }
+        internal VideoRegionResult Region { get; }
+        internal VideoMotionSnapshot Motion { get; }
+        internal double AgeSeconds => (Stopwatch.GetTimestamp() - ReceivedTicks) / (double)Stopwatch.Frequency;
+        internal bool Fresh => AgeSeconds >= 0 && AgeSeconds < .5;
+
+        internal VideoTrackingSample(VideoFrame frame) : this(frame.Image.Size, frame.Sequence, frame.Generation,
+            frame.ReceivedTicks, frame.ReceivedUtc, frame.Region, frame.Motion) { }
+
+        internal VideoTrackingSample(Size imageSize, long sequence, long generation, long receivedTicks,
+            DateTime receivedUtc, VideoRegionResult region, VideoMotionSnapshot motion = null)
+        {
+            ImageSize = imageSize; Sequence = sequence; Generation = generation; ReceivedTicks = receivedTicks;
+            ReceivedUtc = receivedUtc; Region = region; Motion = motion;
+        }
     }
 
     internal sealed class VideoRegionResult

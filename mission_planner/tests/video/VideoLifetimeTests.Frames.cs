@@ -8,6 +8,23 @@ using NOMAD.MissionPlanner;
 
 internal static partial class VideoLifetimeTests
 {
+    private static void RetainedFrameLifetime()
+    {
+        var pixels = SolidVideoImage(Color.CornflowerBlue);
+        var frame = new VideoFrame(pixels, Array.Empty<VideoDetection>(), 7, 3,
+            System.Diagnostics.Stopwatch.GetTimestamp(), DateTime.UtcNow, "owned model");
+        var retained = frame.Retain();
+        frame.Dispose(); frame.Dispose();
+        Check(ReferenceEquals(retained.Image, pixels) && retained.Sequence == 7 && retained.Generation == 3 &&
+            pixels.GetPixel(0, 0).ToArgb() == Color.CornflowerBlue.ToArgb(),
+            "Releasing display invalidated retained pixels or copied the envelope identity");
+        bool rejected = false;
+        try { frame.Retain(); } catch (ObjectDisposedException) { rejected = true; }
+        Check(rejected, "A released envelope acquired another reference");
+        retained.Dispose(); retained.Dispose();
+        CheckDisposed(pixels);
+    }
+
     private static void FreshReceiptsDoNotEstablishFreshCapture()
     {
         var pipeline = new FakeVideoPipeline();
@@ -54,10 +71,8 @@ internal static partial class VideoLifetimeTests
         {
             Marshal.FreeHGlobal(data);
         }
-        using (frame)
-        {
-            Check(frame.GetPixel(0, 0).ToArgb() == Color.Red.ToArgb(), "Frame was invalid after native release");
-        }
+        try { Check(frame.GetPixel(0, 0).ToArgb() == Color.Red.ToArgb(), "Frame was invalid after native release"); }
+        finally { MediaPixels.Dispose(frame); }
     }
 
     private static void CheckTruncatedFrame(VideoBufferMap map)

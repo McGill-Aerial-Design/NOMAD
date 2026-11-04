@@ -3,6 +3,8 @@
 
 using System;
 using System.Drawing;
+using System.Threading;
+using System.Threading.Tasks;
 
 using System.Windows.Forms;
 
@@ -14,10 +16,12 @@ namespace NOMAD.MissionPlanner
         private readonly Action<Bitmap> _setFrame;
         private readonly Func<Image> _getFrame;
         private readonly VideoSession _session;
-        private readonly Timer _timer = new Timer { Interval = 33 };
+        private readonly System.Windows.Forms.Timer _timer = new System.Windows.Forms.Timer { Interval = 33 };
         private Bitmap _display;
         private VideoFrame _displayedVideoFrame;
-        private bool _disposed;
+        private volatile bool _disposed;
+        private volatile bool _startRequested;
+        private long _playbackRevision;
 
         internal HudVideoPlayer(Control hud, Action<Bitmap> setFrame, Func<Image> getFrame,
             Func<IVideoPipeline> createPipeline)
@@ -34,13 +38,29 @@ namespace NOMAD.MissionPlanner
             _timer.Tick += OnFrameTick;
         }
 
-        public bool IsActive => _session.IsActive;
+        public bool IsActive => !_disposed && (_startRequested || _session.IsActive);
 
         public void Start(string pipeline, string shareKey = null)
         {
-            if (_session.Start(pipeline, shareKey))
+            if (_disposed) { return; }
+            _startRequested = true;
+            _ = StartWhenReadyAsync(pipeline, shareKey, Interlocked.Increment(ref _playbackRevision));
+        }
+
+        private async Task StartWhenReadyAsync(string pipeline, string shareKey, long revision)
+        {
+            try
             {
-                _timer.Start();
+                if (_session.State == VideoState.Stopping ||
+                    (_session.State == VideoState.Stopped && !_session.Completion.IsCompleted))
+                { await _session.Completion; }
+                if (_disposed || !_startRequested || revision != Volatile.Read(ref _playbackRevision)) { return; }
+                if (_session.Start(pipeline, shareKey)) { _timer.Start(); }
+            }
+            catch (Exception error)
+            {
+                Log.Error("HUD video could not start: " + error);
+                if (!_disposed && revision == Volatile.Read(ref _playbackRevision)) { Dispose(); }
             }
         }
 
@@ -48,6 +68,7 @@ namespace NOMAD.MissionPlanner
         {
             if (_disposed) { return; }
             bool wasPlaying = IsActive;
+            _startRequested = false; Interlocked.Increment(ref _playbackRevision);
             _session.Stop();
             _timer.Stop();
             ClearDisplay();
@@ -63,6 +84,16 @@ namespace NOMAD.MissionPlanner
         }
 
         private void OnFrameTick(object sender, EventArgs e)
+        {
+            try { RefreshFrame(); }
+            catch (Exception error)
+            {
+                _timer.Stop(); Log.Error("HUD video disabled after a callback failure: " + error);
+                try { Dispose(); } catch (Exception cleanup) { Log.Error("HUD video cleanup failed: " + cleanup); }
+            }
+        }
+
+        private void RefreshFrame()
         {
             if (_disposed)
             {
@@ -89,6 +120,12 @@ namespace NOMAD.MissionPlanner
 
         private void OnHudDisposed(object sender, EventArgs e) => Dispose();
 
+        internal void Retire()
+        {
+            _startRequested = false; Interlocked.Increment(ref _playbackRevision);
+            _session.Dispose();
+        }
+
         public void Dispose()
         {
             if (_disposed)
@@ -96,7 +133,7 @@ namespace NOMAD.MissionPlanner
                 return;
             }
             _disposed = true;
-            _session.Dispose();
+            Retire();
             _timer.Stop();
             _timer.Tick -= OnFrameTick;
             _timer.Dispose();

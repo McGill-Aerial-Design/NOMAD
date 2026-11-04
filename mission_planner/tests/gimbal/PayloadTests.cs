@@ -34,13 +34,14 @@ namespace MissionPlanner
         public readonly List<NativeCommand> Commands = new List<NativeCommand>();
         public Func<NativeCommand, Task<bool>> Send = command => Task.FromResult(true);
         public Func<Task<float>> Trim = () => Task.FromResult(1500f);
+        public Func<Task<bool>> Write = () => throw new InvalidOperationException("Unexpected parameter write.");
         public int Reads;
         public byte TrimSystem, TrimComponent;
         public string Parameter;
         public Task<float> GetParamAsync(byte system, byte component, string name)
         { Reads++; TrimSystem = system; TrimComponent = component; Parameter = name; return Trim(); }
         public Task<bool> setParamAsync(byte system, byte component, string name, double value, bool force) =>
-            throw new InvalidOperationException("Payload fixtures do not write aircraft parameters.");
+            Write();
         public Task<bool> doCommandAsync(byte system, byte component, MAVLink.MAV_CMD kind,
             float p1, float p2, float p3, float p4, float p5, float p6, float p7, bool requireack)
         {
@@ -110,6 +111,65 @@ internal static class PayloadTests
         owner.ActAsync(id, operation, value).GetAwaiter().GetResult();
     private static void Wait(Task task)
     { Check(task.Wait(5000), "Native test deadline exceeded"); }
+    private static void WaitCommands(MissionPlanner.MAVLinkInterface connection, int expected, string action)
+    {
+        Check(SpinWait.SpinUntil(() => { lock (connection.Commands) { return connection.Commands.Count >= expected; } }, 5000),
+            action + " did not enter its native command helper");
+        Check(connection.Commands.Count == expected, action + " emitted an unexpected extra native command");
+    }
+    private static void WaitReads(MissionPlanner.MAVLinkInterface connection, int expected, string action) =>
+        Check(SpinWait.SpinUntil(() => Volatile.Read(ref connection.Reads) >= expected, 5000),
+            action + " did not enter its native parameter helper");
+    private static void BlockingNativeRequests()
+    {
+        foreach (string operation in new[] { "gimbal", "command", "read", "write" })
+        {
+            var fixture = Reset(Definition("servo", "ServoToggle", 8));
+            var target = OutputController.CaptureTarget(fixture.Config);
+            int caller = Thread.CurrentThread.ManagedThreadId;
+            using (var entered = new ManualResetEventSlim())
+            using (var release = new ManualResetEventSlim())
+            {
+                Action block = () =>
+                {
+                    Check(Thread.CurrentThread.ManagedThreadId != caller, "Native request ran on its caller thread");
+                    entered.Set();
+                    Check(release.Wait(5000), "Blocking native request was not released");
+                };
+                fixture.Connection.Send = command => { block(); return Task.FromResult(true); };
+                fixture.Connection.Trim = () => { block(); return Task.FromResult(1500f); };
+                fixture.Connection.Write = () => { block(); return Task.FromResult(true); };
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                Task pending = operation == "gimbal" ? (Task)OutputController.SendGimbalTargetAsync(2, 0, 0, 0,
+                    OutputController.Generation, null) : operation == "command" ?
+                    target.SendAsync(MAVLink.MAV_CMD.DO_SET_SERVO, 8, 1000) :
+                    operation == "read" ? target.ReadParameterAsync("SERVO8_TRIM") :
+                    target.WriteParameterAsync("SERVO8_TRIM", 1000, () => true);
+                Check(watch.ElapsedMilliseconds < 500, "Native request blocked its caller before returning a Task");
+                try
+                {
+                    Check(entered.Wait(2000), "Blocking native request did not enter");
+                    var state = Task.Run(() => target.IsCurrent && target.NativeRequestBusy);
+                    Check(state.Wait(500) && state.Result, "Native request blocked state reads or lost its reservation");
+                    var gimbal = OutputController.SendGimbalTargetAsync(2, 0, 0, 0, OutputController.Generation, null);
+                    Check(gimbal.Wait(500) && gimbal.Result.Outcome == GimbalRequestOutcome.Busy,
+                        "Gimbal overlapped a pending native request");
+                    bool payloadBusy = false;
+                    try { target.SendAsync(MAVLink.MAV_CMD.DO_SET_SERVO, 8, 1000).GetAwaiter().GetResult(); }
+                    catch (OutputController.NativeRequestBusyException) { payloadBusy = true; }
+                    Check(payloadBusy, "Payload overlapped a pending native request");
+                    OutputController.Shutdown();
+                    OutputController.Initialize(fixture.Config);
+                    var current = OutputController.CaptureTarget(fixture.Config);
+                    Check(current.NativeRequestBusy, "Profile retirement cleared an unfinished native reservation");
+                }
+                finally { release.Set(); }
+                Wait(pending);
+                Check(!OutputController.CaptureTarget(fixture.Config).NativeRequestBusy,
+                    "Completed native request retained its reservation");
+            }
+        }
+    }
     private sealed class Sample : MissionPlanner.Joystick.IMyJoystickState
     {
         internal bool[] Buttons = new bool[6];
@@ -129,10 +189,23 @@ internal static class PayloadTests
         config.Inputs = new JArray(JObject.FromObject(new InputBinding { Id = "position_input", Name = "Position", Device = "test",
             Enabled = true, Source = "Axis", Action = "position:position" }));
     }
-    private static void Buttons(NomadJoystickService service, bool[] buttons) => service.TranslateInputs(
-        new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = buttons == null ? null : new Sample { Buttons = buttons } });
-    private static void Position(NomadJoystickService service, bool valid, float value) => service.TranslateInputs(
-        new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = valid ? new Sample { Raw = (int)Math.Round((value + 1) * 32767.5) } : null });
+    private static void Poll(NomadJoystickService service,
+        IDictionary<string, MissionPlanner.Joystick.IMyJoystickState> samples, bool drain = true)
+    {
+        service.TranslateInputs(samples);
+        if (!drain) { return; }
+        Wait(PayloadController.Current.WaitForPendingAsync());
+        var inflight = typeof(GimbalController).GetField("_inflight",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Check(SpinWait.SpinUntil(() => (int)inflight.GetValue(null) == 0, 5000),
+            "HID gimbal request did not finish within its deadline");
+    }
+    private static void Buttons(NomadJoystickService service, bool[] buttons, bool drain = true) => Poll(service,
+        new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = buttons == null ? null :
+            new Sample { Buttons = buttons } }, drain);
+    private static void Position(NomadJoystickService service, bool valid, float value) => Poll(service,
+        new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = valid ?
+            new Sample { Raw = (int)Math.Round((value + 1) * 32767.5) } : null });
     private static void InvalidDefinitions()
     {
         var valid = Definition("servo", "ServoToggle", 8);
@@ -186,12 +259,14 @@ internal static class PayloadTests
             "Mismatched native trim energized a timed servo");
         var held = new TaskCompletionSource<float>(); fixture.Connection.Trim = () => held.Task;
         var pending = fixture.Owner.ActAsync("winch", "positive");
+        WaitReads(fixture.Connection, 2, "Held calibration query");
         fixture.Connection.sysidcurrent = 12;
         held.SetResult(1500); Wait(pending);
         Check(fixture.Connection.Commands.Count == 0, "Calibration query retargeted changed aircraft");
         var pulse = Reset(Definition("pump", "RelayPulse", 1));
         var off = new TaskCompletionSource<bool>(); pulse.Connection.Send = command => off.Task;
         pending = pulse.Owner.ActAsync("pump", "activate");
+        WaitCommands(pulse.Connection, 1, "Relay OFF initialization");
         pulse.Connection.compidcurrent = 3; off.SetResult(true); Wait(pending);
         Check(pulse.Connection.Commands.Count == 1 && pulse.Connection.Commands[0].Second == 0,
             "Relay repeat sent after target changed during OFF initialization");
@@ -204,6 +279,7 @@ internal static class PayloadTests
         var held = new TaskCompletionSource<bool>();
         fixture.Connection.Send = command => command.Kind == MAVLink.MAV_CMD.DO_REPEAT_RELAY ? held.Task : Task.FromResult(true);
         var pending = fixture.Owner.ActAsync("pump", "activate");
+        WaitCommands(fixture.Connection, 2, "Held relay repeat");
         var safe = fixture.Owner.ActAsync("pump", "safe");
         Check(!safe.IsCompleted && fixture.Connection.Commands.Count == 2 && PayloadController.HasPendingWork,
             "Safe raced unfinished native activation/retries or settings could retire it");
@@ -226,6 +302,7 @@ internal static class PayloadTests
         var held = new TaskCompletionSource<bool>();
         fixture.Connection.Send = command => command.First == 8 ? held.Task : Task.FromResult(true);
         var first = fixture.Owner.ActAsync("first", "safe");
+        WaitCommands(fixture.Connection, 3, "First held Safe");
         var second = fixture.Owner.ActAsync("second", "safe");
         var drain = fixture.Owner.WaitForPendingAsync();
         Check(!drain.IsCompleted && fixture.Connection.Commands.Count == 3 && PayloadController.HasPendingWork,
@@ -342,10 +419,11 @@ internal static class PayloadTests
         Buttons(service, new bool[6]);
         var held = new TaskCompletionSource<bool>();
         fixture.Connection.Send = command => command.First == 8 ? held.Task : Task.FromResult(true);
-        Buttons(service, new[] { true, true, false, false, false, false });
+        Buttons(service, new[] { true, true, false, false, false, false }, false);
         var drain = fixture.Owner.WaitForPendingAsync();
+        WaitCommands(fixture.Connection, 3, "Conflict Safe");
         Check(!drain.IsCompleted && fixture.Connection.Commands.Count == 3, "First native Safe was not held");
-        Buttons(service, new bool[6]);
+        Buttons(service, new bool[6], false);
         held.SetResult(true);
         Wait(drain);
         Check(fixture.Connection.Commands.Count == 4 && fixture.Connection.Commands[3].First == 9 &&
@@ -357,6 +435,7 @@ internal static class PayloadTests
         var fixture = Reset(Definition("winch", "ServoBidirectional", 10, 1500));
         var held = new TaskCompletionSource<bool>(); fixture.Connection.Send = command => held.Task;
         var pending = fixture.Owner.ActAsync("winch", "positive");
+        WaitCommands(fixture.Connection, 1, "Retired native repeat");
         var next = Reset(Definition("pump", "RelayPulse", 1));
         Act(next.Owner, "pump", "activate");
         Check(next.Connection.Commands.Count == 0, "New owner overwrote retired pending native repeat");
@@ -385,10 +464,11 @@ internal static class PayloadTests
             var events = new List<(string Id, string Operation, string Input)> { ("first", "safe", "test_input"), ("second", "activate", "second_input") };
             var batch = (Task)typeof(NomadJoystickService).GetMethod("SendPayloadEvents", flags)
                 .Invoke(service, new object[] { events, revision });
+            WaitCommands(fixture.Connection, 2, "Mixed HID batch Safe");
             Check(!batch.IsCompleted && fixture.Connection.Commands.Count == 2, "Mixed HID batch did not pause at native Safe");
             if (retirement == "disconnect") { fixture.Connection.Close(); }
             else if (retirement == "selection") { fixture.Connection.sysidcurrent = 12; }
-            else { Buttons(service, new[] { true, false, false, false, false, false }); }
+            else { Buttons(service, new[] { true, false, false, false, false, false }, false); }
             // No HID poll occurs here: its input revision still belongs to the retired aircraft.
             held.SetResult(true);
             Wait(batch);
@@ -473,12 +553,12 @@ internal static class PayloadTests
             Button = 0, Action = "position:safe" }));
         var service = new NomadJoystickService(fixture.Config);
         Position(service, true, 0); fixture.Connection.Commands.Clear();
-        service.TranslateInputs(new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample { Raw = 65535, Buttons = new[] { true, false } } });
+        Poll(service, new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample { Raw = 65535, Buttons = new[] { true, false } } });
         Check(fixture.Connection.Commands.Count == 1 && fixture.Connection.Commands[0].Second == 1500,
             "Same-sample position dispatched before its opposing Safe");
         foreach (int raw in new[] { 50000, 32768, 0, 32768, 65535 })
         {
-            service.TranslateInputs(new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample { Raw = raw, Buttons = new[] { true, false } } });
+            Poll(service, new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample { Raw = raw, Buttons = new[] { true, false } } });
         }
         Check(fixture.Connection.Commands.All(command => command.Second == 1500), "Changing axis overrode a held Safe");
         fixture = Reset(Definition("position", "ServoPosition", 9, 1500)); MapPosition(fixture.Config);
@@ -486,7 +566,7 @@ internal static class PayloadTests
             Source = "Axis", Action = "position:position" }));
         service = new NomadJoystickService(fixture.Config);
         var both = new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample(), ["other"] = new Sample() };
-        service.TranslateInputs(both); both["test"] = new Sample { Raw = 65535 }; both["other"] = new Sample { Raw = 0 }; service.TranslateInputs(both);
+        Poll(service, both); both["test"] = new Sample { Raw = 65535 }; both["other"] = new Sample { Raw = 0 }; Poll(service, both);
         Check(fixture.Connection.Commands.Count == 1 && fixture.Connection.Commands[0].Second == 1500,
             "Two continuous inputs dispatched position instead of conflict Safe");
         fixture = Reset(Definition("winch", "ServoBidirectional", 10, 1500)); Map(fixture.Config, "winch:positive");
@@ -494,9 +574,10 @@ internal static class PayloadTests
             Source = "Axis", Action = "gimbal:pitch" }));
         var trim = new TaskCompletionSource<float>(); fixture.Connection.Trim = () => trim.Task;
         service = new NomadJoystickService(fixture.Config); Buttons(service, new bool[6]);
-        Buttons(service, new[] { true, false, false, false, false, false });
+        Buttons(service, new[] { true, false, false, false, false, false }, false);
         var pending = fixture.Owner.WaitForPendingAsync(); Check(!pending.IsCompleted, "Delayed trim fixture was not pending");
-        service.TranslateInputs(new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample { Raw = 65535, Buttons = new[] { true, false, false, false, false, false } } });
+        WaitReads(fixture.Connection, 1, "Mixed gimbal/payload calibration");
+        Poll(service, new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample { Raw = 65535, Buttons = new[] { true, false, false, false, false, false } } }, false);
         trim.SetResult(1500); Wait(pending);
         Check(fixture.Connection.Commands.Any(command => command.Kind == MAVLink.MAV_CMD.DO_REPEAT_SERVO),
             "Unrelated gimbal movement retired a legitimate pending payload action");
@@ -507,16 +588,16 @@ internal static class PayloadTests
             Source = "Axis", Action = "gimbal:roll" }));
         service = new NomadJoystickService(fixture.Config); GimbalController.SetTargetAngles(0, 0);
         both = new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample(), ["other"] = null };
-        service.TranslateInputs(both); both["test"] = new Sample { Raw = 65535 }; service.TranslateInputs(both);
+        Poll(service, both); both["test"] = new Sample { Raw = 65535 }; Poll(service, both);
         Check(GimbalController.TargetPitchDeg == 0, "One valid gimbal axis moved while the other was missing");
-        both["test"] = new Sample(); both["other"] = new Sample { Raw = 65535 }; service.TranslateInputs(both);
-        both["test"] = new Sample { Raw = 65535 }; service.TranslateInputs(both);
+        both["test"] = new Sample(); both["other"] = new Sample { Raw = 65535 }; Poll(service, both);
+        both["test"] = new Sample { Raw = 65535 }; Poll(service, both);
         Check(GimbalController.TargetPitchDeg == 0 && GimbalController.TargetRollDeg == 0, "One fresh gimbal center bypassed joint center");
-        both["test"] = new Sample(); both["other"] = new Sample(); service.TranslateInputs(both);
-        both["test"] = new Sample { Raw = 65535 }; service.TranslateInputs(both);
+        both["test"] = new Sample(); both["other"] = new Sample(); Poll(service, both);
+        both["test"] = new Sample { Raw = 65535 }; Poll(service, both);
         Check(GimbalController.TargetPitchDeg > 0, "Joint centered gimbal axes failed to move");
         float target = GimbalController.TargetPitchDeg;
-        OutputController.Initialize(new NOMADConfig()); service.TranslateInputs(both);
+        OutputController.Initialize(new NOMADConfig()); Poll(service, both);
         Check(GimbalController.TargetPitchDeg == target, "Retired service profile continued gimbal movement");
     }
     private static void AbsentDeviceDoesNotRetireOtherInput()
@@ -530,16 +611,17 @@ internal static class PayloadTests
             var trim = new TaskCompletionSource<float>(); fixture.Connection.Trim = () => trim.Task;
             var service = new NomadJoystickService(fixture.Config);
             var samples = new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState> { ["test"] = new Sample() };
-            service.TranslateInputs(samples);
+            Poll(service, samples);
             samples["test"] = new Sample { Buttons = new[] { true, false, false, false, false, false } };
-            service.TranslateInputs(samples);
+            Poll(service, samples, false);
             var activation = fixture.Owner.WaitForPendingAsync();
+            WaitReads(fixture.Connection, 1, "Held HID calibration");
             Check(!activation.IsCompleted && fixture.Connection.Reads == 1, "Delayed trim did not establish pending HID work");
-            for (int poll = 0; poll < 5; poll++) { service.TranslateInputs(samples); }
+            for (int poll = 0; poll < 5; poll++) { Poll(service, samples, false); }
             if (loseActiveDevice)
             {
                 samples["test"] = null;
-                for (int poll = 0; poll < 5; poll++) { service.TranslateInputs(samples); }
+                for (int poll = 0; poll < 5; poll++) { Poll(service, samples, false); }
             }
             var drain = fixture.Owner.WaitForPendingAsync();
             trim.SetResult(1500); Wait(activation); Wait(drain);
@@ -564,19 +646,20 @@ internal static class PayloadTests
             var service = new NomadJoystickService(fixture.Config);
             var samples = new Dictionary<string, MissionPlanner.Joystick.IMyJoystickState>
                 { ["test"] = new Sample(), ["other"] = new Sample() };
-            service.TranslateInputs(samples);
+            Poll(service, samples);
             int beforeConflict = fixture.Connection.Commands.Count;
             samples["test"] = new Sample { Raw = conflictRaw, Buttons = new[] { true, false } };
-            service.TranslateInputs(samples); Wait(fixture.Owner.WaitForPendingAsync());
+            Poll(service, samples);
             Check(fixture.Connection.Commands.Count == beforeConflict + 1 && fixture.Connection.Commands.Last().First == 9 &&
                 fixture.Connection.Commands.Last().Second == 1500, "Conflict entry did not admit exactly one position Safe");
             fixture.Connection.Commands.Clear();
             var trim = new TaskCompletionSource<float>(); fixture.Connection.Trim = () => trim.Task;
             samples["other"] = new Sample { Buttons = new[] { true, false } };
-            service.TranslateInputs(samples);
+            Poll(service, samples, false);
             var pending = fixture.Owner.WaitForPendingAsync();
             Check(!pending.IsCompleted, "Unrelated winch did not begin blocked trim during established conflict");
-            for (int poll = 0; poll < 5; poll++) { service.TranslateInputs(samples); }
+            WaitReads(fixture.Connection, 1, "Unrelated conflict calibration");
+            for (int poll = 0; poll < 5; poll++) { Poll(service, samples, false); }
             trim.SetResult(1500); Wait(pending);
             Check(fixture.Connection.Commands.Count == 1 && fixture.Connection.Commands[0].Kind == MAVLink.MAV_CMD.DO_REPEAT_SERVO &&
                 fixture.Connection.Commands[0].First == 10 && fixture.Connection.Commands[0].Second == 2000,
@@ -586,10 +669,10 @@ internal static class PayloadTests
             {
                 fixture.Connection.Commands.Clear();
                 samples["test"] = new Sample { Raw = 65535 };
-                service.TranslateInputs(samples);
+                Poll(service, samples);
                 Check(fixture.Connection.Commands.Count == 0, "Held axis resumed position after conflict without fresh center");
-                samples["test"] = new Sample(); service.TranslateInputs(samples);
-                samples["test"] = new Sample { Raw = 65535 }; service.TranslateInputs(samples);
+                samples["test"] = new Sample(); Poll(service, samples);
+                samples["test"] = new Sample { Raw = 65535 }; Poll(service, samples);
                 Check(fixture.Connection.Commands.Count == 2 && fixture.Connection.Commands.Last().First == 9 &&
                     fixture.Connection.Commands.Last().Second == 2000, "Fresh neutral did not restore position after conflict");
             }
@@ -597,6 +680,7 @@ internal static class PayloadTests
     }
     private static int Main()
     {
+        BlockingNativeRequests();
         StableConflictDoesNotRetireOtherInput(); AbsentDeviceDoesNotRetireOtherInput(); MixedInputArbitration(); NamedInputSafety(); InvalidDefinitions(); NativeMappings(); TrimAndTargetFences(); StopAndFaults(); SequentialSafeDrain(); SafeRejectionOutcomes(); ConfirmationAndHid(); ConflictSafetySurvivesNewInput(); RepeatSurvivesRetirement(); MixedBatchRetiresAcrossAircraftChange();
         Console.WriteLine("Payload tests passed (native mappings, strict calibration, ACK faults, HID edges, stale targets and repeat lifetime).");
         return 0;

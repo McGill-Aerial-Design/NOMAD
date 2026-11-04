@@ -84,6 +84,8 @@ _ReSharper*/
 
 mission_planner/src/bin/
 mission_planner/src/obj/
+mission_planner/media_worker/bin/
+mission_planner/media_worker/obj/
 mission_planner/plugins-dist/*.dll
 mission_planner/plugins-dist/*.pdb
 mission_planner/packaging/libvlc-windows/
