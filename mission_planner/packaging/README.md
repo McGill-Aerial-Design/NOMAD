@@ -1,7 +1,7 @@
 # Mission Planner plugin distribution
 
 NOMAD provides a single offline Windows **Setup.exe** that installs **NOMADPlugin.dll**
-into the reviewed Mission Planner host. A standalone DLL and ZIP remain available for manual installation.
+into the reviewed Mission Planner host. The DLL can also be installed manually.
 
 ![NOMAD Windows setup with the detected Mission Planner folder](../../docs/images/windows-installer.png)
 
@@ -19,7 +19,7 @@ The build script is [build_plugin_windows.ps1](../../scripts/build/build_plugin_
 It builds Release against the host in
 [mission-planner-target.json](../../scripts/release/mission-planner-target.json), embeds
 the source/version identity, and writes `mission_planner/src/bin/Release/NOMADPlugin.dll`.
-It never copies files into an installed Mission Planner instance. The installer build embeds that DLL,
+It never copies files into an installed Mission Planner instance. The installer build verifies the DLL against its source/hash proof, then embeds it,
 its expected hash and the applicable notices in `build/installer/NOMAD-version-Setup.exe`.
 `installer-manifest.json` records source and payload identities; `SHA256SUMS` covers the setup artifact.
 

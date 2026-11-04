@@ -12,7 +12,7 @@ Physical links and the preferred link are saved per aircraft profile.
 2. Open **NOMAD → Settings → Links**. Add the reviewed UDP, TCP or serial physical
    links and select the preferred enabled link. The dialogs distinguish local UDP
    listening ports, remote TCP server ports and explicit COM devices.
-3. Enable **Enable**, review the local UDPCl port,
+3. Enable the router, review the local UDPCl port,
    then Save. An empty physical-link list opens no connections.
 4. Connect Mission Planner using **UDPCl**, host `127.0.0.1`, and that profile's
    `RouterLocalPort`. The plugin creates one bidirectional consumer named

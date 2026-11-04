@@ -65,6 +65,34 @@ internal static class BatteryHealthTests
             second.cs.battery_voltage = invalidVoltage;
             Require(BatteryHealth.Read(MissionPlanner.MainV2.comPort.MAV, 1) == null, "Invalid battery voltage produced a healthy battery snapshot.");
         }
+        var unconfigured = Aircraft(0, 0, 1000);
+        foreach (double voltage in new[] { 25.2, 22.2, 19.8 })
+        {
+            unconfigured.cs.battery_voltage = voltage;
+            var status = BatteryHealth.Read(unconfigured, 1);
+            Require(status.LowVoltage == 0 && status.CriticalVoltage == 0 &&
+                !status.ThresholdsFromVehicle && status.Severity == 0,
+                "Disabled native thresholds were replaced by a voltage-derived cell-count guess.");
+        }
+        unconfigured.param["BATT_LOW_MAH"] = new MissionPlanner.Parameter { Value = 200 };
+        foreach (double unavailable in new[] { -1.0, double.NaN, double.PositiveInfinity })
+        {
+            unconfigured.cs.battery_usedmah = unavailable;
+            var status = BatteryHealth.Read(unconfigured, 1);
+            Require(!status.HasRemainingCapacity && !status.ThresholdsFromVehicle && status.Severity == 0,
+                "Unknown consumed capacity produced a remaining-capacity reading or warning.");
+        }
+        Require(double.IsNaN(BatteryHealth.GetCsDouble(new object(), "battery_usedmah")),
+            "A missing capacity field was reported as zero consumption.");
+        unconfigured.cs.battery_usedmah = 800;
+        var lowCapacity = BatteryHealth.Read(unconfigured, 1);
+        Require(lowCapacity.HasRemainingCapacity && lowCapacity.ThresholdsFromVehicle &&
+            lowCapacity.RemainingMah == 200 && lowCapacity.Severity == 1,
+            "The exact native remaining-capacity warning boundary was ignored.");
+        unconfigured.cs.battery_usedmah = 0;
+        unconfigured.param["BATT_CRT_MAH"] = new MissionPlanner.Parameter { Value = 1000 };
+        Require(BatteryHealth.Read(unconfigured, 1).Severity == 2,
+            "Valid zero consumption bypassed the native capacity threshold.");
         second.param = null;
         Require(BatteryHealth.GetBattParam(second, 1, "LOW_VOLT") == 0 && BatteryHealth.Read(MissionPlanner.MainV2.comPort.MAV, 1) == null,
             "Unavailable parameter bag was presented as a configured battery monitor.");

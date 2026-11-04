@@ -11,18 +11,7 @@ if ([Diagnostics.FileVersionInfo]::GetVersionInfo($hostExe).FileVersion -ne $ver
 }
 $plugin = Join-Path $root 'mission_planner/src/bin/Release/NOMADPlugin.dll'
 if (!(Test-Path -LiteralPath $plugin -PathType Leaf)) { throw 'Build the plugin before preparing the owned host.' }
-$build = Get-Content (Join-Path $root 'build/release/plugin-build.json') -Raw | ConvertFrom-Json
-if ($build.schema -ne 1 -or $build.plugin_sha256 -ne (Get-FileHash -LiteralPath $plugin).Hash -or
-    $build.source -ne (& git -C $root rev-parse HEAD)) { throw 'Plugin build/source binding mismatch.' }
-$currentSources = Get-PluginSourceHashes $root
-if ($currentSources.Count -ne @($build.source_files.PSObject.Properties).Count) {
-    throw 'Product source set differs from the built artifact; rebuild before testing.'
-}
-foreach ($name in $currentSources.Keys) {
-    if ($build.source_files.PSObject.Properties[$name].Value -ne $currentSources[$name]) {
-        throw 'Product source differs from the built artifact; rebuild before testing.'
-    }
-}
+$build = Get-CurrentPluginBuild -RepoRoot $root -PluginPath $plugin
 $id = [Guid]::NewGuid().ToString('N')
 $run = Join-Path $root ('build/tests/simulation/run-' + $id)
 $hostCopy = Join-Path $run 'host'

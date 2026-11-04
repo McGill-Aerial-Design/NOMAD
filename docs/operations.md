@@ -58,7 +58,7 @@ named file and its `.bak` to a private backup folder, then reopen the host. Setu
 preserves these files; it does not convert or repair invalid profiles.
 Explicit Save replaces atomically with a `.bak`; cancelled/failed saves preserve the
 previous saved collection. Keep profiles private: connection URLs can contain sensitive
-details even though runtime credentials are no longer stored/exported.
+details and credentials. Review exports before sharing them.
 
 Each profile owns optional aircraft notes, gimbal mode/rate, calibrated payload
 outputs, HID mappings, links and video. Aircraft notes are operator labels, not live

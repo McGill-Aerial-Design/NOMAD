@@ -1,239 +1,122 @@
-# Architecture
+# Architecture and contributor guide
 
-NOMAD runs inside Mission Planner as one C#/.NET Framework 4.8 plugin.
-The reviewed host version is stored in `scripts/release/mission-planner-target.json`.
+NOMAD runs inside Mission Planner as one C#/.NET Framework 4.8 DLL. The reviewed
+host is pinned in [target metadata](https://github.com/McGill-Aerial-Design/NOMAD/blob/main/scripts/release/mission-planner-target.json).
+Use its actual APIs and the existing owners below when extending the plugin.
 
 ```mermaid
-flowchart TB
-  subgraph Ground[Mission Planner process]
-    HID[NOMAD UI and custom HID] --> Controls[Profile-bound controllers]
-    Controls --> MP[Native Mission Planner APIs and active connection]
-    Flight[Native flight UI and missions] --> MP
-    MP <-->|UDPCl when enabled| Router[Optional in-process link router]
-  end
-  MP <-->|Direct USB or telemetry| AP[ArduPilot: flight and native failsafes]
-  Router <-->|Configured physical links| AP
-  RC[Physical RC and termination input] --> AP
-  AP --- Terminate[Optional native TERMINATE firmware extension]
+flowchart LR
+  UI[NOMAD views and HID] --> Controllers[Profile-bound controllers]
+  Controllers --> MP[Mission Planner native APIs and selected connection]
+  Flight[MP flight UI and missions] --> MP
+  MP <-->|direct link| AP[ArduPilot flight and failsafes]
+  MP <-->|UDPCl| Router[Optional in-process router]
+  Router <-->|configured telemetry links| AP
+  RC[Physical RC] --> AP
+  Camera[Video input] --> Video[Decoder and local vision]
+  Video --> Controllers
 ```
 
-Mission Planner owns opening/closing the selected aircraft connection, its protocol
-reader, ordinary flight UI, firmware setup and mission execution requests. ArduPilot
-owns stabilization, navigation execution and native failsafes. NOMAD never starts
-Mission Planner's HID RC override loop merely to read custom input devices.
+Mission Planner owns the connection and MAVLink reader. ArduPilot executes flight
+and native failsafes. The router's C# sources compile into the same DLL; the
+optional firmware under `firmware/ardupilot/` builds separately and runs onboard.
 
-`NOMADPlugin` owns the host lifecycle and registers the menus/screens. `Config/`,
-`Control/`, `Input/`, `Media/`, `Vision/` and `Views/` are logical source groups compiled into
-that same DLL, not separately running services. The C# router sources under
-`infra/transport/ground_router/` are also compiled into the plugin. `OutputController`
-is the internal guard for dispatch through the current host target.
-The separate GPL source carrier under `firmware/ardupilot/` builds aircraft firmware;
-its flight policy runs on the Cube, independently of the ground plugin.
+## Find and reuse the owner
 
-## Custom controls
+Paths below are under [mission_planner/src](https://github.com/McGill-Aerial-Design/NOMAD/tree/main/mission_planner/src)
+unless shown otherwise.
 
-`OutputController` captures the live host connection, stream, system/component IDs
-and profile generation. Connection/selection/profile changes retire unsent input.
-Closed, read-only and playback contexts cannot dispatch custom commands. A real
-centered sample is required after analog input loss or generation changes; held
-buttons/keyboard repeats cannot carry activation into another aircraft.
+| Area | Existing owner and responsibility |
+|---|---|
+| Plugin lifecycle | `Plugin/NOMADPlugin.cs` and partials: Init, Loaded, Loop, Exit, menus and shared owners |
+| Aircraft configuration | `Config/NOMADProfiles.cs`, `NOMADConfig`, `NOMADStorage`: validated drafts, selected profile, atomic persistence and host data paths |
+| Native dispatch | `Control/OutputController.cs` and `.Payload.cs`: connection identity, generations, write eligibility and native host helpers |
+| Custom controls | `GimbalController`, `PayloadController`, `TerminationController`; `Input/` owns HID sampling and bindings |
+| Fence setup | `Geofence/`: polygon validation, native editor drafts and `FenceParameters` read/write/readback |
+| Telemetry and alerts | `Telemetry/BatteryHealth.cs`, `AltitudeUnits`, `Notifications/NotificationService` and `AudioAlerts` |
+| Video | `Media/VideoSession` owns pipeline/worker/frames; `SharedVideoCapture` shares local cameras; `EmbeddedVideoPlayer` owns selection and presentation |
+| Vision | `Vision/IVideoDetector`, `IVisualTracker`, `VisualTrackerFactory`: model and tracker boundaries |
+| Links | `Connectivity/MAVLinkConnectionManager` projects the router in `infra/transport/ground_router/` through `IRouterStatusProvider` |
+| Views | `Views/`, `Panels/`, `UI/ControlFactory`, `NOMADTheme`, `NOMADViewBase`, `UiAsync`; `IUpdatableView` is declared in `Plugin/NOMADMainScreen.cs` |
+| Simulation | `Simulation/` owns the optional page/session; `scripts/simulation/` supplies development launchers |
 
-Gimbal uses the host's explicit-target mount APIs and displays submitted/unverified
-outcomes. Payload definitions remain in profiles: servo toggle, position and
-bidirectional motion, relay toggle and pulse. `PayloadController` owns only local
-confirmation/neutral interlocks, input lifetime and software outcome presentation.
-Mission Planner owns native ACK waits and retries. Already-dispatched helpers cannot
-be cancelled by NOMAD; Safe/Stop waits for the pending helper before attempting Safe.
-Native repeat commands bound timed outputs on the controller and have a shared slot.
-See [safety](safety.md) for trim checks, uncertain outcomes and unload limitations.
+Read the owning symbol, callers and closest tests before changing behavior.
+Partial files divide one owner; they are not separate services or new extension points.
 
-## Links and lifetime
+## Read aircraft telemetry
 
-The optional **Testing & Simulation** page lazily creates one plugin-owned simulation session.
-It invokes a user-selected source checkout's development launcher only on Start; normal startup
-requires no WSL, Python or simulator. Scenarios, SDF scenery, WSL distribution, workspace and
-Python path are configurable. Read-only discovery runs when the simulation page opens, lists WSL
-distributions and uses the selected/default distribution's home for its default workspace. It
-preserves manual settings and performs no installation. The shared owner survives page/profile changes; hiding a page
-disposes only its video preview. Stop/unload closes owned handles and requests bounded process
-cleanup, retaining logs and reporting incomplete cleanup. A dispatched native helper must drain.
+For display-only state, follow `NOMADDashboardView.UpdateFlightCards`:
 
-The launcher starts fresh SITL state in an owned run directory. Native MP performs the private
-handshake, verifies the expected fresh disarmed simulator heartbeat, then registers the link with
-MP's existing reader on the UI thread. Existing open/read-only/replay links prevent startup.
-It never replaces an operator stream or starts an independent MAVLink reader. Gazebo camera RTP
-uses an owned encoded-packet relay into the usual decoder; oracle data never enters vision.
-last_letter is a separate headless dynamics option, not a second physics engine in a Gazebo world.
-Normal MP pages retain all flight/setup controls. See `scripts/simulation/README.md` in the source checkout.
-
-The optional `MAVLinkConnectionManager` owns the existing C# router engine and its
-physical UDP/TCP/COM links. It exposes exactly one bidirectional loopback consumer:
-Mission Planner, connected using UDPCl. The router forwards each command to one selected link, retains
-parameter-transaction pinning, deduplication and failover, and disposes old workers
-and sockets before replacement. Unchanged link settings do not restart links.
-Profile/physical-link changes require the live MP connection to be disconnected.
-
-Plugin unload closes input/windows, invalidates control ownership and disposes the
-router/video workers. Existing menu callbacks are fenced by the plugin session.
-No background NOMAD command owner survives unload, although an already-dispatched
-host helper or onboard repeat can finish under native host/controller behavior.
-
-## Profiles and presentation
-
-Profiles own optional aircraft notes, calibrated payload/gimbal settings,
-HID devices/mappings, physical links and video settings. Draft/copy/import/export
-changes stay isolated until explicit Save. Loading validates the current schema
-without rewriting operator files. Unknown fields are rejected. Atomic replacement keeps a backup on
-explicit Save. Native host state and physical aircraft identity require observation;
-a saved label does not establish either.
-Ordinary RC arming and flight-mode configuration belongs to Mission Planner and
-ArduPilot. NOMAD has no corresponding channel settings or automatic discovery.
-
-Video uses Mission Planner's installed GStreamer support. Optional detection runs
-on the existing decoder worker. One owning frame envelope carries its image,
-immutable detections, sequence and local receipt timestamps through the latest-frame
-slot into the player. HUD and Dashboard playback do not run inference.
-Local cameras have one capture/decoder worker per exact Windows device path, shared
-by separate viewer leases. Each lease holds at most one independent pending image;
-decoder receipt clocks survive fanout. The last lease cancels and joins the owner
-before a replacement capture opens. Network playback remains independently owned.
-
-`IVideoDetector` is the model boundary. Its YOLOX adapter owns preprocessing,
-ONNX Runtime inference and class-aware suppression. `IVisualTracker` independently
-owns visual region tracking. Object mode uses a selection foreground mask for CSRT,
-masked appearance, checked local geometry and reversible foreground feature motion.
-Its initial measured foreground bounds define appearance/recovery extent; the drag rectangle
-only identifies that foreground. Verified Object results aim at the current bounds centre.
-The retained appearance anchor supports identity checks and does not define the gimbal target.
-Selected-region context can propose a geometric fit; acceptance also requires distributed
-foreground inliers and masked whole-target/aiming-point appearance.
-It keeps the original identity and one working view, promoted after three accepted
-foreground observations. Predicted masks cannot train either view. Thin uniform objects
-use bounded local foreground shape/colour support; global recovery still requires
-textured visual identity, distributed geometry and no competing placement. Three
-consistent recovery matches precede native tracker reinitialization.
-Area mode retains an immutable planar identity reference and one verified
-working view. Bounded ORB matching or forward/backward optical flow proposes a
-homography; shared geometry, original-relative support, rectified appearance and
-both-view ambiguity checks determine acceptance. Working-view updates preserve the
-original canonical point. Receipt gaps reset continuity and visual confirmation.
-Neither requires detector matches. The video player owns explicit
-selection, tracking lifetime and presentation, and sends through the existing
-`GimbalController`/`OutputController` native path. There is no separate vision
-service or aircraft-control transport. Different YOLOX weights and labels use a
-validated JSON profile; a different model architecture implements the same detector
-interface without changing tracking or native dispatch. The groundstation's named
-model catalog stores strict profile files and references weights in place. One pending selection owns
-a clone of the displayed image. The decode worker alone initializes, updates and
-disposes the tracker, and publishes its region with the matching current frame.
-Source/selection revisions reject superseded results; a shared gimbal claim prevents
-embedded and popped-out Video pages from controlling the mount simultaneously.
-
-The DLL embeds pinned CPU runtime binaries, model and notices. Detection lazily
-extracts verified assets into the host's user-data vision cache. One asynchronous
-constructor loads the latest requested model while decoding continues. Inference
-and its matching pixels remain on the decode worker. Revision tags prevent old
-model results from reaching overlays, selection or observations. Model loading and
-inference support cancellation; detector failure leaves plain video and region
-tracking available. CSRT calls have no native cancellation API: input is bounded
-to a 640-pixel longest edge, or 1280 for Object selections whose narrower dimension
-would be at most 80 pixels at the 640 scale. The budget is fixed at initialization,
-does not upscale source pixels and leaves Area's 640 bound unchanged. Command eligibility retires immediately, and late
-results are discarded before worker shutdown.
-Tracking requires calibrated limits/FOV, latest-frame buffering and fresh selected
-aircraft telemetry. Identity-bound fresh ATTITUDE yaw supplies wrapped body-rotation
-compensation inside the same calibrated rate limit; image feedback handles residual
-error. Submitted heading and visual-time baselines advance together; Object no-step
-samples may advance heading alone as described below. Manual input and session changes invalidate pending requests;
-uncertain submissions disarm tracking. Area memory survives visual uncertainty,
-Stop and manual input; native/source/profile replacement clears it. Searching and
-Outside results never authorize commands. Three successive verified matches can
-resume an active intent after a visual pause, with a fresh heading baseline and
-zero accumulated yaw remainder. Stop/manual/stale input requires explicit rearming.
-An already-dispatched native helper may finish.
-Observations pair the displayed image with its detections and separately labeled
-aircraft position and last submitted tracking request. They do not infer target location.
-
-### Motion estimates and reference lifetime
-
-`VideoMotionHistory` reads the selected Mission Planner packet cache; it opens no
-transport and requests no telemetry. Immutable snapshots travel with their decoded
-frame and retain connection/stream/aircraft/profile validity. Heading remains
-independent of GPS availability. Primary mount selection follows the aircraft's
-mount configuration. Reported yaw obeys explicit MAVLink reference-frame flags;
-reported or commanded poses are labeled as estimates, not physical measurements.
-
-The bounded history retains original attitude/position receipt times and successful
-mount submissions. Camera-delay queries need genuine bracketing samples; heading
-wraps through north and submitted target steps are not interpolated into invented
-motor motion. A cached HOME is reference state checked against fresh altitude data;
-binding, reboot and HOME changes invalidate the corresponding ground estimate.
-
-Optional ground prediction intersects a calibrated camera ray with an explicitly
-declared horizontal plane relative to HOME. Current GPS/altitude reprojects the
-estimate into a coarse search region. Its local tangent model rejects near-pole
-coordinates, rays within five degrees of the horizon and ranges beyond 5 km.
-History supports 0–2000 ms declared delay, 128 samples and a three-second window;
-missing or stale data disables the hint while visual tracking remains available.
-
-A prior only changes search order. Failed local matching falls back globally in
-the same frame, retaining the independent second-placement ambiguity check. A
-contradictory unique visual result disables that ground prior for the selection;
-the anchor is not moved to manufacture agreement. Plane assumptions and unmeasured
-camera pose prevent the estimate from establishing a measured target coordinate or
-authorizing unseen-target steering. The heading marker is likewise a display aid.
-
-### Tracking motion compensation
-
-The image supplies a camera ray from Area's canonical point or Object's verified bounds centre and calibrated
-focal length. Rotating that ray by the requested camera pitch gives pitch and
-azimuth error; a horizontal pixel offset is not the same as yaw at a downward
-camera pitch. Image correction uses a conservative gain of 1/s.
-
-Between fresh `ATTITUDE` messages, heading is predicted from body gyro rates:
-
-```text
-headingRate = (sin(roll) * pitchRate + cos(roll) * yawRate) / cos(pitch)
-headingNow = wrap(heading + headingRate * packetAge)
-yawStep = clamp(imageYawError * dt - aircraftHeadingChange, -rate * dt, rate * dt)
+```csharp
+var mav = MainV2.comPort?.MAV;
+var cs = mav?.cs;
+if (cs?.connected == true)
+{
+    // Display cs.mode, cs.armed, cs.gpsstatus, etc.
+}
 ```
 
-The implementation avoids extrapolation near the pitch singularity, rejects
-invalid or half-second-old attitude and caps `dt` at 0.2 s. Visual elapsed time advances
-only after a current tracking request is submitted, so busy/dropped requests do not
-consume it. Object mode attenuates counter-yaw when image yaw error and aircraft heading
-change have the same sign: the multiplier falls from one to zero over 0..5 degrees
-of image error. It discards the deliberately withheld part rather than replaying it later;
-a no-step sample also advances Object's heading baseline. Both modes retain rate-clipped
-compensation until a later submission. Heading differences wrap across north;
-hitting a travel limit clears any remainder. Pitch and combined yaw
-steps share the configured per-axis rate bound and absolute travel limits.
-No second aircraft-rotation correction is added through reported mount pose.
+Read the selected aircraft each update. A cached `MAVState` can belong to a prior
+aircraft, and `cs.connected` does not establish packet freshness. Reuse
+`BatteryHealth.Read(mav, index)` for native battery thresholds. `CurrentState.alt`
+and `sonarrange` follow MP display units; use `AltitudeUnits.ToMeters` with the
+host multiplier. Check the owning field's units before doing calculations.
 
-Decoder receipt time does not identify exposure time. Combining a delayed image
-with the latest gimbal orientation would mix different camera poses; increasing
-gain does not resolve that timing error. The native mount backend may also report
-requested or cached angles rather than fresh measurements. See
-[mount integration](integrations.md#aircraft-mounts-and-mavlink) for the native
-targeting boundary and CADDX behavior.
+Commands and motion estimates need stronger evidence. Follow
+[VideoMotionHistory](https://github.com/McGill-Aerial-Design/NOMAD/blob/main/mission_planner/src/Media/VideoMotionHistory.cs):
 
-Fence setup validates one
-inclusion polygon and selects Fence in the native Plan editor. A plugin-owned session
-preserves unsaved Mission/Fence/Rally rows across mode changes without changing aircraft
-caches. Staging never uploads; native Write/Read owns fence transfer. The page separately
-reads supported fence-response parameters and applies confirmed changes through captured
-native MP parameter requests, requiring a fresh disarmed heartbeat and value readback.
-An optional controlled-termination subgroup shares the plugin's native capability
-discovery and confines AFS writes to controlled action 44, its rate bounded by a fresh
-native descent limit, and supported RC/fence triggers. It never changes ordinary
-LAND/QLAND rates or selects a dedicated RC channel.
-NOMAD does not evaluate local outline crossings or claim containment. Unsaved coordinate
-text/order and inactive editor drafts remain in memory for the plugin session; save
-needed drafts before unloading the plugin. Alerts and visual tracking do not command
-aircraft movement. The optional [native termination](native-termination.md) entry uses the
-same captured host target and an advertised aircraft mode; policy/execution remain
-onboard. Competition server, autonomous target pursuit and takeover integrations remain outside
-this implementation; requirements remain in [PRD](prd.md).
+1. Capture the selected target through `OutputController.CaptureTarget(config)`.
+2. Read its `Connection.MAV.getPacketLast((uint)messageId)` packet cache.
+3. Verify system/component, UTC receipt time, age, finite values and valid ranges.
+4. Recheck `target.IsCurrent` before admitting a result or dispatching work.
 
-See [video and tracking](video.md) for calibration and operator workflow, and
-[ecosystem integration](integrations.md) for aircraft mounts and companion services.
+A cache read returns the last packet, including old data. Define a freshness bound
+appropriate to the action; do not turn missing telemetry into a healthy default.
+Existing packet subscriptions must be removed by the subscribing owner. Never add
+another `BaseStream` reader or a parallel MAVLink connection to obtain telemetry.
+
+## Send commands through Mission Planner
+
+UI and HID call the existing Gimbal/Payload/Fence/Termination controllers.
+`OutputController` binds work to the connection, stream, selected system/component
+and profile generation. Disconnects, selection/profile changes and read-only or
+playback contexts retire unsent work.
+
+When extending a controller, use the captured target and explicit-target host APIs
+such as `doCommandAsync`, `setMountControl` and `setParamAsync`, following the
+adjacent implementation. Mission Planner owns ACK waits and retries. Preserve
+input neutral/confirmation rules, finite/range checks and Safe/Stop behavior.
+An already-dispatched helper may finish after Stop or unload; report submitted,
+accepted, unknown and independently observed outcomes truthfully.
+
+The optional router gives MP one loopback UDPCl connection and sends each command
+through one selected physical route. It owns deduplication, failover and parameter
+transaction pinning. Reuse that owner instead of adding a transport. Normal
+arming, modes, missions, setup and landing remain in Mission Planner.
+
+## Profiles, UI and lifetime
+
+`NOMADProfiles` owns draft/copy/import/export and explicit Save activation.
+Loading validates the current schema without rewriting files; saving atomically
+replaces the collection with a backup. Use `NOMADStorage` for host-resolved paths.
+Aircraft labels describe configuration and do not establish live aircraft identity.
+
+Reuse `ControlFactory` and `NOMADTheme`. Views refreshed by the main screen implement
+`IUpdatableView`. Use `UiAsync` to observe event-handler errors and marshal synchronous
+updates to an existing UI handle. Unsubscribe events and dispose timers, frames,
+capture leases and cancellation sources with their owner. Fence cached callbacks
+by the plugin session; hiding a view does not retire a shared owner.
+
+Video keeps matching pixels, detections and tracker results in a frame envelope.
+The decode worker alone initializes/updates/disposes vision. Model, selection and
+source revisions discard late results. Local camera viewers lease one capture per
+device; the last lease stops it. Network players own separate pipelines.
+Default Object tracking uses CPU CSRT; explicit GPU Object tracking uses EfficientTAM
+through DirectML. Area uses its own fixed-point tracker. GPU failure is reported.
+All tracking reaches the same guarded gimbal path and requires explicit activation.
+
+Fence staging modifies a native editor draft; native Write/Read transfers it.
+Parameter changes separately require fresh disarmed state and readback. The optional
+simulator starts only on request and owns its processes and private native handshake.
+Plugin Exit retires inputs/callbacks and disposes shared resources. See
+[safety](safety.md) and [development checks](development.md) before changing these contracts.

@@ -16,7 +16,7 @@ Safety H = directly safety relevant, M = supporting safety/evidence, L = mainly
 administrative/scoring. Owner names are component or accountable team roles,
 not a claim that software already exists. Every evidence cell is **required**
 future acceptance evidence. Current implementation scope is in
-[qualification status](qualification.md).
+[safety and qualification](safety.md).
 
 ## Evidence gate legend
 

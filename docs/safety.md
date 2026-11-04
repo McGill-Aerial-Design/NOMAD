@@ -1,10 +1,56 @@
-# Safety case
+# Safety and qualification
 
-NOMAD's software tests establish bounded custom-control behavior, not aircraft safety.
-Mission Planner owns ordinary flight/mission commands and native ACK/retry handling;
-ArduPilot owns stabilization, navigation execution and native failsafes. Native MP,
-RC and mission commands can act outside NOMAD's local interlocks. Aircraft-specific
-qualification must cover those interactions.
+Mission Planner owns ordinary flight/mission commands and native ACK/retry behavior.
+ArduPilot owns stabilization, navigation and native failsafes. NOMAD's interlocks
+apply to its own custom controls; MP, RC and mission commands can act outside them.
+Software checks do not establish aircraft safety or physical completion.
+
+## Custom-control contracts
+
+Custom commands capture connection, stream, system/component and profile generation.
+Closed, read-only, playback and retired targets refuse unsent input. Reconnect,
+profile changes and input loss require fresh neutral/center and release edges.
+Validate finite values, channel ranges and actual calibration for every aircraft.
+
+Payloads support servo toggle/position/bidirectional and relay toggle/pulse.
+Hazardous actions require configured distinct confirmations and neutral-separated
+input edges. Conflicting inputs/loss request Safe for their original targets.
+Timed servo actions require live `SERVOx_TRIM` to match the configured return value.
+Native repeat period is twice the active interval; repeats share one controller
+slot. NOMAD retains the reservation across retirement and uncertain outcomes.
+External MP/mission actions can change that slot or output state.
+
+Mission Planner owns retries. An already-dispatched helper may finish after Stop,
+profile change or unload. Stop waits for pending payload work before attempting
+Safe on the same current target. Unknown outcomes block activation replay until
+explicit accepted Safe. Before disconnect/close, Safe/Stop and observe the result.
+Unload attempts best-effort Safe; it cannot guarantee delivery or de-energization.
+Onboard repeats retain native return behavior. An ACK is software acceptance.
+
+Video tracking requires explicit activation, verified imagery, calibrated limits,
+fresh selected-aircraft telemetry and one active gimbal owner. Searching/Outside
+never authorize steering. Stop, manual input and stale imagery require explicit
+rearming. Receipt time is not exposure time; upstream frozen pixels can look fresh.
+
+## Native fence setup and termination
+
+Fence staging validates one inclusion polygon and selects the native Fence editor.
+Mission/Fence/Rally drafts remain separate during the plugin session. Staging
+neither uploads nor enables a fence; native Write/Read remains explicit.
+Save needed drafts before unload. Aircraft containment requires actual configuration.
+
+Parameter Apply requires captured target identity, fresh disarmed state, confirmation
+and independent readback. Writes are sequential: failure/uncertainty stops the
+remainder, retains earlier writes and requires another Read. Closing the page
+cannot cancel an already-dispatched native helper. Readback is configuration evidence.
+
+The optional [native termination](native-termination.md) extension owns its separate
+descent/aerodynamic policy and latch onboard. The plugin discovers advertised
+support before enabling its guarded request/configuration. The supported subgroup
+writes controlled action 44, bounded descent rate and supported AFS RC/fence settings;
+it does not select an RC channel or alter normal LAND/QLAND rates. Aircraft
+commissioning, transmitter independence, loss response and Q02 acceptance remain
+required. Total estimator/controller failure cannot guarantee controlled descent.
 
 ## Competition safety obligations
 
@@ -19,87 +65,36 @@ The source obligations remain binding acceptance work, not implementation claims
 | AE27-T2-005/006 | Exactly one tracker attachment and at least 100 m horizontal offset after withdrawal through rest of window | Wrong/duplicate tracker and target moving toward sampling/return path; prove detection and approved intervention before encroachment; G6/G7 |
 | AE27-OPS-024/031 | Under-15-kg project margin and physical ground propeller inhibit | Independent weighing and props-safe inhibit fault tests; G7 |
 
-## Current custom-control boundary
 
-Custom commands capture connection/stream/aircraft IDs and profile generation.
-Unsent stale input is refused; closed/read-only/playback contexts are unavailable.
-HID invalid samples require a real center before motion; held input cannot replay
-activation across profile/connection changes. Saved labels/channel roles do not prove
-actual wiring. Review calibration for each physical aircraft.
+## Software evidence
 
-The five payload behaviors are servo toggle/position/bidirectional and relay
-toggle/pulse. Typed definitions validate channels, finite normalized values, PWM
-bounds and configured Safe/neutral values. Hazardous actions require configured
-distinct confirmations within a bounded window; HID requires real neutral-separated
-edges. Input loss/conflicting pairs admit Safe for every original target. Native
-host helpers serialize through the payload owner; a later sample must not discard
-an already-admitted Safe for another output.
+[Development checks](development.md) cover native command arguments, target/input
+retirement, profile validation/persistence, failure handling, UI lifetime, routing,
+video ownership and vision. Host doubles test NOMAD logic; loopback peers test
+native MP API interactions. Optional owned SITL/rendered checks exercise a controlled
+native-API cohort; installed-host checks exercise a separate application lifecycle.
+Firmware gates separately test onboard termination policy and package identity.
 
-Timed servo commands read live captured-target `SERVOx_TRIM` and require it to match
-the configured return value. Timed actions use ArduPilot's native repeat commands:
-period seconds equal twice the active interval. The controller has one shared
-repeat slot; NOMAD retains its reservation across retirement and uncertain outcomes.
-External MP/mission commands can alter that slot, output values or observed state.
-This is not a hardware interlock or an aircraft-wide output arbiter.
+These are available checks, not an evergreen record of passing releases. Each
+report must bind exact source/local changes, binary hashes, reviewed host and actual
+fixtures/configuration. State passed, failed, skipped and unavailable separately.
+Keep raw/private artifacts and run histories outside published docs, under ignored
+local evidence. Do not infer an aircraft output, touchdown or safe mechanism from
+a command ACK, simulator PWM, synthetic image or UI screenshot.
 
-MP uses normal ACK waits and retries. An already-dispatched helper is not cancellable
-by NOMAD; Stop waits for it, then attempts Safe on the same still-current target.
-Unknown outcomes inhibit activation replay until explicit accepted Safe. ACK success
-means software acceptance, not physical return, de-energization or completion.
-Before disconnect/close, explicitly Safe/Stop and observe the result. Synchronous
-unload only attempts best-effort Safe; helpers already dispatched can finish and
-native onboard repeats retain controller return behavior. No post-unload NOMAD
-command owner or delivery guarantee is claimed.
+## Aircraft acceptance remains open
 
-## Native fence setup, takeover and termination
+- Qualify actual Copter/Plane/QuadPlane firmware, controllers, frames and flight phases.
+- Measure gimbal/output direction, mechanical travel, trim, payload feedback and
+  physical Safe under power/link faults; software target angles are not measurements.
+- Measure camera latency, capture freezes and real-scene detection/tracking accuracy.
+  Synthetic centering and model confidence do not qualify selected-deer tracking.
+- Demonstrate RC/LTE takeover and handback, independent termination, all-mode
+  containment, loss responses and failsafe interactions on the chosen aircraft.
+- Verify mass/endurance, official server/traffic/task exports, full Task 1/2
+  rehearsals, installation/operator acceptance and organizer approval.
 
-Fence setup stages a validated inclusion polygon in native Mission Planner Plan,
-automatically selecting Fence and asking before replacing that editor draft. It
-preserves unsaved mode drafts during the plugin session and leaves aircraft caches
-unchanged. Staging does not upload, enable or read back a fence; native Write and Read
-remain explicit operator actions. The separate response group reads supported aircraft
-`FENCE_*` settings using native metadata. Confirmed parameter changes use a captured
-connection/stream/aircraft/profile generation, a fresh disarmed heartbeat and independent
-readback. A failed or uncertain write stops the sequence, requires another Read and does
-not roll back earlier writes. Already-dispatched native requests can finish after the
-page closes; stopping the UI does not cancel them. Readback is configuration evidence,
-not proof of containment or physical response.
-
-NOMAD supplies no site-specific polygon or locally invented boundary response. The
-100 m AGL competition ceiling still needs approved enforcement and datum evidence.
-NOMAD leaves normal LAND and QLAND settings unchanged. Competition termination is
-a separate onboard mechanism for the aircraft and flight phase, not a global
-landing-rate change. The optional [native extension](native-termination.md) owns
-the separate descent/aerodynamic policy, RC/fence triggers and reboot latch onboard.
-The optional configuration subgroup uses the same advertised capability and fresh
-disarmed/readback guards to set only controlled action 44, its bounded rate and
-supported AFS RC/fence triggers. It never changes ordinary descent speeds, chooses
-an RC channel or substitutes stock LAND/in-air disarm. ELRS/LTE takeover,
-transmitter mixing, actual loss responses and physical termination remain aircraft
-acceptance work under D09/Q02. Total estimator/controller failure is not guaranteed
-controlled descent. Preserve native ArduPilot failsafes and qualify interactions.
-
-## Software safety checks
-
-| Boundary | Current validation |
-|---|---|
-| Selected aircraft and profile | Connection, stream, system/component and generation checks reject stale or unwritable targets |
-| Custom input | Finite values, calibrated limits, neutral/confirmation edges and input-loss Safe |
-| Timed payload actions | Live trim matching, bounded native repeats, shared-slot ownership and uncertain-outcome handling |
-| Video and links | Bounded frames/queues, disposal, one command egress, deduplication and parameter pinning |
-| Vision tracking | Explicit region selection/Track, calibrated pitch/yaw bounds and rate, fresh frames/selected telemetry, native loss handling, one active view owner and retirement on manual input or uncertainty |
-| Native fence draft | Complete polygon validation, selected Fence context, cache preservation and zero automatic uploads |
-| Native termination | Advertised support, fresh parameter/heartbeat checks and separate ACK/mode observation; onboard entry, RC/fence, phase and latch tests |
-
-The executable checks are listed in [development](development.md). Physical wiring,
-surface/motor direction, actuator feedback, receiver failures and actual flight
-behavior require the separate [aircraft acceptance](qualification.md#aircraft-acceptance-remains-open).
-
-## Required evidence
-
-Run the focused [software checks](development.md), review native host API arguments
-and collect independent wire/controller/output evidence for the actual aircraft.
-Exercise input loss, stale/wrong profiles, conflicting outputs, pending helpers,
-unknown ACKs, link/power faults and MP exit. State passed/failed/skipped/unavailable
-separately. Do not claim a landing, safe mechanical state, traffic avoidance or
-termination from a software ACK. Remaining acceptance is in [qualification](qualification.md).
+Source obligations remain in [CONOPS traceability](conops-requirements.md), with
+unresolved decisions in [product scope](prd.md). Required PR checks and reviews
+must be verified before merge. Release, installation and physical tests are
+separate authorized operations.

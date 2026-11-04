@@ -130,12 +130,13 @@ namespace NOMAD.MissionPlanner
                 return;
             }
 
-            _lblBattery.Text = battery.CapacityMah > 0
+            _lblBattery.Text = battery.HasRemainingCapacity
                 ? $"{battery.Voltage:F1}V · {battery.RemainingMah:F0} mAh"
                 : $"{battery.Voltage:F1}V";
             _lblBattery.ForeColor = battery.Severity == 2
                 ? NOMADTheme.ERROR
-                : (battery.Severity == 1 ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
+                : (battery.Severity == 1 ? NOMADTheme.WARNING :
+                    (battery.ThresholdsFromVehicle ? NOMADTheme.SUCCESS : NOMADTheme.TEXT_SECONDARY));
         }
 
         private void UpdateLinksCard()

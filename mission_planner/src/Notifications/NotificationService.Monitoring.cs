@@ -116,7 +116,7 @@ namespace NOMAD.MissionPlanner
 
             string label = $"BATT{idx}";
             string detail = $"{label}: {state.Voltage:F1}V";
-            if (state.CapacityMah > 0)
+            if (state.HasRemainingCapacity)
                 detail += $" · {state.RemainingMah:F0}/{state.CapacityMah:F0} mAh";
 
             if (state.Severity == 2)

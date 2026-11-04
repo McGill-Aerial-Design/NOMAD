@@ -258,6 +258,7 @@ namespace NOMAD.MissionPlanner
         private void StopCustomControls()
         {
             RemoveMainMenu();
+            RemoveFlightDataMenuItems();
             _termination?.Dispose();
             _termination = null;
             NOMADMainScreen.SetTerminationController(null);

@@ -33,12 +33,12 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static void RunSync(Control owner, Action action, string operationName)
         {
-            if (owner == null) return;
+            if (owner == null || owner.IsDisposed || owner.Disposing) return;
             try
             {
                 if (owner.InvokeRequired)
                 {
-                    owner.BeginInvoke(action);
+                    owner.BeginInvoke(new Action(() => RunSync(owner, action, operationName)));
                     return;
                 }
                 action();

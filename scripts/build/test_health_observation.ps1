@@ -117,6 +117,23 @@ function Invoke-HealthObservationTests {
         if ($label.Text -ne 'Battery unavailable' -or $label.ForeColor -ne $neutral) {
             throw 'Unavailable battery telemetry displayed a healthy numeric reading or green verdict.'
         }
+        $batteryType = $Plugin.GetType('NOMAD.MissionPlanner.BatteryStatus', $true)
+        $battery = [Activator]::CreateInstance($batteryType)
+        $battery.Voltage = 22.2
+        $battery.CapacityMah = 1000
+        $battery.UsedMah = [double]::NaN
+        $dashboardType.GetMethod('UpdateBatteryCard', $private).Invoke($view, [object[]]@($battery)) | Out-Null
+        if ($label.Text -match 'mAh' -or $label.ForeColor -ne $neutral) {
+            throw 'Unknown capacity or unconfigured thresholds produced a numeric capacity or green verdict.'
+        }
+        $battery.UsedMah = 100
+        $battery.RemainingMah = 900
+        $battery.ThresholdsFromVehicle = $true
+        $dashboardType.GetMethod('UpdateBatteryCard', $private).Invoke($view, [object[]]@($battery)) | Out-Null
+        $healthy = $Plugin.GetType('NOMAD.MissionPlanner.NOMADTheme').GetField('SUCCESS').GetValue($null)
+        if ($label.Text -notmatch '900 mAh' -or $label.ForeColor -ne $healthy) {
+            throw 'Available capacity or configured healthy battery state was lost.'
+        }
     } finally { if ($null -ne $view) { $view.Dispose() }; $shared.SetValue($null, $previousShared); $service.Dispose() }
     Write-Host 'Native health validity, context/cooldown isolation, meter units and unavailable battery checks passed.'
 }

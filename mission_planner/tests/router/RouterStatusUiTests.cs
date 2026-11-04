@@ -30,6 +30,7 @@ internal static class RouterStatusUiTests
             return File.Exists(path) ? Assembly.LoadFrom(path) : null;
         };
         Run("dashboard router summary", DashboardSummary);
+        Run("link panel subscription and bounded log lifetime", LinkPanelLifetime);
         Run("Links view availability", LinksViewAvailability);
         Run("settings save preserves router and unload session", SettingsRouterLifetime);
         Run("aircraft profile retires cached views", AircraftProfileRetiresCachedViews);
@@ -96,6 +97,31 @@ internal static class RouterStatusUiTests
                 "stale menu callbacks cannot recreate plugin owners");
         }
         NOMADMainScreen.SetStaticConfig(null);
+    }
+
+    private static void LinkPanelLifetime()
+    {
+        using var manager = new MAVLinkConnectionManager();
+        var events = new[] { "LinkStatusChanged", "FailoverOccurred", "ActiveLinkChanged", "LogMessage" };
+        using (var panel = new LinkHealthPanel(manager, new NOMADConfig()))
+        {
+            var log = (ListBox)typeof(LinkHealthPanel).GetField("_lstLog", PrivateInstance).GetValue(panel);
+            var handler = (EventHandler<string>)typeof(MAVLinkConnectionManager)
+                .GetField("LogMessage", PrivateInstance).GetValue(manager);
+            for (int index = 0; index < 205; ++index) { handler(manager, "event " + index); }
+            Check(log.Items.Count == 200 && log.Items[0].ToString().EndsWith("event 5") &&
+                log.Items[199].ToString().EndsWith("event 204"), "Router log did not retain only the last 200 messages.");
+            foreach (string name in events)
+            {
+                var subscribers = (Delegate)typeof(MAVLinkConnectionManager).GetField(name, PrivateInstance).GetValue(manager);
+                Check(subscribers?.GetInvocationList().Length == 1, "Missing or duplicate panel subscription: " + name);
+            }
+        }
+        foreach (string name in events)
+        {
+            Check(typeof(MAVLinkConnectionManager).GetField(name, PrivateInstance).GetValue(manager) == null,
+                "Disposed link panel retained its router subscription: " + name);
+        }
     }
 
     private static void DashboardSummary()

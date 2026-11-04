@@ -38,7 +38,8 @@ internal static partial class VideoLifetimeTests
                 form.Controls.Add(player); form.Show(); player.StartStream(); Wait(pipeline.ReadEntered, "real Area source");
                 PlayerSurfaceFrame(player, pipeline, surface);
                 Check(player.SelectRegion(new RectangleF(280, 170, 180, 140)), "Native Area selection failed");
-                for (int index = 0; index < 3; index++)
+                var initialization = Stopwatch.StartNew();
+                for (int index = 0; !player.RegionReady && initialization.Elapsed < TimeSpan.FromSeconds(5); index++)
                 {
                     PlayerSurfaceFrame(player, pipeline, surface);
                     Console.WriteLine("  Native Area initialization " + index + ": " +

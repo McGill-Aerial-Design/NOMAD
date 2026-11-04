@@ -29,17 +29,15 @@ nav:
       - Installation and operation: operations.md
   - Systems:
       - Video and tracking: video.md
-      - Ecosystem integration: integrations.md
-      - Architecture: architecture.md
+      - Architecture and reuse: architecture.md
   - Safety:
-      - Control boundaries: safety.md
+      - Safety and qualification: safety.md
       - Native termination: native-termination.md
-      - Qualification: qualification.md
   - Development:
       - Build and checks: development.md
-      - Product requirements: prd.md
+      - Product scope and AEAC tasks: prd.md
       - CONOPS traceability: conops-requirements.md
-  - Future work:
+  - AEAC ideas:
       - Brainstorming: brainstorming.md
 validation:
   links:
