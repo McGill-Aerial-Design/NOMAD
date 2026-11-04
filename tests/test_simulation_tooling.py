@@ -129,7 +129,8 @@ def test_renderer_health_rejects_late_capture_failure(tooling, tmp_path):
         process.wait(timeout=2)
 
 
-def test_visible_readiness_failure_still_cleans_owned_processes(tooling, monkeypatch, tmp_path):
+@pytest.mark.parametrize("home_workspace", [False, True])
+def test_visible_readiness_failure_still_cleans_owned_processes(tooling, monkeypatch, tmp_path, home_workspace):
     supervisor = tooling("supervise")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -138,8 +139,20 @@ def test_visible_readiness_failure_still_cleans_owned_processes(tooling, monkeyp
     run = tmp_path / ("run-" + run_id)
     run.mkdir()
     (run / "run.id").write_text(run_id)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setattr(
-        sys, "argv", ["supervise", "--workspace", str(workspace), "--run", str(run), "--rendered", "--visible"]
+        sys,
+        "argv",
+        [
+            "supervise",
+            "--workspace",
+            "~/workspace" if home_workspace else str(workspace),
+            "--run",
+            str(run),
+            "--rendered",
+            "--visible",
+        ],
     )
     monkeypatch.setattr(supervisor, "verify", lambda *_: {"sha256": "fixture"})
     monkeypatch.setattr(supervisor, "available", lambda *_: None)

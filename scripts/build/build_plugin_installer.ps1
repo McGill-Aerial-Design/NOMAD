@@ -31,6 +31,7 @@ if ($identity.GetField('MissionPlannerTarget', $flags).GetRawConstantValue() -ne
 }
 $hash = (Get-FileHash -LiteralPath $PluginPath -Algorithm SHA256).Hash.ToLowerInvariant()
 . (Join-Path $PSScriptRoot 'windows_build_tools.ps1')
+$null = Get-CurrentPluginBuild -RepoRoot $root -PluginPath $PluginPath
 $compiler = Find-RoslynCompiler
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $output -Force | Out-Null

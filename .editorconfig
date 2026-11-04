@@ -26,15 +26,6 @@ dotnet_separate_import_directive_groups = true
 
 # Newline preferences
 csharp_new_line_before_open_brace = all
-csharp_new_line_before_open_brace = methods
-csharp_new_line_before_open_brace = properties
-csharp_new_line_before_open_brace = control_blocks
-csharp_new_line_before_open_brace = types
-csharp_new_line_before_open_brace = lambdas
-csharp_new_line_before_open_brace = accessors
-csharp_new_line_before_open_brace = anonymous_methods
-csharp_new_line_before_open_brace = anonymous_types
-csharp_new_line_before_open_brace = object_collection_array_initializers
 csharp_new_line_before_else = true
 csharp_new_line_before_catch = true
 csharp_new_line_before_finally = true
@@ -78,3 +69,6 @@ indent_style = tab
 
 [*.sh]
 indent_size = 2
+
+[*.ps1]
+end_of_line = crlf

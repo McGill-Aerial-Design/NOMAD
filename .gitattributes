@@ -2,7 +2,7 @@
 # don't churn line endings. Binary files are auto-detected and left untouched.
 * text=auto eol=lf
 
-# Keep Linux-executed scripts compatible on Jetson (explicit for clarity).
+# Keep Linux-executed scripts compatible with the simulation tools.
 *.sh text eol=lf
 *.bash text eol=lf
 

@@ -385,23 +385,24 @@ namespace NOMAD.MissionPlanner
 
         private void HookEvents()
         {
-            _provider.LinkStatusChanged += (s, e) =>
-            {
-                UiAsync.RunSync(this, () => RefreshAll(), "LinkStatusChanged");
-            };
-            _provider.FailoverOccurred += (s, e) =>
-            {
-                UiAsync.RunSync(this, () => AppendLog(e), "FailoverOccurred");
-            };
-            _provider.ActiveLinkChanged += (s, t) =>
-            {
-                UiAsync.RunSync(this, () => RefreshAll(), "ActiveLinkChanged");
-            };
-            _provider.LogMessage += (s, msg) =>
-            {
-                UiAsync.RunSync(this, () => _lstLog.Items.Add($"[{DateTime.Now:HH:mm:ss}] {msg}"), "LogMessage");
-            };
+            _provider.LinkStatusChanged += OnLinkStatusChanged;
+            _provider.FailoverOccurred += OnFailoverOccurred;
+            _provider.ActiveLinkChanged += OnActiveLinkChanged;
+            _provider.LogMessage += OnLogMessage;
         }
+
+        private void OnLinkStatusChanged(object sender, LinkStatusChangedEventArgs e) =>
+            UiAsync.RunSync(this, RefreshAll, "LinkStatusChanged");
+
+        private void OnFailoverOccurred(object sender, FailoverEventArgs e) =>
+            UiAsync.RunSync(this, () => AppendLog(
+                $"[{e.Timestamp:HH:mm:ss}] {e.FromLink} → {e.ToLink}   {e.Reason}"), "FailoverOccurred");
+
+        private void OnActiveLinkChanged(object sender, string link) =>
+            UiAsync.RunSync(this, RefreshAll, "ActiveLinkChanged");
+
+        private void OnLogMessage(object sender, string message) =>
+            UiAsync.RunSync(this, () => AppendLog($"[{DateTime.Now:HH:mm:ss}] {message}"), "LogMessage");
 
         // ============================================================
         // Refresh
@@ -456,9 +457,8 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private void AppendLog(FailoverEventArgs e)
+        private void AppendLog(string line)
         {
-            string line = $"[{e.Timestamp:HH:mm:ss}] {e.FromLink} → {e.ToLink}   {e.Reason}";
             _lstLog.Items.Add(line);
             while (_lstLog.Items.Count > 200) _lstLog.Items.RemoveAt(0);
             _lstLog.TopIndex = Math.Max(0, _lstLog.Items.Count - 1);
@@ -485,6 +485,10 @@ namespace NOMAD.MissionPlanner
         {
             if (disposing)
             {
+                _provider.LinkStatusChanged -= OnLinkStatusChanged;
+                _provider.FailoverOccurred -= OnFailoverOccurred;
+                _provider.ActiveLinkChanged -= OnActiveLinkChanged;
+                _provider.LogMessage -= OnLogMessage;
                 _refresh?.Stop();
                 _refresh?.Dispose();
             }

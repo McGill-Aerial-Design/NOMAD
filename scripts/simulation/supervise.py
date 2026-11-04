@@ -74,7 +74,7 @@ def main():
         raise ValueError("Occlusion needs the rendered case")
     if args.endurance_seconds and (not args.rendered or args.occlusion or not 600 <= args.endurance_seconds <= 1800):
         raise ValueError("Invalid bounded endurance duration")
-    workspace = args.workspace.resolve(strict=True)
+    workspace = args.workspace.expanduser().resolve(strict=True)
     if (workspace / ".nomad-simulation-owned").read_text().strip() != "NOMAD simulation sources v1":
         raise ValueError("Invalid source ownership")
     source = workspace / "sources/ardupilot"

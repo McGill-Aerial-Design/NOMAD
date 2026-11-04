@@ -8,9 +8,8 @@
 //   BATTn_LOW_VOLT / BATTn_CRT_VOLT  - voltage warn / critical
 //   BATTn_ARM_VOLT                   - minimum arming voltage
 //   BATTn_CAPACITY + BATTn_LOW_MAH / BATTn_CRT_MAH - capacity-based
-// Nothing is hardcoded except a per-cell fallback used only when the
-// vehicle has no voltage thresholds configured at all. The MP-reported
-// battery_remaining percentage is intentionally NOT used.
+// Disabled thresholds stay disabled; voltage does not identify chemistry
+// or cell count. The MP-reported battery_remaining percentage is not used.
 // ============================================================
 
 using System;
@@ -32,7 +31,9 @@ namespace NOMAD.MissionPlanner
         public double ArmVoltage;        // BATTn_ARM_VOLT (0 = disabled)
         public double LowMah;            // BATTn_LOW_MAH (0 = disabled)
         public double CriticalMah;       // BATTn_CRT_MAH (0 = disabled)
-        public bool ThresholdsFromVehicle; // false = per-cell fallback in use
+        public bool ThresholdsFromVehicle; // usable native low/critical thresholds are available
+        public bool HasRemainingCapacity => CapacityMah > 0 && UsedMah >= 0 &&
+            !double.IsNaN(UsedMah) && !double.IsInfinity(UsedMah);
         public int Severity;             // 0 = ok, 1 = warning, 2 = critical
         public string Reason = "";       // which threshold tripped
         public bool BelowArmVoltage;     // disarmed and under BATTn_ARM_VOLT
@@ -40,12 +41,6 @@ namespace NOMAD.MissionPlanner
 
     public static class BatteryHealth
     {
-        // Used ONLY when the vehicle has neither BATTn_LOW/CRT_VOLT nor a cell
-        // count we can apply them to. 3.5/3.3 V per cell are conservative LiPo
-        // under-load floors.
-        private const double FALLBACK_LOW_PER_CELL = 3.5;
-        private const double FALLBACK_CRT_PER_CELL = 3.3;
-
         /// <summary>
         /// Read battery n (1-based) from the connected vehicle and evaluate it
         /// against its own configured thresholds. Returns null when there is no
@@ -70,29 +65,17 @@ namespace NOMAD.MissionPlanner
             s.LowVoltage = GetBattParam(mav, idx, "LOW_VOLT");
             s.CriticalVoltage = GetBattParam(mav, idx, "CRT_VOLT");
             s.ArmVoltage = GetBattParam(mav, idx, "ARM_VOLT");
-            s.ThresholdsFromVehicle = s.LowVoltage > 0 || s.CriticalVoltage > 0;
-            if (!s.ThresholdsFromVehicle)
-            {
-                double cells = GetBattParam(mav, idx, "CELL_COUNT");
-                if (cells <= 0 && s.Voltage > 0)
-                {
-                    cells = Math.Max(1, Math.Round(s.Voltage / 3.7)); // nominal LiPo cell
-                }
-                if (cells > 0)
-                {
-                    s.LowVoltage = cells * FALLBACK_LOW_PER_CELL;
-                    s.CriticalVoltage = cells * FALLBACK_CRT_PER_CELL;
-                }
-            }
 
             // Capacity thresholds (remaining mAh vs BATTn_LOW/CRT_MAH).
             s.CapacityMah = GetBattParam(mav, idx, "CAPACITY");
             s.LowMah = GetBattParam(mav, idx, "LOW_MAH");
             s.CriticalMah = GetBattParam(mav, idx, "CRT_MAH");
-            if (s.CapacityMah > 0 && s.UsedMah >= 0)
+            if (s.HasRemainingCapacity)
             {
                 s.RemainingMah = Math.Max(0, s.CapacityMah - s.UsedMah);
             }
+            s.ThresholdsFromVehicle = s.LowVoltage > 0 || s.CriticalVoltage > 0 ||
+                (s.HasRemainingCapacity && (s.LowMah > 0 || s.CriticalMah > 0));
 
             Evaluate(s, armed: cs.armed);
             return s;
@@ -100,7 +83,7 @@ namespace NOMAD.MissionPlanner
 
         private static void Evaluate(BatteryStatus s, bool armed)
         {
-            bool haveMah = s.CapacityMah > 0 && s.UsedMah > 0;
+            bool haveMah = s.HasRemainingCapacity;
 
             if (s.CriticalVoltage > 0 && s.Voltage > 0 && s.Voltage <= s.CriticalVoltage)
             {
@@ -166,7 +149,7 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Read a numeric field/property by name from CurrentState. Returns 0 if missing.
+        /// Read a numeric field/property by name from CurrentState. Returns NaN if unavailable.
         /// </summary>
         public static double GetCsDouble(object cs, string name)
         {
@@ -179,7 +162,7 @@ namespace NOMAD.MissionPlanner
                 if (field != null) return Convert.ToDouble(field.GetValue(cs));
             }
             catch { }
-            return 0;
+            return double.NaN;
         }
     }
 }

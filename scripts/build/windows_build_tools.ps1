@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-# Shared Windows build-tool discovery. Keep test-double compiler bootstrap independent.
+# Shared Windows build tools and artifact identity checks.
+# Pixi may pass PowerShell 7 module paths to Windows PowerShell 5.1.
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
 
 function Find-MSBuild {
     $command = Get-Command msbuild -ErrorAction SilentlyContinue
@@ -49,4 +51,27 @@ function Get-PluginSourceHashes {
         }
     }
     return $hashes
+}
+
+function Get-CurrentPluginBuild {
+    param([Parameter(Mandatory=$true)][string]$RepoRoot, [Parameter(Mandatory=$true)][string]$PluginPath)
+    $build = Get-Content -LiteralPath (Join-Path $RepoRoot 'build/release/plugin-build.json') -Raw | ConvertFrom-Json
+    $source = & git -C $RepoRoot rev-parse HEAD
+    if ($LASTEXITCODE -ne 0) { throw 'Plugin source identity unavailable.' }
+    $target = (Get-Content -LiteralPath (Join-Path $RepoRoot 'scripts/release/mission-planner-target.json') -Raw |
+        ConvertFrom-Json).version
+    if ($build.schema -ne 1 -or $build.source -ne $source -or $build.host_target -ne $target -or
+        $build.plugin_sha256 -ne (Get-FileHash -LiteralPath $PluginPath).Hash) {
+        throw 'Plugin build/source binding mismatch; rebuild before using this artifact.'
+    }
+    $current = Get-PluginSourceHashes $RepoRoot
+    if ($current.Count -ne @($build.source_files.PSObject.Properties).Count) {
+        throw 'Product source set differs from the built artifact; rebuild before using this artifact.'
+    }
+    foreach ($name in $current.Keys) {
+        if ($build.source_files.PSObject.Properties[$name].Value -ne $current[$name]) {
+            throw 'Product source differs from the built artifact; rebuild before using this artifact.'
+        }
+    }
+    return $build
 }

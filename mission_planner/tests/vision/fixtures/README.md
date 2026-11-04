@@ -1,4 +1,4 @@
-# Rendered Area regression
+# Vision regression fixtures
 
 `panorama.json` and the thirty `panorama-*.jpg` views add photographed full-360-degree
 camera rotation and return tests for both Object and Area. Source: Greg Zaal's
@@ -14,7 +14,7 @@ the exact original view. Tests check image hashes, wrong acceptance, recovery an
 sustained positive coverage without reselection. This is camera rotation about one
 center, not moving-object, parallax, motion-blur or capture-latency qualification.
 
-These images were generated locally by the owned simulation harness, with seed173 and
+The rendered Area images described below were generated locally by the owned simulation harness, with seed173 and
 the unchanged procedural ground texture. They contain no operator camera or telemetry data.
 The source ground-pattern generator is first-party; rendered vehicle meshes are outside
 the visible image. Keep the original failed evidence under ignored test storage.

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Controlled native MP API cohort; does not start the Mission Planner application.
-param([string]$LinuxWorkspace = '/home/youssef/nomad-simulation', [switch]$Rendered, [switch]$LastLetter,
+param([string]$LinuxWorkspace = '~/nomad-simulation', [switch]$Rendered, [switch]$LastLetter,
     [switch]$Visible, [switch]$Preview,
     [ValidateRange(0,1800)][int]$DurationSeconds=0,
     [ValidateSet('ground','photo-board','natural')][string]$Scene='ground',

@@ -58,7 +58,7 @@ also covers the same local build script. Qualified packages retain:
 
 The patch alone is not the complete corresponding source package. Software/SITL
 results do not establish physical descent, surface direction, transmitter mixing
-or competition acceptance; see [qualification](../../docs/qualification.md).
+or competition acceptance; see [safety and qualification](../../docs/safety.md).
 
 ## License boundary
 

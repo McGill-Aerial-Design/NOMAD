@@ -47,6 +47,8 @@ internal static class PluginUiTests
             "A cached video selector invoked the retired plugin callback.");
         Gesture();
         Menu();
+        QueuedUiUpdates();
+        FlightDataMenuLifetime();
         SameScreen();
         Theme(directory);
         SettingsInputPause();
@@ -73,6 +75,61 @@ internal static class PluginUiTests
 
     private static void Check(bool condition, string message)
     { if (!condition) { throw new InvalidOperationException(message); } }
+
+    private static void QueuedUiUpdates()
+    {
+        using var owner = new Control();
+        var handle = owner.Handle;
+        var run = typeof(NOMADConfig).Assembly.GetType("NOMAD.MissionPlanner.UiAsync", true).GetMethod("RunSync");
+        int unhandled = 0;
+        bool completed = false;
+        Exception workerError = null;
+        ThreadExceptionEventHandler onError = (sender, args) => unhandled++;
+        Application.ThreadException += onError;
+        try
+        {
+            var worker = new Thread(() =>
+            {
+                try
+                {
+                    run.Invoke(null, new object[] { owner, (Action)(() => throw new Exception("fixture")), "throw" });
+                    run.Invoke(null, new object[] { owner, (Action)(() => completed = true), "complete" });
+                }
+                catch (Exception error) { workerError = error; }
+            });
+            worker.IsBackground = true;
+            worker.Start();
+            Check(worker.Join(2000), "UI worker blocked while queueing updates.");
+            Check(workerError == null, "Queueing a UI update failed: " + workerError);
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (!completed && deadline.ElapsedMilliseconds < 2000) { Application.DoEvents(); Thread.Sleep(1); }
+            Check(completed && unhandled == 0, "Queued UI error escaped the guard or prevented the next update.");
+            run.Invoke(null, new object[] { owner, (Action)(() => completed = false), "retire" });
+            owner.Dispose();
+            run.Invoke(null, new object[] { owner, (Action)(() => completed = true), "disposed" });
+            Check(!completed, "Disposed owner accepted a UI update.");
+        }
+        finally { Application.ThreadException -= onError; }
+    }
+
+    private static void FlightDataMenuLifetime()
+    {
+        using var menu = new ContextMenuStrip();
+        var hostItem = menu.Items.Add("Host action");
+        var plugin = new NOMADPlugin();
+        var owned = new[] { new ToolStripMenuItem("NOMAD fixture"), new ToolStripMenuItem("NOMAD fixture 2") };
+        int disposed = 0;
+        foreach (var item in owned) { item.Disposed += (sender, args) => disposed++; }
+        menu.Items.AddRange(owned);
+        typeof(NOMADPlugin).GetField("_flightDataMenuItems", Hidden).SetValue(plugin, owned);
+        var stop = typeof(NOMADPlugin).GetMethod("StopCustomControls", Hidden);
+        stop.Invoke(plugin, null);
+        stop.Invoke(plugin, null);
+        Check(menu.Items.Count == 1 && ReferenceEquals(menu.Items[0], hostItem) &&
+            disposed == 2 && !hostItem.IsDisposed,
+            $"Plugin cleanup retained menus or removed a host item: count={menu.Items.Count}, " +
+            $"owned disposed={disposed}, host disposed={hostItem.IsDisposed}.");
+    }
 
     private static void InputEditorInterpretation(string directory)
     {

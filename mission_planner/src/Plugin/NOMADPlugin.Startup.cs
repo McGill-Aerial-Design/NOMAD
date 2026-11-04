@@ -17,6 +17,17 @@ namespace NOMAD.MissionPlanner
     public partial class NOMADPlugin
     {
         private NOMADMenuItem _nomadMenu;
+        private ToolStripMenuItem[] _flightDataMenuItems = Array.Empty<ToolStripMenuItem>();
+
+        private void RemoveFlightDataMenuItems()
+        {
+            foreach (var item in _flightDataMenuItems)
+            {
+                item.Owner?.Items.Remove(item);
+                item.Dispose();
+            }
+            _flightDataMenuItems = Array.Empty<ToolStripMenuItem>();
+        }
 
         private void RemoveMainMenu()
         {
@@ -49,6 +60,7 @@ namespace NOMAD.MissionPlanner
         /// <summary>Add NOMAD entries to the FlightData right-click map menu (if available).</summary>
         private void AddFlightDataMenuItems()
         {
+            RemoveFlightDataMenuItems();
             try
             {
                 if (Host?.FDMenuMap?.Items == null)
@@ -56,19 +68,17 @@ namespace NOMAD.MissionPlanner
 
                 var openMainItem = new ToolStripMenuItem("NOMAD Full Control");
                 openMainItem.Click += (s, e) => ShowMainScreen();
-                Host.FDMenuMap.Items.Add(openMainItem);
 
                 var openPopOutItem = new ToolStripMenuItem("NOMAD Pop Out Window");
                 openPopOutItem.Click += (s, e) => ShowPopOutWindow();
-                Host.FDMenuMap.Items.Add(openPopOutItem);
 
                 var settingsItem = new ToolStripMenuItem("NOMAD Settings");
                 settingsItem.Click += (s, e) => ShowSettings();
-                Host.FDMenuMap.Items.Add(settingsItem);
 
                 var linkStatusItem = new ToolStripMenuItem("NOMAD Link Status");
                 linkStatusItem.Click += (s, e) => ShowLinkHealthPanel();
-                Host.FDMenuMap.Items.Add(linkStatusItem);
+                _flightDataMenuItems = new[] { openMainItem, openPopOutItem, settingsItem, linkStatusItem };
+                Host.FDMenuMap.Items.AddRange(_flightDataMenuItems);
             }
             catch (Exception ex)
             {

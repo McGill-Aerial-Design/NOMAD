@@ -451,6 +451,40 @@ function Test-SourceChangedDuringBuild {
     }
 }
 
+function Test-BuildProof {
+    param([pscustomobject]$Fixture)
+    . (Join-Path (Split-Path $Fixture.Script) 'windows_build_tools.ps1')
+    $null = Get-CurrentPluginBuild -RepoRoot $Fixture.Repo -PluginPath $Fixture.Artifact
+    $project = Join-Path $Fixture.Project 'NOMADPlugin.csproj'
+    $added = Join-Path $Fixture.Project 'Unexpected.cs'
+    $proof = Join-Path $Fixture.Repo 'build/release/plugin-build.json'
+    $target = Join-Path $Fixture.Repo 'scripts/release/mission-planner-target.json'
+    $originals = @{}
+    foreach ($path in @($project, $proof, $target, $Fixture.Artifact)) {
+        $originals[$path] = [IO.File]::ReadAllBytes($path)
+    }
+    foreach ($mutation in @('change', 'add', 'payload', 'target', 'proof')) {
+        try {
+            switch ($mutation) {
+                'change' { [IO.File]::AppendAllText($project, '<!-- changed after build -->') }
+                'add' { [IO.File]::WriteAllText($added, '// added after build') }
+                'payload' { [IO.File]::AppendAllText($Fixture.Artifact, 'changed payload') }
+                'target' { [IO.File]::WriteAllText($target, '{"version":"9.9.9"}') }
+                'proof' { [IO.File]::WriteAllText($proof, '{}') }
+            }
+            $refused = $false
+            try { $null = Get-CurrentPluginBuild -RepoRoot $Fixture.Repo -PluginPath $Fixture.Artifact }
+            catch { $refused = $true }
+            if (!$refused) { throw "Stale build proof accepted after $mutation." }
+        } finally {
+            foreach ($path in $originals.Keys) { [IO.File]::WriteAllBytes($path, $originals[$path]) }
+            if (Test-Path -LiteralPath $added) { Remove-Item -LiteralPath $added }
+        }
+    }
+    $null = Get-CurrentPluginBuild -RepoRoot $Fixture.Repo -PluginPath $Fixture.Artifact
+    Write-Host 'Build proof rejects changed/added sources, payload, host target and invalid proof.'
+}
+
 function Test-ChangedReviewedTarget {
     param([pscustomobject]$Fixture)
 
@@ -585,6 +619,7 @@ try {
 
     Test-ToolDiscovery -Fixture $fixture
     Test-BuildOnlySuccess -Fixture $fixture
+    Test-BuildProof -Fixture $fixture
     Test-ChangedReviewedTarget -Fixture $fixture
     Test-SourceChangedDuringBuild -Fixture $fixture
     Test-BuildFailure -Fixture $fixture
