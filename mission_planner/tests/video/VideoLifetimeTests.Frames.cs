@@ -3,10 +3,37 @@
 using System;
 using System.Drawing;
 using System.Runtime.InteropServices;
+using System.Threading;
 using NOMAD.MissionPlanner;
 
 internal static partial class VideoLifetimeTests
 {
+    private static void FreshReceiptsDoNotEstablishFreshCapture()
+    {
+        var pipeline = new FakeVideoPipeline();
+        using (var frozen = new Bitmap(16, 16))
+        using (var graphics = Graphics.FromImage(frozen))
+        using (var session = new VideoSession(() => pipeline))
+        {
+            graphics.Clear(Color.DarkBlue);
+            session.Start("owned frozen-pixel fixture");
+            long previousSequence = 0, previousReceipt = 0;
+            for (int index = 0; index < 6; index++)
+            {
+                pipeline.Frames.Add((Bitmap)frozen.Clone());
+                using (var frame = NextVideoFrame(session))
+                {
+                    Check(frame.Fresh && frame.Sequence > previousSequence && frame.ReceivedTicks > previousReceipt,
+                        "Fresh decoded receipts must remain distinct even when upstream pixels repeat");
+                    Check(frame.Image.GetPixel(8, 8).ToArgb() == Color.DarkBlue.ToArgb(),
+                        "Frozen-pixel fixture changed its content");
+                    previousSequence = frame.Sequence; previousReceipt = frame.ReceivedTicks;
+                }
+                Thread.Sleep(35);
+            }
+        }
+    }
+
     private static void BorrowedFrameLifetime()
     {
         Check(Marshal.SizeOf<VideoBufferMap>() == (IntPtr.Size == 8 ? 104 : 52), "Incorrect GstMapInfo ABI size");

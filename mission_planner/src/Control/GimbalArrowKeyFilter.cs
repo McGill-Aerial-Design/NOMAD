@@ -76,27 +76,26 @@ namespace NOMAD.MissionPlanner
 
         internal static bool TryHandleKey(Keys key)
         {
-            float pitchDelta = 0f;
-            float rollDelta = 0f;
+            float x = 0f, y = 0f;
             switch (key & Keys.KeyCode)
             {
                 case Keys.Up:
-                    pitchDelta = KEY_NUDGE_DEG;
+                    y = 1;
                     break;
                 case Keys.Down:
-                    pitchDelta = -KEY_NUDGE_DEG;
+                    y = -1;
                     break;
                 case Keys.Left:
-                    rollDelta = KEY_NUDGE_DEG;
+                    x = -1;
                     break;
                 case Keys.Right:
-                    rollDelta = -KEY_NUDGE_DEG;
+                    x = 1;
                     break;
                 default:
                     return false;
             }
 
-            GimbalController.NudgeTarget(pitchDelta, rollDelta);
+            GimbalController.NudgeScreenTarget(x, y, KEY_NUDGE_DEG);
             return true;
         }
 

@@ -1,0 +1,9 @@
+{
+  "source": "mission_planner/tests/vision/vehicle.png",
+  "sha256": "0f2f36ec9cac6fd0c9e9c892e90e2dcb2f118157c58b9892e94b201223080d87",
+  "width": 640,
+  "height": 360,
+  "class_id": 2,
+  "primary_box": [347, 211, 43, 28],
+  "annotation": "Independent manual visible-grey-car rectangle; synthetic image, not real footage. Other cars are unscored."
+}

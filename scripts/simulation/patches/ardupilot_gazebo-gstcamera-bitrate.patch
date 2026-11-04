@@ -1,0 +1,38 @@
+--- a/src/GstCameraPlugin.cc
++++ b/src/GstCameraPlugin.cc
+@@ -68,6 +68,8 @@
+     std::string rtmpLocation;
+     bool useBasicPipeline{false};
+     bool useCuda{false};
++    // NOMAD simulation patch: encoder bitrate in kbit/s; upstream fixes 800.
++    unsigned int bitrate{800};
+     std::string imageTopic;
+     std::string enableTopic;
+ 
+@@ -178,6 +180,11 @@
+         impl->useCuda = _sdf->Get<bool>("use_cuda");
+     }
+ 
++    if (_sdf->HasElement("bitrate"))
++    {
++        impl->bitrate = _sdf->Get<unsigned int>("bitrate");
++    }
++
+     if (_sdf->HasElement("image_topic"))
+     {
+         impl->imageTopic = _sdf->Get<std::string>("image_topic");
+@@ -493,12 +500,12 @@
+     {
+         gzdbg << "Using Cuda" << std::endl;
+         encoder = gst_element_factory_make("nvh264enc", nullptr);
+-        g_object_set(G_OBJECT(encoder), "bitrate", 800, "preset", 1, nullptr);
++        g_object_set(G_OBJECT(encoder), "bitrate", bitrate, "preset", 1, nullptr);
+     }
+     else
+     {
+         encoder = gst_element_factory_make("x264enc", nullptr);
+-        g_object_set(G_OBJECT(encoder), "bitrate", 800, "speed-preset", 6,
++        g_object_set(G_OBJECT(encoder), "bitrate", bitrate, "speed-preset", 6,
+             "tune", 4, "key-int-max", 10, nullptr);
+     }
+     return encoder;

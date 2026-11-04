@@ -8,6 +8,43 @@ using NOMAD.MissionPlanner;
 
 internal static partial class VideoLifetimeTests
 {
+    private static void TrackingBusyVisualTime()
+    {
+        using (var peer = new TrackingPeer())
+        using (var form = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual,
+            Location = new Point(-2000, -2000), Size = new Size(800, 600) })
+        {
+            var pipeline = new FakeVideoPipeline();
+            var profile = new VideoInputProfile { Name = "Busy visual correction", Url = "udp://@:5600",
+                TrackingCalibrated = true, TrackingMaxRateDegSec = 60 };
+            using (var player = new EmbeddedVideoPlayer(profile, true, CancellationToken.None, () => pipeline,
+                peer.Config, createTracker: (token, mode) => new FakeVisualTracker()))
+            {
+                form.Controls.Add(player); form.Show();
+                player.StartStream(); Wait(pipeline.ReadEntered, "busy visual video");
+                PlayerVisionFrame(player, pipeline, Color.Blue);
+                Check(player.SelectRegion(new RectangleF(65, 30, 20, 20)), "Busy visual selection failed");
+                PlayerVisionFrame(player, pipeline, Color.Blue);
+                Check(player.StartTracking(), "Busy visual tracking did not start");
+                var busy = typeof(OutputController).GetField("_payloadBusy", BindingFlags.NonPublic | BindingFlags.Static);
+                try
+                {
+                    busy.SetValue(null, true);
+                    for (int frame = 0; frame < 5; frame++)
+                    { Thread.Sleep(60); PlayerVisionFrame(player, pipeline, Color.Blue); peer.Pump(15); }
+                    Check(player.SubmittedTrackingCommands == 0, "Busy native path accepted a visual target");
+                }
+                finally { busy.SetValue(null, false); }
+                Thread.Sleep(60); PlayerVisionFrame(player, pipeline, Color.Blue);
+                peer.Until(() => player.SubmittedTrackingCommands > 0, "fresh correction after native busy interval");
+                // Independent pinhole error is atan(25/50)=26.565 degrees; the existing .2s budget permits5.313.
+                Check(player.CommandedYawDeg >= 4.8f && player.CommandedYawDeg <= 5.4f,
+                    "Rejected busy samples consumed elapsed steering time: yaw=" + player.CommandedYawDeg);
+                player.StopTracking();
+            }
+        }
+    }
+
     private static void TrackingHeadingFences()
     {
         using (var peer = new TrackingPeer())
@@ -43,8 +80,15 @@ internal static partial class VideoLifetimeTests
                     "Heading wrap commanded a long turn or wrong native yaw direction");
                 TrackingBusyHeading(peer, player, pipeline);
                 peer.Attitude((float)(-163 * Math.PI / 180)); peer.Pump(20);
-                Thread.Sleep(110); PlayerVisionFrame(player, pipeline, Color.Blue); peer.Pump(20);
-                Thread.Sleep(110); PlayerVisionFrame(player, pipeline, Color.Blue);
+                peer.Pump(70);
+                int beforeClipped = player.SubmittedTrackingCommands;
+                typeof(EmbeddedVideoPlayer).GetField("_lastStepTicks", BindingFlags.NonPublic | BindingFlags.Instance)
+                    .SetValue(player, System.Diagnostics.Stopwatch.GetTimestamp() - System.Diagnostics.Stopwatch.Frequency / 20);
+                PlayerVisionFrame(player, pipeline, Color.Blue);
+                peer.Until(() => player.SubmittedTrackingCommands > beforeClipped, "first deliberately rate-clipped sample");
+                Check(player.CommandedYawDeg > -17.9, "Heading fixture did not exercise rate clipping");
+                for (int frame = 0; frame < 3 && Math.Abs(player.CommandedYawDeg + 18) >= .01; frame++)
+                { Thread.Sleep(110); PlayerVisionFrame(player, pipeline, Color.Blue); peer.Pump(20); }
                 peer.Until(() => Math.Abs(player.CommandedYawDeg + 18) < .01, "rate-clipped heading remainder");
                 foreach (string fault in new[] { "Stale", "WrongTarget", "Invalid" })
                 {

@@ -1,0 +1,3 @@
+# The declared nonlinear last_letter Copter model is a plus-frame quad.
+FRAME_CLASS 1
+FRAME_TYPE 0

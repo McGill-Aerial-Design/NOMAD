@@ -198,6 +198,8 @@ namespace NOMAD.MissionPlanner
             ValidateUiThread();
             var wasPlaying = _isPlaying;
             StopStream();
+            _input.SourceType = "Network";
+            _input.CaptureDevicePath = "";
             _input.Url = newUrl ?? "";
             if (wasPlaying)
             {

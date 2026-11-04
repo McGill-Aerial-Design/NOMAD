@@ -63,6 +63,8 @@ namespace NOMAD.MissionPlanner {
 }
 "@ | Set-Content -LiteralPath $csharpPath -Encoding UTF8
 
+$sourceHashes = Get-PluginSourceHashes $RepoRoot
+
 # Step 3: Build project
 Write-Host "[3/4] Building plugin..." -ForegroundColor Yellow
 & $msbuild $ProjectFile /t:Build /p:Configuration=$Configuration /v:minimal /nologo
@@ -82,6 +84,20 @@ if (-not (Test-Path -LiteralPath $BuiltDll -PathType Leaf)) {
 }
 
 $FileInfo = Get-Item -LiteralPath $BuiltDll
+$completedHashes = Get-PluginSourceHashes $RepoRoot
+if ($completedHashes.Count -ne $sourceHashes.Count) {
+    Write-Host 'ERROR: Product source changed during compilation; the artifact is not qualified.' -ForegroundColor Red
+    exit 1
+}
+foreach ($relative in $sourceHashes.Keys) {
+    if ($completedHashes[$relative] -ne $sourceHashes[$relative]) {
+        Write-Host 'ERROR: Product source changed during compilation; the artifact is not qualified.' -ForegroundColor Red
+        exit 1
+    }
+}
+@{ schema=1; source=$sourceSha; host_target=$target; plugin_sha256=(Get-FileHash -LiteralPath $BuiltDll).Hash;
+    source_files=$sourceHashes } | ConvertTo-Json -Depth 4 |
+    Set-Content -LiteralPath (Join-Path $RepoRoot 'build/release/plugin-build.json') -Encoding UTF8
 Write-Host "  Plugin size: $($FileInfo.Length / 1KB) KB" -ForegroundColor Gray
 
 Write-Host "[4/4] Deployment skipped; install the reviewed artifact separately."

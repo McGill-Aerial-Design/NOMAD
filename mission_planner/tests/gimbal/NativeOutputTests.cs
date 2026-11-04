@@ -54,6 +54,8 @@ namespace NOMAD.MissionPlanner
     {
         public int GimbalMountMode = 2;
         public float JoystickGimbalMaxRateDegSec = 60;
+        public string JoystickGimbalHorizontalAxis = "Yaw", JoystickGimbalVerticalAxis = "Pitch";
+        public bool JoystickGimbalHorizontalInverted, JoystickGimbalVerticalInverted;
         public bool GimbalArrowKeysEnabled;
     }
     public sealed class NOMADProfiles
@@ -155,6 +157,59 @@ internal static class NativeOutputTests
             Require(!result.Submitted && connection.Modes == 0 && connection.Targets == 0,
                 "Malformed gimbal target emitted a command");
         }
+    }
+
+    private static void ScreenAxisTargets()
+    {
+        var connection = Reset();
+        Require(Complete(GimbalController.RequestScreenTargetAsync(-8, 4, 12)).Submitted,
+            "Manual three-axis screen target failed");
+        GimbalController.MaxRateDegSec = 10;
+        GimbalController.ApplyScreenStick(1, 0, .1f, true);
+        Require(connection.Pitch == -800 && connection.Roll == 400 && connection.Yaw == 1300,
+            "Default screen horizontal input changed roll or lost the other target axes");
+        GimbalArrowKeyFilter.TryHandleKey(System.Windows.Forms.Keys.Up);
+        Require(connection.Pitch == -600 && connection.Roll == 400 && connection.Yaw == 1300,
+            "Screen arrow mapping disagrees with the pad or erased an unmapped axis");
+        Require(Complete(GimbalController.RequestScreenTargetAsync(-90, 4, 13)).Submitted &&
+            connection.Pitch == -9000 && connection.Roll == 400 && connection.Yaw == 1300,
+            "Look Down target erased roll or yaw");
+
+        var config = new NOMADConfig { JoystickGimbalHorizontalAxis = "Roll", JoystickGimbalVerticalAxis = "Yaw",
+            JoystickGimbalHorizontalInverted = true, JoystickGimbalVerticalInverted = true };
+        OutputController.Initialize(config); GimbalController.ApplyProfile(config);
+        GimbalController.MaxRateDegSec = 10;
+        GimbalController.ApplyScreenStick(1, .5f, .1f, true);
+        Require(connection.Pitch == 0 && connection.Roll == -100 && connection.Yaw == -50,
+            "Configured screen axes or independent inversion was ignored");
+        GimbalArrowKeyFilter.TryHandleKey(System.Windows.Forms.Keys.Left);
+        Require(connection.Roll == 100 && connection.Yaw == -50,
+            "Configured arrow axis or inversion was ignored");
+        config.JoystickGimbalHorizontalInverted = config.JoystickGimbalVerticalInverted = false;
+        GimbalController.ApplyProfile(config);
+        Require(Complete(GimbalController.RequestScreenTargetAsync(89, 29, 179)).Submitted,
+            "Screen boundary fixture did not initialize");
+        GimbalController.ApplyScreenStick(1, 1, .5f, true);
+        Require(connection.Pitch == 8900 && connection.Roll == 3000 && connection.Yaw == 18000,
+            "Mapped screen target crossed an axis limit or changed the unselected pitch axis");
+
+        config.JoystickGimbalHorizontalAxis = "None"; config.JoystickGimbalVerticalAxis = "Pitch";
+        GimbalController.ApplyProfile(config);
+        int targets = connection.Targets;
+        GimbalController.ApplyScreenStick(1, 0, .1f, true);
+        Require(connection.Targets == targets, "Disabled screen axis dispatched a native request");
+        GimbalController.ApplyScreenStick(0, 1, .1f, true);
+        Require(connection.Pitch == 600 && connection.Roll == 0 && connection.Yaw == 0,
+            "One-axis gimbal configuration did not retain its enabled axis");
+        foreach (float invalid in new[] { float.NaN, float.PositiveInfinity, 0, -.1f, .51f })
+        {
+            targets = connection.Targets;
+            GimbalController.ApplyScreenStick(0, 1, invalid, true);
+            Require(connection.Targets == targets, "Invalid screen dt dispatched");
+        }
+        connection = Reset(); connection.ReadOnly = true;
+        GimbalController.ApplyScreenStick(1, 0, .1f, true);
+        Require(connection.Targets == 0 && connection.Modes == 0, "Screen input bypassed native read-only admission");
     }
     private static void TrackingRetirement()
     {
@@ -272,6 +327,7 @@ internal static class NativeOutputTests
         Send();
         Require(connection.Modes == 1 && connection.Targets == 2, "Repeated target reconfigured mount mode");
         TrackingAngles();
+        ScreenAxisTargets();
         MalformedTargets();
         TrackingRetirement();
         ManualOverride(() => GimbalController.RequestPitchRollTarget(0, 0), "Manual angle request");
@@ -281,6 +337,9 @@ internal static class NativeOutputTests
         ManualOverride(() => GimbalController.ApplyStick(1, 0, 0.05f, true), "Sending manual stick");
         ManualOverride(() => GimbalController.ApplyStick(1, 0, 0.05f, false), "Local manual stick");
         ManualOverride(() => GimbalController.SetTargetAngles(0, 0), "Manual target edit");
+        ManualOverride(() => GimbalController.ApplyScreenStick(1, 0, .05f, true), "Mapped screen stick");
+        ManualOverride(() => GimbalController.NudgeScreenTarget(1, 0, 2), "Mapped screen arrow");
+        ManualOverride(() => { _ = GimbalController.RequestScreenTargetAsync(0, 0, 0); }, "Mapped screen preset");
         NeutralAndDispatchedTracking();
         PendingManualRetirement();
         SharedTrackingClaim();

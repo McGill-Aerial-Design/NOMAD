@@ -25,6 +25,7 @@ internal static class VisionDetectorTests
     private static int _checks;
     private static int Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--gdal-c-runtime") { return GdalCRuntimeFirst(); }
         try
         {
             VisualTrackerTests.Run();
@@ -226,6 +227,51 @@ internal static class VisionDetectorTests
         output[offset] = x; output[offset + 1] = y;
         output[offset + 2] = width; output[offset + 3] = height;
         output[offset + 4] = score; output[offset + 7] = 1;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern IntPtr LoadLibraryEx(string path, IntPtr file, uint flags);
+
+    // Fresh process: Mission Planner's GDAL loads a 2017 Visual C++ runtime before plugins start. With that copy
+    // already loaded by name, ONNX Runtime must still load (in its own activation context) and run inference.
+    private static int GdalCRuntimeFirst()
+    {
+        string gdal = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            "Mission Planner", "gdal", "x64");
+        if (!File.Exists(Path.Combine(gdal, "msvcp140.dll")))
+        { Console.WriteLine("SKIP: Mission Planner GDAL C runtime not installed."); return 0; }
+        foreach (string name in new[] { "vcruntime140.dll", "msvcp140.dll" })
+        {
+            // LOAD_WITH_ALTERED_SEARCH_PATH, as GDAL resolves its own directory.
+            if (LoadLibraryEx(Path.Combine(gdal, name), IntPtr.Zero, 8) == IntPtr.Zero)
+            { Console.WriteLine("FAIL: could not load GDAL's " + name); return 1; }
+        }
+        try
+        {
+            using (var detector = VisionDetectorFactory.Create("", CancellationToken.None))
+            using (var frame = new Bitmap(320, 240))
+            { detector.Detect(frame, CancellationToken.None); }
+            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NOMAD_TEST_TAM_MODEL")))
+            {
+                using (var tracker = VisualTrackerFactory.Create(CancellationToken.None, VisualTrackingMode.Object, true))
+                using (var frame = new Bitmap(640, 480))
+                using (var graphics = Graphics.FromImage(frame))
+                {
+                    graphics.Clear(Color.DarkOliveGreen);
+                    graphics.FillEllipse(Brushes.SaddleBrown, 280, 200, 80, 60);
+                    tracker.Initialize(frame, new RectangleF(270, 190, 100, 80), CancellationToken.None);
+                    tracker.Update(frame, CancellationToken.None);
+                }
+                Console.WriteLine("PASS: GPU Object tracker runs with GDAL's 2017 C runtime already loaded.");
+            }
+            Console.WriteLine("PASS: ONNX Runtime loads and infers with GDAL's 2017 C runtime already loaded.");
+            return 0;
+        }
+        catch (Exception error)
+        {
+            Console.WriteLine("FAIL: ONNX Runtime beside GDAL's C runtime: " + error.Message);
+            return 1;
+        }
     }
 
     private static void Check(bool condition, string message)

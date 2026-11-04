@@ -139,6 +139,9 @@
     <EmbeddedResource Include="..\..\build\vision\runtime\Microsoft.ML.OnnxRuntime.dll;
       ..\..\build\vision\runtime\onnxruntime.dll;
       ..\..\build\vision\runtime\onnxruntime_providers_shared.dll;
+      ..\..\build\vision\runtime\DirectML.dll;
+      ..\..\build\vision\runtime\DirectML-LICENSE.txt;
+      ..\..\build\vision\runtime\DirectML-NOTICES.txt;
       ..\..\build\vision\runtime\yolox_nano.onnx;
       ..\..\build\vision\runtime\ONNX-RUNTIME-LICENSE.txt;
       ..\..\build\vision\runtime\ONNX-RUNTIME-NOTICES.txt;
@@ -146,12 +149,18 @@
       ..\..\build\vision\runtime\OpenCvSharp.dll;
       ..\..\build\vision\runtime\OpenCvSharpExtern.dll;
       ..\..\build\vision\runtime\OpenCvSharp-NOTICES.txt;
-      ..\..\build\vision\runtime\OPENCV-IPP-EULA.rtf">
+      ..\..\build\vision\runtime\OPENCV-IPP-EULA.rtf;
+      ..\..\build\vision\runtime\encoder.onnx;
+      ..\..\build\vision\runtime\memory_attention.onnx;
+      ..\..\build\vision\runtime\decoder.onnx;
+      ..\..\build\vision\runtime\memory_encoder.onnx;
+      ..\..\build\vision\runtime\constants.bin;
+      ..\..\build\vision\runtime\EfficientTAM-LICENSE.txt">
       <LogicalName>NOMAD.Vision.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
   <Target Name="CheckVisionInputs" BeforeTargets="PrepareForBuild">
-    <Error Condition="!Exists('..\..\build\vision\runtime\yolox_nano.onnx')"
+    <Error Condition="!Exists('..\..\build\vision\runtime\yolox_nano.onnx') Or !Exists('..\..\build\vision\runtime\encoder.onnx')"
       Text="Run scripts/build/prepare_vision.ps1 to prepare the pinned vision inputs." />
   </Target>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

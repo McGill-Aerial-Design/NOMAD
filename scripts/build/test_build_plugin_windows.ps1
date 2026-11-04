@@ -231,6 +231,9 @@ internal static class MockMsbuild
         string outputDirectory = Path.Combine(Environment.CurrentDirectory, "bin", "Release");
         Directory.CreateDirectory(outputDirectory);
         File.WriteAllText(Path.Combine(outputDirectory, "NOMADPlugin.dll"), "test artifact");
+        string mutation = Environment.GetEnvironmentVariable("MOCK_SOURCE_MUTATION");
+        if (mutation == "change") File.AppendAllText("NOMADPlugin.csproj", "changed during build");
+        if (mutation == "add") File.WriteAllText("Unexpected.cs", "class Unexpected {}");
         return 0;
     }
 
@@ -356,13 +359,15 @@ function Invoke-BuildScript {
         [pscustomobject]$Fixture,
         [string]$CleanExitCode,
         [string]$BuildExitCode,
-        [switch]$SkipArtifact
+        [switch]$SkipArtifact,
+        [string]$SourceMutation = ''
     )
 
     [IO.File]::WriteAllText($Fixture.MockLog, '')
     $env:MOCK_CLEAN_EXIT = $CleanExitCode
     $env:MOCK_BUILD_EXIT = $BuildExitCode
     $env:MOCK_SKIP_ARTIFACT = if ($SkipArtifact) { '1' } else { '0' }
+    $env:MOCK_SOURCE_MUTATION = $SourceMutation
 
     $output = & $Fixture.PowerShell -NoProfile -ExecutionPolicy Bypass -File $Fixture.Script 2>&1
     $exitCode = $LASTEXITCODE
@@ -423,6 +428,27 @@ function Test-BuildOnlySuccess {
 
     Assert-Contains $csharp "MissionPlannerTarget = `"$targetVersion`"" `
         'C# build metadata did not carry the reviewed Mission Planner target'
+    $manifest = Get-Content (Join-Path $Fixture.Repo 'build/release/plugin-build.json') -Raw | ConvertFrom-Json
+    Assert-Equal $manifest.plugin_sha256 (Get-Sha256 $Fixture.Artifact) 'Build manifest omitted the actual DLL hash'
+    Assert-Equal $manifest.source_files.'mission_planner\src\NOMADPlugin.csproj' `
+        (Get-Sha256 (Join-Path $Fixture.Project 'NOMADPlugin.csproj')) 'Build manifest omitted its source inputs'
+}
+
+function Test-SourceChangedDuringBuild {
+    param([pscustomobject]$Fixture)
+    $project = Join-Path $Fixture.Project 'NOMADPlugin.csproj'
+    $original = [IO.File]::ReadAllText($project)
+    foreach ($mutation in @('change','add')) {
+        try {
+            $result = Invoke-BuildScript -Fixture $Fixture -SourceMutation $mutation
+            Assert-ExitCode $result 1 "Source $mutation during build"
+            Assert-Contains $result.Output 'Product source changed during compilation' 'Changed source was qualified'
+        } finally {
+            [IO.File]::WriteAllText($project, $original)
+            $added = Join-Path $Fixture.Project 'Unexpected.cs'
+            if (Test-Path -LiteralPath $added) { Remove-Item -LiteralPath $added }
+        }
+    }
 }
 
 function Test-ChangedReviewedTarget {
@@ -502,6 +528,7 @@ function Save-ProcessEnvironment {
         CleanExit = [Environment]::GetEnvironmentVariable('MOCK_CLEAN_EXIT', 'Process')
         BuildExit = [Environment]::GetEnvironmentVariable('MOCK_BUILD_EXIT', 'Process')
         SkipArtifact = [Environment]::GetEnvironmentVariable('MOCK_SKIP_ARTIFACT', 'Process')
+        SourceMutation = [Environment]::GetEnvironmentVariable('MOCK_SOURCE_MUTATION', 'Process')
         VsPath = [Environment]::GetEnvironmentVariable('MOCK_VS_PATH', 'Process')
         VsExit = [Environment]::GetEnvironmentVariable('MOCK_VS_EXIT', 'Process')
     }
@@ -518,6 +545,7 @@ function Restore-ProcessEnvironment {
     [Environment]::SetEnvironmentVariable('MOCK_CLEAN_EXIT', $Original.CleanExit, 'Process')
     [Environment]::SetEnvironmentVariable('MOCK_BUILD_EXIT', $Original.BuildExit, 'Process')
     [Environment]::SetEnvironmentVariable('MOCK_SKIP_ARTIFACT', $Original.SkipArtifact, 'Process')
+    [Environment]::SetEnvironmentVariable('MOCK_SOURCE_MUTATION', $Original.SourceMutation, 'Process')
     [Environment]::SetEnvironmentVariable('MOCK_VS_PATH', $Original.VsPath, 'Process')
     [Environment]::SetEnvironmentVariable('MOCK_VS_EXIT', $Original.VsExit, 'Process')
 }
@@ -558,6 +586,7 @@ try {
     Test-ToolDiscovery -Fixture $fixture
     Test-BuildOnlySuccess -Fixture $fixture
     Test-ChangedReviewedTarget -Fixture $fixture
+    Test-SourceChangedDuringBuild -Fixture $fixture
     Test-BuildFailure -Fixture $fixture
     Test-CleanFailure -Fixture $fixture
     Test-MissingArtifact -Fixture $fixture

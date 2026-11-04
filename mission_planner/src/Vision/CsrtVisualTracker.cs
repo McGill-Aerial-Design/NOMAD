@@ -8,11 +8,16 @@ using OpenCvSharp.Tracking;
 
 namespace NOMAD.MissionPlanner
 {
-    internal sealed class CsrtVisualTracker : IVisualTracker
+    internal sealed partial class CsrtVisualTracker : IVisualTracker
     {
         private TrackerCSRT _tracker;
         private FrozenAppearance _appearance;
+        private ObjectRecoveryReference _reference;
+        private Rectangle? _recoveryBounds;
+        private int _recoveryMatches;
         private System.Drawing.Size _imageSize;
+        private int _maximumImageDimension = 640;
+        internal System.Drawing.Size ProcessingImageSize { get; private set; }
         private bool _disposed;
 
         internal CsrtVisualTracker() { Cv2.SetNumThreads(2); }
@@ -25,7 +30,13 @@ namespace NOMAD.MissionPlanner
             token.ThrowIfCancellationRequested();
             VisualTrackingImage.ValidateFrame(frame);
             VisualTrackingImage.ValidateSelection(frame, bounds);
-            using (var image = VisualTrackingImage.Scale(frame))
+            // Select the pixel budget once, retaining the original 640-coordinate foreground policy.
+            double baselineScale = Math.Min(1, 640.0 / Math.Max(frame.Width, frame.Height));
+            int baselineWidth = (int)(bounds.Width * ((int)(frame.Width * baselineScale) / (double)frame.Width));
+            int baselineHeight = (int)(bounds.Height * ((int)(frame.Height * baselineScale) / (double)frame.Height));
+            _maximumImageDimension = Math.Min(baselineWidth, baselineHeight) <= 80 ? 1280 : 640;
+            bool smallSelection = Math.Max(baselineWidth, baselineHeight) <= 80;
+            using (var image = VisualTrackingImage.Scale(frame, _maximumImageDimension))
             {
                 double scaleX = (double)image.Width / frame.Width, scaleY = (double)image.Height / frame.Height;
                 var box = new OpenCvSharp.Rect((int)(bounds.X * scaleX), (int)(bounds.Y * scaleY),
@@ -41,11 +52,10 @@ namespace NOMAD.MissionPlanner
                     {
                         token.ThrowIfCancellationRequested();
                         // OpenCV's default CSRT PSR threshold is 0.035; Update returns false below it.
-                        _tracker = TrackerCSRT.Create();
-                        _tracker.Init(mat, box);
-                        _appearance = new FrozenAppearance(mat, box);
+                        InitializeObject(mat, box, smallSelection, token);
                         token.ThrowIfCancellationRequested();
                         _imageSize = frame.Size;
+                        ProcessingImageSize = image.Size;
                     }
                 }
                 catch { Clear(); throw; }
@@ -59,9 +69,10 @@ namespace NOMAD.MissionPlanner
             if (token.IsCancellationRequested) { Clear(); }
             token.ThrowIfCancellationRequested();
             VisualTrackingImage.ValidateFrame(frame);
-            if (_tracker == null) { return Lost("Object lost; select it again"); }
+            if (_appearance == null) { return Lost("Select a distinctive object"); }
             if (frame.Size != _imageSize) { Clear(); return Lost("Image size changed; select the object again"); }
-            using (var image = VisualTrackingImage.Scale(frame))
+            if (context.Discontinuous) { ResetNative(); }
+            using (var image = VisualTrackingImage.Scale(frame, _maximumImageDimension))
             {
                 var bits = image.LockBits(new Rectangle(0, 0, image.Width, image.Height), ImageLockMode.ReadOnly,
                     PixelFormat.Format24bppRgb);
@@ -71,21 +82,15 @@ namespace NOMAD.MissionPlanner
                         bits.Scan0, bits.Stride))
                     {
                         token.ThrowIfCancellationRequested();
-                        var box = new OpenCvSharp.Rect();
-                        bool found = _tracker.Update(mat, ref box);
-                        // CSRT has no native interruption API; a canceled result must never leave this worker.
+                        var result = FollowObject(mat, token);
                         token.ThrowIfCancellationRequested();
-                        if (!found || box.Width < 1 || box.Height < 1 || box.X < 0 || box.Y < 0 ||
-                            (long)box.X + box.Width > image.Width || (long)box.Y + box.Height > image.Height)
-                        { Clear(); return Lost("Object lost; select it again"); }
-                        if (!_appearance.Matches(mat, box))
-                        { Clear(); return Lost("Object appearance changed or was occluded; select it again"); }
-                        token.ThrowIfCancellationRequested();
-                        var bounds = new RectangleF((float)box.X * frame.Width / image.Width,
-                            (float)box.Y * frame.Height / image.Height, (float)box.Width * frame.Width / image.Width,
-                            (float)box.Height * frame.Height / image.Height);
-                        return new VisualTrackingResult(VisualTrackingState.Verified, "Selected object verified", bounds,
-                            new PointF(bounds.X + bounds.Width / 2, bounds.Y + bounds.Height / 2));
+                        if (!result.Found) { return result; }
+                        var box = result.Bounds.Value;
+                        var bounds = new RectangleF(box.X * frame.Width / image.Width, box.Y * frame.Height / image.Height,
+                            box.Width * frame.Width / image.Width, box.Height * frame.Height / image.Height);
+                        return new VisualTrackingResult(VisualTrackingState.Verified, result.Status, bounds,
+                            new PointF(result.AimPoint.Value.X * frame.Width / image.Width,
+                                result.AimPoint.Value.Y * frame.Height / image.Height));
                     }
                 }
                 catch { Clear(); throw; }
@@ -109,12 +114,33 @@ namespace NOMAD.MissionPlanner
         }
 
         private static VisualTrackingResult Lost(string status) => new VisualTrackingResult(VisualTrackingState.Lost, status);
+        private static VisualTrackingResult Searching(string status) => new VisualTrackingResult(VisualTrackingState.Searching, status);
+
+        private static double Overlap(Rectangle a, Rectangle b)
+        {
+            double intersection = Math.Max(0, Math.Min(a.Right, b.Right) - Math.Max(a.Left, b.Left)) *
+                Math.Max(0, Math.Min(a.Bottom, b.Bottom) - Math.Max(a.Top, b.Top));
+            return intersection / ((double)a.Width * a.Height + (double)b.Width * b.Height - intersection);
+        }
 
         private void CheckDisposed()
         { if (_disposed) { throw new ObjectDisposedException(nameof(CsrtVisualTracker)); } }
 
+        private void ResetNative()
+        {
+            _tracker?.Dispose(); _tracker = null; _recoveryBounds = null; _recoveryMatches = 0; _acceptedViews = 0;
+            _heldFrames = 0; _heldConfirmations = 0;
+        }
+
         private void Clear()
-        { _tracker?.Dispose(); _tracker = null; _appearance?.Dispose(); _appearance = null; }
+        {
+            ResetNative(); _reference?.Dispose(); _reference = null; _appearance?.Dispose(); _appearance = null;
+            _workingReference?.Dispose(); _workingReference = null; _workingAppearance?.Dispose(); _workingAppearance = null;
+            _originalView?.Dispose(); _originalView = null; _workingView?.Dispose(); _workingView = null;
+            _previousView?.Dispose(); _previousView = null;
+            _hasObjectCentre = false; _objectMotion = PointF.Empty;
+            _maximumImageDimension = 640; ProcessingImageSize = System.Drawing.Size.Empty;
+        }
 
         public void Dispose()
         {

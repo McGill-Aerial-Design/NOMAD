@@ -8,9 +8,11 @@ namespace NOMAD.MissionPlanner
 {
     internal static class VisualTrackingImage
     {
-        internal static Bitmap Scale(Bitmap frame)
+        internal static Bitmap Scale(Bitmap frame, int maximumDimension = 640)
         {
-            double scale = Math.Min(1, 640.0 / Math.Max(frame.Width, frame.Height));
+            if (maximumDimension < 1 || maximumDimension > 1280)
+            { throw new ArgumentOutOfRangeException(nameof(maximumDimension)); }
+            double scale = Math.Min(1, maximumDimension / (double)Math.Max(frame.Width, frame.Height));
             var result = new Bitmap(Math.Max(1, (int)(frame.Width * scale)), Math.Max(1, (int)(frame.Height * scale)),
                 PixelFormat.Format24bppRgb);
             using (var graphics = Graphics.FromImage(result))

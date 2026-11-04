@@ -30,7 +30,7 @@ namespace NOMAD.MissionPlanner
                 180 / Math.PI);
         internal static bool TryStep(VideoInputProfile calibration, Size image, PointF target,
             float currentPitch, float currentYaw, double dt, out float pitch, out float yaw,
-            float aircraftYawChange = 0)
+            float aircraftYawChange = 0, bool movingObject = false)
         {
             pitch = currentPitch; yaw = currentYaw;
             if (!calibration.TrackingCalibrated || image.Width <= 0 || image.Height <= 0 ||
@@ -54,6 +54,9 @@ namespace NOMAD.MissionPlanner
                 180 / Math.PI - currentPitch;
             double elapsed = Math.Min(dt, .2);
             double step = calibration.TrackingMaxRateDegSec * elapsed;
+            // An Object's bearing can move with the aircraft; do not counter yaw against verified image motion.
+            if (movingObject && yawError * aircraftYawChange > 0)
+            { aircraftYawChange *= (float)Math.Max(0, 1 - Math.Abs(yawError) / 5); }
             // Native mount yaw is body-relative; counter aircraft rotation without amplifying delayed image error.
             pitch = GimbalCommand.Clamp(currentPitch + (float)Math.Max(-step, Math.Min(step,
                 pitchError * elapsed)), calibration.PitchMinDeg, calibration.PitchMaxDeg);

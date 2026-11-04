@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "name": "Gazebo grass field / Iris",
+  "backend": "gazebo",
+  "frame": "JSON:127.0.0.1",
+  "home": [-35.362938, 149.165085, 584, 0],
+  "system_id": 201,
+  "seed": 173,
+  "defaults": ["sources/ardupilot_gazebo/config/gazebo-iris-gimbal.parm"],
+  "defaults_local": ["servo-gimbal.parm"],
+  "scene": "natural",
+  "aircraft_model": "sources/ardupilot_gazebo/models/iris_with_gimbal",
+  "camera_model": "sources/ardupilot_gazebo/models/gimbal_small_3d",
+  "texture": "../../../local/simulation/assets/aerial_grass_rock_diff_1k.jpg",
+  "texture_sha256": "57b8041bfe0d0f01430e4dbaad45e7ddddf0a9fc97317f90dbc51f7b0d9e1b5d",
+  "spawn": [0, 0, 0.3, 0, 0, 0],
+  "notes": "Free-running Iris X quad and native servo gimbal. Normal Mission Planner flight controls."
+}

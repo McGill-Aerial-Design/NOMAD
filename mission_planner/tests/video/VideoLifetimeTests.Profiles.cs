@@ -43,6 +43,12 @@ internal static partial class VideoLifetimeTests
         string pipeline = VideoPipeline.Build(input);
         Check(pipeline.Contains("latency=0 drop-on-latency=true") && pipeline.Contains("max-size-buffers=120") &&
             pipeline.Contains("leaky=downstream"), "Receiver option boundaries or old-frame drop mode were lost.");
+        Check(new VideoInputProfile().ObjectTracker == "CPU", "Existing profiles did not default to the CPU Object tracker.");
+        input.ObjectTracker = "GPU";
+        input.Validate();
+        input.ObjectTracker = "Auto";
+        try { input.Validate(); Check(false, "An unknown Object tracker setting was accepted."); }
+        catch (Newtonsoft.Json.JsonSerializationException) { }
     }
 
     private static void EmptyVideoDoesNotStart()
@@ -109,6 +115,7 @@ internal static partial class VideoLifetimeTests
             GetField<NumericUpDown>(form, "_numVisionYawMax").Value = 170;
             GetField<CheckBox>(form, "_chkTrackingCalibrated").Checked = true;
             GetField<ComboBox>(form, "_cmbTrackingMode").SelectedItem = "Area";
+            GetField<ComboBox>(form, "_cmbObjectTracker").SelectedIndex = 1;
             GetField<CheckBox>(form, "_chkGroundPrediction").Checked = true;
             GetField<NumericUpDown>(form, "_numGroundPlaneHeight").Value = 12.5m;
             GetField<NumericUpDown>(form, "_numCameraDelay").Value = 180;
@@ -142,7 +149,8 @@ internal static partial class VideoLifetimeTests
             Check(saved.SelectedVideoInput.Name == "Renamed" && saved.SelectedVideoInput.LatencyMs == 700 &&
                 saved.SelectedVideoInput.TrackingCalibrated && saved.SelectedVideoInput.HorizontalFovDeg == 110 &&
                 saved.SelectedVideoInput.TrackingMaxRateDegSec == 60 &&
-                saved.SelectedVideoInput.TrackingMode == "Area" && saved.SelectedVideoInput.GroundPredictionEnabled &&
+                saved.SelectedVideoInput.TrackingMode == "Area" && saved.SelectedVideoInput.ObjectTracker == "GPU" &&
+                saved.SelectedVideoInput.GroundPredictionEnabled &&
                 saved.SelectedVideoInput.GroundPlaneHeightMeters == 12.5 && saved.SelectedVideoInput.CameraDelayEstimateMs == 180 &&
                 saved.SelectedVideoInput.YawMinDeg == -170 && saved.SelectedVideoInput.YawMaxDeg == 170,
                 "Saved/clone video input selection or settings were lost.");

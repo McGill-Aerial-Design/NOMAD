@@ -52,6 +52,26 @@ namespace NOMAD.MissionPlanner
         public static float ApplyDeadzone(float value, float deadzone)
             => Math.Abs(value) < deadzone ? 0f : value;
 
+        internal static readonly string[] ScreenAxes = { "None", "Pitch", "Roll", "Yaw" };
+
+        internal static bool ValidScreenAxes(string horizontal, string vertical) =>
+            Array.IndexOf(ScreenAxes, horizontal) >= 0 && Array.IndexOf(ScreenAxes, vertical) >= 0 &&
+            (horizontal == "None" || horizontal != vertical);
+
+        internal static bool TryMapScreenAxes(string horizontal, string vertical, bool invertHorizontal,
+            bool invertVertical, float x, float y, out float pitch, out float roll, out float yaw)
+        {
+            pitch = roll = yaw = 0;
+            if (!ValidScreenAxes(horizontal, vertical) || float.IsNaN(x) || float.IsInfinity(x) ||
+                float.IsNaN(y) || float.IsInfinity(y) || Math.Abs(x) > 1 || Math.Abs(y) > 1) { return false; }
+            if (invertHorizontal) { x = -x; }
+            if (invertVertical) { y = -y; }
+            pitch = (horizontal == "Pitch" ? x : 0) + (vertical == "Pitch" ? y : 0);
+            roll = (horizontal == "Roll" ? x : 0) + (vertical == "Roll" ? y : 0);
+            yaw = (horizontal == "Yaw" ? x : 0) + (vertical == "Yaw" ? y : 0);
+            return true;
+        }
+
         /// <summary>
         /// Integrate a normalized stick reading over <paramref name="dt"/> at
         /// <paramref name="maxRateDegSec"/> and return the new clamped target.

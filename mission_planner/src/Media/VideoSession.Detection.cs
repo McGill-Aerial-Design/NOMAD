@@ -40,7 +40,7 @@ namespace NOMAD.MissionPlanner
                         else { loaded.Dispose(); }
                     }
                     catch (OperationCanceledException) { _token.ThrowIfCancellationRequested(); }
-                    catch (Exception) { Fail(_revision); }
+                    catch (Exception error) { Fail(_revision, error); }
                     finally { _load = null; }
                 }
                 if (_revision != revision)
@@ -84,8 +84,9 @@ namespace NOMAD.MissionPlanner
 
             internal CancellationToken Token => _source?.Token ?? _token;
 
-            internal void Fail(long revision)
+            internal void Fail(long revision, Exception error)
             {
+                Log.Error("Detection model failed: " + error);
                 lock (_owner._gate)
                 {
                     if (revision != _owner._detectionRevision) { return; }
@@ -107,7 +108,7 @@ namespace NOMAD.MissionPlanner
             {
                 var detector = _detector; _detector = null;
                 try { detector?.Dispose(); }
-                catch (Exception) { Fail(_revision); }
+                catch (Exception error) { Fail(_revision, error); }
             }
 
             public void Dispose()
@@ -119,7 +120,7 @@ namespace NOMAD.MissionPlanner
                     {
                         try { _load.GetAwaiter().GetResult()?.Dispose(); }
                         catch (OperationCanceledException) { }
-                        catch (Exception) { Fail(_revision); }
+                        catch (Exception error) { Fail(_revision, error); }
                     }
                     ReleaseDetector();
                 }

@@ -3,6 +3,7 @@
 #
 # Runs the video lifetime against an isolated off-screen STA WinForms host.
 # Build the plugin first with `pixi run build-plugin-only`.
+param([string]$CaptureProbeRuntime = '')
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
@@ -38,5 +39,6 @@ $references = @(
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Copy-Item -LiteralPath $plugin -Destination $outDir -Force
 # The harness resolves dependencies using the supplied reference directory.
-& $exe $mpDir
+if ($CaptureProbeRuntime) { & $exe $mpDir --capture-probe $CaptureProbeRuntime }
+else { & $exe $mpDir }
 exit $LASTEXITCODE

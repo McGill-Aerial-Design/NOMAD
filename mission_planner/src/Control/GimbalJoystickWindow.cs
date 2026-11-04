@@ -3,7 +3,7 @@
 // ============================================================
 // NOMAD Gimbal Joystick — Floating Dockable Window
 // ============================================================
-// Rate-controlled joystick requests pitch/roll targets through the selected Mission Planner connection.
+// Rate-controlled joystick requests profile-mapped targets through the selected Mission Planner connection.
 //
 // This is independent from the camera tilt servo (ActuatorControlPanel), which is
 // just a SERVOx output. Angle integration lives in GimbalCommand and the shared
@@ -62,18 +62,18 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // State
         // ============================================================
-        // Stick: normalized [-1,1] x = roll rate, y = pitch rate (up = +pitch).
+        // Stick: normalized [-1,1], using this aircraft's screen-axis mapping.
         private float _stickX, _stickY;
         // Local mirror of GimbalController target so display label code can read
         // without crossing threads. Authoritative state lives in GimbalController.
-        private float _targetPitch, _targetRoll;
+        private float _targetPitch, _targetRoll, _targetYaw;
         // Mount mode currently selected — mirrors GimbalController.
         private MountMode _mountMode = MountMode.MavlinkTargeting;
         private string _modeLabel = "MAVLINK";
 
         // UI
         private JoystickPad _pad;
-        private Label _lblPitch, _lblRoll, _lblMode, _lblRate, _lblTitle;
+        private Label _lblPitch, _lblRoll, _lblYaw, _lblMode, _lblRate, _lblTitle;
         private TableLayoutPanel _rateRow;
         private TrackBar _trkRate;
         private Button _btnRetract, _btnNeutral, _btnRcTgt, _btnMavTgt, _btnCenter, _btnLevel;
@@ -108,6 +108,7 @@ namespace NOMAD.MissionPlanner
             // window doesn't snap the readout back to 0.
             _targetPitch = GimbalController.TargetPitchDeg;
             _targetRoll = GimbalController.TargetRollDeg;
+            _targetYaw = GimbalController.TargetYawDeg;
 
             _streamTimer = new Timer { Interval = 1000 / STREAM_HZ };
             _streamTimer.Tick += OnStreamTick;
@@ -150,8 +151,10 @@ namespace NOMAD.MissionPlanner
             {
                 _targetPitch = pitch;
                 _targetRoll = roll;
+                _targetYaw = GimbalController.TargetYawDeg;
                 if (_lblPitch != null) _lblPitch.Text = $"Pitch: {_targetPitch,+6:0.0}°";
                 if (_lblRoll != null) _lblRoll.Text = $"Roll: {_targetRoll,+6:0.0}°";
+                if (_lblYaw != null) _lblYaw.Text = $"Yaw: {_targetYaw,+6:0.0}°";
             }, "OnExternalTargetChanged");
         }
 
@@ -231,6 +234,10 @@ namespace NOMAD.MissionPlanner
                 Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
                 MinimumSize = new Size(150, 150),
                 BackColor = NOMADTheme.CARD_BG,
+                HorizontalLabel = GimbalController.ScreenHorizontalAxis,
+                VerticalLabel = GimbalController.ScreenVerticalAxis,
+                HorizontalInverted = GimbalController.ScreenHorizontalInverted,
+                VerticalInverted = GimbalController.ScreenVerticalInverted,
             };
             _pad.StickChanged += (x, y) => { _stickX = x; _stickY = y; };
             root.Controls.Add(_pad, 0, 1);
@@ -246,9 +253,11 @@ namespace NOMAD.MissionPlanner
             };
             _lblPitch = MakeReadout("Pitch: +0.0°");
             _lblRoll = MakeReadout("Roll: +0.0°");
+            _lblYaw = MakeReadout("Yaw: +0.0°");
             _lblMode = MakeReadout("Selected mode: MAVLINK");
             readouts.Controls.Add(_lblPitch);
             readouts.Controls.Add(_lblRoll);
+            readouts.Controls.Add(_lblYaw);
             readouts.Controls.Add(_lblMode);
             root.Controls.Add(readouts, 0, 2);
 
@@ -340,8 +349,9 @@ namespace NOMAD.MissionPlanner
             _btnRcTgt = MakeButton("RC Tgt", c => SetModePreset("RC", MountMode.RcTargeting));
             _btnNeutral = MakeButton("Neutral", c => SetModePreset("NEUTRAL", MountMode.Neutral));
             _btnRetract = MakeButton("Retract", c => SetModePreset("RETRACT", MountMode.Retract));
-            _btnCenter = MakeButton("Center 0°/0°", c => SnapAngles(0, 0));
-            _btnLevel = MakeButton("Look Down −90°", c => SnapAngles(-90, _targetRoll));
+            _btnCenter = MakeButton("Center", c => SnapAngles(0, 0, 0));
+            _btnLevel = MakeButton("Look Down −90°", c => SnapAngles(-90,
+                GimbalController.TargetRollDeg, GimbalController.TargetYawDeg));
             flow.Controls.Add(_btnMavTgt);
             flow.Controls.Add(_btnRcTgt);
             flow.Controls.Add(_btnNeutral);
@@ -439,10 +449,9 @@ namespace NOMAD.MissionPlanner
 
             bool active = _gimbalInput.CanMove(true, sx, sy, OutputController.Generation);
 
-            // Share rate-to-target integration with the physical joystick.
             if (active)
             {
-                GimbalController.ApplyStick(sx, sy, dt,
+                GimbalController.ApplyScreenStick(sx, sy, dt,
                     send: _mountMode == MountMode.MavlinkTargeting);
             }
 
@@ -451,17 +460,10 @@ namespace NOMAD.MissionPlanner
             // even when no stick motion fires the event).
             _targetPitch = GimbalController.TargetPitchDeg;
             _targetRoll = GimbalController.TargetRollDeg;
+            _targetYaw = GimbalController.TargetYawDeg;
             if (_lblPitch != null) _lblPitch.Text = $"Pitch: {_targetPitch,+6:0.0}°";
             if (_lblRoll != null) _lblRoll.Text = $"Roll: {_targetRoll,+6:0.0}°";
-        }
-
-        // Helpers for the in-window snap / key-nudge buttons — both go through
-        // GimbalController so the physical NomadJoystickService sees the same
-        // target angles immediately.
-        private void RequestPitchRollTarget(float pitchDeg, float rollDeg)
-        {
-            GimbalController.SetTargetAngles(pitchDeg, rollDeg);
-            GimbalController.RequestPitchRollTarget(GimbalController.TargetPitchDeg, GimbalController.TargetRollDeg);
+            if (_lblYaw != null) _lblYaw.Text = $"Yaw: {_targetYaw,+6:0.0}°";
         }
 
         // ============================================================
@@ -499,21 +501,8 @@ namespace NOMAD.MissionPlanner
             _lblMode.Text = $"Selected mode: {_modeLabel}";
         }
 
-        private void SnapAngles(float pitch, float roll)
-        {
-            _targetPitch = pitch;
-            _targetRoll = roll;
-            if (_mountMode != MountMode.MavlinkTargeting)
-            {
-                _mountMode = MountMode.MavlinkTargeting;
-                _modeLabel = "MAVLINK";
-                UpdateModeLabel();
-                HighlightModeButtons();
-                GimbalController.SetModeAndTargetAsync(_mountMode, pitch, roll);
-                return;
-            }
-            RequestPitchRollTarget(pitch, roll);
-        }
+        private void SnapAngles(float pitch, float roll, float yaw) =>
+            _ = GimbalController.RequestScreenTargetAsync(pitch, roll, yaw);
 
     }
 }

@@ -49,16 +49,20 @@ internal static partial class VideoLifetimeTests
         var frame = new Bitmap(1, 1);
         oldSession.PublishFrame(oldGeneration, frame);
         Tick(player);
+        // Views of one input share its receiver: the full view joins the preview's instead of opening another.
         full.Player.StartStream();
-        Wait(fullFirst.ReadEntered, "full source before explicit stop");
+        AwaitCapture(() => CaptureSubscribers(VideoPipeline.ShareKey(config.SelectedVideoInput)) == 2 &&
+            GetField<VideoSession>(full.Player, "_session").State == VideoState.Streaming, "full view joins preview receiver");
+        Check(fullFirst.Starts == 0, "The full view opened a second receiver for the same input.");
         full.Player.StopStream();
+        Check(oldSession.State == VideoState.Streaming && first.Disposals == 0,
+            "Stopping the full view closed a receiver the preview still uses.");
         GetField<ComboBox>(preview, "_selector").SelectedItem = "Alternate";
         Wait(second.ReadEntered, "replacement preview");
         full.RefreshInput();
         Check(ReferenceEquals(preview.Player, player) && player.Handle == handle,
             "Input selection recreated the player/control handle.");
         CheckClean(first);
-        CheckClean(fullFirst);
         CheckDisposed(frame);
         Check(second.Pipeline == VideoPipeline.Build(config.VideoInputs[1]),
             "Replacement lost transport, latency, queue or drop settings.");
@@ -68,8 +72,10 @@ internal static partial class VideoLifetimeTests
         oldSession.PublishFrame(oldGeneration, stale);
         CheckDisposed(stale);
         full.Player.StartStream();
-        Wait(fullSecond.ReadEntered, "explicitly restarted replacement full source");
-        Check(fullSecond.Pipeline == second.Pipeline, "Cached full video retained the old receiver profile.");
+        AwaitCapture(() => CaptureSubscribers(VideoPipeline.ShareKey(config.VideoInputs[1])) == 2 &&
+            GetField<VideoSession>(full.Player, "_session").State == VideoState.Streaming,
+            "restarted full view joins the replacement receiver");
+        Check(fullSecond.Starts == 0, "Cached full video retained the old input or opened a second receiver.");
         save = false;
         GetField<ComboBox>(preview, "_selector").SelectedItem = "Synthetic";
         Check(config.SelectedVideoInputName == "Alternate" &&

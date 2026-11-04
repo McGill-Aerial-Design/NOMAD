@@ -68,6 +68,7 @@ namespace NOMAD.MissionPlanner
         private Button _btnBoundaries;
         private Button _btnVideo;
         private Button _btnLinks;
+        private Button _btnSimulation;
         private Label _aircraftLabel;
 
         // Content views
@@ -77,6 +78,9 @@ namespace NOMAD.MissionPlanner
         private NativeFenceSetupView _boundaryView;
         private NOMADVideoView _videoView;
         private NOMADLinksView _linksView;
+        private NOMADSimulationView _simulationView;
+        private static Func<SimulationSession> _simulation;
+        internal static void SetSimulationFactory(Func<SimulationSession> simulation) { _simulation = simulation; }
 
 
         // Update timer
@@ -178,6 +182,7 @@ namespace NOMAD.MissionPlanner
         public void Deactivate()
         {
             _videoView?.StopTracking();
+            _simulationView?.PausePreview();
             StopUpdateTimer();
         }
 
@@ -198,6 +203,7 @@ namespace NOMAD.MissionPlanner
             if (_currentView != null)
             {
                 if (ReferenceEquals(_currentView, _videoView)) { _videoView.StopTracking(); }
+                if (ReferenceEquals(_currentView, _simulationView)) { _simulationView.PausePreview(); }
                 _viewContainer.Controls.Remove(_currentView);
                 // Don't dispose - keep cached for quick switching
             }
@@ -230,6 +236,10 @@ namespace NOMAD.MissionPlanner
                     if (_linksView == null) _linksView = new NOMADLinksView(_connectionManager, _config);
                     newView = _linksView;
                     break;
+                case "Simulation":
+                    if (_simulationView == null) { _simulationView = new NOMADSimulationView(_simulation?.Invoke(), _videoShutdown); }
+                    newView = _simulationView;
+                    break;
             }
 
             if (newView != null)
@@ -237,6 +247,7 @@ namespace NOMAD.MissionPlanner
                 newView.Dock = DockStyle.Fill;
                 _viewContainer.Controls.Add(newView);
                 _currentView = newView;
+                if (newView is NOMADSimulationView simulation) { simulation.UpdateData(); }
             }
         }
 
@@ -249,6 +260,7 @@ namespace NOMAD.MissionPlanner
                 _btnBoundaries,
                 _btnVideo,
                 _btnLinks,
+                _btnSimulation,
             };
             foreach (var btn in buttons)
             {
@@ -267,6 +279,7 @@ namespace NOMAD.MissionPlanner
                 case "Boundaries": activeBtn = _btnBoundaries; break;
                 case "Video": activeBtn = _btnVideo; break;
                 case "Links": activeBtn = _btnLinks; break;
+                case "Simulation": activeBtn = _btnSimulation; break;
             }
 
             if (activeBtn != null)
@@ -326,10 +339,12 @@ namespace NOMAD.MissionPlanner
             _boundaryView?.Dispose();
             _videoView?.Dispose();
             _linksView?.Dispose();
+            _simulationView?.Dispose();
             _dashboardView = null;
             _boundaryView = null;
             _videoView = null;
             _linksView = null;
+            _simulationView = null;
             _currentView = null;
             if (_updateTimer != null)
             {
@@ -353,6 +368,7 @@ namespace NOMAD.MissionPlanner
                 _boundaryView?.Dispose();
                 _videoView?.Dispose();
                 _linksView?.Dispose();
+                _simulationView?.Dispose();
             }
             base.Dispose(disposing);
         }

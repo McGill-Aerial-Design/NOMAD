@@ -20,9 +20,8 @@ namespace NOMAD.MissionPlanner
                 SelectedRegion.HasValue && frame.Region.GroundSearchHint.HasValue)
             { detail += " | Estimated area search hint; horizontal plane " + _input.GroundPlaneHeightMeters +
                 " m above HOME, camera delay " + _input.CameraDelayEstimateMs + " ms; no steering authority"; }
-            _videoToolTips.SetToolTip(_videoBox, detail);
             _videoBox.AccessibleDescription = detail;
-            if (_fullscreenBox != null) { _videoToolTips.SetToolTip(_fullscreenBox, detail); }
+            if (_fullscreenBox != null) { _fullscreenBox.AccessibleDescription = detail; }
             return detail;
         }
 

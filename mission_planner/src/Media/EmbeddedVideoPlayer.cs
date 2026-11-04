@@ -35,7 +35,8 @@ namespace NOMAD.MissionPlanner
             _showControls = showControls;
             _trackingMode = input.TrackingMode == "Area" ? VisualTrackingMode.Area : VisualTrackingMode.Object;
             _session = new VideoSession(createPipeline, createDetector,
-                showControls ? createTracker ?? VisualTrackerFactory.Create : null, aircraft, _input);
+                showControls ? createTracker ?? ((token, mode) =>
+                    VisualTrackerFactory.Create(token, mode, _input.ObjectTracker == "GPU")) : null, aircraft, _input);
             _frameTimer = new System.Windows.Forms.Timer { Interval = 33 };
             _frameTimer.Tick += OnFrameTick;
             try
@@ -131,6 +132,7 @@ namespace NOMAD.MissionPlanner
                     finally
                     {
                         _videoToolTips.Dispose();
+                        _trackingHistoryMenu.Dispose();
                         _fullscreenForm?.Dispose();
                     }
                 }

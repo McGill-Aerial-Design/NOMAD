@@ -10,6 +10,8 @@ namespace NOMAD.MissionPlanner
     public sealed class VideoInputProfile
     {
         public string Name { get; set; } = "";
+        public string SourceType { get; set; } = "Network";
+        public string CaptureDevicePath { get; set; } = "";
         public string Url { get; set; } = "";
         public string RtspTransport { get; set; } = "TCP";
         public int LatencyMs { get; set; } = 100;
@@ -18,6 +20,8 @@ namespace NOMAD.MissionPlanner
         public string DetectorModelProfilePath { get; set; } = "";
         public bool TrackingCalibrated { get; set; }
         public string TrackingMode { get; set; } = "Object";
+        // "CPU" (default) or "GPU": EfficientTAM video memory on an NVIDIA DirectX 12 GPU for Object tracking.
+        public string ObjectTracker { get; set; } = "CPU";
         public bool GroundPredictionEnabled { get; set; }
         public double GroundPlaneHeightMeters { get; set; }
         public int CameraDelayEstimateMs { get; set; }
@@ -39,8 +43,13 @@ namespace NOMAD.MissionPlanner
             { throw new JsonSerializationException("Video input names must be trimmed text from 1 to 80 characters."); }
             if (RtspTransport != "TCP" && RtspTransport != "UDP")
             { throw new JsonSerializationException("Video RTSP transport must be TCP or UDP."); }
+            if ((SourceType != "Network" && SourceType != "Camera") || CaptureDevicePath == null || Url == null ||
+                CaptureDevicePath.Length > 1024 || CaptureDevicePath.Any(char.IsControl))
+            { throw new JsonSerializationException("Review the video source type and capture device."); }
             if (LatencyMs < 0 || LatencyMs > 5000 || QueueMaxBuffers < 1 || QueueMaxBuffers > 120)
             { throw new JsonSerializationException("Video latency must be 0..5000 ms and queue size 1..120 frames."); }
+            if (ObjectTracker != "CPU" && ObjectTracker != "GPU")
+            { throw new JsonSerializationException("Object tracker must be CPU or GPU."); }
             if ((TrackingMode != "Object" && TrackingMode != "Area") || CameraDelayEstimateMs < 0 ||
                 CameraDelayEstimateMs > 2000 || double.IsNaN(GroundPlaneHeightMeters) ||
                 double.IsInfinity(GroundPlaneHeightMeters) || Math.Abs(GroundPlaneHeightMeters) > 10000)
@@ -57,12 +66,14 @@ namespace NOMAD.MissionPlanner
             { throw new JsonSerializationException("Review vision FOV, pitch/yaw limits, signs and rate (1..60 deg/s)."); }
             try
             {
+                if (SourceType == "Camera") { VideoCaptureDevice.QuotedPath(CaptureDevicePath); return; }
                 if (Url?.StartsWith("udp://", StringComparison.OrdinalIgnoreCase) == true)
                 { VideoStreamAddress.UdpPort(Url); }
                 else { VideoStreamAddress.QuotedRtspUrl(Url); }
             }
             catch (FormatException)
-            { throw new JsonSerializationException("Video input requires an absolute RTSP URL or UDP listening port."); }
+            { throw new JsonSerializationException(SourceType == "Camera" ? "Choose a local camera or capture card device." :
+                "Video input requires an absolute RTSP URL or UDP listening port."); }
         }
     }
 }

@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "name": "last_letter quadcopter",
+  "backend": "last-letter",
+  "frame": "JSON",
+  "home": [-35.362938, 149.165085, 584, 0],
+  "system_id": 201,
+  "defaults": [],
+  "defaults_local": ["servo-gimbal.parm", "last-letter.parm"],
+  "last_letter_model": "ardupilot_copter",
+  "notes": "Headless plus-frame quad; separate from Gazebo dynamics."
+}

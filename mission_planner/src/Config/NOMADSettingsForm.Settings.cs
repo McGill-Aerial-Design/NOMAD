@@ -49,6 +49,10 @@ namespace NOMAD.MissionPlanner
         private void LoadJoystickSettings()
         {
             _numJoyGimbalMaxRate.Value = ClampValue(_numJoyGimbalMaxRate, Config.JoystickGimbalMaxRateDegSec);
+            _cmbGimbalHorizontal.SelectedItem = Config.JoystickGimbalHorizontalAxis;
+            _cmbGimbalVertical.SelectedItem = Config.JoystickGimbalVerticalAxis;
+            _chkGimbalHorizontalInverted.Checked = Config.JoystickGimbalHorizontalInverted;
+            _chkGimbalVerticalInverted.Checked = Config.JoystickGimbalVerticalInverted;
             LoadInputList();
         }
 
@@ -77,6 +81,10 @@ namespace NOMAD.MissionPlanner
         private void SaveJoystickSettings()
         {
             Config.JoystickGimbalMaxRateDegSec = (float)_numJoyGimbalMaxRate.Value;
+            Config.JoystickGimbalHorizontalAxis = _cmbGimbalHorizontal.SelectedItem as string;
+            Config.JoystickGimbalVerticalAxis = _cmbGimbalVertical.SelectedItem as string;
+            Config.JoystickGimbalHorizontalInverted = _chkGimbalHorizontalInverted.Checked;
+            Config.JoystickGimbalVerticalInverted = _chkGimbalVerticalInverted.Checked;
             Config.ValidateInputBindings();
         }
 

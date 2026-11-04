@@ -1,0 +1,43 @@
+{
+  "seed": 173,
+  "generator": "scripts/simulation/world.py",
+  "renderer": "Gazebo8.10;ardupilot_gazebo80dc9664dda7efd6c5d1a71a79198d1d6b708c0e",
+  "reference": "area-ground-reference.png",
+  "reference_capture": 97,
+  "selection": [
+    360,
+    180,
+    144,
+    144
+  ],
+  "truth": "Independent camera world pose and horizontal plane intersection; not bbox center",
+  "frames": [
+    {
+      "file": "area-ground-pan-221.png",
+      "capture": 221,
+      "aim": [
+        409.68561632394704,
+        246.48302697161165
+      ],
+      "sha256": "56e01fdcf555e2670f0fa1e537489b725f606c582bcffde985198401a019780c"
+    },
+    {
+      "file": "area-ground-pan-225.png",
+      "capture": 225,
+      "aim": [
+        398.33370878932647,
+        244.9508165028134
+      ],
+      "sha256": "284d99b7800a9423120597ed4ee41382277ba9b403d58d5f77281ca596e93e05"
+    },
+    {
+      "file": "area-ground-pan-229.png",
+      "capture": 229,
+      "aim": [
+        398.25917827317994,
+        244.9419815085389
+      ],
+      "sha256": "a314727e83d168d451c7bca1ca15a33fbe5f317f8998c12a049285ad4eb8493f"
+    }
+  ]
+}

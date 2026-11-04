@@ -72,11 +72,52 @@ internal static partial class VideoLifetimeTests
         foreach (int translationDirection in new[] { -1, 1 })
         foreach (int delayTicks in new[] { 14, 80 })
         foreach (int attitudePeriod in new[] { 10, 25 })
-        { CheckDelayedTracking(startPitch, direction, period, translationDirection, delayTicks, attitudePeriod); }
+        foreach (bool movingObject in new[] { false, true })
+        { CheckDelayedTracking(startPitch, direction, period, translationDirection, delayTicks, attitudePeriod, movingObject); }
+    }
+
+    private static void ObjectOrbitResponse()
+    {
+        foreach (double altitude in new[] { 5.0, 15.0 })
+        foreach (double speed in new[] { 5.0, 10.0 })
+        {
+            const double radius = 20, dt = .05;
+            double targetPitch = -Math.Atan2(altitude, radius) * 180 / Math.PI;
+            var profile = new VideoInputProfile { TrackingCalibrated = true, TrackingMaxRateDegSec = 60 };
+            float pitch = (float)targetPitch, yaw = 0;
+            double actualPitch = targetPitch, actualYaw = 0, previousHeading = 0, peak = 0;
+            var images = new List<PointF>();
+            var errors = new List<double>();
+            for (int frame = 0; frame < Math.Ceiling(2 * Math.PI * radius / speed / dt); frame++)
+            {
+                double heading = frame * dt * speed / radius * 180 / Math.PI;
+                actualPitch += (pitch - actualPitch) * (dt / .08);
+                actualYaw += (yaw - actualYaw) * (dt / .08);
+                // The aircraft flies around a fixed deer with its nose facing it: bearing and heading rotate together.
+                PointF image = ProjectTrackingRay(actualPitch, actualYaw + heading, heading, targetPitch);
+                double error = Math.Max(Math.Abs(image.X), Math.Abs(image.Y));
+                peak = Math.Max(peak, error); errors.Add(error);
+                images.Add(image);
+                var delayed = images[Math.Max(0, images.Count - 4)];
+                float change = (float)(heading - previousHeading);
+                float beforePitch = pitch, beforeYaw = yaw;
+                VideoTrackingAngles.TryStep(profile, TrackingImageSize, TrackingRegion(delayed),
+                    pitch, yaw, dt, out pitch, out yaw, change, movingObject: true);
+                previousHeading = heading;
+                Check(Math.Abs(pitch - beforePitch) <= 60 * dt + .0001 &&
+                    Math.Abs(yaw - beforeYaw) <= 60 * dt + .0001, "Orbit correction exceeded calibrated travel rate");
+            }
+            errors.Sort();
+            double p95 = errors[(int)Math.Ceiling(errors.Count * .95) - 1];
+            // The first qualification band is5% sustained/8% peak; the tighter3.5% experiment stays reported.
+            string diagnostic = $"altitude={altitude}, speed={speed}, peak={peak:F3}, p95={p95:F3}";
+            Check(peak <= .08 && p95 <= .05, "Object orbit centering failed: " + diagnostic);
+            Console.WriteLine("  Object orbit " + diagnostic + "; strict3.5%peak=" + (peak <= .035));
+        }
     }
 
     private static void CheckDelayedTracking(float startPitch, int direction, int period, int translationDirection,
-        int delayTicks, int attitudePeriod)
+        int delayTicks, int attitudePeriod, bool movingObject)
     {
         var profile = new VideoInputProfile { TrackingCalibrated = true, TrackingMaxRateDegSec = 60 };
         var history = new List<PointF>();
@@ -116,16 +157,16 @@ internal static partial class VideoLifetimeTests
             float compensation = GimbalCommand.Clamp(change, -step, step);
             if (VideoTrackingAngles.TryStep(profile, TrackingImageSize, TrackingRegion(delayed),
                 commandedPitch, commandedYaw, period * .01, out commandedPitch, out commandedYaw,
-                compensation))
+                compensation, movingObject))
             {
                 previousHeading = currentHeading * 180 / Math.PI;
-                unapplied = Math.Abs(commandedYaw) == 90 ? 0 : change - compensation;
+                unapplied = movingObject || Math.Abs(commandedYaw) == 90 ? 0 : change - compensation;
             }
             Check(Math.Abs(commandedPitch - previousPitch) <= 60 * period * .01 + .0001 &&
                 Math.Abs(commandedYaw - previousYaw) <= 60 * period * .01 + .0001,
                 "Delayed control bypassed the calibrated target rate");
         }
-        string diagnostic = $"pitch={startPitch}, yaw={direction}, period={period}, translation={translationDirection}, " +
+        string diagnostic = $"object={movingObject}, pitch={startPitch}, yaw={direction}, period={period}, translation={translationDirection}, " +
             $"delay={delayTicks}, attitude={attitudePeriod}: " +
             $"peak={maximum:F3}, steady={steady:F3}, settled={settled:F3}";
         Check(maximum < .12 && steady < .08 && settled < .035,

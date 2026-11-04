@@ -33,14 +33,21 @@ try {
 $exe = Join-Path $outDir 'VisionDetectorTests.exe'
 $sources = @('VideoDetection', 'VisionDetectorFactory', 'VisionModelProfile', 'VisionRuntime', 'YoloXVideoDetector',
     'IVisualTracker', 'VisualTrackerFactory', 'CsrtVisualTracker', 'FrozenAppearance', 'VisualTrackingImage',
-    'AreaVisualTracker', 'AreaVisualTracker.Matching') |
+    'AreaVisualTracker', 'AreaVisualTracker.Matching', 'ObjectRecoveryReference', 'ObjectForeground',
+    'CsrtVisualTracker.Object', 'EfficientTamVisualTracker', 'EfficientTamCore',
+    'GpuAdapter') |
     ForEach-Object { Join-Path $repoRoot "mission_planner\src\Vision\$_.cs" }
 $sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisionDetectorTests.cs'
 $sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.cs'
 $sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.Area.cs'
+$sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.Panorama.cs'
+$sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.ObjectMotion.cs'
+$sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.Gpu.cs'
 $resources = @(Get-ChildItem -LiteralPath $runtime -File | ForEach-Object {
     "/resource:$($_.FullName),NOMAD.Vision.$($_.Name)"
 })
+$resources += Get-ChildItem -LiteralPath (Join-Path $repoRoot 'mission_planner/tests/vision/fixtures') -File |
+    ForEach-Object { "/resource:$($_.FullName),NOMAD.Tests.$($_.Name)" }
 $references = @('/r:System.Drawing.dll', "/r:$mpDir\Newtonsoft.Json.dll", "/r:$mpDir\System.Memory.dll",
     "/r:$runtime\Microsoft.ML.OnnxRuntime.dll", "/r:$runtime\OpenCvSharp.dll",
     '/r:C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8\Facades\netstandard.dll')
@@ -70,6 +77,8 @@ try {
     $env:NOMAD_VISION_TRACKING_GT = $TrackingGroundTruth
     if ($FixtureImage) { & $exe ([IO.Path]::GetFullPath($FixtureImage)) } else { & $exe }
     $result = $LASTEXITCODE
+    # Native modules are process-wide, so Mission Planner's GDAL C runtime case runs in its own process.
+    if ($result -eq 0) { & $exe '--gdal-c-runtime'; $result = $LASTEXITCODE }
 } finally {
     $env:NOMAD_VISION_TEST_DATA = $previousData
     $env:NOMAD_VISION_TRACKING_FRAMES = $previousFrames
