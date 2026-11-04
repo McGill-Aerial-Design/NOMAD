@@ -113,6 +113,15 @@ The test-only encoded-video relay carries RTP packets through WSL TCP to Windows
 it is separate from the native MP telemetry connection. Backpressure drops whole
 datagrams and is recorded; a decoder can need the next keyframe.
 
+Rendered runs encode at `-EncoderKbps` (100..50000, default 800; recorded as
+`camera.encoder_kbps`). Above 2000 kbps the relay needs a 4 MiB UDP receive buffer,
+otherwise keyframe bursts overflow and video stays grey; the run refuses to start
+until `net.core.rmem_max` is raised. The setting does not persist across WSL restarts:
+
+```powershell
+wsl -d Ubuntu-24.04 -u root sysctl -w net.core.rmem_max=8388608
+```
+
 A prepared local workspace can also exercise the page's launcher/handshake/Stop:
 
 ```powershell
