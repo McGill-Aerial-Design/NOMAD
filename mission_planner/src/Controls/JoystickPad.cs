@@ -11,6 +11,10 @@ namespace NOMAD.MissionPlanner
     internal class JoystickPad : Control
     {
         public event Action<float, float> StickChanged;
+        internal string HorizontalLabel { get; set; } = "YAW";
+        internal string VerticalLabel { get; set; } = "PITCH";
+        internal bool HorizontalInverted { get; set; }
+        internal bool VerticalInverted { get; set; }
 
         private bool _dragging;
         private PointF _stickNorm; // [-1,1] each axis
@@ -18,7 +22,7 @@ namespace NOMAD.MissionPlanner
 
         // Gutters reserved between the ring and the control edge so the axis
         // labels sit OUTSIDE the circle yet stay within the pad; the X gutter is
-        // wider because "ROLL+/ROLL-" are wider than they are tall. The radius is
+        // wider because axis names are wider than they are tall. The radius is
         // also capped so the joystick stays a sensible size on a large pad. Both
         // OnPaint and the hit-test use Radius() so visual + interaction agree.
         private const int LABEL_MARGIN_X = 38;
@@ -127,13 +131,20 @@ namespace NOMAD.MissionPlanner
             using (var brush = new SolidBrush(NOMADTheme.TEXT_SECONDARY))
             using (var f = new Font(NOMADTheme.FONT_FAMILY, NOMADTheme.SIZE_SMALL))
             {
-                var p = g.MeasureString("PITCH+", f);
-                var roll = g.MeasureString("ROLL+", f);
-                g.DrawString("PITCH+", f, brush, cx - p.Width / 2, cy - r - p.Height + 1);
-                g.DrawString("PITCH-", f, brush, cx - p.Width / 2, cy + r + 1);
-                g.DrawString("ROLL+", f, brush, cx - r - roll.Width - 1, cy - roll.Height / 2);
-                g.DrawString("ROLL-", f, brush, cx + r + 1, cy - roll.Height / 2);
+                string top = AxisLabel(VerticalLabel, !VerticalInverted);
+                string bottom = AxisLabel(VerticalLabel, VerticalInverted);
+                string left = AxisLabel(HorizontalLabel, HorizontalInverted);
+                string right = AxisLabel(HorizontalLabel, !HorizontalInverted);
+                var topSize = g.MeasureString(top, f); var bottomSize = g.MeasureString(bottom, f);
+                var leftSize = g.MeasureString(left, f); var rightSize = g.MeasureString(right, f);
+                g.DrawString(top, f, brush, cx - topSize.Width / 2, cy - r - topSize.Height + 1);
+                g.DrawString(bottom, f, brush, cx - bottomSize.Width / 2, cy + r + 1);
+                g.DrawString(left, f, brush, cx - r - leftSize.Width - 1, cy - leftSize.Height / 2);
+                g.DrawString(right, f, brush, cx + r + 1, cy - rightSize.Height / 2);
             }
         }
+
+        private static string AxisLabel(string name, bool positive) =>
+            name == "None" ? "OFF" : name.ToUpperInvariant() + (positive ? "+" : "−");
     }
 }

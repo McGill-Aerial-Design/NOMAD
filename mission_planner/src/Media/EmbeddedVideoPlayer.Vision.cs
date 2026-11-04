@@ -23,6 +23,8 @@ namespace NOMAD.MissionPlanner
         private VisualTrackingMode _trackingMode;
         private ComboBox _trackingModeSelector;
         private Button _clearAreaButton;
+        private readonly ContextMenuStrip _trackingHistoryMenu = new ContextMenuStrip
+        { BackColor = NOMADTheme.CARD_BG, ForeColor = NOMADTheme.TEXT_PRIMARY, Font = NOMADTheme.Font() };
         private bool _selectionInitialized, _trackingPaused;
         private bool _regionReady, _trackingVisible;
         private long _regionRevision, _trackingClaim, _selectionStartedTicks;
@@ -69,9 +71,8 @@ namespace NOMAD.MissionPlanner
             _trackingModeSelector.Width = 90; _trackingModeSelector.AccessibleName = "Tracking mode";
             _trackingModeSelector.SelectedIndexChanged += (sender, args) =>
                 SetTrackingMode((VisualTrackingMode)_trackingModeSelector.SelectedIndex);
-            _clearAreaButton = CreateVideoButton("\uE74D", "Clear remembered area",
-                (sender, args) => { RetireTracking("Area cleared; select again"); UpdateVisionStatus(); });
-            _clearAreaButton.Visible = _trackingMode == VisualTrackingMode.Area;
+            _clearAreaButton = CreateVideoButton("\uE74D", "Clear remembered target",
+                (sender, args) => { RetireTracking("Target cleared; select again"); UpdateVisionStatus(); });
             _detectButton = ControlFactory.Button("Detect", (sender, args) => EnableDetection(!_session.DetectionEnabled),
                 width: 65, height: 28);
             _detectButton.MinimumSize = _detectButton.Size;
@@ -273,12 +274,13 @@ namespace NOMAD.MissionPlanner
         {
             TrackingTransition[] events;
             lock (_visionGate) { events = _trackingEvents.Reverse().ToArray(); }
-            var menu = new ContextMenuStrip
-            { BackColor = NOMADTheme.CARD_BG, ForeColor = NOMADTheme.TEXT_PRIMARY, Font = NOMADTheme.Font() };
+            var menu = _trackingHistoryMenu;
+            if (menu.Visible) { menu.Close(); }
+            foreach (var item in menu.Items.Cast<ToolStripItem>().ToArray()) { item.Dispose(); }
+            menu.Items.Clear();
             foreach (var item in events)
             { menu.Items.Add(new ToolStripLabel(item.Utc.ToString("HH:mm:ss") + " UTC  " + item.Reason)); }
             if (events.Length == 0) { menu.Items.Add(new ToolStripLabel("No tracking events")); }
-            menu.Closed += (source, eventArgs) => menu.Dispose();
             var button = (Control)sender;
             menu.Show(button, new Point(0, button.Height));
         }
@@ -342,11 +344,13 @@ namespace NOMAD.MissionPlanner
                     DisarmTracking("Video stale");
                     return;
                 }
+                if (_tracking && (frame.ReceivedTicks - _latestReceivedTicks) /
+                    (double)Stopwatch.Frequency >= .5)
+                { DisarmTracking("Video receipt gap"); }
                 _selectionInitialized = true;
-                if (_trackingMode == VisualTrackingMode.Area &&
-                    (frame.Region.State == VisualTrackingState.Searching || frame.Region.State == VisualTrackingState.Outside))
+                if (frame.Region.State == VisualTrackingState.Searching || frame.Region.State == VisualTrackingState.Outside)
                 {
-                    PauseAreaTracking(frame.Region.Status);
+                    PauseTracking(frame.Region.Status);
                     _latestSequence = frame.Sequence; _latestReceivedTicks = frame.ReceivedTicks;
                     return;
                 }
@@ -357,7 +361,7 @@ namespace NOMAD.MissionPlanner
                 if (!_tracking) { _trackingStatus = "Region locked; press Track to move the gimbal"; }
                 _latestSequence = frame.Sequence; _latestReceivedTicks = frame.ReceivedTicks;
             }
-            if (ResumeAreaTracking(frame)) { return; }
+            if (ResumeTracking(frame)) { return; }
             _ = DriveTrackingAsync(frame);
         }
 
@@ -378,12 +382,16 @@ namespace NOMAD.MissionPlanner
                 float step = _input.TrackingMaxRateDegSec * (float)Math.Min(dt, .2);
                 compensation = GimbalCommand.Clamp(headingChange, -step, step);
                 if (!_tracking || _trackingPaused || !_selectedAimPoint.HasValue || !_regionReady ||
-                    (now - _lastRequestTicks) / (double)Stopwatch.Frequency < .05 ||
-                    !VideoTrackingAngles.TryStep(_input, frame.Image.Size, _selectedAimPoint.Value,
+                    (now - _lastRequestTicks) / (double)Stopwatch.Frequency < .05) { return; }
+                if (!VideoTrackingAngles.TryStep(_input, frame.Image.Size, _selectedAimPoint.Value,
                         _trackingPitch, _trackingYaw, dt, out pitch, out yaw,
-                        compensation)) { return; }
+                        compensation, _trackingMode == VisualTrackingMode.Object))
+                {
+                    if (_trackingMode == VisualTrackingMode.Object)
+                    { _trackingAircraftHeading = heading; _trackingUnappliedYawChange = 0; }
+                    return;
+                }
                 revision = _trackingRevision; manual = _trackingManualRevision; generation = _trackingTarget.Generation;
-                _lastStepTicks = frame.ReceivedTicks;
             }
             if (!TrackingInputCurrent(revision, frame.Sequence) || Interlocked.Exchange(ref _trackingInFlight, 1) != 0)
             { return; }
@@ -402,6 +410,8 @@ namespace NOMAD.MissionPlanner
                         if (_tracking && revision == _trackingRevision)
                         {
                             _trackingPitch = pitch; _trackingYaw = yaw; _trackingAircraftHeading = heading;
+                            _lastStepTicks = frame.ReceivedTicks;
+                            // Carry rate clipping; TryStep's deliberate Object attenuation is already excluded.
                             _trackingUnappliedYawChange = yaw == _input.YawMinDeg || yaw == _input.YawMaxDeg
                                 ? 0 : headingChange - compensation;
                             _trackingStatus = yaw == _input.YawMinDeg || yaw == _input.YawMaxDeg
@@ -435,21 +445,22 @@ namespace NOMAD.MissionPlanner
             {
                 lock (_visionGate)
                 {
-                    if (_trackingMode == VisualTrackingMode.Area && _session.HasRegion(_regionRevision))
-                    { PauseAreaTracking("Area unverified; searching original reference"); }
+                    if (_session.HasRegion(_regionRevision))
+                    { PauseTracking("Target unverified; searching original reference"); }
                     else { RetireTracking("Target lost; select again"); }
                 }
             }
             if (_selectionInitialized && SelectedRegion.HasValue && !_session.HasRegion(_regionRevision))
             { RetireTracking("Selected reference retired; select again"); }
             if (SelectedRegion.HasValue && !IsTracking && !WaitingForRegionInitialization &&
-                (!_selectionInitialized || (_trackingMode == VisualTrackingMode.Object &&
-                (!RegionReady || _displayedVideoFrame?.Fresh != true))))
+                !_selectionInitialized)
             { RetireTracking("Selection expired; select the current image again"); }
+            if (SelectedRegion.HasValue && RegionReady && _displayedVideoFrame?.Fresh != true)
+            { DisarmTracking("Video stale"); }
             string error = _session.TrackerError ?? _session.VisionError;
             _lblVisionStatus.Text = IsTracking ? TrackingStatus.Replace(" selected region", "") :
                 error != null ? "Vision unavailable" : WaitingForRegionInitialization ? "Selecting target" :
-                SelectedRegion.HasValue && _trackingMode == VisualTrackingMode.Area && !RegionReady ? "Area searching" :
+                SelectedRegion.HasValue && !RegionReady ? _trackingMode + " searching" :
                 !_input.TrackingCalibrated ? "Calibration required" : RegionReady ? "Target selected" : "Select a target";
             string detail = TrackingStatus + (error == null ? "" : " | " + error) +
                 MotionEstimateDetail() +

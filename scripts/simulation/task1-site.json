@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "name": "AEAC 2027 Medicine Hat Task 1 site approximation",
+  "inspected": "2026-10-27",
+  "origin_lat_lon": [50.1016183, -110.73828215],
+  "imagery_bbox_w_s_e_n": [-110.7453, 50.0961, -110.7313, 50.1071],
+  "boundary_lat_lon": [
+    [50.0970884, -110.7328077], [50.1061216, -110.7327756],
+    [50.1061482, -110.7437887], [50.1035232, -110.7437798],
+    [50.0988785, -110.7382540], [50.0971194, -110.7382533]
+  ],
+  "boundary_source": {
+    "url": "https://www.aerialevolution.ca/wp-content/uploads/2026/09/2027-AEAC-CONOPS-v1.0-2026-09-08.pdf",
+    "sha256": "0097ad8029086e2163e613d4d234d4720ed151e90fdbde8c8889f1b748d93708",
+    "page": 31,
+    "note": "Published C1 outline. Soft/hard labels conflict in source. Actual Task 1 search polygon/laps withheld until 2027-05-13."
+  },
+  "imagery": {
+    "item": "https://earth-search.aws.element84.com/v1/collections/sentinel-2-l2a/items/S2B_12UWA_20250507_0_L2A",
+    "url": "https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/12/U/WA/2025/5/S2B_12UWA_20250507_0_L2A/TCI.tif",
+    "captured": "2025-05-07T18:40:19.258Z",
+    "native_resolution_m": 10,
+    "license": "https://cds.climate.copernicus.eu/licences/ec-sentinel",
+    "credit": "Contains modified Copernicus Sentinel data 2025",
+    "note": "Actual field layout/colour; no grass-scale detail. No Esri/Google imagery is cached."
+  },
+  "terrain": {
+    "url": "https://geogratis.gc.ca/services/elevation/cdem/profile",
+    "documentation": "https://natural-resources.canada.ca/science-data/data-analysis/geospatial-data-tools-services/elevation-api",
+    "license": "https://open.canada.ca/en/open-government-licence-canada",
+    "credit": "Canadian Digital Elevation Model, Natural Resources Canada",
+    "horizontal_datum": "NAD83(CSRS)",
+    "vertical_datum": "CGVD28",
+    "note": "Coarse source terrain, approximately 20 m; not survey accuracy. Partial 1 m HRDEM does not cover the entire site and is not silently mixed with this datum."
+  },
+  "deer": {
+    "name": "red-deer-stag.glb",
+    "url": "https://www.innerscene.com/api/library/red-deer-stag-9f27e209/download",
+    "bytes": 8560236,
+    "sha256": "86ec04fe26f61e65649eb5273d86b466617b7395f95ddac4eeda69347393c3ee",
+    "source": "https://www.innerscene.com/tools/library/3d-parts/red-deer-stag-9f27e209",
+    "license": "CC0-1.0",
+    "license_url": "https://www.innerscene.com/tools/library/terms",
+    "source_length_m": 2.132851,
+    "proxy_length_m": 1.524,
+    "antler_nodes": [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 40, 41],
+    "note": "Stationary textured deer proxy, not the unknown official plastic decoy. Length inspired by Flambeau Boss Buck; antlerless derivative is not an anatomically exact doe."
+  },
+  "seed": 173,
+  "deer_groups_xy_m": [
+    [[118, -122], [123, -121], [119, -116], [125, -115]],
+    [[-140, 200], [-135, 204], [-143, 205]],
+    [[180, 300], [185, 304]],
+    [[-220, 350]], [[300, -350]], [[-300, 400]]
+  ]
+}

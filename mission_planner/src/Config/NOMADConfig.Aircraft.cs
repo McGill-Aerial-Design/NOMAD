@@ -33,6 +33,16 @@ namespace NOMAD.MissionPlanner
             {
                 throw new JsonSerializationException("GimbalMountMode must be an integer.");
             }
+            foreach (string name in new[] { nameof(JoystickGimbalHorizontalAxis), nameof(JoystickGimbalVerticalAxis) })
+            {
+                if (document[name] != null && document[name].Type != JTokenType.String)
+                { throw new JsonSerializationException(name + " must be text."); }
+            }
+            foreach (string name in new[] { nameof(JoystickGimbalHorizontalInverted), nameof(JoystickGimbalVerticalInverted) })
+            {
+                if (document[name] != null && document[name].Type != JTokenType.Boolean)
+                { throw new JsonSerializationException(name + " must be boolean."); }
+            }
             ValidateActuatorDefinitions(document[nameof(ActuatorDefinitions)]);
             if (document[nameof(Inputs)] != null) { InputBinding.Parse(document[nameof(Inputs)]); }
         }
@@ -54,6 +64,8 @@ namespace NOMAD.MissionPlanner
         private void ValidateAircraftSettings()
         {
             ValidateActuatorDefinitions(ActuatorDefinitions);
+            if (!GimbalCommand.ValidScreenAxes(JoystickGimbalHorizontalAxis, JoystickGimbalVerticalAxis))
+            { throw new JsonSerializationException("Choose distinct gimbal screen axes: None, Pitch, Roll or Yaw."); }
             if (float.IsNaN(JoystickGimbalMaxRateDegSec) || float.IsInfinity(JoystickGimbalMaxRateDegSec) ||
                 JoystickGimbalMaxRateDegSec < GimbalCommand.MIN_MAX_RATE_DEG_SEC ||
                 JoystickGimbalMaxRateDegSec > GimbalCommand.MAX_MAX_RATE_DEG_SEC)

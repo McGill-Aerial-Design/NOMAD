@@ -77,6 +77,11 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static event Action<float, float> TargetChanged;
 
+        internal static string ScreenHorizontalAxis { get; private set; } = "Yaw";
+        internal static string ScreenVerticalAxis { get; private set; } = "Pitch";
+        internal static bool ScreenHorizontalInverted { get; private set; }
+        internal static bool ScreenVerticalInverted { get; private set; }
+
         /// <summary>Fires when the desired mount mode preset changes; vehicle acceptance is separate.</summary>
         public static event Action<MountMode> ModeChanged;
 
@@ -122,6 +127,10 @@ namespace NOMAD.MissionPlanner
             InvalidateInput();
             SelectedMode = (MountMode)config.GimbalMountMode;
             MaxRateDegSec = config.JoystickGimbalMaxRateDegSec;
+            ScreenHorizontalAxis = config.JoystickGimbalHorizontalAxis;
+            ScreenVerticalAxis = config.JoystickGimbalVerticalAxis;
+            ScreenHorizontalInverted = config.JoystickGimbalHorizontalInverted;
+            ScreenVerticalInverted = config.JoystickGimbalVerticalInverted;
             SetTargetAnglesCore(0, 0, 0);
             ModeChanged?.Invoke(SelectedMode);
         }
@@ -177,6 +186,29 @@ namespace NOMAD.MissionPlanner
         {
             _ = SetModeAsync(mode);
         }
+        internal static void ApplyScreenStick(float x, float y, float dt, bool send)
+        {
+            if (!Finite(dt) || dt <= 0 || dt > .5f) { return; }
+            MoveScreenTarget(x, y, _maxRateDegSec * dt, SelectedMode, send);
+        }
+        internal static void NudgeScreenTarget(float x, float y, float degrees) =>
+            MoveScreenTarget(x, y, degrees, MountMode.MavlinkTargeting, true);
+        private static void MoveScreenTarget(float x, float y, float amount, MountMode mode, bool send)
+        {
+            if (!Finite(amount) || amount <= 0 || amount > MAX_MAX_RATE_DEG_SEC ||
+                !GimbalCommand.TryMapScreenAxes(ScreenHorizontalAxis, ScreenVerticalAxis,
+                    ScreenHorizontalInverted, ScreenVerticalInverted, x, y, out float dp, out float dr, out float dy) ||
+                (dp == 0 && dr == 0 && dy == 0)) { return; }
+            long generation = OutputController.Generation;
+            long revision = RecordManualInput();
+            float pitch = GimbalCommand.ClampPitch(TargetPitchDeg + dp * amount);
+            float roll = GimbalCommand.ClampRoll(TargetRollDeg + dr * amount);
+            float yaw = GimbalCommand.Clamp(TargetYawDeg + dy * amount, YAW_MIN_DEG, YAW_MAX_DEG);
+            SetTargetAnglesCore(pitch, roll, yaw);
+            if (send) { _ = SendAsync(mode, pitch, roll, yaw, generation, revision, null); }
+        }
+        internal static Task<GimbalRequestResult> RequestScreenTargetAsync(float pitch, float roll, float yaw) =>
+            SendManualAsync(MountMode.MavlinkTargeting, pitch, roll, yaw);
         internal static Task<GimbalRequestResult> SetModeAsync(MountMode mode) => SendManualAsync(mode, null, null);
         public static void RequestPitchRollTarget(float pitchDeg, float rollDeg)
         {
@@ -197,11 +229,11 @@ namespace NOMAD.MissionPlanner
             ManualInput?.Invoke();
             return revision;
         }
-        private static Task<GimbalRequestResult> SendManualAsync(MountMode mode, float? pitch, float? roll)
+        private static Task<GimbalRequestResult> SendManualAsync(MountMode mode, float? pitch, float? roll, float yaw = 0)
         {
             long generation = OutputController.Generation;
             long revision = RecordManualInput();
-            return SendAsync(mode, pitch, roll, 0, generation, revision, null);
+            return SendAsync(mode, pitch, roll, yaw, generation, revision, null);
         }
         private static async Task<GimbalRequestResult> SendAsync(MountMode mode, float? pitch, float? roll,
             float yaw, long generation, long revision, Func<bool> inputStillCurrent)

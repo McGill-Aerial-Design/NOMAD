@@ -70,7 +70,7 @@ internal static partial class VideoLifetimeTests
                 system_status = (byte)MAVLink.MAV_STATE.ACTIVE,
             });
 
-        internal void Pump(int milliseconds)
+        internal void Pump(int milliseconds, bool dispatchUi = true)
         {
             var clock = Stopwatch.StartNew();
             while (clock.ElapsedMilliseconds < milliseconds)
@@ -79,7 +79,7 @@ internal static partial class VideoLifetimeTests
                 { Attitude(_heading); }
                 if (!Connection.giveComport && _serial.BytesToRead > 0) { Connection.readPacket(); }
                 else { Thread.Sleep(1); }
-                Application.DoEvents();
+                if (dispatchUi) { Application.DoEvents(); }
                 if (_failure != null) { throw new InvalidOperationException("Synthetic tracking peer failed", _failure); }
             }
         }

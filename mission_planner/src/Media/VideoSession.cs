@@ -12,7 +12,7 @@ namespace NOMAD.MissionPlanner
     internal interface IVideoPipeline : IDisposable
     {
         void Start(string pipeline, CancellationToken cancellation);
-        Bitmap ReadFrame(CancellationToken cancellation);
+        Bitmap ReadFrame(CancellationToken cancellation, out long receivedTicks, out DateTime receivedUtc);
     }
 
     internal enum VideoState { Stopped, Starting, Streaming, Stopping, Disposed }
@@ -72,7 +72,7 @@ namespace NOMAD.MissionPlanner
         internal long Generation { get { lock (_gate) { return _generation; } } }
         public bool IsActive => State == VideoState.Starting || State == VideoState.Streaming;
 
-        public bool Start(string pipeline)
+        public bool Start(string pipeline, string shareKey = null)
         {
             lock (_gate)
             {
@@ -86,17 +86,18 @@ namespace NOMAD.MissionPlanner
                 var generation = ++_generation;
                 _error = null;
                 _state = VideoState.Starting;
-                _worker = Task.Run(() => Run(pipeline, generation, token));
+                _worker = Task.Run(() => Run(pipeline, shareKey, generation, token));
                 return true;
             }
         }
 
-        private void Run(string pipeline, long generation, CancellationToken token)
+        private void Run(string pipeline, string shareKey, long generation, CancellationToken token)
         {
             try
             {
                 token.ThrowIfCancellationRequested();
-                using (var resource = _createPipeline())
+                using (var resource = shareKey == null ? _createPipeline() :
+                    SharedVideoCapture.Create(shareKey, _createPipeline))
                 {
                     resource.Start(pipeline, token);
                     token.ThrowIfCancellationRequested();
@@ -146,12 +147,10 @@ namespace NOMAD.MissionPlanner
             {
                 while (!token.IsCancellationRequested)
                 {
-                    var image = pipeline.ReadFrame(token);
+                    var image = pipeline.ReadFrame(token, out long received, out DateTime utc);
                     if (image == null) { return; }
                     VideoFrame processed = null;
-                    long received = Stopwatch.GetTimestamp();
-                    DateTime utc = DateTime.UtcNow;
-                    if (_trackingAircraft != null) { motionHistory.Capture(received); }
+                    if (_trackingAircraft != null) { motionHistory.Capture(Stopwatch.GetTimestamp()); }
                     var motion = motionHistory.Snapshot(received, _trackingProfile.CameraDelayEstimateMs);
                     long sequence = Interlocked.Increment(ref _sequence);
                     VideoRegionResult region = null;
@@ -190,9 +189,9 @@ namespace NOMAD.MissionPlanner
                     {
                         token.ThrowIfCancellationRequested();
                     }
-                    catch (Exception) when (!token.IsCancellationRequested)
+                    catch (Exception error) when (!token.IsCancellationRequested)
                     {
-                        detection.Fail(revision);
+                        detection.Fail(revision, error);
                         if (image != null)
                         {
                             PublishVideoFrame(generation, new VideoFrame(image, Array.Empty<VideoDetection>(),

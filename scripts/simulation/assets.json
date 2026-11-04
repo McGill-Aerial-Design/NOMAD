@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "inspected": "2026-10-26",
+  "assets": [
+    {
+      "name": "courtyard.jpg", "group": "panorama", "bytes": 6296902,
+      "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/courtyard.jpg",
+      "sha256": "b11be77cdeca832d44d5067521444feac410d062c476ba4a95666afb4dfa758e",
+      "license": "CC0", "author": "Greg Zaal / Poly Haven",
+      "source": "https://polyhaven.com/a/courtyard",
+      "captured": "2015-12-09", "published": "2018-04-04",
+      "file_list_revision": "a75467fd21d677525347a93b91ccc15d75867b08"
+    },
+    {
+      "name": "aerial_grass_rock_diff_1k.jpg", "group": "scene", "bytes": 666655,
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/aerial_grass_rock/aerial_grass_rock_diff_1k.jpg",
+      "sha256": "57b8041bfe0d0f01430e4dbaad45e7ddddf0a9fc97317f90dbc51f7b0d9e1b5d",
+      "license": "CC0", "author": "Rob Tuytel / Poly Haven", "physical_width_m": 15,
+      "source": "https://polyhaven.com/a/aerial_grass_rock"
+    },
+    {
+      "name": "sparse_grass_diff_1k.jpg", "group": "ground", "asset_id": "sparse_grass", "bytes": 955945,
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/sparse_grass/sparse_grass_diff_1k.jpg",
+      "sha256": "ae94f2b34597b9108eefd88217f55eccaec6d6b382e858a478ee92df90e66617",
+      "license": "CC0-1.0", "author": "Amal Kumar / Poly Haven", "physical_width_m": 2,
+      "source": "https://polyhaven.com/a/sparse_grass", "published": "2024-09-10", "inspected": "2026-10-29"
+    },
+    {
+      "name": "withered_grass_diff_1k.jpg", "group": "ground", "asset_id": "withered_grass", "bytes": 1138384,
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/withered_grass/withered_grass_diff_1k.jpg",
+      "sha256": "8bebfb639ef74f651bc445526c46c845beee52a86d831848b82eb2bbbf2d98ee",
+      "license": "CC0-1.0", "author": "Charlotte Baglioni / Poly Haven", "physical_width_m": 2,
+      "source": "https://polyhaven.com/a/withered_grass", "published": "2023-09-07", "inspected": "2026-10-29"
+    },
+    {
+      "name": "dirt_diff_1k.jpg", "group": "ground", "asset_id": "dirt", "bytes": 730425,
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/dirt/dirt_diff_1k.jpg",
+      "sha256": "6ce6ca7e28ed046f7f93fa60dcb29f8cf42cd5a539adc5676675acccfa34efd3",
+      "license": "CC0-1.0", "author": "Charlotte Baglioni / Poly Haven", "physical_width_m": 2,
+      "source": "https://polyhaven.com/a/dirt", "published": "2024-07-23", "inspected": "2026-10-29"
+    },
+    {
+      "name": "hatchback-v3.zip", "group": "scene", "bytes": 1011216,
+      "url": "https://fuel.gazebosim.org/1.0/OpenRobotics/models/Hatchback/3/Hatchback.zip",
+      "sha256": "dcd34e68cf43863991768c3ddbdeb322d6ee8bddaa01aa7da8267bbacfdb60ed",
+      "license": "CC0", "author": "OpenRobotics", "model": "hatchback",
+      "source": "https://fuel.gazebosim.org/1.0/OpenRobotics/models/Hatchback/3/files"
+    },
+    {
+      "name": "construction-barrel-v4.zip", "group": "scene", "bytes": 1644935,
+      "url": "https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction%20Barrel/4/Construction%20Barrel.zip",
+      "sha256": "3df9417f2478864946eabd064e0ad7d9cd6178eaa96a060886eb560372f36fc9",
+      "license": "CC0", "author": "OpenRobotics", "model": "construction_barrel",
+      "source": "https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction%20Barrel/4/files"
+    },
+    {
+      "name": "nl_bookI_s1.avi", "group": "video", "bytes": 5095358,
+      "url": "https://sites.ualberta.ca/~vis/trackDB/nl_videos/nl_bookI_s1.avi",
+      "sha256": "06ba36ef73a4990964b55ffd0bfea5fe82855eda11380d4665b4ddb63d9ff37f",
+      "license": "Public research benchmark; redistribution grant not located; keep local",
+      "source": "https://sites.ualberta.ca/~vis/trackDB/singlemotion.html"
+    },
+    {
+      "name": "nl_bookI_s1.txt", "group": "video", "bytes": 92267,
+      "url": "https://sites.ualberta.ca/~vis/trackDB/nl_tdata/nl_bookI_s1.txt",
+      "sha256": "8b69ad45d563022d5a416a9806aed207b90831b2010556656c6c43136adca8a6",
+      "license": "Public research benchmark; redistribution grant not located; keep local",
+      "source": "https://sites.ualberta.ca/~vis/trackDB/codetest.html"
+    }
+  ]
+}

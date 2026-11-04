@@ -49,6 +49,23 @@ See [safety](safety.md) for trim checks, uncertain outcomes and unload limitatio
 
 ## Links and lifetime
 
+The optional **Testing & Simulation** page lazily creates one plugin-owned simulation session.
+It invokes a user-selected source checkout's development launcher only on Start; normal startup
+requires no WSL, Python or simulator. Scenarios, SDF scenery, WSL distribution, workspace and
+Python path are configurable. Read-only discovery runs when the simulation page opens, lists WSL
+distributions and uses the selected/default distribution's home for its default workspace. It
+preserves manual settings and performs no installation. The shared owner survives page/profile changes; hiding a page
+disposes only its video preview. Stop/unload closes owned handles and requests bounded process
+cleanup, retaining logs and reporting incomplete cleanup. A dispatched native helper must drain.
+
+The launcher starts fresh SITL state in an owned run directory. Native MP performs the private
+handshake, verifies the expected fresh disarmed simulator heartbeat, then registers the link with
+MP's existing reader on the UI thread. Existing open/read-only/replay links prevent startup.
+It never replaces an operator stream or starts an independent MAVLink reader. Gazebo camera RTP
+uses an owned encoded-packet relay into the usual decoder; oracle data never enters vision.
+last_letter is a separate headless dynamics option, not a second physics engine in a Gazebo world.
+Normal MP pages retain all flight/setup controls. See `scripts/simulation/README.md` in the source checkout.
+
 The optional `MAVLinkConnectionManager` owns the existing C# router engine and its
 physical UDP/TCP/COM links. It exposes exactly one bidirectional loopback consumer:
 Mission Planner, connected using UDPCl. The router forwards each command to one selected link, retains
@@ -76,11 +93,30 @@ Video uses Mission Planner's installed GStreamer support. Optional detection run
 on the existing decoder worker. One owning frame envelope carries its image,
 immutable detections, sequence and local receipt timestamps through the latest-frame
 slot into the player. HUD and Dashboard playback do not run inference.
+Local cameras have one capture/decoder worker per exact Windows device path, shared
+by separate viewer leases. Each lease holds at most one independent pending image;
+decoder receipt clocks survive fanout. The last lease cancels and joins the owner
+before a replacement capture opens. Network playback remains independently owned.
 
 `IVideoDetector` is the model boundary. Its YOLOX adapter owns preprocessing,
 ONNX Runtime inference and class-aware suppression. `IVisualTracker` independently
-owns visual region tracking. Object mode combines CSRT with a frozen appearance
-check; Area mode matches an immutable planar reference with ORB and robust homography.
+owns visual region tracking. Object mode uses a selection foreground mask for CSRT,
+masked appearance, checked local geometry and reversible foreground feature motion.
+Its initial measured foreground bounds define appearance/recovery extent; the drag rectangle
+only identifies that foreground. Verified Object results aim at the current bounds centre.
+The retained appearance anchor supports identity checks and does not define the gimbal target.
+Selected-region context can propose a geometric fit; acceptance also requires distributed
+foreground inliers and masked whole-target/aiming-point appearance.
+It keeps the original identity and one working view, promoted after three accepted
+foreground observations. Predicted masks cannot train either view. Thin uniform objects
+use bounded local foreground shape/colour support; global recovery still requires
+textured visual identity, distributed geometry and no competing placement. Three
+consistent recovery matches precede native tracker reinitialization.
+Area mode retains an immutable planar identity reference and one verified
+working view. Bounded ORB matching or forward/backward optical flow proposes a
+homography; shared geometry, original-relative support, rectified appearance and
+both-view ambiguity checks determine acceptance. Working-view updates preserve the
+original canonical point. Receipt gaps reset continuity and visual confirmation.
 Neither requires detector matches. The video player owns explicit
 selection, tracking lifetime and presentation, and sends through the existing
 `GimbalController`/`OutputController` native path. There is no separate vision
@@ -100,15 +136,18 @@ and its matching pixels remain on the decode worker. Revision tags prevent old
 model results from reaching overlays, selection or observations. Model loading and
 inference support cancellation; detector failure leaves plain video and region
 tracking available. CSRT calls have no native cancellation API: input is bounded
-to a 640-pixel longest edge, command eligibility retires immediately, and late
+to a 640-pixel longest edge, or 1280 for Object selections whose narrower dimension
+would be at most 80 pixels at the 640 scale. The budget is fixed at initialization,
+does not upscale source pixels and leaves Area's 640 bound unchanged. Command eligibility retires immediately, and late
 results are discarded before worker shutdown.
 Tracking requires calibrated limits/FOV, latest-frame buffering and fresh selected
 aircraft telemetry. Identity-bound fresh ATTITUDE yaw supplies wrapped body-rotation
 compensation inside the same calibrated rate limit; image feedback handles residual
-error. The heading reference advances only on submission. Manual input and session changes invalidate pending requests;
+error. Submitted heading and visual-time baselines advance together; Object no-step
+samples may advance heading alone as described below. Manual input and session changes invalidate pending requests;
 uncertain submissions disarm tracking. Area memory survives visual uncertainty,
 Stop and manual input; native/source/profile replacement clears it. Searching and
-Outside results never authorize commands. Three independent verified matches can
+Outside results never authorize commands. Three successive verified matches can
 resume an active intent after a visual pause, with a fresh heading baseline and
 zero accumulated yaw remainder. Stop/manual/stale input requires explicit rearming.
 An already-dispatched native helper may finish.
@@ -146,7 +185,7 @@ authorizing unseen-target steering. The heading marker is likewise a display aid
 
 ### Tracking motion compensation
 
-The image supplies a camera ray from the canonical selected point and calibrated
+The image supplies a camera ray from Area's canonical point or Object's verified bounds centre and calibrated
 focal length. Rotating that ray by the requested camera pitch gives pitch and
 azimuth error; a horizontal pixel offset is not the same as yaw at a downward
 camera pitch. Image correction uses a conservative gain of 1/s.
@@ -160,9 +199,14 @@ yawStep = clamp(imageYawError * dt - aircraftHeadingChange, -rate * dt, rate * d
 ```
 
 The implementation avoids extrapolation near the pitch singularity, rejects
-invalid or half-second-old attitude and caps `dt` at 0.2 s. It wraps heading
-differences across north and retains rate-clipped compensation until a later
-submission; hitting a travel limit clears that remainder. Pitch and combined yaw
+invalid or half-second-old attitude and caps `dt` at 0.2 s. Visual elapsed time advances
+only after a current tracking request is submitted, so busy/dropped requests do not
+consume it. Object mode attenuates counter-yaw when image yaw error and aircraft heading
+change have the same sign: the multiplier falls from one to zero over 0..5 degrees
+of image error. It discards the deliberately withheld part rather than replaying it later;
+a no-step sample also advances Object's heading baseline. Both modes retain rate-clipped
+compensation until a later submission. Heading differences wrap across north;
+hitting a travel limit clears any remainder. Pitch and combined yaw
 steps share the configured per-axis rate bound and absolute travel limits.
 No second aircraft-rotation correction is added through reported mount pose.
 

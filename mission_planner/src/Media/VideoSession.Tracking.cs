@@ -82,6 +82,7 @@ namespace NOMAD.MissionPlanner
             private GroundAreaAnchor _groundAnchor;
             private RectangleF _referenceSelection;
             private bool _groundPriorDisabled;
+            private long _lastReceivedTicks;
 
             internal RegionWorker(VideoSession owner, CancellationToken token)
             {
@@ -93,8 +94,13 @@ namespace NOMAD.MissionPlanner
                     lock (owner._gate) { owner._trackerReady = true; owner._trackerError = null; }
                 }
                 catch (OperationCanceledException) { token.ThrowIfCancellationRequested(); }
-                catch (Exception)
-                { lock (owner._gate) { owner._trackerReady = false; owner._trackerError = "Visual tracking unavailable; video continues."; } }
+                catch (Exception error)
+                {
+                    // The factory's message names the cause (e.g. no NVIDIA adapter); the log keeps the full detail.
+                    Log.Error("Visual tracker could not load: " + error);
+                    lock (owner._gate)
+                    { owner._trackerReady = false; owner._trackerError = error.Message + " Video continues."; }
+                }
             }
 
             internal VideoRegionResult Update(Bitmap image, long received, long sequence, VideoMotionSnapshot motion)
@@ -129,7 +135,10 @@ namespace NOMAD.MissionPlanner
                     }
                     if (_tracker == null || _cancellation == null) { return _lastResult; }
                     PointF? hint = GroundHint(image.Size, motion);
-                    var result = _tracker.Update(image, _cancellation.Token, new VisualFrameContext(hint));
+                    bool gap = _lastReceivedTicks != 0 && (received <= _lastReceivedTicks ||
+                        (received - _lastReceivedTicks) / (double)Stopwatch.Frequency >= .5);
+                    _lastReceivedTicks = received;
+                    var result = _tracker.Update(image, _cancellation.Token, new VisualFrameContext(hint, gap));
                     bool found = result.Found && result.Bounds.HasValue && result.AimPoint.HasValue &&
                         ValidRegion(result.Bounds.Value, image.Size, false) &&
                         new RectangleF(0, 0, image.Width, image.Height).Contains(result.AimPoint.Value);
@@ -187,6 +196,7 @@ namespace NOMAD.MissionPlanner
                 _lastResult = null;
                 _groundAnchor = null;
                 _groundPriorDisabled = false;
+                _lastReceivedTicks = 0;
                 lock (_owner._gate)
                 { if (ReferenceEquals(_owner._selectionCancellation, source)) { _owner._selectionCancellation = null; } }
                 try { _tracker?.Dispose(); }

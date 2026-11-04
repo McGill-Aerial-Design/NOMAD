@@ -36,22 +36,22 @@ namespace NOMAD.MissionPlanner
 
         public bool IsActive => _session.IsActive;
 
-        public void Start(string pipeline)
+        public void Start(string pipeline, string shareKey = null)
         {
-            if (_session.Start(pipeline))
+            if (_session.Start(pipeline, shareKey))
             {
                 _timer.Start();
             }
         }
 
-        internal void UpdateInput(string pipeline)
+        internal void UpdateInput(string pipeline, string shareKey = null)
         {
             if (_disposed) { return; }
             bool wasPlaying = IsActive;
             _session.Stop();
             _timer.Stop();
             ClearDisplay();
-            if (wasPlaying) { Start(pipeline); }
+            if (wasPlaying) { Start(pipeline, shareKey); }
         }
 
         private void ClearDisplay()

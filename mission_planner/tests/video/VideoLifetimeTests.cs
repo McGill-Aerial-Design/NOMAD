@@ -24,6 +24,21 @@ internal static partial class VideoLifetimeTests
                 return File.Exists(path) ? Assembly.LoadFrom(path) : null;
             };
             ConfigureVideoTestStorage();
+            if (args.Length == 3 && args[1] == "--capture-probe")
+            {
+                Run("native capture pipeline stays NULL and preserves exact UTF-8 device identity", () => CaptureNativeNull(args[2]));
+                return 0;
+            }
+            Run("local capture inputs share playback and exact device ownership", LocalCaptureInputs);
+            Run("local capture profile validation and configuration round trip", LocalCaptureProfiles);
+            Run("passive capture picker, missing device and draft isolation", LocalCaptureSettings);
+            Run("History menu click/close/reopen retains ownership until player disposal", TrackingHistoryMenuLifetime);
+            Run("one exclusive camera feeds Dashboard, Video and HUD until its last viewer closes", SharedCameraViews);
+            Run("one UDP network input feeds Dashboard and Video; distinct sources stay separate", SharedNetworkViews);
+            Run("shared camera clones preserve receipt clocks and bound slow viewers", SharedCameraClocksAndLatestFrame);
+            Run("camera EOF, unplug and failed startup reach every viewer and permit explicit restart", SharedCameraEndAndFailure);
+            Run("camera close joins before reopen, source generations fence late pixels and networks stay separate",
+                SharedCameraClosingAndSourceChange);
             Run("playback controls attached", PlaybackControlsAttached);
             Run("video toggles fit enabled labels at enlarged fonts", VideoToggleButtonSizing);
             Run("disabled buttons remain readable and inactive in the dark theme", DisabledButtonsKeepContrast);
@@ -33,8 +48,11 @@ internal static partial class VideoLifetimeTests
             Run("native motion history, actual delayed samples and submitted pose steps", NativeMotionHistory);
             Run("native primary mount, held target, cached HOME and reboot references", NativeMotionReferences);
             Run("delayed tracking stays centered through aircraft yaw and reversal", DelayedTrackingResponse);
+            Run("busy native requests retain elapsed visual steering time", TrackingBusyVisualTime);
+            Run("Object orbit bounds sustained centering and delayed transients", ObjectOrbitResponse);
             Run("tracking heading wrap, busy recovery and stale/wrong/invalid attitude", TrackingHeadingFences);
             Run("Area memory, canonical point, paused yaw and explicit recovery fencing", AreaRuntimeRecovery);
+            Run("Object memory, paused steering, Stop/manual/stale disarm and guarded return", ObjectRuntimeRecovery);
             Run("persistent wrong coarse prior preserves native Area verification and new commands", PersistentWrongPriorStillCommands);
             Run("frame-consistent estimated ground hint and heading in both viewports", GroundHintAndHeadingFrame);
             Run("start-stop and repeated stop", StartStop);
@@ -55,6 +73,7 @@ internal static partial class VideoLifetimeTests
             Run("background plugin cancellation", BackgroundShutdown);
             Run("already cancelled plugin token", AlreadyCancelledShutdown);
             Run("borrowed native frame lifetime", BorrowedFrameLifetime);
+            Run("fresh receipts of frozen pixels expose capture-time observability limit", FreshReceiptsDoNotEstablishFreshCapture);
             Run("dashboard preview reopen and shutdown", DashboardShutdown);
             Run("UDP input pipeline", VideoUdpInput);
             Run("video URL port and property regressions", VideoAddressRegressions);

@@ -1,0 +1,20 @@
+{
+  "seed": 173,
+  "generator": "scripts/simulation/world.py",
+  "renderer": "Gazebo8.10;ardupilot_gazebo80dc9664dda7efd6c5d1a71a79198d1d6b708c0e",
+  "reference": "area-natural-reference.png",
+  "reference_capture": 98,
+  "reference_sha256": "91a53e94a15e32f431cbed6d32bf7160b76c2443d7d310963cab7c07848333b0",
+  "selection": [360, 180, 144, 144],
+  "truth": "Independent horizontal plane intersection and camera poses; worst reference/pose uncertainty below 0.23 px; capture identity ambiguous",
+  "frames": [
+    {"file": "area-natural-8.png", "capture": 98, "aim": [432,252],
+     "sha256": "eb350a5f045f2f82996efcb099c6f81713e40004a4b9ab7d087e88f555baf0fb"},
+    {"file": "area-natural-22.png", "capture": 98, "aim": [432,252],
+     "sha256": "2a0448a5dd07a4203006b03ac5a392768389ad4d0ed24eeacaa15b605a8435cd"},
+    {"file": "area-natural-40.png", "capture": 161, "aim": [415.1107809783,249.0525712179],
+     "sha256": "e4e9a3bfd067579b70d82c515f686d4189b9863ddf14f5b0cf9ffc76c4a38fa6"},
+    {"file": "area-natural-62.png", "capture": 161, "aim": [415.1107809783,249.0525712179],
+     "sha256": "a6754b1c0f50d0782122271c3771b1c84bf6a489525713d82dea7ca4d0072ddf"}
+  ]
+}

@@ -65,6 +65,7 @@ pixi run test-plugin-version
 pixi run test-ground-router-logic
 pixi run test-plugin-gimbal-ui
 pixi run test-plugin-ui
+pixi run test-plugin-simulation
 pixi run test-plugin-router-ui
 pixi run test-plugin-video
 pixi run test-plugin-vision
@@ -73,6 +74,16 @@ pixi run test-plugin-termination
 
 Configuration validation includes the aircraft-profile suite; use
 `pixi run test-aircraft-profiles` alone for a focused profile check.
+An optional local capture probe uses an existing GStreamer runtime without opening a camera:
+
+```powershell
+powershell -NoProfile -File scripts/build/test_plugin_video.ps1 -CaptureProbeRuntime <existing-gstreamer-prefix>
+```
+
+The prefix contains `bin/` and `lib/gstreamer-1.0/`. This check parses the actual pipeline
+in NULL state, verifies UTF-8 device-path containment and passively enumerates Windows
+capture interfaces. Streaming, format negotiation and unplug/busy behavior require a
+separate operator-selected camera check; the probe never enters READY or PLAYING.
 The storage check uses fresh CLR processes for default, custom and invalid host
 user-data settings. It checks the default path without opening operator files;
 custom profile save/backup/load and logging use owned directories. An invalid
@@ -91,6 +102,24 @@ opening; they do not acquire an operator device. Router covers parser, dedup/fai
 parameter pinning and ownership disposal. Geometry/video/profile tests retain
 invalid-input and lifecycle fault cases.
 
+The plugin embeds the ONNX Runtime 1.24.4 DirectML build: its CPU provider runs the detector and
+DirectML (pinned redistributable 1.15.4, loaded by path only for the GPU tracker) serves the opt-in GPU
+Object tracker. Re-exporting the model does not reproduce the tested graph bytes, so the tested export
+is a pinned build input: `prepare_vision.ps1` downloads release asset
+[`tracker-model-efficienttam-ti512-1`](https://github.com/McGill-Aerial-Design/NOMAD/releases/tag/tracker-model-efficienttam-ti512-1)
+(EfficientTAM licence and change notice inside; an identical mirror sits on the YoussGm3o8 fork), verifies
+the archive and every file hash, and every build embeds it.
+Mission Planner's GDAL loads a 2017 Visual C++ runtime before plugins start, and Windows reuses a loaded DLL
+by name, so ONNX Runtime (built with toolset 14.44) failed with error 1114 inside the real host.
+`prepare_vision.ps1` disables ORT's embedded isolation manifest (resource ID 2 → 3, pinned hashes), and
+`VisionRuntime` loads ORT in an activation context that redirects it to a private copy of the installed
+runtime (System32, 14.44 or later, else a clear error). The vision gate checks detection, and with
+`NOMAD_TEST_TAM_MODEL` the GPU tracker, in a fresh process after loading GDAL's runtime first.
+Set `NOMAD_TEST_TAM_MODEL` to the export folder to add the GPU tracker checks (NVIDIA adapter selection,
+the setting creating the tracker from the embedded model, moving positives, adjacent occluders, a
+simultaneous twin, removal without memory writes, three-frame return, a small turning object, reselection
+and a long-loss lookalike); without it the gate prints an explicit SKIP. The setting, Area isolation and
+the no-model refusal are checked in every build.
 Vision checks run the pinned CPU model and verify preprocessing, decoding,
 invalid profiles/tensors, native load/inference cancellation and recovery. Video
 checks exercise matching frame ownership, selection clone replacement, cancellation/failure,
@@ -100,10 +129,25 @@ requires a fresh matching result; stale results and timeout admit no gimbal comm
 Tracking response checks independently project a world target through delayed camera
 motion, aircraft yaw reversals and additive/opposing translation. They verify
 downward-camera geometry, mirrored-image calibration, rate bounds and settling.
-CSRT checks follow moving/scaling texture and require loss without automatic
-reacquisition when it disappears. Area search prioritizes the optional coarse hint,
+The Object orbit ray checks use 5/15 m altitude and 5/10 m/s at a 20 m radius, with
+p95 image-center error at most 5% and peak at most 8%; the stricter 3.5% peak goal
+is reported separately. These are controller tests, not rendered detector qualification.
+Busy-request coverage checks the next independently calculated angular correction.
+Object checks follow moving/scaling texture and a deforming face or rotating thin shaft
+under independent background changes. They require verified positive coverage, bounded aim
+error and actual working-view updates, then reject an aiming-point occluder after learning.
+Removed shafts cannot be replaced by unchanged background. A sub-patch HD animal blob turning
+side-on to head-on must stay verified with whole-object centre/box overlap; its removal, a stale gap
+return without three matches, and a nearby indistinguishable twin must not be accepted. Tracking retains
+the whole-object centre for Object and the immutable point for Area. Off-centre padded
+selections and exact uniform shafts cover both initialization and working-view promotion.
+The photographed watering-can outline is independently annotated in the first panorama;
+camera-ray projection supplies later whole-object extents. Object uses an 8px centre
+tolerance; Area retains its 5px canonical-point tolerance. Neither changes wrong-identity
+or three-frame recovery requirements. Global return checks retain three-frame confirmation
+and duplicate-placement rejection. Area search prioritizes the optional coarse hint,
 then falls back globally in the same frame and independently checks another placement.
-Each frame performs at most three homography fits, each bounded to 750 RANSAC iterations,
+Each frame performs at most five homography fits, each bounded to 750 RANSAC iterations,
 with at most 1000 descriptors per image at a 640-pixel maximum dimension. Native tests
 measure the fit count and latency while a persistent wrong hint leaves unique visual
 verification and gimbal command admission intact. A verified mismatch beyond that
@@ -113,6 +157,10 @@ arguments to `test_plugin_vision.ps1` require 120 aligned PNG/ground-truth frame
 all 119 subsequent updates without reseeding. Keep external benchmark media in ignored
 test storage with its provenance. Detector scores and synthetic centering do not
 establish performance on another camera, scene or physical mount.
+
+Rendered-image replays need the separate post-inference semantic scorer;
+positive-coverage replay alone does not establish pixel accuracy. Original receipt gaps,
+returned frame-owned boxes and all wrong admitted points remain in the evidence.
 
 ## Documentation screenshots
 
@@ -142,6 +190,43 @@ powershell -STA -NoProfile -File scripts/docs/capture_installer_screenshot.ps1 -
 ```
 
 ## Manual native simulator acceptance
+
+The optional NOMAD **Testing & Simulation** page loads editable scenarios and starts a prepared
+WSL simulator workspace. Follow `scripts/simulation/README.md` in the source checkout
+for prerequisites, backend limits and configuration. Its focused Windows gate tests inactive
+controls, native connection admission and owned process lifecycle without launching MP or WSL.
+Python launcher/world checks run on CI with simulator dependencies mocked; visible renderer and
+actual SITL/native-decoder probes are separate local checks, not hosted CI or flight qualification.
+
+### Owned simulation test harness
+
+The development harness under `scripts/simulation/` uses an owned copy of reviewed MP
+assemblies, isolated settings/cache/log paths and fresh simulator state. It never starts
+the installed MP application, installs the plugin or opens an operator aircraft/device.
+Its controlled native-API cohort exercises the actual MP connection/reader and NOMAD
+controllers. It does not establish full MP application or plugin startup/shutdown lifecycle.
+
+```powershell
+pixi run build-plugin-only
+pixi run test-simulation-host
+powershell -NoProfile -File scripts/simulation/run_headless.ps1
+powershell -NoProfile -File scripts/simulation/run_headless.ps1 -LastLetter
+powershell -NoProfile -File scripts/simulation/run_headless.ps1 -Rendered
+powershell -NoProfile -File scripts/simulation/run_headless.ps1 -Rendered -Scene photo-board -VideoCase Detect
+```
+
+The simulator runs require the separately prepared owned WSL workspace and pinned
+sources. `scripts/simulation/README.md` describes acquisition/build commands, actual
+supported cases and known qualification gaps.
+Rendered correctness is an explicit gate: failed positive coverage, unavailable truth or
+unavailable capture timing must not be described as a passing end-to-end qualification.
+
+`test-simulation-host` is the fast Windows CI probe; it starts no MP application, simulator
+or connection. Python CI tests source/binary manifests, the independent geometry oracle,
+RTP byte preservation and Linux process-group ownership. Rendered and real-SITL runs remain
+local opt-in checks with owned process/port cleanup and preservation hashes in their results.
+
+### Installed-host manual acceptance
 
 With Mission Planner closed, an explicitly installed reviewed DLL, and the active
 saved profile's router, enabled input bindings, arrow inputs and configured automatic

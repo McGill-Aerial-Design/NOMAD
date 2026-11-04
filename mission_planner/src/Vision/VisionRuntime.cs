@@ -10,11 +10,15 @@ namespace NOMAD.MissionPlanner
 {
     internal static class VisionRuntime
     {
-        private const string ManagedHash = "f113c8148a3fd93852c9e532cce3f8d0f15c28f1ff3cc073338084b5a1db3351";
-        private const string NativeHash = "0c42dc4e278f0968fdf9ebf1b1e54a74c657a9942e70803e453c91993451cf4c";
+        // ONNX Runtime 1.24.4 DirectML build: its CPU provider runs the detector; DirectML serves the opt-in GPU tracker.
+        private const string ManagedHash = "5c3c531af36a6cb4baa01db20dcf94a0464ec36f8090aa42f35ff565b90a1ea6";
+        // Native ORT files have their isolation manifest disabled (see prepare_vision.ps1 and CRuntimeContext).
+        private const string NativeHash = "35d9ffb1351e4151e1b147a06750c4a66ac17ebd6d16c11be60a05d5ed8d6c9d";
+        private const string ProvidersHash = "fc74b2954f44e618c60194ba788d918681fe7571132efcaa7ea39b32791d7e89";
+        private const string DirectMlHash = "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1";
         private static readonly object Gate = new object();
         private static Assembly _managed;
-        private static IntPtr _native;
+        private static IntPtr _native, _directMl;
         private static Assembly _openCvManaged;
         private static IntPtr _openCvNative;
         internal static string BuiltinModelPath { get; private set; }
@@ -30,26 +34,69 @@ namespace NOMAD.MissionPlanner
                 if (Environment.OSVersion.Platform != PlatformID.Win32NT || !Environment.Is64BitProcess)
                 { throw new PlatformNotSupportedException("Vision requires Windows x64."); }
                 string cache = Path.Combine(Path.GetDirectoryName(NOMADStorage.PluginsDirectory),
-                    "vision", "onnxruntime-1.31.0-" + NativeHash.Substring(0, 12));
+                    "vision", "onnxruntime-1.24.4-dml-" + NativeHash.Substring(0, 12));
                 EnsureDirectory(cache);
                 string managed = Extract(cache, "Microsoft.ML.OnnxRuntime.dll", ManagedHash, token);
                 string native = Extract(cache, "onnxruntime.dll", NativeHash, token);
-                Extract(cache, "onnxruntime_providers_shared.dll",
-                    "e45d471ea2a842b268c51291b96d53568b0dae10807f43d1fb7dc0eb84e83723", token);
+                string providers = Extract(cache, "onnxruntime_providers_shared.dll", ProvidersHash, token);
                 BuiltinModelPath = Extract(cache, "yolox_nano.onnx", VisionModelProfile.BuiltinHash, token);
                 Extract(cache, "ONNX-RUNTIME-LICENSE.txt",
                     "c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674", token);
                 Extract(cache, "ONNX-RUNTIME-NOTICES.txt",
-                    "c53a76501ef60db6f865f20599f220761201ac4057683acefdab37d861b86622", token);
+                    "fb0af774b4d7cffc5b9d046f2aaeade2f37df2f80abf8033c95dfffcc77a8866", token);
                 Extract(cache, "YOLOX-LICENSE.txt",
                     "577c03d505ec80f667ebf96ebd0cc4f6825c817ca1088ee348c48aaabd51bd92", token);
-                _native = LoadNative(native, "onnxruntime.dll", NativeHash);
+                IntPtr context = CRuntimeContext(cache);
+                if (!ActivateActCtx(context, out IntPtr cookie))
+                { throw new InvalidOperationException("Vision runtime context could not activate."); }
+                try
+                {
+                    _native = LoadNative(native, "onnxruntime.dll", NativeHash);
+                    LoadNative(providers, "onnxruntime_providers_shared.dll", ProvidersHash);
+                }
+                finally { DeactivateActCtx(0, cookie); }
                 var existing = AppDomain.CurrentDomain.GetAssemblies()
                     .FirstOrDefault(assembly => assembly.GetName().Name == "Microsoft.ML.OnnxRuntime");
                 if (existing != null && (string.IsNullOrEmpty(existing.Location) ||
                     VisionModelProfile.Hash(File.ReadAllBytes(existing.Location)) != ManagedHash))
                 { throw new InvalidOperationException("A different ONNX Runtime is already loaded."); }
                 _managed = existing ?? Assembly.Load(File.ReadAllBytes(managed));
+            }
+        }
+
+        // Loads the pinned DirectML redistributable by path before any DirectML session, so the provider never binds
+        // the operating system's copy. Only the GPU tracker calls this; a conflict cannot disable the CPU detector.
+        internal static void EnsureDirectMlLoaded(CancellationToken token)
+        {
+            EnsureLoaded(token);
+            lock (Gate)
+            {
+                token.ThrowIfCancellationRequested();
+                if (_directMl != IntPtr.Zero) { return; }
+                string cache = Path.Combine(Path.GetDirectoryName(NOMADStorage.PluginsDirectory),
+                    "vision", "directml-1.15.4-" + DirectMlHash.Substring(0, 12));
+                EnsureDirectory(cache);
+                string native = Extract(cache, "DirectML.dll", DirectMlHash, token);
+                Extract(cache, "DirectML-LICENSE.txt",
+                    "a05138e3a085ff60a44881eedfa58dccb03ecc1d7b1f6ae888418e8c2fec4b8d", token);
+                Extract(cache, "DirectML-NOTICES.txt",
+                    "2c95795c13ff48a58b6ed916f37901c23d964b5d9d601af422f17ad2172e7950", token);
+                _directMl = LoadNative(native, "DirectML.dll", DirectMlHash);
+            }
+        }
+
+        // Extracts the embedded, tested EfficientTAM export (and its licence) to the hash-checked vision cache.
+        internal static string EnsureTrackerModel(CancellationToken token)
+        {
+            lock (Gate)
+            {
+                string cache = Path.Combine(Path.GetDirectoryName(NOMADStorage.PluginsDirectory), "vision",
+                    "efficienttam-ti512-" + EfficientTamCore.Hashes["encoder.onnx"].Substring(0, 12));
+                EnsureDirectory(cache);
+                foreach (var file in EfficientTamCore.Hashes) { Extract(cache, file.Key, file.Value, token); }
+                Extract(cache, "EfficientTAM-LICENSE.txt",
+                    "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4", token);
+                return cache;
             }
         }
 
@@ -88,6 +135,76 @@ namespace NOMAD.MissionPlanner
             return args.Name == _openCvManaged?.FullName ? _openCvManaged : null;
         }
 
+        private static readonly string[] CRuntime = { "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll" };
+
+        // Mission Planner's GDAL loads a 2017 Visual C++ runtime before plugins start, and Windows reuses a loaded DLL by
+        // name, so ONNX Runtime (built with toolset 14.44) failed with error 1114. ORT therefore loads inside this
+        // activation context, which redirects its C++ runtime to a private copy of the installed runtime. GDAL keeps
+        // its own; ORT's C API shares no C++ runtime objects with either side.
+        private static IntPtr CRuntimeContext(string cache)
+        {
+            string assembly = Path.Combine(cache, "NOMAD.VisionCrt");
+            EnsureDirectory(assembly);
+            string system = Environment.GetFolderPath(Environment.SpecialFolder.System);
+            foreach (string name in CRuntime)
+            {
+                string source = Path.Combine(system, name), target = Path.Combine(assembly, name);
+                var version = File.Exists(source) ? System.Diagnostics.FileVersionInfo.GetVersionInfo(source) : null;
+                if (version == null || version.FileMajorPart != 14 || version.FileMinorPart < 44)
+                {
+                    throw new InvalidOperationException("Vision needs the Microsoft Visual C++ 2015-2022 " +
+                        "Redistributable (x64) 14.44 or later. Install the latest version from Microsoft.");
+                }
+                GuardReparse(target);
+                if (!File.Exists(target) || new FileInfo(target).Length != new FileInfo(source).Length ||
+                    System.Diagnostics.FileVersionInfo.GetVersionInfo(target).FileVersion != version.FileVersion)
+                {
+                    string temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                    try { File.Copy(source, temporary); File.Copy(temporary, target, true); }
+                    finally { if (File.Exists(temporary)) { File.Delete(temporary); } }
+                }
+            }
+            const string head = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                "<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">";
+            const string identity = "<assemblyIdentity type=\"win32\" name=\"NOMAD.VisionCrt\" version=\"1.0.0.0\" " +
+                "processorArchitecture=\"amd64\"/>";
+            WriteText(Path.Combine(assembly, "NOMAD.VisionCrt.manifest"), head + identity +
+                string.Concat(CRuntime.Select(name => "<file name=\"" + name + "\"/>")) + "</assembly>");
+            string root = Path.Combine(cache, "vision.manifest");
+            WriteText(root, head + "<assemblyIdentity type=\"win32\" name=\"NOMAD.Vision\" version=\"1.0.0.0\" " +
+                "processorArchitecture=\"amd64\"/><dependency><dependentAssembly>" + identity +
+                "</dependentAssembly></dependency></assembly>");
+            var request = new ActivationContextRequest
+            {
+                Size = Marshal.SizeOf(typeof(ActivationContextRequest)), Flags = 0x4, // ACTCTX_FLAG_ASSEMBLY_DIRECTORY_VALID
+                Source = root, AssemblyDirectory = cache,
+            };
+            IntPtr context = CreateActCtx(ref request);
+            if (context == new IntPtr(-1))
+            {
+                throw new InvalidOperationException("Vision runtime context could not be created (Windows error " +
+                    Marshal.GetLastWin32Error() + ").");
+            }
+            return context; // Kept for the process, like the native runtime it served.
+        }
+
+        private static void WriteText(string path, string text)
+        {
+            GuardReparse(path);
+            if (!File.Exists(path) || File.ReadAllText(path) != text) { File.WriteAllText(path, text); }
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct ActivationContextRequest
+        {
+            internal int Size;
+            internal uint Flags;
+            internal string Source;
+            internal ushort Architecture, Language;
+            internal string AssemblyDirectory, ResourceName, ApplicationName;
+            internal IntPtr Module;
+        }
+
         private static IntPtr LoadNative(string path, string moduleName, string expectedHash)
         {
             IntPtr existing = GetModuleHandle(moduleName);
@@ -101,7 +218,11 @@ namespace NOMAD.MissionPlanner
             }
             // LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS avoids current-directory lookup.
             IntPtr native = LoadLibraryEx(path, IntPtr.Zero, 0x100 | 0x1000);
-            if (native == IntPtr.Zero) { throw new InvalidOperationException("Native vision runtime could not load."); }
+            if (native == IntPtr.Zero)
+            {
+                int error = Marshal.GetLastWin32Error();
+                throw new InvalidOperationException("Native vision runtime could not load (Windows error " + error + ").");
+            }
             // The process owns this library; unloading can invalidate other managed sessions.
             return native;
         }
@@ -168,6 +289,12 @@ namespace NOMAD.MissionPlanner
         private static extern IntPtr LoadLibraryEx(string path, IntPtr file, uint flags);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         private static extern IntPtr GetModuleHandle(string name);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateActCtx(ref ActivationContextRequest request);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool ActivateActCtx(IntPtr context, out IntPtr cookie);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool DeactivateActCtx(uint flags, IntPtr cookie);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         private static extern uint GetModuleFileName(IntPtr module, System.Text.StringBuilder name, int length);
     }

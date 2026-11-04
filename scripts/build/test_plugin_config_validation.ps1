@@ -190,6 +190,28 @@ try {
     $videoJson = '{"VideoInputs":[{"Name":"Camera","Url":"rtsp://video.invalid/live","RtspTransport":"UDP",' +
         '"LatencyMs":5000,"QueueMaxBuffers":120,"DropOldFrames":false}],"SelectedVideoInputName":"Camera"}'
     $video = Load-Config $videoJson
+    if ($video.SelectedVideoInput.SourceType -ne 'Network' -or $video.SelectedVideoInput.CaptureDevicePath -ne '') {
+        throw 'Existing network video profiles changed source identity.'
+    }
+    $captureJson = @{
+        VideoInputs=@(@{Name='Local';SourceType='Camera';CaptureDevicePath='\\?\usb#synthetic#video'})
+        SelectedVideoInputName='Local'
+    } | ConvertTo-Json -Depth 5 -Compress
+    $capture = Load-Config $captureJson
+    if ($capture.SelectedVideoInput.SourceType -ne 'Camera' -or
+        $capture.SelectedVideoInput.CaptureDevicePath -ne '\\?\usb#synthetic#video') {
+        throw 'Local capture profile lost its exact device path.'
+    }
+    foreach ($change in @(@{SourceType='Unknown'}, @{SourceType=42}, @{CaptureDevicePath=''},
+        @{CaptureDevicePath=$null}, @{CaptureDevicePath='USB camera'}, @{Url=$null})) {
+        $bad = $captureJson | ConvertFrom-Json
+        foreach ($field in $change.Keys) {
+            $bad.VideoInputs[0] | Add-Member -NotePropertyName $field -NotePropertyValue $change[$field] -Force
+        }
+        $rejected=$false
+        try { Load-Config ($bad | ConvertTo-Json -Depth 5 -Compress) | Out-Null } catch { $rejected=$true }
+        if (!$rejected) { throw 'Invalid local capture profile or field type was accepted.' }
+    }
     if ($video.SelectedVideoInput.LatencyMs -ne 5000 -or $video.SelectedVideoInput.QueueMaxBuffers -ne 120 -or
         $video.SelectedVideoInput.DropOldFrames -or $video.SelectedVideoInput.RtspTransport -ne 'UDP') {
         throw 'Named receiver settings did not retain their boundary values.'
@@ -243,6 +265,28 @@ try {
     $videoCopy = $loadMethod.Invoke($null, [object[]]@([string]$videoExport)).Clone()
     if ($videoCopy.SelectedVideoInput.Url -ne $video.SelectedVideoInput.Url) { throw 'Video export/load/clone lost the source.' }
     Assert-ThrowsMessage '{"RouterLocalPort":0}' 'ports'
+    $screenDefaults = Load-Config '{}'
+    if ($screenDefaults.JoystickGimbalHorizontalAxis -ne 'Yaw' -or
+        $screenDefaults.JoystickGimbalVerticalAxis -ne 'Pitch' -or
+        $screenDefaults.JoystickGimbalHorizontalInverted -or $screenDefaults.JoystickGimbalVerticalInverted) {
+        throw 'Missing screen-axis settings did not receive the pan/tilt defaults.'
+    }
+    foreach ($json in @('{"JoystickGimbalHorizontalAxis":null}', '{"JoystickGimbalVerticalAxis":1}',
+        '{"JoystickGimbalHorizontalAxis":"yaw"}', '{"JoystickGimbalVerticalAxis":"Other"}',
+        '{"JoystickGimbalHorizontalAxis":"Pitch","JoystickGimbalVerticalAxis":"Pitch"}',
+        '{"JoystickGimbalHorizontalInverted":"true"}', '{"JoystickGimbalVerticalInverted":1}')) {
+        $rejected = $false
+        try { Load-Config $json | Out-Null } catch { $rejected = $true }
+        if (!$rejected) { throw "Invalid screen-axis mapping was accepted: $json" }
+    }
+    $screen = Load-Config '{"JoystickGimbalHorizontalAxis":"Roll","JoystickGimbalVerticalAxis":"None","JoystickGimbalHorizontalInverted":true}'
+    $screenExport = Join-Path $temporary 'screen-axes.json'
+    $screen.ExportToFile($screenExport)
+    $screenCopy = $loadMethod.Invoke($null, [object[]]@([string]$screenExport)).Clone()
+    if ($screenCopy.JoystickGimbalHorizontalAxis -ne 'Roll' -or
+        $screenCopy.JoystickGimbalVerticalAxis -ne 'None' -or !$screenCopy.JoystickGimbalHorizontalInverted) {
+        throw 'Screen-axis export/load/clone lost its mapping or inversion.'
+    }
     $input = '{"Id":"one","Name":"Control","Device":"test","Source":"Button","Action":"a:activate","Enabled":true,"Button":0}'
     foreach ($button in @(0, 127)) {
         $mapped = Load-Config ('{"Inputs":[' + $input.Replace('"Button":0', '"Button":' + $button) + ']}')
@@ -290,6 +334,27 @@ try {
     $form = $formType.GetConstructor([type[]]@($profilesType)).Invoke($formArguments)
     try {
         $privateFlags = [Reflection.BindingFlags]'Instance,NonPublic'
+        $horizontal = $formType.GetField('_cmbGimbalHorizontal', $privateFlags).GetValue($form)
+        $vertical = $formType.GetField('_cmbGimbalVertical', $privateFlags).GetValue($form)
+        $reverse = $formType.GetField('_chkGimbalHorizontalInverted', $privateFlags).GetValue($form)
+        if ($horizontal.SelectedItem -ne 'Yaw' -or $vertical.SelectedItem -ne 'Pitch') {
+            throw 'Settings did not load the screen-axis defaults.'
+        }
+        $horizontal.SelectedItem = 'Roll'; $reverse.Checked = $true
+        if ($profiles.Selected.Config.JoystickGimbalHorizontalAxis -ne 'Yaw') {
+            throw 'Editing a screen-axis draft mutated the active profile.'
+        }
+        $formType.GetMethod('SaveSettings', $privateFlags).Invoke($form, @()) | Out-Null
+        if ($form.Config.JoystickGimbalHorizontalAxis -ne 'Roll' -or
+            !$form.Config.JoystickGimbalHorizontalInverted -or
+            $profiles.Selected.Config.JoystickGimbalHorizontalAxis -ne 'Yaw') {
+            throw 'Saving the screen-axis draft lost values or mutated the active profile.'
+        }
+        $checkConnection = $profilesType.GetMethod('CheckForConnection', $privateFlags)
+        $rejected = $false
+        try { $checkConnection.Invoke($form.Profiles, [object[]]@($profiles, $true)) | Out-Null }
+        catch { $rejected = $true }
+        if (!$rejected) { throw 'Changing screen axes while connected bypassed output calibration admission.' }
         $editorType = $plugin.GetType('NOMAD.MissionPlanner.InputBindingEditorForm', $true)
         $editor = $editorType.GetConstructors([Reflection.BindingFlags]'Instance,NonPublic')[0].Invoke([object[]]@($form.Config, [int]0))
         try {

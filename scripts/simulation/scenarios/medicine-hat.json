@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "name": "Medicine Hat Task 1 / Iris",
+  "backend": "gazebo",
+  "frame": "JSON:127.0.0.1",
+  "system_id": 201,
+  "seed": 173,
+  "defaults": ["sources/ardupilot_gazebo/config/gazebo-iris-gimbal.parm"],
+  "defaults_local": ["servo-gimbal.parm"],
+  "scene": "task1",
+  "aircraft_model": "sources/ardupilot_gazebo/models/iris_with_gimbal",
+  "camera_model": "sources/ardupilot_gazebo/models/gimbal_small_3d",
+  "notes": "Published C1 site approximation; uses its georeference/terrain spawn. Deer weights and real-site imagery remain separate."
+}

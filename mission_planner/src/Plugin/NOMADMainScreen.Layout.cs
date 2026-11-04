@@ -109,6 +109,11 @@ namespace NOMAD.MissionPlanner
             btnGimbal.Click += (s, e) => GimbalJoystickWindow.ShowSingleton(_config, this.FindForm());
             navPanel.Controls.Add(btnGimbal);
 
+            _btnSimulation = CreateSidebarButton("Testing & Simulation");
+            _btnSimulation.UseMnemonic = false;
+            _btnSimulation.Click += (sender, args) => ShowView("Simulation");
+            navPanel.Controls.Add(_btnSimulation);
+
             navPanel.Controls.Add(CreateSeparatorLabel("PREFERENCES"));
             var settings = CreateSidebarButton("Settings…");
             settings.Name = "OpenSettings";

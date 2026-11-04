@@ -18,7 +18,7 @@ internal static partial class VideoLifetimeTests
         public void Initialize(Bitmap frame, RectangleF bounds, CancellationToken token, VisualFrameContext context = default)
         { _tracker.Initialize(frame, bounds, token, context); }
         public VisualTrackingResult Update(Bitmap frame, CancellationToken token, VisualFrameContext context = default) =>
-            _tracker.Update(frame, token, new VisualFrameContext(new PointF(-1000, -1000)));
+            _tracker.Update(frame, token, new VisualFrameContext(new PointF(-1000, -1000), context.Discontinuous));
         public void Dispose() => _tracker.Dispose();
     }
 
@@ -93,6 +93,12 @@ internal static partial class VideoLifetimeTests
     }
 
     private static void AreaRuntimeRecovery()
+    { RetainedTrackingRuntime(VisualTrackingMode.Area); }
+
+    private static void ObjectRuntimeRecovery()
+    { RetainedTrackingRuntime(VisualTrackingMode.Object); }
+
+    private static void RetainedTrackingRuntime(VisualTrackingMode trackingMode)
     {
         using (var peer = new TrackingPeer())
         using (var form = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual,
@@ -100,7 +106,7 @@ internal static partial class VideoLifetimeTests
         {
             var pipeline = new FakeVideoPipeline();
             FakeVisualTracker visual = null;
-            var profile = new VideoInputProfile { Name = "Area runtime", Url = "udp://@:5600", TrackingMode = "Area",
+            var profile = new VideoInputProfile { Name = "Retained runtime", Url = "udp://@:5600", TrackingMode = trackingMode.ToString(),
                 TrackingCalibrated = true, TrackingMaxRateDegSec = 60 };
             using (var player = new EmbeddedVideoPlayer(profile, true, CancellationToken.None, () => pipeline,
                 peer.Config, createTracker: (token, mode) => visual = new FakeVisualTracker { AimPoint = new PointF(50, 40) }))
@@ -108,7 +114,7 @@ internal static partial class VideoLifetimeTests
                 form.Controls.Add(player); form.Show(); player.StartStream(); Wait(pipeline.ReadEntered, "area source");
                 var session = GetField<VideoSession>(player, "_session");
                 PlayerVisionFrame(player, pipeline, Color.Blue);
-                Check(player.TrackingMode == VisualTrackingMode.Area &&
+                Check(player.TrackingMode == trackingMode &&
                     GetField<Button>(player, "_clearAreaButton").Visible, "Area default or explicit Clear was missing");
                 Check(player.SelectRegion(new RectangleF(70, 50, 20, 20)), "Area fixture could not select");
                 PlayerVisionFrame(player, pipeline, Color.Blue);
@@ -188,12 +194,34 @@ internal static partial class VideoLifetimeTests
                     "Stale video left automatic recovery armed or erased independent Area memory");
                 peer.Heartbeat(4); peer.Attitude(0); peer.Pump(20);
                 PlayerVisionFrame(player, pipeline, Color.Blue);
-                Check(!player.IsTracking && player.RegionReady && player.SubmittedTrackingCommands == commands,
+                Check(!player.IsTracking && player.RegionReady && player.SubmittedTrackingCommands == commands &&
+                    visual.LastContext.Discontinuous,
                     "Fresh pixels after stale input automatically regained control");
-                player.SetTrackingMode(VisualTrackingMode.Object);
-                Check(!player.SelectedRegion.HasValue && !GetField<Button>(player, "_clearAreaButton").Visible,
+                Check(player.StartTracking(), "UI-gap fixture could not explicitly arm");
+                peer.Pump(550, dispatchUi: false);
+                visual.State = VisualTrackingState.Searching;
+                pipeline.Frames.Add(SolidVideoImage(Color.Blue));
+                var ready = Stopwatch.StartNew();
+                bool pending = false;
+                while (!pending && ready.ElapsedMilliseconds < 3000)
+                {
+                    lock (GetField<object>(session, "_gate"))
+                    { pending = GetField<VideoFrame>(session, "_pendingFrame") != null; }
+                    if (!pending) { peer.Pump(2, dispatchUi: false); }
+                }
+                Check(pending, "Fresh gap frame was not decoded while UI dispatch was held");
+                Tick(player);
+                Check(!player.IsTracking && player.SelectedRegion.HasValue && !player.RegionReady,
+                    "A fresh Searching frame hid the stale interval and retained armed intent");
+                visual.State = VisualTrackingState.Verified;
+                for (int index = 0; index < 3; index++)
+                { PlayerVisionFrame(player, pipeline, Color.Blue); }
+                Check(!player.IsTracking && player.SubmittedTrackingCommands == commands,
+                    "UI-gap visual recovery automatically rearmed steering");
+                player.SetTrackingMode(trackingMode == VisualTrackingMode.Area ? VisualTrackingMode.Object : VisualTrackingMode.Area);
+                Check(!player.SelectedRegion.HasValue && GetField<Button>(player, "_clearAreaButton").Visible,
                     "Mode replacement retained the previous Area reference");
-                player.SetTrackingMode(VisualTrackingMode.Area);
+                player.SetTrackingMode(trackingMode);
                 PlayerVisionFrame(player, pipeline, Color.Blue);
                 Check(player.SelectRegion(new RectangleF(30, 20, 20, 20)), "Clear fixture selection failed");
                 PlayerVisionFrame(player, pipeline, Color.Blue);
@@ -355,6 +383,19 @@ internal static partial class VideoLifetimeTests
         var primary = GetField<PictureBox>(player, "_videoBox");
         using (var fullscreen = new PictureBox { Size = new Size(320, 240), Image = player.DisplayedVideoFrame.Image })
         {
+            SetField(player, "_fullscreenBox", fullscreen);
+            try
+            {
+                typeof(EmbeddedVideoPlayer).GetMethod("MotionEstimateDetail", BindingFlags.NonPublic |
+                    BindingFlags.Instance).Invoke(player, null);
+                var tips = GetField<ToolTip>(player, "_videoToolTips");
+                Check(string.IsNullOrEmpty(tips.GetToolTip(primary)) &&
+                    string.IsNullOrEmpty(tips.GetToolTip(fullscreen)) &&
+                    !string.IsNullOrEmpty(primary.AccessibleDescription) &&
+                    fullscreen.AccessibleDescription == primary.AccessibleDescription,
+                    "Video hover obscured the feed or removed accessible motion details");
+            }
+            finally { SetField(player, "_fullscreenBox", null); }
             foreach (var box in new[] { primary, fullscreen })
             {
                 using (var bitmap = new Bitmap(box.Width, box.Height))

@@ -11,7 +11,9 @@ namespace NOMAD.MissionPlanner
     internal readonly struct VisualFrameContext
     {
         internal PointF? SearchHint { get; }
-        internal VisualFrameContext(PointF? searchHint) { SearchHint = searchHint; }
+        internal bool Discontinuous { get; }
+        internal VisualFrameContext(PointF? searchHint, bool discontinuous = false)
+        { SearchHint = searchHint; Discontinuous = discontinuous; }
         internal static float PriorSearchRadius(Size image, RectangleF referenceSelection) =>
             Math.Max(64 * Math.Max(1, Math.Max(image.Width, image.Height) / 640f),
                 Math.Max(referenceSelection.Width, referenceSelection.Height) * 1.25f);

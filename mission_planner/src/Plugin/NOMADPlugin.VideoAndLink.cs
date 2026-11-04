@@ -104,7 +104,7 @@ namespace NOMAD.MissionPlanner
                 var hud = global::MissionPlanner.GCSViews.FlightData.myhud;
                 _hudVideo = new HudVideoPlayer((Control)(object)hud, frame => hud.bgimage = frame,
                     () => hud.bgimage, () => new GStreamerVideoPipeline());
-                _hudVideo.Start(pipeline);
+                _hudVideo.Start(pipeline, VideoPipeline.ShareKey(input));
             }
             catch (Exception ex)
             {
@@ -164,7 +164,8 @@ namespace NOMAD.MissionPlanner
                 Log.Error("Active video input was not saved: " + error.Message);
                 return false;
             }
-            try { _hudVideo?.UpdateInput(BuildHudVideoPipeline(config.SelectedVideoInput)); }
+            try { _hudVideo?.UpdateInput(BuildHudVideoPipeline(config.SelectedVideoInput),
+                VideoPipeline.ShareKey(config.SelectedVideoInput)); }
             catch (Exception error) { Log.Error("Video selection saved; HUD source change failed: " + error.Message); }
             return true;
         }

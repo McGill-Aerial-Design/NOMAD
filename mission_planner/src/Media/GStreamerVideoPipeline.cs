@@ -3,6 +3,7 @@
 using System;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using MissionPlanner.Utilities;
@@ -11,7 +12,7 @@ using Native = MissionPlanner.Utilities.GStreamer.NativeMethods;
 
 namespace NOMAD.MissionPlanner
 {
-    // All native calls and handles are confined to the VideoSession worker.
+    // All native calls and handles stay on one worker, including when camera viewers share that worker.
     internal sealed class GStreamerVideoPipeline : IVideoPipeline
     {
         private IntPtr _pipeline;
@@ -33,7 +34,7 @@ namespace NOMAD.MissionPlanner
             {
                 throw new InvalidOperationException("GStreamer could not initialize");
             }
-            _pipeline = Native.gst_parse_launch(pipeline, out error);
+            _pipeline = gst_parse_launch(pipeline, out error);
             CheckError(error);
             if (_pipeline == IntPtr.Zero)
             {
@@ -56,8 +57,9 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        public Bitmap ReadFrame(CancellationToken cancellation)
+        public Bitmap ReadFrame(CancellationToken cancellation, out long receivedTicks, out DateTime receivedUtc)
         {
+            receivedTicks = 0; receivedUtc = default;
             while (!cancellation.IsCancellationRequested)
             {
                 CheckBusError();
@@ -74,6 +76,7 @@ namespace NOMAD.MissionPlanner
                 try
                 {
                     cancellation.ThrowIfCancellationRequested();
+                    receivedTicks = Stopwatch.GetTimestamp(); receivedUtc = DateTime.UtcNow;
                     return CopyFrame(sample);
                 }
                 finally
@@ -234,6 +237,9 @@ namespace NOMAD.MissionPlanner
                 gst_object_unref(value);
             }
         }
+
+        [DllImport(Gst.WinNativeMethods.lib, CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr gst_parse_launch([MarshalAs(UnmanagedType.LPUTF8Str)] string pipeline, out IntPtr error);
 
         [DllImport(Gst.WinNativeMethods.lib, CallingConvention = CallingConvention.Cdecl)]
         private static extern void gst_object_unref(IntPtr resource);

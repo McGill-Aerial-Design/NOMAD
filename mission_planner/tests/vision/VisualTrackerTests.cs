@@ -15,6 +15,7 @@ internal static partial class VisualTrackerTests
 
     internal static void Run()
     {
+        ObjectBackgroundAndTurning();
         using (var tile = Texture())
         using (var tracker = VisualTrackerFactory.Create(CancellationToken.None))
         {
@@ -53,8 +54,14 @@ internal static partial class VisualTrackerTests
                 var lost = tracker.Update(blank, CancellationToken.None);
                 Check(!lost.Found && !lost.Bounds.HasValue && !lost.AimPoint.HasValue,
                     "Native CSRT confidence loss must return no target.");
-                Check(!tracker.Update(targetReturns, CancellationToken.None).Found,
-                    "A lost target must never be reacquired automatically.");
+                for (int index = 1; index <= 3; index++)
+                {
+                    var recovered = tracker.Update(targetReturns, CancellationToken.None);
+                    Check(recovered.Found == (index == 3),
+                        "A returning Object needs three matches, then must recover without reselection: " + recovered.Status);
+                    if (recovered.Found)
+                    { Check(Overlap(recovered.Bounds.Value, Truth(10)) > .65, "Recovered Object matched the wrong region"); }
+                }
                 tracker.Initialize(targetReturns, Truth(10), CancellationToken.None);
                 using (var resized = new Bitmap(800, 600))
                 { Check(!tracker.Update(resized, CancellationToken.None).Found, "Image-size change must retire tracking."); }
@@ -81,9 +88,13 @@ internal static partial class VisualTrackerTests
             }
         }
         RejectObjectOccluder();
+        RejectObjectCenterOccluder();
+        RejectDuplicateObjects();
         RejectFlatAppearanceReference();
         AreaTracking();
+        PanoramaReturn();
         BenchmarkPerson();
+        GpuObjectTracker(); // Last: it loads the ONNX runtime the checks above must run without.
         Console.WriteLine("PASS: " + _checks + " visual tracker checks.");
     }
 
@@ -105,6 +116,57 @@ internal static partial class VisualTrackerTests
             {
                 using (var appearance = new FrozenAppearance(color, new OpenCvSharp.Rect(0, 0, 64, 64))) { }
             }, "A constant appearance template must not produce a false perfect correlation.");
+        }
+    }
+
+    private static void RejectDuplicateObjects()
+    {
+        using (var tile = Texture())
+        using (var reference = Frame(tile, 0))
+        using (var blank = Frame(null, 0))
+        using (var second = Frame(null, 0))
+        using (var duplicates = new Bitmap(reference))
+        {
+            var other = Truth(0); other.Offset(250, 0);
+            using (var graphics = Graphics.FromImage(duplicates)) { graphics.DrawImage(tile, other); }
+            using (var graphics = Graphics.FromImage(second)) { graphics.DrawImage(tile, other); }
+            foreach (var frame in new[] { reference, second })
+            using (var tracker = VisualTrackerFactory.Create(CancellationToken.None))
+            {
+                tracker.Initialize(reference, Truth(0), CancellationToken.None);
+                tracker.Update(blank, CancellationToken.None);
+                for (int i = 0; i < 3; i++)
+                { Check(tracker.Update(frame, CancellationToken.None).Found == (i == 2),
+                    "Each unique Object placement must recover positively before ambiguity testing"); }
+            }
+            using (var tracker = VisualTrackerFactory.Create(CancellationToken.None))
+            {
+                tracker.Initialize(reference, Truth(0), CancellationToken.None);
+                tracker.Update(blank, CancellationToken.None);
+                for (int i = 0; i < 4; i++)
+                { Check(!tracker.Update(duplicates, CancellationToken.None).Found,
+                    "Two identical Object placements were accepted as a unique returning target"); }
+            }
+        }
+    }
+
+    private static void RejectObjectCenterOccluder()
+    {
+        using (var tile = Texture())
+        using (var reference = Frame(tile, 0))
+        foreach (int size in new[] { 48, 96 })
+        using (var tracker = VisualTrackerFactory.Create(CancellationToken.None))
+        using (var occluded = new Bitmap(reference))
+        {
+            tracker.Initialize(reference, Truth(0), CancellationToken.None);
+            Check(tracker.Update(reference, CancellationToken.None).Found, "Clear Object positive never verified");
+            using (var graphics = Graphics.FromImage(occluded))
+            { graphics.FillRectangle(Brushes.DarkSlateGray, 272 - size / 2, 272 - size / 2, size, size); }
+            Check(!tracker.Update(occluded, CancellationToken.None).Found,
+                "A foreground covering the Object aiming point was accepted while outer appearance stayed visible");
+            for (int index = 1; index <= 3; index++)
+            { Check(tracker.Update(reference, CancellationToken.None).Found == (index == 3),
+                "Object center-occlusion recovery needs three new matches"); }
         }
     }
 
@@ -161,13 +223,19 @@ internal static partial class VisualTrackerTests
                 {
                     var elapsed = Stopwatch.StartNew();
                     var result = tracker.Update(frame, CancellationToken.None);
-                    if (!result.Found) { break; }
+                    if (!result.Found)
+                    {
+                        Console.WriteLine("Person benchmark loss at " + index + ": " + result.Status + "; " +
+                            ((CsrtVisualTracker)tracker).LastObjectDiagnostic);
+                        break;
+                    }
                     maximum = Math.Max(maximum, elapsed.ElapsedMilliseconds);
                     double overlap = Overlap(result.Bounds.Value, truth[index]);
                     minimum = Math.Min(minimum, overlap); sum += overlap; tracked++;
                 }
             }
-            Check(tracked == files.Length - 1 && sum / tracked > .4,
+            Console.WriteLine("Person benchmark coverage " + tracked + "/" + (files.Length - 1));
+            Check(tracked == files.Length - 1 && sum / Math.Max(1, tracked) > .4,
                 "Person tracking must complete every frame and overlap the independent ground truth.");
             Console.WriteLine("CSRT person benchmark, no reseeding: " + tracked + "/" + (files.Length - 1) +
                 " updates; mean IoU " + (sum / tracked).ToString("F3", CultureInfo.InvariantCulture) +

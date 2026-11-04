@@ -196,7 +196,8 @@ internal static partial class VideoLifetimeTests
                 "Visual selection failed to lock or moved before explicit Track");
             Check(!player.StartTracking() && !player.IsTracking, "Uncalibrated UI started tracking");
             GimbalController.SetTargetAngles(0, 0);
-            Check(player.SelectedRegion == null && player.TrackingStatus.Contains("Manual"), "Manual input retained selection");
+            Check(player.SelectedRegion.HasValue && !player.IsTracking && player.TrackingStatus.Contains("Manual"),
+                "Manual input lost identity or retained automatic steering");
             Check(player.SelectRegion(new RectangleF(20, 20, 20, 15)), "Fresh explicit ROI was rejected");
             PlayerVisionFrame(player, pipeline, Color.Red);
             var selected = player.SelectedRegion;

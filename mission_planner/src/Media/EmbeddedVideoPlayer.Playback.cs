@@ -17,7 +17,7 @@ namespace NOMAD.MissionPlanner
             ValidateUiThread();
             try
             {
-                if (_session.Start(BuildGStreamerPipeline()))
+                if (_session.Start(BuildGStreamerPipeline(), VideoPipeline.ShareKey(_input)))
                 {
                     _frameTimer.Start();
                     _lblStatus.Text = "Connecting...";

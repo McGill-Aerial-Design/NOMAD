@@ -46,6 +46,7 @@ namespace NOMAD.MissionPlanner
         private HudVideoPlayer _hudVideo;
         private bool _hudVideoStarted => _hudVideo?.IsActive == true;
         private System.Threading.CancellationTokenSource _videoShutdown;
+        private SimulationSession _simulationSession;
         private bool _screenRegistered = false;               // Track if NOMAD screen is registered with MainSwitcher
 
         // ============================================================
@@ -61,6 +62,8 @@ namespace NOMAD.MissionPlanner
             {
                 loopratehz = 1;
                 ShutdownVideo();
+                _simulationSession?.Dispose(); _simulationSession = null;
+                NOMADMainScreen.SetSimulationFactory(() => _simulationSession ?? (_simulationSession = new SimulationSession()));
                 _fenceSetupInput = new FenceSetupInput();
                 NOMADMainScreen.SetFenceSetupInput(_fenceSetupInput);
                 _videoShutdown = new System.Threading.CancellationTokenSource();
@@ -209,6 +212,8 @@ namespace NOMAD.MissionPlanner
         {
             if (Host?.MainForm != null) { Host.MainForm.FormClosed -= OnHostClosed; }
             StopCustomControls();
+            NOMADMainScreen.SetSimulationFactory(null);
+            _simulationSession?.Dispose(); _simulationSession = null;
             ShutdownVideo();
             NOMADMainScreen.SetFenceSetupInput(null);
             _fenceSetupInput = null;

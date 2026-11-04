@@ -10,7 +10,10 @@ namespace NOMAD.MissionPlanner
 {
     public partial class NOMADSettingsForm
     {
-        private ComboBox _cmbVideoInputs, _cmbVideoTransport;
+        private ComboBox _cmbVideoInputs, _cmbVideoTransport, _cmbVideoSourceType, _cmbVideoDevice;
+        private Button _btnVideoDevices;
+        private Label _lblVideoDevices;
+        private Func<VideoCaptureDevice[]> _getVideoDevices = VideoCaptureDevice.Enumerate;
         private TextBox _txtVideoName;
         private NumericUpDown _numVideoLatency, _numVideoQueue;
         private CheckBox _chkVideoDrop;
@@ -23,7 +26,7 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numVisionYawMin, _numVisionYawMax, _numVisionRate;
         private ComboBox _cmbVisionPitchSign, _cmbVisionYawSign;
         private Button _btnVisionModelBrowse;
-        private ComboBox _cmbTrackingMode;
+        private ComboBox _cmbTrackingMode, _cmbObjectTracker;
         private CheckBox _chkGroundPrediction;
         private NumericUpDown _numGroundPlaneHeight, _numCameraDelay;
 
@@ -49,8 +52,32 @@ namespace NOMAD.MissionPlanner
             AddLabel(tab, "Input name:", 20, y);
             _txtVideoName = AddTextBox(tab, 180, y, 440);
             y += 32;
+            AddLabel(tab, "Source type:", 20, y);
+            _cmbVideoSourceType = AddComboBox(tab, 180, y, 250, new[] { "Network stream", "Camera / capture card" });
+            _cmbVideoSourceType.AccessibleName = "Video source type";
+            _cmbVideoSourceType.SelectedIndexChanged += (sender, args) =>
+            {
+                if (!_loadingVideo) { _chkTrackingCalibrated.Checked = false; }
+                UpdateVideoSourceFields();
+            };
+            y += 32;
             AddLabel(tab, "Source URL:", 20, y);
             _txtVideoUrl = AddTextBox(tab, 180, y, 440);
+            y += 32;
+            AddLabel(tab, "Capture device:", 20, y);
+            _cmbVideoDevice = AddComboBox(tab, 180, y, 330, Array.Empty<string>());
+            _cmbVideoDevice.DisplayMember = nameof(VideoCaptureDevice.Name);
+            _cmbVideoDevice.AccessibleName = "Local camera or capture card";
+            _cmbVideoDevice.SelectedIndexChanged += (sender, args) =>
+            {
+                if (!_loadingVideo) { _chkTrackingCalibrated.Checked = false; }
+            };
+            _btnVideoDevices = ControlFactory.Button("Refresh", width: 100, height: 27);
+            _btnVideoDevices.Location = new Point(520, y);
+            _btnVideoDevices.Click += (sender, args) => RefreshVideoDevices();
+            tab.Controls.Add(_btnVideoDevices);
+            y += 30;
+            _lblVideoDevices = AddLabel(tab, "Refresh to list connected devices.", 180, y);
             y += 32;
             AddSectionLabel(tab, "Receiver tuning", ref y);
             AddLabel(tab, "RTSP transport:", 20, y);
@@ -67,10 +94,16 @@ namespace NOMAD.MissionPlanner
 
             _chkAutoStartHudVideo = AddCheckBox(tab, "Start video on HUD", 20, y);
             y += 35;
-            var info = ControlFactory.Button("Receiver help ⓘ", width: 150, height: 28);
+            var info = ControlFactory.Button("Input help ⓘ", width: 150, height: 28);
             info.Location = new Point(20, y);
             info.AccessibleName = "Video receiver help";
-            string help = "RTSP negotiates its video codec. UDP listens for RTP/H.264 on the explicit port.\n" +
+            string help = "Select a network stream or a Windows camera / USB capture card.\n" +
+                "Refresh lists supported devices without opening a camera. Playback and HUD autostart begin capture.\n" +
+                "Windows capture negotiates a supported format up to 1920×1080 at 30 FPS.\n" +
+                "The capture driver may briefly probe other cameras during startup; only the selected device streams.\n" +
+                "HUD, Dashboard and Video share one local capture; each view displays the latest frame.\n" +
+                "RTSP negotiates its video codec. UDP listens for RTP/H.264 on the explicit port.\n" +
+                "Receiver queue tuning applies to network sources; local capture uses a one-frame dropping queue.\n" +
                 "RTSP transport and jitter settings do not affect UDP inputs.\n" +
                 "The display always shows the latest frame; queue backpressure does not preserve every frame.\n" +
                 "Bitrate, resolution and encoded quality are set at the camera or encoder.";
@@ -141,6 +174,13 @@ namespace NOMAD.MissionPlanner
             y += 32;
             AddLabel(tab, "Default tracking:", 20, y);
             _cmbTrackingMode = AddComboBox(tab, 180, y, 140, new[] { "Object", "Area" }); y += 32;
+            AddLabel(tab, "Object tracker:", 20, y);
+            _cmbObjectTracker = AddComboBox(tab, 180, y, 240, new[] { "Standard (CPU)", "GPU (NVIDIA, EfficientTAM)" });
+            _cmbObjectTracker.AccessibleName = "Object tracker";
+            _toolTips.SetToolTip(_cmbObjectTracker,
+                "GPU follows the whole selected object with EfficientTAM video memory on an NVIDIA DirectX 12 GPU. " +
+                "If that GPU or model is unavailable, tracking reports it; it never switches tracker silently.");
+            y += 32;
             _chkGroundPrediction = AddCheckBox(tab, "Use estimated ground-plane search hint", 20, y); y += 32;
             AddLabel(tab, "Plane above HOME (m):", 20, y);
             _numGroundPlaneHeight = AddNumericUpDown(tab, 180, y, 100, -10000, 10000, 0);
@@ -174,7 +214,10 @@ namespace NOMAD.MissionPlanner
         {
             _editingVideoInput = input;
             _txtVideoName.Text = input?.Name ?? "";
+            _cmbVideoSourceType.SelectedIndex = input?.SourceType == "Camera" ? 1 : 0;
             _txtVideoUrl.Text = input?.Url ?? "";
+            LoadVideoDevices(Array.Empty<VideoCaptureDevice>(), input?.CaptureDevicePath ?? "", false);
+            _lblVideoDevices.Text = "Refresh to list connected devices.";
             _cmbVideoTransport.SelectedItem = input?.RtspTransport ?? "TCP";
             _numVideoLatency.Value = input?.LatencyMs ?? 100;
             _numVideoQueue.Value = input?.QueueMaxBuffers ?? 1;
@@ -182,6 +225,7 @@ namespace NOMAD.MissionPlanner
             LoadModelChoices(input?.DetectorModelProfilePath ?? "");
             _chkTrackingCalibrated.Checked = input?.TrackingCalibrated ?? false;
             _cmbTrackingMode.SelectedItem = input?.TrackingMode ?? "Object";
+            _cmbObjectTracker.SelectedIndex = input?.ObjectTracker == "GPU" ? 1 : 0;
             _chkGroundPrediction.Checked = input?.GroundPredictionEnabled ?? false;
             _numGroundPlaneHeight.Value = (decimal)(input?.GroundPlaneHeightMeters ?? 0);
             _numCameraDelay.Value = input?.CameraDelayEstimateMs ?? 0;
@@ -197,8 +241,75 @@ namespace NOMAD.MissionPlanner
                 _numVideoLatency, _numVideoQueue, _chkVideoDrop, _btnRemoveVideo, _cmbVisionModel,
                 _chkTrackingCalibrated, _numVisionFov, _numVisionPitchMin, _numVisionPitchMax,
                 _numVisionYawMin, _numVisionYawMax, _numVisionRate, _cmbVisionPitchSign, _cmbVisionYawSign,
-                _btnVisionModelBrowse, _cmbTrackingMode, _chkGroundPrediction, _numGroundPlaneHeight, _numCameraDelay })
+                _btnVisionModelBrowse, _cmbTrackingMode, _cmbObjectTracker, _chkGroundPrediction, _numGroundPlaneHeight, _numCameraDelay })
             { control.Enabled = input != null; }
+            _cmbVideoSourceType.Enabled = input != null;
+            UpdateVideoSourceFields();
+        }
+
+        private void UpdateVideoSourceFields()
+        {
+            bool selected = _editingVideoInput != null;
+            bool camera = _cmbVideoSourceType.SelectedIndex == 1;
+            _txtVideoUrl.Enabled = selected && !camera;
+            _cmbVideoTransport.Enabled = selected && !camera;
+            _numVideoLatency.Enabled = selected && !camera;
+            _numVideoQueue.Enabled = selected && !camera;
+            _chkVideoDrop.Enabled = selected && !camera;
+            _cmbVideoDevice.Enabled = selected && camera;
+            _btnVideoDevices.Enabled = selected && camera;
+            _lblVideoDevices.Enabled = selected && camera;
+        }
+
+        private void LoadVideoDevices(VideoCaptureDevice[] devices, string selectedPath, bool refreshed)
+        {
+            bool loading = _loadingVideo;
+            _loadingVideo = true;
+            try
+            {
+                _cmbVideoDevice.Items.Clear();
+                var selected = devices.FirstOrDefault(device =>
+                    string.Equals(device.Path, selectedPath, StringComparison.OrdinalIgnoreCase));
+                if (selected == null)
+                {
+                    selected = new VideoCaptureDevice(selectedPath == "" ? "Choose a device" :
+                        refreshed ? "Unavailable saved device" : "Saved device (Refresh to check)", selectedPath);
+                    _cmbVideoDevice.Items.Add(selected);
+                }
+                foreach (var device in devices)
+                {
+                    int count = devices.Count(other => other.Name == device.Name);
+                    int index = _cmbVideoDevice.Items.Cast<VideoCaptureDevice>().Count(other =>
+                        other.Name == device.Name || other.Name.StartsWith(device.Name + " (", StringComparison.Ordinal));
+                    var choice = count > 1 ?
+                        new VideoCaptureDevice(device.Name + " (" + (index + 1) + ")", device.Path) : device;
+                    _cmbVideoDevice.Items.Add(choice);
+                    if (string.Equals(device.Path, selectedPath, StringComparison.OrdinalIgnoreCase)) { selected = choice; }
+                }
+                _cmbVideoDevice.SelectedItem = selected;
+            }
+            finally { _loadingVideo = loading; }
+        }
+
+        private void RefreshVideoDevices()
+        {
+            string path = (_cmbVideoDevice.SelectedItem as VideoCaptureDevice)?.Path ?? "";
+            try
+            {
+                var devices = _getVideoDevices();
+                LoadVideoDevices(devices, path, true);
+                _lblVideoDevices.Text = devices.Length == 0 ? "No supported capture devices found." :
+                    path != "" && !devices.Any(device =>
+                        string.Equals(device.Path, path, StringComparison.OrdinalIgnoreCase)) ? "Saved device is unavailable." :
+                    "Supported modes up to 1080p / 30 FPS.";
+            }
+            catch (Exception error) when (error is System.ComponentModel.Win32Exception ||
+                error is InvalidOperationException || error is FormatException || error is DllNotFoundException ||
+                error is EntryPointNotFoundException)
+            {
+                _lblVideoDevices.Text = "Device list unavailable. Check the driver and Refresh.";
+                _toolTips.SetToolTip(_btnVideoDevices, error.Message);
+            }
         }
 
         private void LoadModelChoices(string path)
@@ -216,12 +327,15 @@ namespace NOMAD.MissionPlanner
             var input = new VideoInputProfile
             {
                 Name = _txtVideoName.Text.Trim(), Url = _txtVideoUrl.Text.Trim(),
+                SourceType = _cmbVideoSourceType.SelectedIndex == 1 ? "Camera" : "Network",
+                CaptureDevicePath = (_cmbVideoDevice.SelectedItem as VideoCaptureDevice)?.Path ?? "",
                 RtspTransport = (string)_cmbVideoTransport.SelectedItem,
                 LatencyMs = (int)_numVideoLatency.Value, QueueMaxBuffers = (int)_numVideoQueue.Value,
                 DropOldFrames = _chkVideoDrop.Checked,
                 DetectorModelProfilePath = (_cmbVisionModel.SelectedItem as VisionModelChoice)?.Path ?? "",
                 TrackingCalibrated = _chkTrackingCalibrated.Checked,
                 TrackingMode = (string)_cmbTrackingMode.SelectedItem,
+                ObjectTracker = _cmbObjectTracker.SelectedIndex == 1 ? "GPU" : "CPU",
                 GroundPredictionEnabled = _chkGroundPrediction.Checked,
                 GroundPlaneHeightMeters = (double)_numGroundPlaneHeight.Value,
                 CameraDelayEstimateMs = (int)_numCameraDelay.Value,

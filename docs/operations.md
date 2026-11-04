@@ -151,6 +151,14 @@ Aircraft-side telemetry endpoints and video/network services are commissioned se
 
 ## Gimbal, payload and input
 
+The floating gimbal screen uses horizontal **Yaw** and vertical **Pitch** by default.
+In Settings → Inputs, choose **None**, **Pitch**, **Roll** or **Yaw** for each screen axis
+and reverse either direction as needed. Choose distinct active axes; None disables a direction.
+The screen's pad labels and arrow keys follow that aircraft's mapping. A two-dimensional pad
+controls the selected pair, while the third target angle is retained. **Look Down** preserves
+roll and yaw; **Center** requests zero on all three axes. Disconnect before saving these output
+settings. Physical HID controls retain their explicit bindings and existing pitch/roll convention.
+
 Select explicit HID devices; missing or ambiguously named devices are never substituted.
 After reconnect/input loss, center analog controls and release buttons before fresh
 activation. Payload hazardous actions require their configured distinct confirmations

@@ -106,6 +106,18 @@ internal static partial class VideoLifetimeTests
             }
         }
         CheckClean(pipeline);
+        // A tracker that cannot load reports its own cause (e.g. GPU unavailable), not a generic message.
+        pipeline = new FakeVideoPipeline();
+        using (var session = new VideoSession(() => pipeline, createTracker: (token, mode) =>
+            throw new InvalidOperationException("GPU Object tracker could not load: No NVIDIA DirectX 12 adapter found.")))
+        {
+            session.Start("fake"); Wait(pipeline.ReadEntered, "failed tracker warmup");
+            Check(!session.TrackerReady && session.TrackerError != null &&
+                session.TrackerError.Contains("No NVIDIA DirectX 12 adapter found.") &&
+                session.TrackerError.Contains("Video continues."),
+                "A tracker load failure hid its cause from the operator: " + session.TrackerError);
+        }
+        CheckClean(pipeline);
         pipeline = new FakeVideoPipeline();
         FakeVisualTracker active = null;
         using (var session = new VideoSession(() => pipeline,
@@ -171,7 +183,8 @@ internal static partial class VideoLifetimeTests
         Check(player.RegionReady && player.SelectedRegion.HasValue && player.SubmittedTrackingCommands == 0,
             "Fresh post-initialization result did not establish selection without moving the gimbal");
         for (int i = 0; i < 7; i++) { Thread.Sleep(90); Tick(player); }
-        Check(!player.SelectedRegion.HasValue && !player.RegionReady, "Established selection survived stale video");
+        Check(player.SelectedRegion.HasValue && !player.RegionReady && !player.IsTracking,
+            "Stale video must retain identity without visual/control admission");
 
         PlayerVisionFrame(player, pipeline, Color.Blue);
         var previousTracker = tracker;

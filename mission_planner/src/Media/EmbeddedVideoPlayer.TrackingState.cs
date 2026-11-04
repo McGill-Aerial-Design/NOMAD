@@ -12,13 +12,12 @@ namespace NOMAD.MissionPlanner
             if (_trackingMode == mode) { return; }
             RetireTracking("Tracking mode changed; select again"); _trackingMode = mode;
             if (_trackingModeSelector != null) { _trackingModeSelector.SelectedIndex = (int)mode; }
-            if (_clearAreaButton != null) { _clearAreaButton.Visible = mode == VisualTrackingMode.Area; }
             UpdateVisionStatus();
         }
 
         private void DisarmTracking(string reason)
         {
-            if (_trackingMode != VisualTrackingMode.Area || !SelectedRegion.HasValue)
+            if (!SelectedRegion.HasValue)
             { RetireTracking(reason + "; select again"); return; }
             lock (_visionGate)
             {
@@ -28,12 +27,12 @@ namespace NOMAD.MissionPlanner
                     _session.IsRegionCurrent(_regionRevision);
                 if (!_regionReady) { _selectedAimPoint = null; }
                 _lastStepTicks = _lastRequestTicks = 0;
-                _trackingStatus = reason + "; area retained, press Track when verified";
+                _trackingStatus = reason + "; target retained, press Track when verified";
                 RecordTrackingEvent("tracking-disarmed");
             }
         }
 
-        private void PauseAreaTracking(string reason)
+        private void PauseTracking(string reason)
         {
             _regionReady = false; _selectedAimPoint = null;
             if (_tracking && !_trackingPaused)
@@ -42,7 +41,7 @@ namespace NOMAD.MissionPlanner
             _trackingStatus = reason;
         }
 
-        private bool ResumeAreaTracking(VideoFrame frame)
+        private bool ResumeTracking(VideoFrame frame)
         {
             long revision;
             OutputController.NativeTarget target;
@@ -65,7 +64,7 @@ namespace NOMAD.MissionPlanner
                 _trackingAircraftHeading = heading; _trackingUnappliedYawChange = 0;
                 _trackingPitch = pitch; _trackingYaw = yaw;
                 _lastStepTicks = frame.ReceivedTicks; _lastRequestTicks = 0; _trackingPaused = false;
-                _trackingStatus = "Area verified; tracking resumed"; RecordTrackingEvent("tracking-resumed");
+                _trackingStatus = "Target verified; tracking resumed"; RecordTrackingEvent("tracking-resumed");
             }
             return true;
         }

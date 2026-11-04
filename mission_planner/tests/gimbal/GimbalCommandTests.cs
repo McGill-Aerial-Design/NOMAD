@@ -28,6 +28,7 @@ internal static class GimbalCommandTests
         IntegrateStick_AppliesRateOverTime();
         IntegrateStick_SignConventions();
         IntegrateStick_ClampsAtLimits();
+        ScreenAxes_MapOnlyTheSelectedAxes();
 
         Console.WriteLine(_failures == 0
             ? "All gimbal-command tests passed."
@@ -102,6 +103,37 @@ internal static class GimbalCommandTests
         GimbalCommand.IntegrateStick(80f, 25f, -1f, -1f, 200f, 5f, out float p, out float r);
         AssertNear(GimbalCommand.PITCH_MIN_DEG, p, "integrate: pitch clamps to min");
         AssertNear(GimbalCommand.ROLL_MAX_DEG, r, "integrate: roll clamps to max");
+    }
+
+    private static void ScreenAxes_MapOnlyTheSelectedAxes()
+    {
+        foreach (var item in new[] {
+            ("Yaw", "Pitch", false, false, .5f, 0f, .25f),
+            ("Pitch", "Roll", false, false, .25f, .5f, 0f),
+            ("Roll", "Yaw", false, false, 0f, .25f, .5f),
+            ("Yaw", "Pitch", true, false, .5f, 0f, -.25f),
+            ("Yaw", "Roll", true, true, 0f, -.5f, -.25f),
+            ("None", "Pitch", false, true, -.5f, 0f, 0f),
+            ("Roll", "None", false, false, 0f, .25f, 0f),
+            ("None", "None", false, false, 0f, 0f, 0f) })
+        {
+            Assert(GimbalCommand.TryMapScreenAxes(item.Item1, item.Item2, item.Item3, item.Item4,
+                .25f, .5f, out float pitch, out float roll, out float yaw), "valid screen mapping");
+            AssertNear(item.Item5, pitch, "mapped pitch");
+            AssertNear(item.Item6, roll, "mapped roll");
+            AssertNear(item.Item7, yaw, "mapped yaw");
+        }
+        foreach (string axis in new[] { "Pitch", "Roll", "Yaw" })
+        { Assert(!GimbalCommand.ValidScreenAxes(axis, axis), "duplicate active screen axes are invalid"); }
+        foreach (string invalid in new[] { null, "", "yaw", "Other" })
+        { Assert(!GimbalCommand.ValidScreenAxes(invalid, "Pitch"), "invalid screen axis is rejected"); }
+        foreach (float invalid in new[] { float.NaN, float.PositiveInfinity, -1.01f, 1.01f })
+        {
+            Assert(!GimbalCommand.TryMapScreenAxes("Yaw", "Pitch", false, false, invalid, 0,
+                out _, out _, out _), "invalid horizontal screen input is rejected");
+            Assert(!GimbalCommand.TryMapScreenAxes("Yaw", "Pitch", false, false, 0, invalid,
+                out _, out _, out _), "invalid vertical screen input is rejected");
+        }
     }
 
     // ============================================================

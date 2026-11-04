@@ -34,3 +34,19 @@ function Find-RoslynCompiler {
     }
     return $compiler
 }
+
+function Get-PluginSourceHashes {
+    param([Parameter(Mandatory=$true)][string]$RepoRoot)
+    $root = [IO.Path]::GetFullPath($RepoRoot)
+    $hashes = @{}
+    foreach ($directory in @('mission_planner/src','infra/transport/ground_router')) {
+        $path = Join-Path $root $directory
+        if (!(Test-Path -LiteralPath $path)) { continue }
+        foreach ($file in Get-ChildItem -LiteralPath $path -File -Recurse) {
+            if ($file.FullName -match '[\\/](bin|obj)[\\/]' -or
+                $file.Extension -notin '.cs','.csproj','.resx') { continue }
+            $hashes[$file.FullName.Substring($root.Length + 1)] = (Get-FileHash -LiteralPath $file.FullName).Hash
+        }
+    }
+    return $hashes
+}

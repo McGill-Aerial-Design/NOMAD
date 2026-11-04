@@ -7,7 +7,7 @@ controls remain in Mission Planner.
 ## Video inputs
 
 Settings → Video stores named inputs for the selected aircraft. Add an input, enter
-its name and source URL, then Save the definitions. Browsing or editing an input in
+its name and choose **Network stream** or **Camera / capture card**, then Save the definitions. Browsing or editing an input in
 Settings does not change playback. Choose the active input from the top-right of
 the Dashboard preview or Video player; that choice is saved for the aircraft and
 updates HUD video and both NOMAD views. A stopped player stays stopped.
@@ -15,13 +15,31 @@ Renaming the active definition preserves its selection; removing it chooses the
 first remaining input. Remove the final input to leave video unconfigured. Profiles use
 `VideoInputs` and `SelectedVideoInputName`; imports must use that same current schema.
 
+For a webcam, USB camera or USB HDMI capture card, select **Camera / capture card**,
+click **Refresh**, then choose the Windows capture device. Refresh reads device metadata
+without opening cameras. The saved device path identifies the device; unplugging it
+does not select another camera. Refresh after reconnecting or changing USB ports.
+Changing the source type or device clears the calibration confirmation; review FOV,
+mount limits and directions before enabling tracking with that camera.
+
+Capture negotiates a supported raw or MJPEG mode up to **1920×1080 at 30 FPS** through
+Mission Planner's installed GStreamer `ksvideosrc`. Windows Kernel Streaming devices
+are supported; DirectShow-only virtual cameras are not included. Playback, a live
+Dashboard preview or enabled HUD autostart opens the selected source. This older
+GStreamer source briefly probes other capture drivers during startup; only the selected
+device streams. Busy, missing or unsupported devices report a playback error.
+HUD, Dashboard and Video share one capture stream for the same local device. Each
+player keeps its own display and tracking state; stopping one leaves the others playing.
+The camera stays active while any of those players is playing. Local capture always
+uses a one-frame latest-image queue; receiver queue/drop tuning applies to network inputs.
+
 ![Video page with active input selection beside playback controls](images/video-page.png)
 
 
 RTSP negotiates the video codec supported by the installed GStreamer decoder. Select
 TCP or UDP transport and a 0..5000 ms jitter buffer. UDP source URLs such as
 `udp://@:5600` listen for RTP/H.264 on the explicit port; RTSP settings do not affect
-those inputs. Camera and MediaMTX URLs, including addresses reachable through
+those inputs or local capture. Camera and MediaMTX URLs, including addresses reachable through
 Tailscale, are ordinary operator inputs; NOMAD does not set up their server or network.
 
 The decoded-frame queue holds 1..120 frames. Drop old frames discards old queue
@@ -41,19 +59,81 @@ The fixed-width tracking button switches between **Start tracking** and **Stop t
 
 ### Object tracking
 
-Object mode follows a moving image region using CSRT. A frozen appearance check
-rejects a candidate that no longer resembles the original selection, including a
-dissimilar foreground obstruction. Loss stops Object tracking; select the target
-again to resume. This is visual similarity, not semantic person identification.
-Large deformation, occlusion or appearance changes can require reselection.
+Object mode separates foreground inside a tight selection and gives CSRT a foreground mask.
+The selection identifies the object; the gimbal aims at the centre of its verified whole-object
+bounds rather than holding the initial click on one surface point. Drag padding does not
+become part of the retained object extent. Its centre can lie between legs or inside a hole;
+foreground appearance and geometry establish identity independently of that aiming pixel.
+Background pixels do not establish appearance identity. A thin object can be followed through
+in-plane rotation using its foreground shape and colour. Enough
+unoccluded foreground must remain to verify identity. Three accepted foreground observations can replace one working
+view while the original view remains available. Predicted masks are never learned.
+A verified Object box is the foreground measured in that frame. Only when segmentation fragments may
+feature geometry confirm the object, and its projected box must overlap the last verified outline by half.
+
+Below the 48×48 comparison patch's pixel count, as for a distant animal, the patch only upsamples
+the object and masked correlation measures interpolation noise. On a continuous local track, each
+freshly measured outline may instead chain from the previous verified frame when its bounds-normalized
+shape, aspect (±25%) and colour (RMS ≤15) agree. Projected masks never satisfy that check.
+A single appearance miss holds the local track for at most ten frames: no gimbal request, tracked state
+update or learning. Resuming then needs three consecutive accepted frames.
+
+Small selections retain more source detail: Object processing uses at most a 1280-pixel
+longest edge when the selection's narrower dimension would be at most 80 pixels at the
+usual 640-pixel scale. The budget stays fixed until reselection and never enlarges the
+source image. This costs more CPU; it cannot recover detail absent from a distant target.
+Area processing remains bounded to 640 pixels.
+
+When the object leaves view, a bounded global search checks retained appearances,
+distributed feature geometry and competing placements. Recovery needs three consistent
+visual matches; it never accepts a uniform colour match alone. Searching sends no new
+gimbal requests. This is visual similarity, not semantic person identification.
+Small objects carry too few global features, so for up to 15 frames after the last verified frame their
+recovery also checks a window of six object sizes around that position. After that, position no longer binds
+identity: an identical decoy can stand there, so only global identity evidence or reselection returns. Retained-appearance correlation only proposes seeds; exactly
+one freshly measured foreground there must match a retained appearance or outline, or the search
+fails closed. Within those 15 frames, a lookalike that is the only candidate in the window while the
+selected object is hidden can still be accepted; that case remains unqualified.
+Full occlusion, a visually identical object or a completely unseen side can still require
+reselection. If foreground cannot be separated, drag a tighter outline with visible edges.
+Choose Object for a moving person or vehicle; choose Area for a fixed point on grass,
+a wall or another approximately planar surface. Clicking uses the currently selected mode.
+
+### GPU Object tracker
+
+**Settings → Video → Object tracker** chooses, per video input, between **Standard (CPU)** (the default)
+and **GPU (NVIDIA, EfficientTAM)**: EfficientTAM Ti512 video memory on an NVIDIA GPU through DirectML.
+Area tracking is unchanged. The plugin embeds the tested model export (about 88 MB, Apache-2.0,
+licence extracted beside it) and extracts it to the plugin's vision cache on first use; every file is
+checked against pinned SHA256 values. If the model, a DirectX 12 NVIDIA adapter or the pinned DirectML runtime is
+unavailable, tracking reports the failure; it never switches tracker silently. Integrated and software
+adapters are refused by vendor, because Windows may list them first. The setting takes effect when the
+video view restarts.
+
+The model segments the whole selected object in an object-relative crop of about four selection
+diameters. Its prediction never changes memory by itself: a frame is written to video memory only
+after admission (the model's presence decision, mask-quality estimate at least 0.5, and bounded
+size/position change since the last admitted frame). Rejected frames, removed objects and stale-video
+gaps send no gimbal request; resuming needs three consecutive admitted frames. After 15 consecutive
+unadmitted frames the tracker stops re-acquiring and asks for reselection: video memory cannot tell
+identical objects apart, so a decoy near the stale position could otherwise be accepted. The aim is the centre
+of the measured mask bounds. Thin parts lost by video compression, such as antlers, are not in that
+box. One model load (a few seconds) is shared by later selections in the same Mission Planner session.
 
 ### Area tracking and memory
 
 Area mode follows a fixed, approximately planar surface. Include distinctive local
 texture and surrounding features when selecting grass, pavement or a wall.
-The tracker matches an immutable scene reference and verifies a perspective
-transform. It steers toward the transformed original point, not the center of a
-changing bounding rectangle.
+The tracker keeps the original identity reference and one learned working view.
+After three consecutive geometric and visual matches of a meaningful view change,
+that view can replace the working view. New features must lie near observed plane
+inliers, so a passing foreground cannot supply a new reference. The working view also retains
+its measured plane tracks instead of discarding them when detecting fresh ORB descriptors.
+Checked forward/backward registration against a verified
+keyframe helps nearby views and recovery; global feature matching remains a fallback. Both
+paths still verify the selected surface and reject competing placements.
+It steers toward the transformed original point, not the center of a changing
+bounding rectangle. Learning never relocates that point or authorizes steering.
 
 | State | Behavior |
 |---|---|
@@ -64,10 +144,15 @@ changing bounding rectangle.
 
 After uncertainty, three successive unique visual matches are required before an
 active session resumes. A foreground object does not replace the reference.
+Whole-area and aiming-point appearance checks compare rectified views, allowing
+perspective and lighting changes while guarding against gradual foreground takeover.
+A decoded receipt gap also restarts the three-match visual confirmation.
 **Stop tracking**, manual gimbal input or stale imagery disarms automatic recovery
 while retaining Area memory. Select **Start tracking** again after verification.
 **Clear** discards the remembered area. Changing source, aircraft or profile clears
 its reference. Opening another tracking owner disarms the previous owner.
+Object mode uses the same retained-selection and Stop/manual/stale-input interlocks.
+After Stop, manual input or stale video, visual recovery alone never rearms steering.
 
 Indistinguishable repeating tiles, featureless surfaces, moving vegetation,
 parallax and large viewpoint changes can leave an area searching. A remembered
@@ -88,10 +173,18 @@ Configure each input in **Settings → Video** before enabling tracking:
 
 Tracking commands pitch/yaw with roll zero through the selected Mission Planner
 connection. Aircraft attitude and angular rates compensate body yaw; image feedback
-corrects the residual. Freshness, selected aircraft, input generation, native command
+corrects the residual. In Object mode, counter-yaw is reduced when it would oppose
+verified image motion. A busy native request does not consume the next correction's
+elapsed visual time. Freshness, selected aircraft, input generation, native command
 ownership and calibrated travel/rate remain admission requirements. Resume resets
 its heading baseline rather than replaying rotation accumulated during a pause.
 An already-dispatched native helper can still finish after Stop.
+
+Match calibration to the active camera and mount. A simulated 115-degree camera is
+not a 90-degree camera; a narrower configured pan range or a slow rate limit can prevent
+an otherwise valid target from staying centered. Rotation, occlusion and very small
+targets remain visual limitations. Tracking a distant object does not make unreadable
+ear-tag lettering readable with a fixed wide-angle lens.
 
 Use ArduPilot's supported mount driver for the hardware. The
 [GM3 guide](integrations.md#caddx-gm3) distinguishes internal stabilization from the
@@ -128,7 +221,7 @@ that side of the camera direction, and bottom means behind. It uses aircraft
 attitude, not GPS course over ground.
 
 Reported mount orientation or a successful NOMAD target may provide the camera
-heading estimate. Hover over the video for source, estimate classification and
+heading estimate. Hover over the status text for source, estimate classification and
 angle details. Unknown or stale aircraft/camera data removes the marker. The marker
 works in embedded and full-screen video and does not supply aircraft flight controls.
 

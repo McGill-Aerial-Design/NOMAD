@@ -50,6 +50,7 @@ internal static class PluginUiTests
         SameScreen();
         Theme(directory);
         SettingsInputPause();
+        GimbalScreenAxes();
         InputEditorInterpretation(directory);
         using (var form = new NOMADForm())
         using (var widget = new TerminationWidget(null, CancellationToken.None))
@@ -136,6 +137,38 @@ internal static class PluginUiTests
         Check(GimbalController.TargetPitchDeg == 0 && GimbalController.TargetRollDeg == 0 && config.GimbalArrowKeysEnabled,
             "Settings list navigation moved gimbal or changed saved arrow preference.");
         output.GetMethod("Shutdown", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, null);
+    }
+
+    private static void GimbalScreenAxes()
+    {
+        var config = new NOMADConfig { AircraftName = "Screen-axis fixture", GimbalMountMode = (int)MountMode.RcTargeting,
+            JoystickGimbalHorizontalAxis = "Roll", JoystickGimbalVerticalAxis = "Yaw",
+            JoystickGimbalHorizontalInverted = true };
+        OutputController.Initialize(config); GimbalController.ApplyProfile(config);
+        var type = typeof(GimbalJoystickWindow);
+        using var window = (Form)type.GetConstructor(Hidden, null, new[] { typeof(NOMADConfig) }, null)
+            .Invoke(new object[] { config });
+        try
+        {
+            window.Location = new Point(-20000, -20000); window.Show(); Application.DoEvents();
+            ((System.Windows.Forms.Timer)type.GetField("_streamTimer", Hidden).GetValue(window)).Stop();
+            var pad = (Control)type.GetField("_pad", Hidden).GetValue(window);
+            Check((string)pad.GetType().GetProperty("HorizontalLabel", Hidden).GetValue(pad) == "Roll" &&
+                (string)pad.GetType().GetProperty("VerticalLabel", Hidden).GetValue(pad) == "Yaw" &&
+                (bool)pad.GetType().GetProperty("HorizontalInverted", Hidden).GetValue(pad),
+                "Gimbal screen pad labels did not reflect the aircraft axis mapping.");
+            var tick = type.GetMethod("OnStreamTick", Hidden);
+            tick.Invoke(window, new object[] { null, EventArgs.Empty });
+            type.GetField("_stickX", Hidden).SetValue(window, .5f);
+            type.GetField("_stickY", Hidden).SetValue(window, .25f);
+            tick.Invoke(window, new object[] { null, EventArgs.Empty });
+            Check(Math.Abs(GimbalController.TargetRollDeg + 1.5f) < .001f &&
+                Math.Abs(GimbalController.TargetYawDeg - .75f) < .001f && GimbalController.TargetPitchDeg == 0,
+                "Gimbal screen pad did not apply the selected axes/inversion or moved its unselected axis.");
+            Check(((Label)type.GetField("_lblYaw", Hidden).GetValue(window)).Text.Contains(.75f.ToString("0.0")),
+                "Gimbal screen omitted its updated yaw target readout.");
+        }
+        finally { window.Close(); OutputController.Shutdown(); }
     }
 
     private static void Gesture()
@@ -293,7 +326,13 @@ internal static class PluginUiTests
         NotificationService.Shared = service;
         try
         {
+            int simulationOwners = 0;
+            NOMADMainScreen.SetSimulationFactory(() => { simulationOwners++; return null; });
             using var screen = new NOMADMainScreen(config);
+            Check(simulationOwners == 0, "Constructing the normal screen created a simulation owner.");
+            var simulationButton = (Button)typeof(NOMADMainScreen).GetField("_btnSimulation", Hidden).GetValue(screen);
+            Check(simulationButton.Text == "Testing & Simulation" && !simulationButton.UseMnemonic,
+                "Simulation navigation lost its label or treated the ampersand as a shortcut.");
             using var settings = new NOMADSettingsForm(new NOMADProfiles(config));
             using var payload = new PayloadEditorForm(new JArray(), -1, "synthetic");
             using var router = new RouterLinkEditorForm(config, -1, "synthetic");
@@ -302,12 +341,16 @@ internal static class PluginUiTests
             var payloadStatus = (Label)typeof(ActuatorControlPanel).GetField("_status", Hidden).GetValue(payloadControls);
             Check(payloadStatus.Text == "" && !payloadStatus.Visible, "Idle payload controls displayed boilerplate instead of action status.");
             using var form = new NOMADForm { BackColor = NOMADTheme.BG_DARK };
+            using var simulationSession = new SimulationSession();
+            using var simulation = new NOMADSimulationView(simulationSession, CancellationToken.None, detectOnOpen: false);
             form.Controls.Add(ControlFactory.Button("Save", backColor: NOMADTheme.BTN_PRIMARY));
-            foreach (var root in new Control[] { screen, settings, payload, router, input, form }) { RetainsTheme(root); }
+            foreach (var root in new Control[] { screen, settings, payload, router, input, form, simulation }) { RetainsTheme(root); }
             typeof(NOMADMainScreen).GetMethod("ShowView", Hidden).Invoke(screen, new object[] { "Dashboard" });
             Capture(screen, directory, "dashboard.png", new Size(1180, 760));
             Capture(settings, directory, "settings.png", settings.Size);
             Capture(input, directory, "input-editor.png", input.Size);
+            Capture(simulation, directory, "simulation.png", new Size(1180, 760));
+            Check(!simulationSession.Status.Active, "An inactive simulation render launched a simulator.");
             config.VideoInputs.Add(new VideoInputProfile { Name = "Example receiver", Url = "rtsp://camera.invalid/live" });
             config.VideoInputs.Add(new VideoInputProfile { Name = "Alternate receiver", Url = "rtsp://alternate.invalid/live" });
             config.SelectedVideoInputName = "Example receiver";
@@ -325,6 +368,6 @@ internal static class PluginUiTests
             ThemeManager.ApplyThemeTo(host);
             Check(host.BackColor != Color.Magenta, "NOMAD disabled host theming globally.");
         }
-        finally { NotificationService.Shared = previous; }
+        finally { NOMADMainScreen.SetSimulationFactory(null); NotificationService.Shared = previous; }
     }
 }

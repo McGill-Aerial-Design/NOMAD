@@ -10,6 +10,8 @@ namespace NOMAD.MissionPlanner
     public partial class NOMADSettingsForm
     {
         private DataGridView _inputList;
+        private ComboBox _cmbGimbalHorizontal, _cmbGimbalVertical;
+        private CheckBox _chkGimbalHorizontalInverted, _chkGimbalVerticalInverted;
         private TabPage CreateJoystickTab()
         {
             var tab = CreateTabPage("Inputs");
@@ -22,6 +24,13 @@ namespace NOMAD.MissionPlanner
             buttons.Location = new Point(12, 290); tab.Controls.Add(buttons);
             AddLabel(tab, "Gimbal maximum rate (deg/s):", 12, 340);
             _numJoyGimbalMaxRate = AddNumericUpDown(tab, 235, 337, 85, 5, 200, 60);
+            AddLabel(tab, "Gimbal screen horizontal axis:", 12, 380);
+            _cmbGimbalHorizontal = AddComboBox(tab, 235, 377, 120, GimbalCommand.ScreenAxes);
+            _chkGimbalHorizontalInverted = AddCheckBox(tab, "Reverse", 375, 379);
+            AddLabel(tab, "Gimbal screen vertical axis:", 12, 415);
+            _cmbGimbalVertical = AddComboBox(tab, 235, 412, 120, GimbalCommand.ScreenAxes);
+            _chkGimbalVerticalInverted = AddCheckBox(tab, "Reverse", 375, 414);
+            AddLabel(tab, "The screen stick and arrow keys use these axes. Physical controls keep their bindings.", 12, 455);
             _inputList.CellDoubleClick += (sender, args) => { if (args.RowIndex >= 0) { EditInput(args.RowIndex); } };
             return tab;
         }

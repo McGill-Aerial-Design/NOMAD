@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Drawing;
+using System.Diagnostics;
 using System.Threading;
 using NOMAD.MissionPlanner;
 
@@ -38,15 +39,18 @@ internal sealed class FakeVideoPipeline : IVideoPipeline
         Resources = 3;
     }
 
-    public Bitmap ReadFrame(CancellationToken cancellation)
+    public Bitmap ReadFrame(CancellationToken cancellation, out long receivedTicks, out DateTime receivedUtc)
     {
         ReadEntered.Set();
         if (HoldRead)
         {
             VideoLifetimeTests.Wait(ReleaseRead, "late frame release");
+            receivedTicks = Stopwatch.GetTimestamp(); receivedUtc = DateTime.UtcNow;
             return LateFrame;
         }
-        return Frames.Take(cancellation);
+        var frame = Frames.Take(cancellation);
+        receivedTicks = Stopwatch.GetTimestamp(); receivedUtc = DateTime.UtcNow;
+        return frame;
     }
 
     public void Dispose()
