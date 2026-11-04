@@ -237,7 +237,8 @@ internal static class RouterStatusUiTests
             settings.PerformClick();
             Check(opened == 1, "a retired plugin session cannot reopen Settings");
             var plugin = new NOMADPlugin();
-            typeof(NOMADPlugin).GetMethod("ShutdownVideo", PrivateInstance).Invoke(plugin, null);
+            // reflection does not fill optional parameters: final=false is the ordinary (non-unload) shutdown
+            typeof(NOMADPlugin).GetMethod("ShutdownVideo", PrivateInstance).Invoke(plugin, new object[] { false });
             Check(type.GetField("_showSettings", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null) == null,
                 "plugin shutdown releases the Settings callback");
             settings.PerformClick();
