@@ -99,14 +99,21 @@ $references = @('MissionPlanner.exe','MissionPlanner.Utilities.dll','MissionPlan
     'MissionPlanner.ArduPilot.dll','MissionPlanner.Controls.dll','MAVLink.dll','Interfaces.dll',
     'Newtonsoft.Json.dll','System.Memory.dll','Microsoft.ML.OnnxRuntime.dll','OpenCvSharp.dll') |
     ForEach-Object { '/r:' + (Join-Path $hostCopy $_) }
-& $compiler /nologo /target:exe /platform:x64 /langversion:latest `
+# Native trackers live in the media worker, not the plugin DLL; the fixtures build them in-process
+# (through the plugin's InternalsVisibleTo("VideoLifetimeTests")), as test_plugin_vision.ps1 does.
+# MEDIA_WORKER selects VisionRuntime's native implementation; this copy shadows the plugin's stub (CS0436).
+$trackers = @('VisionRuntime', 'AreaVisualTracker', 'AreaVisualTracker.Matching', 'CsrtVisualTracker',
+    'CsrtVisualTracker.Object', 'EfficientTamVisualTracker', 'EfficientTamCore', 'FrozenAppearance',
+    'VisualTrackingImage', 'ObjectRecoveryReference', 'ObjectForeground', 'GpuAdapter') |
+    ForEach-Object { Join-Path $root "mission_planner/src/Vision/$_.cs" }
+& $compiler /nologo /target:exe /platform:x64 /define:MEDIA_WORKER /langversion:latest `
     "/out:$(Join-Path $hostCopy 'VideoLifetimeTests.exe')" /r:System.Web.Extensions.dll `
     /r:System.Windows.Forms.dll /r:System.Drawing.dll "/r:$plugin" @references `
     ('/r:' + (Join-Path ${env:ProgramFiles(x86)} 'Reference Assemblies/Microsoft/Framework/.NETFramework/v4.8/Facades/netstandard.dll')) `
     (Join-Path $root 'mission_planner/tests/simulation/SimulationHost.cs') `
     (Join-Path $root 'mission_planner/tests/simulation/NativeFixture.cs') `
     (Join-Path $root 'mission_planner/tests/simulation/NativeFixture.Video.cs') `
-    (Join-Path $root 'mission_planner/tests/simulation/ReplayFixture.cs') | ForEach-Object { Write-Host $_ }
+    (Join-Path $root 'mission_planner/tests/simulation/ReplayFixture.cs') @trackers | ForEach-Object { Write-Host $_ }
 if ($LASTEXITCODE -ne 0) { throw 'Owned host compilation failed.' }
 $manifest = @{
     schema=1; source=(& git -C $root rev-parse HEAD); host_version=$version;
