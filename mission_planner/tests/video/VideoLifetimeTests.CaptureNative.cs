@@ -29,10 +29,7 @@ internal static partial class VideoLifetimeTests
                 "Existing GStreamer could not initialize for the NULL-only capture probe");
             string path = @"\\?\usb#synthetic_日本語#quote"" ! fakesink name=unexpected";
             string description = VideoPipeline.Build(CaptureInput(path)).Replace("ksvideosrc ", "ksvideosrc name=capture ");
-            var arguments = new object[] { description, IntPtr.Zero };
-            pipeline = (IntPtr)typeof(GStreamerVideoPipeline).GetMethod("gst_parse_launch",
-                BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, arguments);
-            error = (IntPtr)arguments[1];
+            pipeline = capture_gst_parse_launch(description, out error);
             Check(pipeline != IntPtr.Zero && error == IntPtr.Zero, "The actual capture pipeline did not parse");
             source = capture_gst_bin_get_by_name(pipeline, "capture");
             Check(source != IntPtr.Zero, "Parsed pipeline has no selected capture source");
@@ -64,6 +61,8 @@ internal static partial class VideoLifetimeTests
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool SetDllDirectory(string directory);
+    [DllImport("libgstreamer-1.0-0.dll", EntryPoint = "gst_parse_launch", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr capture_gst_parse_launch([MarshalAs(UnmanagedType.LPUTF8Str)] string pipeline, out IntPtr error);
     [DllImport("libgstreamer-1.0-0.dll", EntryPoint = "gst_init_check", CallingConvention = CallingConvention.Cdecl)]
     private static extern bool capture_gst_init_check(IntPtr argc, IntPtr argv, out IntPtr error);
     [DllImport("libgstreamer-1.0-0.dll", EntryPoint = "gst_bin_get_by_name", CallingConvention = CallingConvention.Cdecl)]

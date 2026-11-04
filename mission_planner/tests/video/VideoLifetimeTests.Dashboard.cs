@@ -19,6 +19,7 @@ internal static partial class VideoLifetimeTests
             finally
             {
                 NotificationService.Shared = previousService;
+                MediaWorkerHost.RequestStart();
             }
         }
     }

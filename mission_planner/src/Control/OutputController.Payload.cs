@@ -40,7 +40,6 @@ namespace NOMAD.MissionPlanner
             internal async Task<bool> SendAsync(MAVLink.MAV_CMD command, float p1, float p2,
                 float p3 = 0, float p4 = 0, Func<bool> current = null)
             {
-                Task<bool> task;
                 lock (Gate)
                 {
                     if (!IsCurrent || current?.Invoke() == false)
@@ -49,44 +48,67 @@ namespace NOMAD.MissionPlanner
                     }
                     if (_payloadBusy || Connection.giveComport) { throw new NativeRequestBusyException(); }
                     _payloadBusy = true;
-                    try
-                    {
-                        task = Connection.doCommandAsync(System, Component, command, p1, p2, p3, p4, 0, 0, 0, true);
-                    }
-                    catch { _payloadBusy = false; throw; }
                 }
-                try { return await task.ConfigureAwait(false); }
+                try
+                {
+                    return await Task.Run(async () =>
+                    {
+                        lock (Gate)
+                        {
+                            if (!IsCurrent || current?.Invoke() == false || Connection.giveComport)
+                            { throw new InvalidOperationException("Aircraft or input changed; no new command was sent."); }
+                        }
+                        return await Connection.doCommandAsync(System, Component, command,
+                            p1, p2, p3, p4, 0, 0, 0, true).ConfigureAwait(false);
+                    }).ConfigureAwait(false);
+                }
                 finally { lock (Gate) { _payloadBusy = false; } }
             }
 
             internal async Task<float> ReadParameterAsync(string name)
             {
-                Task<float> task;
                 lock (Gate)
                 {
                     if (!IsCurrent) { throw new InvalidOperationException("Aircraft changed; no parameter request was sent."); }
                     if (_payloadBusy || Connection.giveComport) { throw new NativeRequestBusyException(); }
                     _payloadBusy = true;
-                    try { task = Connection.GetParamAsync(System, Component, name); }
-                    catch { _payloadBusy = false; throw; }
                 }
-                try { return await task.ConfigureAwait(false); }
+                try
+                {
+                    return await Task.Run(async () =>
+                    {
+                        lock (Gate)
+                        {
+                            if (!IsCurrent || Connection.giveComport)
+                            { throw new InvalidOperationException("Aircraft changed; no parameter request was sent."); }
+                        }
+                        return await Connection.GetParamAsync(System, Component, name).ConfigureAwait(false);
+                    }).ConfigureAwait(false);
+                }
                 finally { lock (Gate) { _payloadBusy = false; } }
             }
 
             internal async Task<bool> WriteParameterAsync(string name, float value, Func<bool> current)
             {
-                Task<bool> task;
                 lock (Gate)
                 {
                     if (!IsCurrent || current?.Invoke() != true || _payloadBusy || Connection.giveComport ||
                         float.IsNaN(value) || float.IsInfinity(value))
                     { throw new InvalidOperationException("Aircraft, safety state or input changed; no parameter was sent."); }
                     _payloadBusy = true;
-                    try { task = Connection.setParamAsync(System, Component, name, value, true); }
-                    catch { _payloadBusy = false; throw; }
                 }
-                try { return await task.ConfigureAwait(false); }
+                try
+                {
+                    return await Task.Run(async () =>
+                    {
+                        lock (Gate)
+                        {
+                            if (!IsCurrent || current?.Invoke() != true || Connection.giveComport)
+                            { throw new InvalidOperationException("Aircraft, safety state or input changed; no parameter was sent."); }
+                        }
+                        return await Connection.setParamAsync(System, Component, name, value, true).ConfigureAwait(false);
+                    }).ConfigureAwait(false);
+                }
                 finally { lock (Gate) { _payloadBusy = false; } }
             }
         }

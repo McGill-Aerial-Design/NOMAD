@@ -40,8 +40,12 @@ Write-Host "Dead-code lint (plugin): $Project" -ForegroundColor Cyan
 Write-Host "Promoting to errors: $deadCodeWarnings`n" -ForegroundColor Gray
 
 # Rebuild (not Build) so every file is recompiled and all diagnostics surface.
-& $msbuild $Project /t:Rebuild /p:Configuration=Release /warnaserror:$deadCodeWarnings /nologo /v:minimal
-$code = $LASTEXITCODE
+$code = 0
+foreach ($inputProject in @((Join-Path $RepoRoot 'mission_planner/media_worker/NOMADMediaWorker.csproj'), $Project)) {
+    & $msbuild $inputProject /t:Rebuild /p:Configuration=Release /warnaserror:$deadCodeWarnings /nologo /v:minimal
+    $code = $LASTEXITCODE
+    if ($code -ne 0) { break }
+}
 
 Write-Host ""
 if ($code -ne 0) {

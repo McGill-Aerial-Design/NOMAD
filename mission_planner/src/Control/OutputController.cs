@@ -39,6 +39,7 @@ namespace NOMAD.MissionPlanner
         private static int _submittedMode = -1;
         internal static Func<MAVLinkInterface> CurrentConnection = () => MainV2.comPort;
         internal static event Action ConnectionChanged;
+        // Shared reservation for one admitted host helper, including its native retries.
         private static bool _payloadBusy;
         internal static long Generation
         {
@@ -139,7 +140,7 @@ namespace NOMAD.MissionPlanner
             RefreshConnection();
             MAVLinkInterface connection;
             byte system, component;
-            Task<bool> configure;
+            bool configure;
             lock (Gate)
             {
                 if (generation != _generation || _config == null || inputStillCurrent?.Invoke() == false)
@@ -167,55 +168,55 @@ namespace NOMAD.MissionPlanner
                 { return Result(GimbalRequestOutcome.Busy, "Mission Planner is busy; no gimbal command was sent."); }
                 system = (byte)_system;
                 component = (byte)_component;
-                try
-                {
-                    // The no-ACK host path emits synchronously before returning its completed task.
-                    configure = _modeGeneration == generation && _submittedMode == mode
-                        ? Task.FromResult(true)
-                        : connection.doCommandAsync(system, component, MAVLink.MAV_CMD.DO_MOUNT_CONFIGURE,
-                            mode, 1, 1, 0, 0, 0, 0, false);
-                }
-                catch (Exception error)
-                {
-                    return Result(GimbalRequestOutcome.Unknown,
-                        "Gimbal not confirmed. Check before retrying. " + error.Message);
-                }
+                configure = _modeGeneration != generation || _submittedMode != mode;
+                _payloadBusy = true;
             }
             try
             {
-                if (!await configure.ConfigureAwait(false))
-                {
-                    return Result(GimbalRequestOutcome.NotSent, "Mission Planner did not submit the mount command.");
-                }
-                lock (Gate)
-                {
-                    if (generation == _generation)
-                    {
-                        _modeGeneration = generation;
-                        _submittedMode = mode;
-                    }
-                }
-                if (pitch.HasValue)
+                return await Task.Run(async () =>
                 {
                     RefreshConnection();
                     lock (Gate)
                     {
-                        if (generation != _generation || _payloadBusy || inputStillCurrent?.Invoke() == false ||
-                            connection != CurrentConnection() || connection.BaseStream != _stream ||
-                            connection.BaseStream?.IsOpen != true || connection.ReadOnly || connection.logreadmode || connection.giveComport)
+                        if (generation != _generation || inputStillCurrent?.Invoke() == false ||
+                            connection != _connection || connection != CurrentConnection() || connection.BaseStream != _stream ||
+                            connection.BaseStream?.IsOpen != true || connection.ReadOnly || connection.logreadmode ||
+                            connection.giveComport)
+                        { return Result(GimbalRequestOutcome.NotSent, "Gimbal input was retired; no command was sent."); }
+                    }
+                    // Native helpers may emit before returning a Task; never invoke them on the UI or under Gate.
+                    if (configure && !await connection.doCommandAsync(system, component,
+                        MAVLink.MAV_CMD.DO_MOUNT_CONFIGURE, mode, 1, 1, 0, 0, 0, 0, false).ConfigureAwait(false))
+                    { return Result(GimbalRequestOutcome.NotSent, "Mission Planner did not submit the mount command."); }
+                    lock (Gate)
+                    {
+                        if (generation == _generation)
                         {
-                            return Result(GimbalRequestOutcome.Unknown, "Mount mode may have been sent; target input was retired.");
+                            _modeGeneration = generation;
+                            _submittedMode = mode;
+                        }
+                    }
+                    if (pitch.HasValue)
+                    {
+                        RefreshConnection();
+                        lock (Gate)
+                        {
+                            if (generation != _generation || inputStillCurrent?.Invoke() == false ||
+                                connection != _connection || connection != CurrentConnection() || connection.BaseStream != _stream ||
+                                connection.BaseStream?.IsOpen != true || connection.ReadOnly || connection.logreadmode ||
+                                connection.giveComport)
+                            { return Result(GimbalRequestOutcome.Unknown, "Mount mode may have been sent; target input was retired."); }
                         }
                         connection.setMountControl(system, component, pitch.Value * 100, roll.Value * 100, yaw * 100, false);
                     }
-                }
-                return Result(GimbalRequestOutcome.Submitted,
-                    "Command sent; acceptance not confirmed.");
+                    return Result(GimbalRequestOutcome.Submitted, "Command sent; acceptance not confirmed.");
+                }).ConfigureAwait(false);
             }
             catch (Exception error)
             {
                 return Result(GimbalRequestOutcome.Unknown, "Gimbal not confirmed. Check before retrying. " + error.Message);
             }
+            finally { lock (Gate) { _payloadBusy = false; } }
         }
         private static bool Finite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
         private static GimbalRequestResult Result(GimbalRequestOutcome outcome, string message) =>

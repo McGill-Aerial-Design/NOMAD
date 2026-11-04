@@ -56,21 +56,22 @@ namespace NOMAD.MissionPlanner
 
         private void PaintSelectedRegion(PictureBox box, Graphics graphics, RectangleF area, float scale)
         {
-            RectangleF? region = SelectedRegion;
+            var result = _displayedVideoFrame?.Region;
+            bool verified = result?.Revision == _regionRevision && result.Found;
+            RectangleF? region = verified ? result.Bounds : null;
             bool dragging = ReferenceEquals(box, _dragBox);
-            if (!dragging && _trackingMode == VisualTrackingMode.Area && !RegionReady) { return; }
             if (dragging && VideoGeometry.TryImageRegion(_dragStart, _dragEnd, _dragImageSize,
                 _dragViewport, out var drag)) { region = drag; }
             if (!region.HasValue) { return; }
             var bounds = region.Value;
             using (var pen = new Pen(Color.Yellow, 2))
             {
-                if (dragging || !RegionReady) { pen.DashStyle = DashStyle.Dash; }
+                if (dragging) { pen.DashStyle = DashStyle.Dash; }
                 graphics.DrawRectangle(pen, area.X + bounds.X * scale, area.Y + bounds.Y * scale,
                     bounds.Width * scale, bounds.Height * scale);
-                if (!dragging && RegionReady && _selectedAimPoint.HasValue)
+                if (!dragging && verified && result.AimPoint.HasValue)
                 {
-                    var point = _selectedAimPoint.Value;
+                    var point = result.AimPoint.Value;
                     graphics.DrawEllipse(pen, area.X + point.X * scale - 3, area.Y + point.Y * scale - 3, 6, 6);
                 }
             }

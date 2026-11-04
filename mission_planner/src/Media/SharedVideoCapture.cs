@@ -52,7 +52,8 @@ namespace NOMAD.MissionPlanner
                         started = true; Ready.TrySetResult(true);
                         while (!token.IsCancellationRequested)
                         {
-                            using (var image = native.ReadFrame(token, out long ticks, out DateTime utc))
+                            var image = native.ReadFrame(token, out long ticks, out DateTime utc);
+                            try
                             {
                                 if (image == null) { break; }
                                 token.ThrowIfCancellationRequested();
@@ -60,6 +61,7 @@ namespace NOMAD.MissionPlanner
                                 lock (Gate) { viewers = Viewers.ToArray(); }
                                 foreach (var viewer in viewers) { viewer.Publish(image, ticks, utc); }
                             }
+                            finally { MediaPixels.Dispose(image); }
                         }
                     }
                 }
@@ -135,8 +137,8 @@ namespace NOMAD.MissionPlanner
                 lock (_gate)
                 {
                     if (_disposed || _ended) { return; }
-                    var copy = (Bitmap)image.Clone();
-                    _pending?.Dispose(); _pending = copy;
+                    var copy = MediaPixels.Clone(image);
+                    MediaPixels.Dispose(_pending); _pending = copy;
                     _receivedTicks = ticks; _receivedUtc = utc;
                     Monitor.PulseAll(_gate);
                 }
@@ -147,7 +149,7 @@ namespace NOMAD.MissionPlanner
                 lock (_gate)
                 {
                     _ended = true; _error = error;
-                    _pending?.Dispose(); _pending = null;
+                    MediaPixels.Dispose(_pending); _pending = null;
                     Monitor.PulseAll(_gate);
                 }
             }
@@ -182,7 +184,7 @@ namespace NOMAD.MissionPlanner
                 lock (_gate)
                 {
                     if (_disposed) { return; }
-                    _disposed = true; _pending?.Dispose(); _pending = null;
+                    _disposed = true; MediaPixels.Dispose(_pending); _pending = null;
                     Monitor.PulseAll(_gate);
                 }
                 Capture capture = _capture;

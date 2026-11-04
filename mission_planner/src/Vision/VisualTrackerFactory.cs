@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#if MEDIA_WORKER
 using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -42,3 +43,16 @@ namespace NOMAD.MissionPlanner
             mode == VisualTrackingMode.Area ? (IVisualTracker)new AreaVisualTracker() : new CsrtVisualTracker();
     }
 }
+
+#else
+// SPDX-License-Identifier: Apache-2.0
+using System.Threading;
+namespace NOMAD.MissionPlanner
+{
+    internal static class VisualTrackerFactory
+    {
+        internal static IVisualTracker Create(CancellationToken token, VisualTrackingMode mode = VisualTrackingMode.Object,
+            bool gpuObjectTracker = false) => new MediaWorkerTracker(token, mode, gpuObjectTracker);
+    }
+}
+#endif

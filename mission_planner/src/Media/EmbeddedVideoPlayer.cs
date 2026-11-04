@@ -72,6 +72,7 @@ namespace NOMAD.MissionPlanner
 
         private void ShutdownVideo()
         {
+            _playbackRequested = false; Interlocked.Increment(ref _playbackRevision);
             RetireTracking("Video closed");
             GimbalController.ManualInput -= OnManualGimbalInput;
             OutputController.ConnectionChanged -= OnAircraftChanged;
@@ -90,6 +91,7 @@ namespace NOMAD.MissionPlanner
 
         private void OnPluginShutdown()
         {
+            _playbackRequested = false; Interlocked.Increment(ref _playbackRevision);
             RetireTracking("Plugin stopped");
             _session.Dispose();
             if (Thread.CurrentThread.ManagedThreadId == _uiThread)
@@ -97,16 +99,13 @@ namespace NOMAD.MissionPlanner
                 Dispose();
                 return;
             }
-            // Worker cleanup is already complete; the UI releases its controls on its own thread.
             if (IsHandleCreated && !IsDisposed)
             {
-                UiAsync.RunSync(this, () =>
+                try { BeginInvoke(new Action(() =>
                 {
-                    if (!IsDisposed)
-                    {
-                        Dispose();
-                    }
-                }, "video shutdown");
+                    if (!IsDisposed) { Dispose(); }
+                })); }
+                catch (InvalidOperationException) { }
             }
         }
 

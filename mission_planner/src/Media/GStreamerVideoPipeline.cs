@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#if MEDIA_WORKER
 // Copyright 2026 The NOMAD Authors
 using System;
 using System.Drawing;
@@ -6,9 +7,9 @@ using System.Drawing.Imaging;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
-using MissionPlanner.Utilities;
-using Gst = MissionPlanner.Utilities.GStreamer;
-using Native = MissionPlanner.Utilities.GStreamer.NativeMethods;
+
+using Gst = NOMAD.MissionPlanner.GStreamerNative;
+using Native = NOMAD.MissionPlanner.GStreamerNative.NativeMethods;
 
 namespace NOMAD.MissionPlanner
 {
@@ -22,19 +23,7 @@ namespace NOMAD.MissionPlanner
         public void Start(string pipeline, CancellationToken cancellation)
         {
             cancellation.ThrowIfCancellationRequested();
-            GStreamer.GstLaunch = GStreamer.LookForGstreamer();
-            if (!GStreamer.GstLaunchExists)
-            {
-                throw new InvalidOperationException("GStreamer is not available in Mission Planner");
-            }
-            cancellation.ThrowIfCancellationRequested();
-            bool initialized = Native.gst_init_check(IntPtr.Zero, IntPtr.Zero, out var error);
-            CheckError(error);
-            if (!initialized)
-            {
-                throw new InvalidOperationException("GStreamer could not initialize");
-            }
-            _pipeline = gst_parse_launch(pipeline, out error);
+            _pipeline = gst_parse_launch(pipeline, out var error);
             CheckError(error);
             if (_pipeline == IntPtr.Zero)
             {
@@ -62,6 +51,7 @@ namespace NOMAD.MissionPlanner
             receivedTicks = 0; receivedUtc = default;
             while (!cancellation.IsCancellationRequested)
             {
+                NativeProgress.Touch();
                 CheckBusError();
                 if (Native.gst_app_sink_is_eos(_sink))
                 {
@@ -144,43 +134,7 @@ namespace NOMAD.MissionPlanner
             return new Size(width, height);
         }
 
-        internal static Bitmap CopyMappedFrame(Size size, VideoBufferMap map)
-        {
-            int stride = checked((size.Width * 4 + 3) & ~3);
-            if (map.Size.ToUInt64() < checked((ulong)stride * (ulong)size.Height))
-            {
-                throw new InvalidOperationException("Truncated video frame");
-            }
-            var frame = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppArgb);
-            try
-            {
-                CopyPixels(frame, map.Data, stride);
-                return frame;
-            }
-            catch
-            {
-                frame.Dispose();
-                throw;
-            }
-        }
-
-        private static unsafe void CopyPixels(Bitmap frame, IntPtr source, int sourceStride)
-        {
-            var pixels = frame.LockBits(new Rectangle(0, 0, frame.Width, frame.Height),
-                ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-            try
-            {
-                for (int row = 0; row < frame.Height; ++row)
-                {
-                    Buffer.MemoryCopy((byte*)source + row * sourceStride,
-                        (byte*)pixels.Scan0 + row * pixels.Stride, pixels.Stride, sourceStride);
-                }
-            }
-            finally
-            {
-                frame.UnlockBits(pixels);
-            }
-        }
+        internal static Bitmap CopyMappedFrame(Size size, VideoBufferMap map) => MediaPixels.CopyMappedFrame(size, map);
 
         private static void CheckError(IntPtr error)
         {
@@ -254,3 +208,15 @@ namespace NOMAD.MissionPlanner
         private static extern void g_error_free(IntPtr error);
     }
 }
+
+#else
+// SPDX-License-Identifier: Apache-2.0
+using System.Drawing;
+namespace NOMAD.MissionPlanner
+{
+    internal sealed class GStreamerVideoPipeline : MediaWorkerPipeline
+    {
+        internal static Bitmap CopyMappedFrame(Size size, VideoBufferMap map) => MediaPixels.CopyMappedFrame(size, map);
+    }
+}
+#endif

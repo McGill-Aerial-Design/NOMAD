@@ -139,6 +139,8 @@ internal static partial class VideoLifetimeTests
                 "HUD keeps camera after other views stop");
             Check(native.Disposals == 0, "Stopping Video closed a camera still used by HUD");
             overlay.Dispose();
+            AwaitCapture(() => native.Disposals == 1 && CaptureSubscribers(VideoPipeline.ShareKey(profile)) == 0,
+                "last camera viewer native cleanup");
             Check(native.Disposals == 1 && CaptureSubscribers(VideoPipeline.ShareKey(profile)) == 0,
                 "Last camera viewer retained the native capture");
             CheckDisposed(original);
@@ -174,6 +176,7 @@ internal static partial class VideoLifetimeTests
                 "Video keeps the UDP input after Dashboard stops");
             Check(native.Disposals == 0, "Stopping one view closed a UDP receiver still in use");
         }
+        AwaitCapture(() => native.Disposals == 1 && CaptureSubscribers(key) == 0, "last UDP viewer cleanup");
         Check(native.Disposals == 1 && CaptureSubscribers(key) == 0, "The last UDP viewer retained the receiver");
         Check(key != VideoPipeline.ShareKey(new VideoInputProfile { Name = "Other", Url = "udp://127.0.0.1:64553" }) &&
             VideoPipeline.ShareKey(new VideoInputProfile { Name = "A", Url = "rtsp://cam.invalid/Live" }) !=
@@ -251,6 +254,7 @@ internal static partial class VideoLifetimeTests
                 session.Start("owned end capture", key);
                 AwaitCapture(() => session.State == VideoState.Streaming, "explicit camera restart after end");
             }
+            AwaitCapture(() => reopened.Disposals == 1, "reopened camera asynchronous cleanup");
             Check(reopened.Starts == 1 && reopened.Disposals == 1, "Ended camera could not explicitly restart");
         }
         const string failedKey = @"\\?\usb#shared-start-failure#video";
@@ -275,6 +279,7 @@ internal static partial class VideoLifetimeTests
             session.Start("owned startup failure", failedKey);
             AwaitCapture(() => session.State == VideoState.Streaming, "explicit restart after failed camera startup");
         }
+        AwaitCapture(() => recovered.Disposals == 1, "recovered camera asynchronous cleanup");
         Check(recovered.Starts == 1 && recovered.Disposals == 1, "Failed camera startup left an unusable pool entry");
         var closeFailure = new ExclusiveCameraPipeline { ThrowOnDispose = true };
         using (var session = new VideoSession(() => closeFailure))
@@ -282,6 +287,7 @@ internal static partial class VideoLifetimeTests
             session.Start("owned camera close fault", failedKey);
             AwaitCapture(() => session.State == VideoState.Streaming, "camera before close fault");
             session.Stop();
+            Wait(session.Completion, "native camera close failure completion");
             Check(closeFailure.Disposals == 1 && session.Error == "Injected camera close failure" &&
                 CaptureSubscribers(failedKey) == 0, "The last viewer hid a native camera close failure");
         }
@@ -298,6 +304,7 @@ internal static partial class VideoLifetimeTests
             first.Start("owned camera source", key);
             AwaitCapture(() => first.State == VideoState.Streaming, "camera before held close");
             var stopped = Task.Run(() => first.Stop());
+            Wait(stopped, "nonblocking camera retirement");
             try
             {
                 Wait(old.DisposeEntered, "native camera close entered");
@@ -305,7 +312,8 @@ internal static partial class VideoLifetimeTests
                 Check(!replacement.StartEntered.Wait(100), "A second open overlapped native camera disposal");
             }
             finally { old.ReleaseDispose.Set(); }
-            Wait(stopped, "camera close join"); AwaitCapture(() => next.State == VideoState.Streaming, "camera reopen");
+            Wait(first.Completion, "camera close completion");
+            AwaitCapture(() => next.State == VideoState.Streaming, "camera reopen");
             Check(old.Disposals == 1 && replacement.Starts == 1 && replacement.StartedTicks >= old.DisposedTicks,
                 "Camera restart lost exclusive ownership or overlapped native disposal");
         }
@@ -323,6 +331,7 @@ internal static partial class VideoLifetimeTests
                 AwaitCapture(() => CaptureSubscribers(aKey) == 2, "source A shared before change");
                 long retired = switched.Generation;
                 switched.Stop();
+                Wait(switched.Completion, "old shared viewer retirement");
                 Check(!sourceA.SourceToken.IsCancellationRequested, "Changing one view canceled another view's camera A");
                 switched.Start("owned source B", bKey);
                 AwaitCapture(() => switched.State == VideoState.Streaming, "replacement camera B");
@@ -335,6 +344,7 @@ internal static partial class VideoLifetimeTests
             }
             finally { sourceA.ReleaseRead.Set(); }
         }
+        AwaitCapture(() => sourceA.Disposals == 1 && sourceB.Disposals == 1, "source handoff cleanup");
         Check(sourceA.Disposals == 1 && sourceB.Disposals == 1, "A source handoff retained a camera owner");
         var networkA = new FakeVideoPipeline(); var networkB = new FakeVideoPipeline();
         using (var a = new VideoSession(() => networkA))

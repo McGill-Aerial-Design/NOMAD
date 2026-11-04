@@ -69,6 +69,7 @@ internal static partial class VideoLifetimeTests
             using (var frame = DetectionFrame(session, pipeline, 10, 6, item => item.Detections.Count == 1))
             { Check(frame.Detections.Count == 1 && detectors.Count == 2, "Detect on/off/on reused retired state"); }
             session.Stop();
+            Wait(session.Completion, "detector stop completion");
             Check(detectors[1].Disposals == 1, "Stop retained its detector");
         }
         CheckClean(pipeline);
@@ -85,6 +86,7 @@ internal static partial class VideoLifetimeTests
                 { pipeline.Frames.Add(new Bitmap(16, 8)); Thread.Sleep(5); }
                 Wait(detector.Entered, "held inference");
                 Wait(Task.Run(() => session.Stop()), "inference stop and join");
+                Wait(session.Completion, "canceled inference owner cleanup");
                 Check(session.TakeFrame() == null && session.Completion.IsCompleted && detector.Disposals == 1,
                     "Cancelled inference published or retained work");
                 CheckDisposed(image);
@@ -211,7 +213,7 @@ internal static partial class VideoLifetimeTests
             Check(player.RegionReady && session.VisionError != null && player.SelectedRegion == selected,
                 "Optional detector failure retired visual tracking");
             long savedSequence = player.DisplayedVideoFrame.Sequence;
-            string path = player.SaveObservation();
+            string path = WaitUi(player.SaveObservationAsync(), "observation write");
             Check(path != null && File.Exists(path) && File.Exists(Path.ChangeExtension(path, ".json")), "Observation pair was not saved");
             var metadata = JObject.Parse(File.ReadAllText(Path.ChangeExtension(path, ".json")));
             Check((long)metadata["Sequence"] == savedSequence && (int)metadata["Width"] == 100 &&
@@ -232,7 +234,8 @@ internal static partial class VideoLifetimeTests
                 "Source replacement retained selected identity or display ownership");
             var stale = TestVisionFrame(11, Color.Red, new[] { Car() }, session.Generation, 1);
             session.PublishVideoFrame(session.Generation, stale); Tick(player);
-            Check(player.SaveObservation() == null, "Stale observation was saved");
+            Check(WaitUi(player.SaveObservationAsync(), "stale observation refusal") == null,
+                "Stale observation was saved");
             player.StopStream(); CheckDisposed(stale.Image);
         }
         Check(Path.GetFullPath(directory).StartsWith(Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory),

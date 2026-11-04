@@ -237,6 +237,7 @@ internal static partial class VideoLifetimeTests
             Check(!video.IsActive, "Plugin exit left HUD running");
             Check(menuDisposed, "Plugin exit retained its video menu subscription");
         }
+        MediaWorkerHost.RequestStart();
     }
 
     private static void DisposedSubscriptions()
@@ -246,9 +247,11 @@ internal static partial class VideoLifetimeTests
         {
             var view = CreateDisposedView(shutdown.Token);
             var video = CreateDisposedHudVideo(hud);
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            WaitUi(() =>
+            {
+                GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+                return !view.IsAlive && !video.IsAlive;
+            }, "disposed view continuations and subscriptions to release");
             Check(!view.IsAlive, "Shutdown subscription retained disposed video view");
             Check(!video.IsAlive, "HUD subscription retained disposed video owner");
             GC.KeepAlive(hud);

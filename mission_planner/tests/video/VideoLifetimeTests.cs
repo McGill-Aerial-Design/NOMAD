@@ -14,8 +14,14 @@ internal static partial class VideoLifetimeTests
     [STAThread]
     private static int Main(string[] args)
     {
+        var previousContext = SynchronizationContext.Current;
+        bool autoInstall = WindowsFormsSynchronizationContext.AutoInstall;
+        WindowsFormsSynchronizationContext uiContext = null;
         try
         {
+            WindowsFormsSynchronizationContext.AutoInstall = false;
+            uiContext = new WindowsFormsSynchronizationContext();
+            SynchronizationContext.SetSynchronizationContext(uiContext);
             string references = args[0];
             AppDomain.CurrentDomain.AssemblyResolve += (sender, request) =>
             {
@@ -24,11 +30,15 @@ internal static partial class VideoLifetimeTests
                 return File.Exists(path) ? Assembly.LoadFrom(path) : null;
             };
             ConfigureVideoTestStorage();
+            if (args.Length == 3 && args[1] == "--filter") { _filter = args[2]; }
             if (args.Length == 3 && args[1] == "--capture-probe")
             {
                 Run("native capture pipeline stays NULL and preserves exact UTF-8 device identity", () => CaptureNativeNull(args[2]));
                 return 0;
             }
+            Run("owned media worker faults preserve parent UI and bounded plain recovery", MediaWorkerIsolation);
+            Run("owned media worker held operations and high-rate display alignment", MediaWorkerHeldOperations);
+            Run("native media transport and opt-in isolated GPU pipeline", NativeMediaTransport);
             Run("local capture inputs share playback and exact device ownership", LocalCaptureInputs);
             Run("local capture profile validation and configuration round trip", LocalCaptureProfiles);
             Run("passive capture picker, missing device and draft isolation", LocalCaptureSettings);
@@ -73,6 +83,7 @@ internal static partial class VideoLifetimeTests
             Run("background plugin cancellation", BackgroundShutdown);
             Run("already cancelled plugin token", AlreadyCancelledShutdown);
             Run("borrowed native frame lifetime", BorrowedFrameLifetime);
+            Run("retained video envelopes release pixels after the last owner", RetainedFrameLifetime);
             Run("fresh receipts of frozen pixels expose capture-time observability limit", FreshReceiptsDoNotEstablishFreshCapture);
             Run("dashboard preview reopen and shutdown", DashboardShutdown);
             Run("UDP input pipeline", VideoUdpInput);
@@ -84,6 +95,7 @@ internal static partial class VideoLifetimeTests
             Run("empty video profiles start no source", EmptyVideoDoesNotStart);
             Run("video drafts, rename, selection and aircraft isolation", VideoSettingsDrafts);
             Run("active input replacement, cached views and stopped state", ActiveVideoInput);
+            Run("pending video restart uses the latest input and Stop retires it", PendingPlaybackRestart);
             Run("active input save ownership, rollback and HUD replacement", ActiveVideoInputSave);
             Run("definition editing preserves active selection", VideoDefinitionSelection);
             Run("vision envelope, detector toggles and inference cancellation", VisionWorkerLifetime);
@@ -97,6 +109,7 @@ internal static partial class VideoLifetimeTests
             Run("bounded gimbal tracking angles", BoundedTrackingAngles);
             Run("generic visual worker selection, replacement, loss and retirement", GenericVisualWorker);
             Run("pending tracker initialization waits for a fresh result without control admission", PendingRegionInitialization);
+            Run("tracking samples stay independent of newer plain display frames", TrackingSampleDisplayIndependence);
             Run("zoom selection, manual override and observation ownership", VisionSelectionAndObservation);
             Run("natural EOF retires selection and calibration validates", VisionEndAndCalibration);
             return 0;
@@ -107,7 +120,14 @@ internal static partial class VideoLifetimeTests
             return 1;
         }
         finally
-        { CleanupVideoTestStorage(); }
+        {
+            MediaWorkerHost.Shutdown();
+            Wait(MediaWorkerHost.ShutdownCompletion, "final media fixture exit");
+            CleanupVideoTestStorage();
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+            uiContext?.Dispose();
+            WindowsFormsSynchronizationContext.AutoInstall = autoInstall;
+        }
     }
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
@@ -129,8 +149,11 @@ internal static partial class VideoLifetimeTests
         { Directory.Delete(metadata, true); }
     }
 
+    private static string _filter;
+
     private static void Run(string name, Action test)
     {
+        if (_filter != null && name.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) { return; }
         test();
         Console.WriteLine("PASS: " + name);
     }
@@ -153,8 +176,30 @@ internal static partial class VideoLifetimeTests
         Check(task.Wait(TimeSpan.FromSeconds(10)), "Timed out waiting for " + name);
     }
 
+    private static T WaitUi<T>(Task<T> task, string name)
+    {
+        WaitUi((Task)task, name);
+        return task.GetAwaiter().GetResult();
+    }
+
+    private static void WaitUi(Task task, string name)
+    {
+        WaitUi(() => task.IsCompleted, name);
+        task.GetAwaiter().GetResult();
+    }
+
+    private static void WaitUi(Func<bool> ready, string name)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (!ready() && clock.Elapsed < TimeSpan.FromSeconds(10))
+        { Application.DoEvents(); Thread.Sleep(1); }
+        Check(ready(), "Timed out waiting for " + name);
+    }
+
     private static void CheckClean(FakeVideoPipeline fake)
     {
+        Check(SpinWait.SpinUntil(() => fake.Resources == 0 && fake.Disposals == 1, TimeSpan.FromSeconds(10)),
+            "Timed out waiting for asynchronous pipeline cleanup");
         Check(fake.Resources == 0, "Pipeline resources remain: " + fake.Resources);
         Check(fake.Disposals == 1, "Pipeline disposal count: " + fake.Disposals);
     }
@@ -168,6 +213,7 @@ internal static partial class VideoLifetimeTests
             Wait(fake.ReadEntered, "streaming");
             session.Stop();
             session.Stop();
+            Wait(session.Completion, "repeated stop completion");
             Check(session.State == VideoState.Stopped, "Repeated stop did not remain stopped");
             Check(session.Completion.IsCompleted, "Stop returned with work running");
             CheckClean(fake);
@@ -187,6 +233,7 @@ internal static partial class VideoLifetimeTests
             Wait(fake.ReadEntered, "streaming");
             Check(!session.Start("duplicate"), "Duplicate streaming start was accepted");
             session.Stop();
+            Wait(session.Completion, "duplicate start cleanup");
             Check(fake.Starts == 1, "Duplicate pipelines started: " + fake.Starts);
             CheckClean(fake);
         }
@@ -223,12 +270,15 @@ internal static partial class VideoLifetimeTests
         {
             session.Start("fake");
             Wait(fake.StartEntered, "held startup");
-            var stopping = Task.Run(() => { if (dispose) { session.Dispose(); } else { session.Stop(); } });
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            if (dispose) { session.Dispose(); } else { session.Stop(); }
+            Check(clock.ElapsedMilliseconds < 100, "Retirement waited for held native startup");
             Wait(fake.Cancelled, "startup cancellation");
-            Check(!stopping.IsCompleted, "Stop did not wait for owned startup");
+            Check(!session.Completion.IsCompleted && fake.Disposals == 0,
+                "Held startup was reported complete or disposed before its native owner returned");
             Check(!session.Start("duplicate"), "Start was accepted during shutdown");
             fake.ReleaseStart.Set();
-            Wait(stopping, "shutdown join");
+            Wait(session.Completion, "shutdown completion");
             Check(!fake.ReadEntered.IsSet, "Cancelled startup resurrected streaming");
             CheckClean(fake);
             Check(session.State == (dispose ? VideoState.Disposed : VideoState.Stopped), "Incorrect shutdown state");
@@ -248,6 +298,7 @@ internal static partial class VideoLifetimeTests
         session.Dispose();
         session.Dispose();
         Check(session.State == VideoState.Disposed, "Dispose was not terminal");
+        Wait(session.Completion, "streaming disposal completion");
         Check(session.Completion.IsCompleted, "Dispose retained work");
         CheckClean(fake);
     }
@@ -263,6 +314,7 @@ internal static partial class VideoLifetimeTests
             Wait(first.ReadEntered, "first stream");
             long oldGeneration = session.Generation;
             session.Stop();
+            Wait(session.Completion, "first stream retirement");
             Check(session.Start("second"), "Restart was rejected");
             Wait(second.ReadEntered, "second stream");
             var current = new Bitmap(2, 2);
@@ -298,6 +350,7 @@ internal static partial class VideoLifetimeTests
             session.Start("fake");
             Wait(fake.ReadEntered, "streaming");
             Wait(Task.WhenAll(Task.Run(() => session.Stop()), Task.Run(() => session.Stop())), "concurrent stops");
+            Wait(session.Completion, "concurrent stop completion");
             CheckClean(fake);
             Check(session.State == VideoState.Stopped, "Concurrent stop left stopping state");
         }
@@ -341,11 +394,17 @@ internal static partial class VideoLifetimeTests
         {
             session.Start("fake");
             Wait(fake.ReadEntered, "held read");
-            var stopping = Task.Run(() => session.Stop());
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            session.Stop();
+            Check(clock.ElapsedMilliseconds < 100, "Stop blocked on a held native read");
             Wait(fake.Cancelled, "read cancellation");
-            Check(!stopping.IsCompleted, "Stop returned before read drained");
+            Check(!session.Completion.IsCompleted && fake.Disposals == 0,
+                "Held read was reported complete or disposed before its native owner returned");
+            var stale = new Bitmap(1, 1);
+            session.PublishFrame(session.Generation - 1, stale);
+            CheckDisposed(stale);
             fake.ReleaseRead.Set();
-            Wait(stopping, "late read drainage");
+            Wait(session.Completion, "late read drainage");
             CheckDisposed(fake.LateFrame);
             Check(session.TakeFrame() == null, "Late result was retained after stop");
             CheckClean(fake);

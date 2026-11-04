@@ -3,28 +3,32 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 
 namespace NOMAD.MissionPlanner
 {
     public partial class EmbeddedVideoPlayer
     {
-        internal string SaveObservation()
+        private int _observationInFlight;
+
+        internal async Task<string> SaveObservationAsync()
         {
             ValidateUiThread();
-            var frame = _displayedVideoFrame;
-            if (frame?.Fresh != true) { SetTrackingStatus("No fresh frame available to save"); return null; }
-            string png = null, json = null;
-            bool createdPng = false, createdJson = false;
+            if (IsDisposed || _displayedVideoFrame?.Fresh != true)
+            { if (!IsDisposed) { SetTrackingStatus("No fresh frame available to save"); } return null; }
+            if (Interlocked.CompareExchange(ref _observationInFlight, 1, 0) != 0) { return null; }
+            VideoFrame frame = null;
             try
             {
+                frame = _displayedVideoFrame.Retain();
                 string directory = ObservationDirectory ?? Path.Combine(NOMADStorage.PluginsDirectory,
                     "NOMAD", "observations");
-                Directory.CreateDirectory(directory);
                 string name = "NOMAD_observation_" + DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + "_" +
                     Guid.NewGuid().ToString("N").Substring(0, 8);
-                png = Path.Combine(directory, name + ".png");
-                json = Path.Combine(directory, name + ".json");
+                string png = Path.Combine(directory, name + ".png");
+                string json = Path.Combine(directory, name + ".json");
                 object[] transitions;
                 RectangleF? selected;
                 string label, selectionDetector;
@@ -52,7 +56,8 @@ namespace NOMAD.MissionPlanner
                     SelectedTarget = selected.HasValue && frame.Region?.Revision == regionRevision
                         ? new { OptionalDetectorLabel = label, SelectionDetectorIdentity = selectionDetector,
                             Mode = frame.Region.Mode.ToString(), State = frame.Region.State.ToString(),
-                            Tracker = frame.Region.Mode == VisualTrackingMode.Area ? "OpenCV ORB planar reference" : "OpenCV CSRT",
+                            Tracker = frame.Region.Mode == VisualTrackingMode.Area ? "OpenCV ORB planar reference" :
+                                _input.ObjectTracker == "GPU" ? "EfficientTAM Ti512 / DirectML" : "OpenCV CSRT",
                             Found = frame.Region.Found, ReferenceRetained = _session.HasRegion(regionRevision),
                             Box = frame.Region.Found ? frame.Region.Bounds : null,
                             CanonicalAimPoint = frame.Region.Found ? frame.Region.AimPoint : null,
@@ -65,26 +70,48 @@ namespace NOMAD.MissionPlanner
                         Available = currentCommand, ObservedPhysicalAngles = false },
                     TrackingStatus, LifetimeSubmittedTrackingCommands = SubmittedTrackingCommands, Transitions = transitions,
                 };
-                using (var image = (Bitmap)frame.Image.Clone())
-                using (var output = new FileStream(png, FileMode.CreateNew, FileAccess.Write))
-                { createdPng = true; image.Save(output, System.Drawing.Imaging.ImageFormat.Png); }
-                using (var output = new StreamWriter(new FileStream(json, FileMode.CreateNew, FileAccess.Write)))
-                { createdJson = true; output.Write(JsonConvert.SerializeObject(metadata, Formatting.Indented)); }
-                LastObservationPath = png;
-                SetTrackingStatus("Observation saved: " + name);
+                await Task.Run(() => WriteObservation(frame, metadata, png, json));
+                if (!IsDisposed)
+                {
+                    LastObservationPath = png;
+                    SetTrackingStatus("Observation saved: " + name);
+                }
                 return png;
             }
             catch (Exception)
             {
+                if (!IsDisposed) { SetTrackingStatus("Observation could not be saved; check the output folder"); }
+                return null;
+            }
+            finally { frame?.Dispose(); Interlocked.Exchange(ref _observationInFlight, 0); }
+        }
+
+        private static void WriteObservation(VideoFrame frame, object metadata, string png, string json)
+        {
+            bool createdPng = false, createdJson = false;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(png));
+                var image = MediaPixels.Clone(frame.Image);
                 try
                 {
-                    if (createdPng && File.Exists(png)) { File.Delete(png); }
-                    if (createdJson && File.Exists(json)) { File.Delete(json); }
+                    using (var output = new FileStream(png, FileMode.CreateNew, FileAccess.Write))
+                    { createdPng = true; image.Save(output, System.Drawing.Imaging.ImageFormat.Png); }
+                }
+                finally { MediaPixels.Dispose(image); }
+                using (var output = new StreamWriter(new FileStream(json, FileMode.CreateNew, FileAccess.Write)))
+                { createdJson = true; output.Write(JsonConvert.SerializeObject(metadata, Formatting.Indented)); }
+            }
+            catch
+            {
+                try
+                {
+                    if (createdPng) { File.Delete(png); }
+                    if (createdJson) { File.Delete(json); }
                 }
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
-                SetTrackingStatus("Observation could not be saved; check the output folder");
-                return null;
+                throw;
             }
         }
 

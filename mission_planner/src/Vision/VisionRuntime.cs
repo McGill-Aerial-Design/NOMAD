@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#if MEDIA_WORKER
 using System;
 using System.IO;
 using System.Linq;
@@ -299,3 +300,21 @@ namespace NOMAD.MissionPlanner
         private static extern uint GetModuleFileName(IntPtr module, System.Text.StringBuilder name, int length);
     }
 }
+
+#else
+// SPDX-License-Identifier: Apache-2.0
+using System.Threading;
+namespace NOMAD.MissionPlanner
+{
+    internal static class VisionRuntime
+    {
+        internal static string BuiltinModelPath { get; private set; }
+        internal static void EnsureLoaded(CancellationToken token) => EnsureBuiltinModel(token);
+        internal static void EnsureBuiltinModel(CancellationToken token)
+        {
+            using (var channel = MediaWorkerHost.Open(token))
+            { BuiltinModelPath = channel.Call(new MediaMessage { Operation = "builtin" }, token).Text; }
+        }
+    }
+}
+#endif

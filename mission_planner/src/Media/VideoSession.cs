@@ -9,19 +9,16 @@ using System.Threading.Tasks;
 
 namespace NOMAD.MissionPlanner
 {
-    internal interface IVideoPipeline : IDisposable
-    {
-        void Start(string pipeline, CancellationToken cancellation);
-        Bitmap ReadFrame(CancellationToken cancellation, out long receivedTicks, out DateTime receivedUtc);
-    }
-
     internal enum VideoState { Stopped, Starting, Streaming, Stopping, Disposed }
 
     // The worker alone touches the pipeline; consumers own frames returned by TakeFrame.
     internal sealed partial class VideoSession : IDisposable
     {
         private readonly object _gate = new object();
-        private readonly object _stopGate = new object();
+        private readonly bool _isolated;
+        private bool _plainRecovery;
+        private VideoTrackingSample _pendingTracking;
+        private long _trackingSequence;
         private readonly Func<IVideoPipeline> _createPipeline;
         private CancellationTokenSource _cancellation;
         private Task _worker = Task.CompletedTask;
@@ -43,6 +40,8 @@ namespace NOMAD.MissionPlanner
             NOMADConfig trackingAircraft = null, VideoInputProfile trackingProfile = null)
         {
             _createPipeline = createPipeline;
+            _isolated = createPipeline == MediaWorkerPipeline.Create;
+            if (_isolated) { MediaWorkerHost.Failed += OnMediaWorkerFailed; }
             _createDetector = createDetector ?? VisionDetectorFactory.Create;
             _createTracker = createTracker;
             _trackingAircraft = trackingAircraft; _trackingProfile = trackingProfile?.Copy() ?? new VideoInputProfile();
@@ -59,7 +58,7 @@ namespace NOMAD.MissionPlanner
         {
             lock (_gate)
             {
-                _visionCancellation?.Cancel();
+                CancelLater(_visionCancellation);
                 ++_detectionRevision;
                 _detectionEnabled = enabled;
                 _modelProfilePath = modelProfilePath ?? "";
@@ -80,6 +79,8 @@ namespace NOMAD.MissionPlanner
                 {
                     return false;
                 }
+                if (_isolated) { MediaWorkerHost.RequestStart(); }
+                _plainRecovery = false;
                 _cancellation?.Dispose();
                 _cancellation = new CancellationTokenSource();
                 var token = _cancellation.Token;
@@ -95,113 +96,157 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                token.ThrowIfCancellationRequested();
-                using (var resource = shareKey == null ? _createPipeline() :
-                    SharedVideoCapture.Create(shareKey, _createPipeline))
+                while (!token.IsCancellationRequested)
                 {
-                    resource.Start(pipeline, token);
-                    token.ThrowIfCancellationRequested();
-                    lock (_gate)
+                    try
                     {
-                        if (generation != _generation)
+                        using (var resource = shareKey == null ? _createPipeline() :
+                            SharedVideoCapture.Create(shareKey, _createPipeline))
                         {
-                            return;
+                            resource.Start(pipeline, token);
+                            token.ThrowIfCancellationRequested();
+                            lock (_gate)
+                            {
+                                generation = _generation;
+                                if (_state == VideoState.Stopping || _state == VideoState.Disposed) { return; }
+                                _state = VideoState.Streaming;
+                            }
+                            ReadFrames(resource, generation, token);
                         }
-                        _state = VideoState.Streaming;
+                        return;
                     }
-                    ReadFrames(resource, generation, token);
+                    catch (Exception error) when (_isolated && IsWorkerFailure(error) &&
+                        MediaWorkerHost.CanRecover && !token.IsCancellationRequested)
+                    {
+                        lock (_gate)
+                        {
+                            if (_state == VideoState.Stopping || _state == VideoState.Disposed) { return; }
+                            _state = VideoState.Starting;
+                            generation = _generation;
+                        }
+                    }
                 }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-            catch (Exception ex)
-            {
-                lock (_gate)
-                {
-                    if (generation == _generation || _state == VideoState.Stopping || _state == VideoState.Disposed)
-                    {
-                        _error = ex.Message;
-                    }
-                }
-            }
+            catch (Exception error)
+            { lock (_gate) { if (_state != VideoState.Disposed && !(token.IsCancellationRequested && IsWorkerFailure(error)))
+                { _error = error.Message; } } }
             finally
             {
                 lock (_gate)
                 {
-                    if (generation == _generation)
+                    if (_state != VideoState.Stopping && _state != VideoState.Disposed)
                     {
-                        RetireRegion();
-                        ClearPendingFrame();
-                        _cancellation?.Dispose();
-                        _cancellation = null;
-                        _state = VideoState.Stopped;
+                        RetireRegion(); ClearPendingFrame(); _state = VideoState.Stopped;
+                        _cancellation?.Dispose(); _cancellation = null;
                     }
                 }
             }
         }
 
+        private static bool IsWorkerFailure(Exception error) => error is MediaWorkerException ||
+            (error.InnerException != null && IsWorkerFailure(error.InnerException));
+
+        private void OnMediaWorkerFailed()
+        {
+            lock (_gate)
+            {
+                if (_state == VideoState.Stopped || _state == VideoState.Stopping || _state == VideoState.Disposed) { return; }
+                ++_generation; ++_detectionRevision; _plainRecovery = true; CancelLater(_visionCancellation); _detectionEnabled = false; _detectionLoading = false;
+                RetireRegion(); ClearPendingFrame(); _pendingTracking = null;
+                _visionError = "Media worker stopped; detection and tracking are off. Select again after video recovers.";
+                _state = VideoState.Starting;
+            }
+        }
+
         private void ReadFrames(IVideoPipeline pipeline, long generation, CancellationToken token)
         {
-            using (var detection = new DetectionWorker(this, token))
-            using (var tracking = new RegionWorker(this, token))
+            using (var source = CancellationTokenSource.CreateLinkedTokenSource(token))
             using (var motionHistory = new VideoMotionHistory(_trackingAircraft))
             {
-                while (!token.IsCancellationRequested)
+                var detection = new DetectionWorker(this, source.Token);
+                var tracking = new RegionWorker(this, source.Token);
+                var display = new DisplayWindow(this, generation, source.Token);
+                var detector = new AnalysisLane(candidate =>
                 {
-                    var image = pipeline.ReadFrame(token, out long received, out DateTime utc);
-                    if (image == null) { return; }
-                    VideoFrame processed = null;
-                    if (_trackingAircraft != null) { motionHistory.Capture(Stopwatch.GetTimestamp()); }
-                    var motion = motionHistory.Snapshot(received, _trackingProfile.CameraDelayEstimateMs);
-                    long sequence = Interlocked.Increment(ref _sequence);
-                    VideoRegionResult region = null;
-                    long revision;
-                    bool enabled;
-                    string path;
-                    lock (_gate)
-                    { revision = _detectionRevision; enabled = _detectionEnabled; path = _modelProfilePath; }
-                    IReadOnlyList<VideoDetection> detections = Array.Empty<VideoDetection>();
-                    string identity = "";
                     try
                     {
-                        region = tracking.Update(image, received, sequence, motion);
-                        var detector = detection.Current(revision, enabled, path);
-                        lock (_gate)
-                        {
-                            if (revision != _detectionRevision)
-                            { revision = _detectionRevision; enabled = _detectionEnabled; detector = null; }
-                        }
-                        if (enabled && detector != null)
-                        {
-                            detections = detector.Detect(image, detection.Token);
-                            identity = detector.Identity;
-                        }
-                        token.ThrowIfCancellationRequested();
-                        processed = new VideoFrame(image, detections, sequence,
-                            generation, received, utc, identity, region, revision, motion);
-                        image = null;
-                        lock (_gate)
-                        {
-                            if (revision == _detectionRevision)
-                            { PublishVideoFrame(generation, processed); processed = null; }
-                        }
+                        var current = detection.Current(candidate.Frame.DetectionRevision,
+                            candidate.Detect, candidate.Model);
+                        var values = candidate.Detect && current != null
+                            ? current.Detect(candidate.Frame.Image, detection.Token) : Array.Empty<VideoDetection>();
+                        lock (candidate.Gate)
+                        { candidate.Detections = values; candidate.Identity = current?.Identity ?? ""; }
                     }
-                    catch (OperationCanceledException)
+                    catch (OperationCanceledException) { }
+                    catch (Exception error) { detection.Fail(candidate.Frame.DetectionRevision, error); }
+                    finally { lock (candidate.Gate) { candidate.DetectionDone = true; } }
+                }, source.Token, cleanup: detection.Dispose);
+                var tracker = new AnalysisLane(candidate =>
+                {
+                    try
                     {
-                        token.ThrowIfCancellationRequested();
+                        var frame = candidate.Frame;
+                        var region = tracking.Update(frame.Image, frame.ReceivedTicks, frame.Sequence, frame.Motion);
+                        lock (candidate.Gate) { candidate.Region = region; }
+                        if (region != null)
+                        { PublishTrackingSample(generation, new VideoTrackingSample(frame.Image.Size, frame.Sequence,
+                            generation, frame.ReceivedTicks, frame.ReceivedUtc, region, frame.Motion)); }
                     }
-                    catch (Exception error) when (!token.IsCancellationRequested)
+                    catch (OperationCanceledException) { }
+                    catch (Exception error) { Log.Error("Tracking unavailable: " + error.GetType().Name); }
+                    finally { lock (candidate.Gate) { candidate.TrackingDone = true; } }
+                }, source.Token, tracking.Warm, tracking.Dispose);
+                try
+                {
+                    while (!source.IsCancellationRequested)
                     {
-                        detection.Fail(revision, error);
-                        if (image != null)
+                        var image = pipeline.ReadFrame(source.Token, out long received, out DateTime utc);
+                        if (image == null) { return; }
+                        VideoFrame frame = null;
+                        try
                         {
-                            PublishVideoFrame(generation, new VideoFrame(image, Array.Empty<VideoDetection>(),
-                                sequence, generation, received, utc, "", region, DetectionRevision, motion));
+                            image = MediaPixels.Own(image, received);
+                            if (_trackingAircraft != null) { motionHistory.Capture(received); }
+                            var motion = motionHistory.Snapshot(received, _trackingProfile.CameraDelayEstimateMs);
+                            bool enabled; string path; long revision;
+                            lock (_gate) { enabled = _detectionEnabled; path = _modelProfilePath; revision = _detectionRevision; }
+                            frame = new VideoFrame(image, Array.Empty<VideoDetection>(), Interlocked.Increment(ref _sequence),
+                                generation, received, utc, "", detectionRevision: revision, motion: motion);
                             image = null;
+                            var candidate = new DisplayCandidate(frame, enabled, path);
+                            detector.Offer(candidate); tracker.Offer(candidate); display.Offer(candidate);
+                            frame = null;
                         }
+                        finally { frame?.Dispose(); MediaPixels.Dispose(image); }
                     }
-                    finally { processed?.Dispose(); image?.Dispose(); }
+                }
+                finally
+                {
+                    source.Cancel(); detector.Stop(); tracker.Stop(); display.Stop();
+                    Task.WhenAll(detector.Completion, tracker.Completion, display.Completion).GetAwaiter().GetResult();
                 }
             }
+        }
+
+        internal void PublishTrackingSample(long generation, VideoTrackingSample sample)
+        {
+            lock (_gate)
+            {
+                if (generation != _generation || sample.Generation != generation || _state != VideoState.Streaming ||
+                    sample.Region == null || sample.Region.Revision != _selectionRevision ||
+                    sample.Sequence <= _trackingSequence) { return; }
+                _trackingSequence = sample.Sequence; _pendingTracking = sample;
+            }
+        }
+
+        internal VideoTrackingSample TakeTrackingSample()
+        { lock (_gate) { var result = _pendingTracking; _pendingTracking = null; return result; } }
+
+        private static void CancelLater(CancellationTokenSource source)
+        {
+            if (source == null) { return; }
+            Task.Run(() => { try { source.Cancel(); } catch (ObjectDisposedException) { } });
         }
 
         internal void PublishFrame(long generation, Bitmap frame) =>
@@ -219,6 +264,7 @@ namespace NOMAD.MissionPlanner
                 }
                 ClearPendingFrame();
                 _pendingFrame = frame;
+                if (frame.Region != null) { PublishTrackingSample(generation, new VideoTrackingSample(frame)); }
             }
         }
 
@@ -237,33 +283,30 @@ namespace NOMAD.MissionPlanner
 
         private void Stop(bool disposing)
         {
-            lock (_stopGate)
+            lock (_gate)
             {
-                StopWorker(disposing);
+                long generation = ++_generation;
+                RetireRegion(); ClearPendingFrame(); _pendingTracking = null;
+                _state = disposing || _state == VideoState.Disposed ? VideoState.Disposed : VideoState.Stopping;
+                if (disposing && _isolated) { MediaWorkerHost.Failed -= OnMediaWorkerFailed; }
+                var source = _cancellation;
+                CancelLater(source);
+                var prior = _worker;
+                _worker = Task.Run(() => FinishStop(prior, source, generation));
             }
         }
 
-        private void StopWorker(bool disposing)
+        private async Task FinishStop(Task worker, CancellationTokenSource source, long generation)
         {
-            Task worker;
-            lock (_gate)
+            await Task.Yield();
+            try { await worker.ConfigureAwait(false); }
+            finally
             {
-                ++_generation;
-                RetireRegion();
-                _state = disposing || _state == VideoState.Disposed ? VideoState.Disposed : VideoState.Stopping;
-                _cancellation?.Cancel();
-                worker = _worker;
-            }
-            // No worker invokes a consumer or needs its UI thread to finish.
-            worker.GetAwaiter().GetResult();
-            lock (_gate)
-            {
-                ClearPendingFrame();
-                _cancellation?.Dispose();
-                _cancellation = null;
-                if (_state != VideoState.Disposed)
+                lock (_gate)
                 {
-                    _state = VideoState.Stopped;
+                    source?.Dispose();
+                    if (ReferenceEquals(_cancellation, source)) { _cancellation = null; }
+                    if (_generation == generation && _state != VideoState.Disposed) { _state = VideoState.Stopped; }
                 }
             }
         }

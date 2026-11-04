@@ -27,29 +27,31 @@ namespace NOMAD.MissionPlanner
             MinimumSize = new Size(460, 260);
             StartPosition = FormStartPosition.CenterParent;
             var actions = _actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(8) };
-            actions.Controls.Add(ControlFactory.Button("Add", (sender, args) => Run(() => Edit(null))));
+            actions.Controls.Add(ControlFactory.Button("Add", async (sender, args) => await Run(() => Edit(null))));
             _duplicate = ControlFactory.Button("Duplicate", async (sender, args) => await DuplicateSelected());
             actions.Controls.Add(_duplicate);
-            _edit = ControlFactory.Button("Edit", (sender, args) => Run(() => Edit(Selected())));
+            _edit = ControlFactory.Button("Edit", async (sender, args) => await Run(() => Edit(Selected())));
             actions.Controls.Add(_edit);
-            actions.Controls.Add(ControlFactory.Button("Import", (sender, args) => Run(Import)));
-            _export = ControlFactory.Button("Export", (sender, args) => Run(Export));
-            _remove = ControlFactory.Button("Remove", (sender, args) => Run(Remove));
+            actions.Controls.Add(ControlFactory.Button("Import", async (sender, args) => await Run(Import)));
+            _export = ControlFactory.Button("Export", async (sender, args) => await Run(Export));
+            _remove = ControlFactory.Button("Remove", async (sender, args) => await Run(Remove));
             actions.Controls.Add(_export); actions.Controls.Add(_remove);
             var close = ControlFactory.Button("Close", (sender, args) => Close());
             close.DialogResult = DialogResult.Cancel; CancelButton = close;
             actions.Controls.Add(close);
             Controls.Add(_models); Controls.Add(actions);
             _models.SelectedIndexChanged += (sender, args) => UpdateActions();
-            RefreshModels(_current);
+            Shown += async (sender, args) => await Run(() => RefreshModels(_current));
         }
 
         private VisionModelChoice Selected() => _models.SelectedItem as VisionModelChoice;
-        private void RefreshModels(string preferred = null)
+        private async Task RefreshModels(string preferred = null)
         {
             string selected = preferred ?? Selected()?.Path ?? "";
+            var choices = await Task.Run(() => _catalog.Choices(_current));
+            if (IsDisposed || _shutdown.IsCancellationRequested) { return; }
             _models.Items.Clear();
-            _models.Items.AddRange(_catalog.Choices(_current).ToArray());
+            _models.Items.AddRange(choices.ToArray());
             _models.SelectedIndex = 0;
             for (int index = 0; index < _models.Items.Count; index++)
             {
@@ -74,7 +76,7 @@ namespace NOMAD.MissionPlanner
             var profile = choice.Path == "" ? VisionModelProfile.Builtin() : VisionModelProfile.Load(choice.Path);
             if (choice.Path == "")
             {
-                VisionRuntime.EnsureLoaded(token);
+                VisionRuntime.EnsureBuiltinModel(token);
                 profile.Model = VisionRuntime.BuiltinModelPath;
             }
             token.ThrowIfCancellationRequested();
@@ -93,7 +95,7 @@ namespace NOMAD.MissionPlanner
             {
                 var token = _shutdown.Token;
                 var profile = await Task.Run(() => PrepareDuplicate(choice, token), token);
-                if (!IsDisposed && !token.IsCancellationRequested) { EditProfile(profile); }
+                if (!IsDisposed && !token.IsCancellationRequested) { await EditProfile(profile); }
             }
             catch (OperationCanceledException) { }
             catch (Exception error) when (!(error is OutOfMemoryException) && !_shutdown.IsCancellationRequested)
@@ -110,17 +112,19 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private void Edit(VisionModelChoice choice)
+        private async Task Edit(VisionModelChoice choice)
         {
             if (choice?.Path == "") { throw new InvalidOperationException("The built-in model is read-only. Use Add for another model."); }
-            var profile = choice == null ? VisionModelProfile.Builtin() : VisionModelProfile.Load(choice.Path);
+            var profile = choice == null ? VisionModelProfile.Builtin() :
+                await Task.Run(() => VisionModelProfile.Load(choice.Path));
+            if (IsDisposed) { return; }
             if (choice == null) { profile.Name = "New YOLOX model"; profile.Model = ""; profile.Sha256 = ""; }
             bool managed = choice != null && VisionModelCatalog.SamePath(Path.GetDirectoryName(choice.Path),
                 _catalog.DirectoryPath);
-            EditProfile(profile, managed ? choice.Path : null);
+            await EditProfile(profile, managed ? choice.Path : null);
         }
 
-        private void EditProfile(VisionModelProfile profile, string path = null)
+        private async Task EditProfile(VisionModelProfile profile, string path = null)
         {
             while (true)
             {
@@ -129,47 +133,77 @@ namespace NOMAD.MissionPlanner
                     if (editor.ShowDialog(this) != DialogResult.OK) { return; }
                     profile = editor.Draft;
                 }
-                try { string saved = _catalog.Save(profile, path); RefreshModels(saved); return; }
+                try
+                {
+                    var draft = profile;
+                    string saved = await Task.Run(() => _catalog.Save(draft, path));
+                    if (!IsDisposed) { await RefreshModels(saved); }
+                    return;
+                }
                 catch (FormatException error)
-                { MessageBox.Show(this, error.Message, "Review model profile", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+                {
+                    if (IsDisposed) { return; }
+                    MessageBox.Show(this, error.Message, "Review model profile", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
             }
         }
 
-        private void Import()
+        private async Task Import()
         {
             using (var dialog = new OpenFileDialog { Filter = "Model profile (*.json)|*.json" })
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) { return; }
-                EditProfile(VisionModelProfile.Load(dialog.FileName));
+                string path = dialog.FileName;
+                var profile = await Task.Run(() => VisionModelProfile.Load(path));
+                if (!IsDisposed) { await EditProfile(profile); }
             }
         }
 
-        private void Export()
+        private async Task Export()
         {
             var selected = Selected(); if (selected == null) { return; }
             if (selected.Path == "") { throw new InvalidOperationException("Built-in weights are embedded; export a custom profile instead."); }
-            var profile = VisionModelProfile.Load(selected.Path);
             using (var dialog = new SaveFileDialog { Filter = "Model profile (*.json)|*.json", FileName = "vision-model.json" })
             {
                 if (dialog.ShowDialog(this) == DialogResult.OK)
-                { NOMADConfig.WriteAtomically(dialog.FileName, JsonConvert.SerializeObject(profile, Formatting.Indented)); }
+                {
+                    string output = dialog.FileName;
+                    await Task.Run(() => NOMADConfig.WriteAtomically(output,
+                        JsonConvert.SerializeObject(VisionModelProfile.Load(selected.Path), Formatting.Indented)));
+                }
             }
         }
 
-        private void Remove()
+        private async Task Remove()
         {
             var selected = Selected(); if (selected == null) { return; }
             if (MessageBox.Show(this, "Remove this profile? Cameras referencing it will report detection unavailable. " +
                 "The ONNX weights remain in place.", "Remove model profile", MessageBoxButtons.OKCancel,
                 MessageBoxIcon.Warning) != DialogResult.OK) { return; }
-            _catalog.Remove(selected.Path); RefreshModels();
+            await Task.Run(() => _catalog.Remove(selected.Path));
+            if (!IsDisposed) { await RefreshModels(); }
         }
 
-        private void Run(Action action)
+        private async Task Run(Func<Task> action)
         {
-            try { action(); }
+            if (_preparing) { return; }
+            _preparing = true; _models.Enabled = false;
+            foreach (Control control in _actions.Controls) { control.Enabled = ReferenceEquals(control, CancelButton); }
+            try { await action(); }
             catch (Exception error) when (!(error is OutOfMemoryException))
-            { MessageBox.Show(this, error.Message, "Model profile requires review", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            {
+                if (!IsDisposed && !_shutdown.IsCancellationRequested)
+                { MessageBox.Show(this, error.Message, "Model profile requires review", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            }
+            finally
+            {
+                if (!IsDisposed)
+                {
+                    _preparing = false; _models.Enabled = true;
+                    foreach (Control control in _actions.Controls) { control.Enabled = true; }
+                    UpdateActions();
+                }
+            }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs args)

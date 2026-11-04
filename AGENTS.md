@@ -13,7 +13,9 @@ video, native fence draft setup and the plugin-owned link router.
 - Keep each change useful and narrow. Prefer deleting superseded code to wrappers.
   Write explicit, shallow, human-readable C#; one job per helper, about 120 columns.
 - Use Mission Planner's actual reviewed APIs. Do not add an independent transport,
-  CLI, service, IPC compatibility layer or duplicate ordinary flight UI.
+  aircraft CLI, service, IPC compatibility layer or duplicate ordinary flight UI.
+  The private, version-matched media child and local pixel/control IPC are permitted
+  only for video/vision isolation; aircraft connections and commands stay in MP.
 - Bind custom controls to the selected connection, stream, aircraft IDs and profile
   generation. Fence stale inputs. Keep finite/range/calibration checks, confirmation
   interlocks, input-loss Safe, bounded native repeats and truthful outcomes.

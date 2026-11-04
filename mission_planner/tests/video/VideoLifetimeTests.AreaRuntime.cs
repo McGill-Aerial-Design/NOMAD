@@ -197,7 +197,12 @@ internal static partial class VideoLifetimeTests
                 PlayerVisionFrame(player, pipeline, Color.Blue);
                 Check(!player.IsTracking && player.RegionReady && player.SubmittedTrackingCommands == commands &&
                     visual.LastContext.Discontinuous,
-                    "Fresh pixels after stale input automatically regained control");
+                    "Fresh pixels after stale input automatically regained control: tracking=" + player.IsTracking +
+                    ", ready=" + player.RegionReady + ", commands=" + player.SubmittedTrackingCommands + "/" + commands +
+                    ", discontinuous=" + visual.LastContext.Discontinuous + ", selected=" + player.SelectedRegion.HasValue +
+                    ", status=" + player.TrackingStatus + ", sample=" + GetField<VideoTrackingSample>(player,
+                        "_latestTrackingSample")?.AgeSeconds + ", display=" + player.DisplayedVideoFrame?.AgeSeconds +
+                    ", current=" + session.IsRegionCurrent(GetField<long>(player, "_regionRevision")));
                 Check(player.StartTracking(), "UI-gap fixture could not explicitly arm");
                 peer.Pump(550, dispatchUi: false);
                 visual.State = VisualTrackingState.Searching;
@@ -364,7 +369,7 @@ internal static partial class VideoLifetimeTests
         player.ObservationDirectory = directory;
         try
         {
-            string path = player.SaveObservation();
+            string path = WaitUi(player.SaveObservationAsync(), "ground observation write");
             Check(path != null, "Current Searching frame could not be saved");
             var metadata = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(Path.ChangeExtension(path, ".json")));
             var selected = metadata["SelectedTarget"];

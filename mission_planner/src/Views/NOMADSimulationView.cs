@@ -225,7 +225,7 @@ namespace NOMAD.MissionPlanner
             var input = new VideoInputProfile { Name = "Simulation preview", Url = status.VideoUrl,
                 HorizontalFovDeg = status.CameraFov, TrackingCalibrated = false };
             // This borrowed view offers pixel detection/selection. Normal profile-bound gimbal control stays on Video.
-            _preview = new EmbeddedVideoPlayer(input, true, _shutdown, () => new GStreamerVideoPipeline());
+            _preview = new EmbeddedVideoPlayer(input, true, _shutdown, MediaWorkerPipeline.Create);
             _previewPanel.Controls.Add(_preview); _preview.Dock = DockStyle.Fill; _preview.StartStream();
         }
         internal void PausePreview()

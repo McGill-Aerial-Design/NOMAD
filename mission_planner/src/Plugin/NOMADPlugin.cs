@@ -62,6 +62,7 @@ namespace NOMAD.MissionPlanner
             {
                 loopratehz = 1;
                 ShutdownVideo();
+                MediaWorkerHost.RequestStart();
                 _simulationSession?.Dispose(); _simulationSession = null;
                 NOMADMainScreen.SetSimulationFactory(() => _simulationSession ?? (_simulationSession = new SimulationSession()));
                 _fenceSetupInput = new FenceSetupInput();
@@ -214,7 +215,7 @@ namespace NOMAD.MissionPlanner
             StopCustomControls();
             NOMADMainScreen.SetSimulationFactory(null);
             _simulationSession?.Dispose(); _simulationSession = null;
-            ShutdownVideo();
+            ShutdownVideo(true);
             NOMADMainScreen.SetFenceSetupInput(null);
             _fenceSetupInput = null;
             try
