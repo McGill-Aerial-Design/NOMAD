@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.IO;
 using Newtonsoft.Json;
@@ -14,6 +15,7 @@ namespace NOMAD.MissionPlanner
         public string CaptureDevicePath { get; set; } = "";
         public string Url { get; set; } = "";
         public string RtspTransport { get; set; } = "TCP";
+        public bool RtspSkipOptions { get; set; }
         public int LatencyMs { get; set; } = 100;
         public int QueueMaxBuffers { get; set; } = 1;
         public bool DropOldFrames { get; set; } = true;
@@ -33,11 +35,22 @@ namespace NOMAD.MissionPlanner
         public int PitchSign { get; set; } = 1;
         public int YawSign { get; set; } = 1;
         public int TrackingMaxRateDegSec { get; set; } = 10;
+        public List<ServoGimbalAxis> ServoGimbalAxes { get; set; } = new List<ServoGimbalAxis>();
 
-        internal VideoInputProfile Copy() => (VideoInputProfile)MemberwiseClone();
+        internal VideoInputProfile Copy()
+        {
+            var copy = (VideoInputProfile)MemberwiseClone();
+            copy.ServoGimbalAxes = ServoGimbalAxes?.Select(axis => axis?.Copy()).ToList();
+            return copy;
+        }
 
         internal void Validate()
         {
+            ServoGimbalAxis.Validate(ServoGimbalAxes);
+            if (TrackingCalibrated && ServoGimbalAxes.Any(axis =>
+                (axis.Axis == "Pitch" && (PitchMinDeg < axis.MinimumAngleDeg || PitchMaxDeg > axis.MaximumAngleDeg)) ||
+                (axis.Axis == "Yaw" && (YawMinDeg < axis.MinimumAngleDeg || YawMaxDeg > axis.MaximumAngleDeg))))
+            { throw new JsonSerializationException("Tracking travel limits must fit the configured servo gimbal angles."); }
             if (string.IsNullOrWhiteSpace(Name) || Name != Name.Trim() || Name.Length > 80 ||
                 Name.Any(char.IsControl))
             { throw new JsonSerializationException("Video input names must be trimmed text from 1 to 80 characters."); }

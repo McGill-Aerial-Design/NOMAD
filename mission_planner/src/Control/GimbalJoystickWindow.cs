@@ -390,6 +390,9 @@ namespace NOMAD.MissionPlanner
         // the active mode obvious.
         private void HighlightModeButtons()
         {
+            bool servo = OutputController.GimbalAxes?.Count > 0;
+            _btnMavTgt.Text = servo ? "Servo targets" : "MAVLink Tgt";
+            _btnMavTgt.Enabled = _btnRcTgt.Enabled = _btnNeutral.Enabled = _btnRetract.Enabled = !servo;
             SetModeButtonState(_btnMavTgt, _mountMode == MountMode.MavlinkTargeting);
             SetModeButtonState(_btnRcTgt, _mountMode == MountMode.RcTargeting);
             SetModeButtonState(_btnNeutral, _mountMode == MountMode.Neutral);

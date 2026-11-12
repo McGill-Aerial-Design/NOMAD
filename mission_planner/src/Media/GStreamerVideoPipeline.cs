@@ -19,6 +19,7 @@ namespace NOMAD.MissionPlanner
         private IntPtr _pipeline;
         private IntPtr _sink;
         private IntPtr _bus;
+        private static readonly BeforeSend SkipOptions = BeforeRtspSend;
 
         public void Start(string pipeline, CancellationToken cancellation)
         {
@@ -35,6 +36,17 @@ namespace NOMAD.MissionPlanner
             if (_sink == IntPtr.Zero || _bus == IntPtr.Zero)
             {
                 throw new InvalidOperationException("Video pipeline has no appsink or bus");
+            }
+            var source = Native.gst_bin_get_by_name(_pipeline, "nomad_rtsp_no_options");
+            if (source != IntPtr.Zero)
+            {
+                try
+                {
+                    if (g_signal_connect_data(source, "before-send", SkipOptions,
+                        IntPtr.Zero, IntPtr.Zero, 0) == 0)
+                    { throw new InvalidOperationException("RTSP compatibility could not be configured"); }
+                }
+                finally { gst_object_unref(source); }
             }
             Native.gst_app_sink_set_drop(_sink, true);
             Native.gst_app_sink_set_max_buffers(_sink, 1);
@@ -93,6 +105,14 @@ namespace NOMAD.MissionPlanner
             {
                 Native.gst_mini_object_unref(message);
             }
+        }
+
+        private static int BeforeRtspSend(IntPtr source, IntPtr message, IntPtr data)
+        {
+            const int options = 8;
+            // Some legacy receivers reset the connection on the optional OPTIONS request.
+            return gst_rtsp_message_parse_request(message, out int method, out _, out _) == 0 &&
+                method == options ? 0 : 1;
         }
 
         private static Bitmap CopyFrame(IntPtr sample)
@@ -206,6 +226,17 @@ namespace NOMAD.MissionPlanner
 
         [DllImport("libglib-2.0-0.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern void g_error_free(IntPtr error);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int BeforeSend(IntPtr source, IntPtr message, IntPtr data);
+
+        [DllImport("libgobject-2.0-0.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern uint g_signal_connect_data(IntPtr source, string signal, BeforeSend callback,
+            IntPtr data, IntPtr destroy, int flags);
+
+        [DllImport("libgstrtsp-1.0-0.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int gst_rtsp_message_parse_request(IntPtr message, out int method,
+            out IntPtr uri, out int version);
     }
 }
 

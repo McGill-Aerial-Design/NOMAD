@@ -185,7 +185,8 @@ namespace NOMAD.MissionPlanner
             {
                 Process = process; Id = process.Id; _job = job; Pipe = pipe; Secret = secret; Epoch = epoch;
                 Prefix = "Local\\NOMAD.Media." + secret + ".";
-                _exited = Task.Run(() => process.WaitForExit());
+                _exited = Task.Factory.StartNew(() => process.WaitForExit(), CancellationToken.None,
+                    TaskCreationOptions.LongRunning, TaskScheduler.Default);
             }
             internal bool WaitForExit(int milliseconds) => _exited.Wait(milliseconds);
             private void CloseJob() { if (Interlocked.Exchange(ref _jobClosed, 1) == 0) { _job.Dispose(); } }

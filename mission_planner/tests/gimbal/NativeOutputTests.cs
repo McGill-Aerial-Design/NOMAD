@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using NOMAD.MissionPlanner;
@@ -8,7 +10,7 @@ using NOMAD.MissionPlanner;
 // Native host doubles exercise dispatch and identity fences without aircraft or MP application state.
 public class MAVLink
 {
-    public enum MAV_CMD { DO_MOUNT_CONFIGURE }
+    public enum MAV_CMD { DO_MOUNT_CONFIGURE, DO_SET_SERVO }
 }
 namespace MissionPlanner
 {
@@ -24,6 +26,7 @@ namespace MissionPlanner
         public Func<Task<bool>> Configure = () => Task.FromResult(true);
         public readonly ManualResetEventSlim ConfigureEntered = new ManualResetEventSlim();
         public int Modes, Targets;
+        public readonly List<(int Channel, int Pwm)> ServoTargets = new List<(int Channel, int Pwm)>();
         public byte LastSystem, LastComponent;
         public double Pitch, Roll, Yaw;
         public Action TargetDispatched;
@@ -33,7 +36,8 @@ namespace MissionPlanner
         public Task<bool> doCommandAsync(byte system, byte component, MAVLink.MAV_CMD command,
             float p1, float p2, float p3, float p4, float p5, float p6, float p7, bool requireack)
         {
-            Modes++;
+            if (command == MAVLink.MAV_CMD.DO_SET_SERVO) { ServoTargets.Add(((int)p1, (int)p2)); }
+            else { Modes++; }
             LastSystem = system;
             LastComponent = component;
             AcknowledgementRequested = requireack;
@@ -61,6 +65,8 @@ namespace NOMAD.MissionPlanner
         public string JoystickGimbalHorizontalAxis = "Yaw", JoystickGimbalVerticalAxis = "Pitch";
         public bool JoystickGimbalHorizontalInverted, JoystickGimbalVerticalInverted;
         public bool GimbalArrowKeysEnabled;
+        public string SelectedVideoInputName = "";
+        public IReadOnlyList<ServoGimbalAxis> SelectedGimbalAxes { get; set; }
     }
     public sealed class NOMADProfiles
     {
@@ -381,6 +387,63 @@ internal static class NativeOutputTests
             connection.Targets == 1 && GimbalController.CurrentTrackingClaim == second,
             "Retired owner completion invalidated the new tracking claim");
     }
+    private static void ServoGimbalTargets()
+    {
+        var connection = Reset();
+        var config = new NOMADConfig { SelectedVideoInputName = "Camera A", SelectedGimbalAxes = new[]
+        {
+            new ServoGimbalAxis { Axis = "Pitch", Channel = 14, MaximumPwm = 1800 },
+            new ServoGimbalAxis { Axis = "Yaw", Channel = 15, MinimumAngleDeg = -180, MaximumAngleDeg = 180, Reversed = true },
+            new ServoGimbalAxis { Axis = "Roll", Channel = 16, MinimumPwm = 1100, MaximumPwm = 1900 },
+        } };
+        OutputController.Initialize(config); GimbalController.ApplyProfile(config);
+        var result = Complete(GimbalController.RequestScreenTargetAsync(45, -45, 90));
+        Require(result.Submitted && connection.Modes == 0 && connection.Targets == 0 &&
+            connection.ServoTargets.Count == 3 && connection.ServoTargets[0] == (14, 1600) &&
+            connection.ServoTargets[1] == (15, 1250) && connection.ServoTargets[2] == (16, 1300) &&
+            connection.AcknowledgementRequested && connection.LastSystem == 4 && connection.LastComponent == 2,
+            "Custom gimbal did not send three calibrated, reversed, ACK-requested servo targets to the captured aircraft");
+        int commands = connection.ServoTargets.Count;
+        Require(!Complete(GimbalController.RequestScreenTargetAsync(180, 0, 0)).Submitted &&
+            connection.ServoTargets.Count == commands, "An out-of-calibration gimbal target reached a servo");
+        foreach (int count in new[] { 1, 2 })
+        {
+            config.SelectedGimbalAxes = new[]
+            {
+                new ServoGimbalAxis { Axis = "Pitch", Channel = 14 },
+                new ServoGimbalAxis { Axis = "Yaw", Channel = 15 },
+            }.Take(count).ToArray();
+            GimbalController.ApplyProfile(config);
+            commands = connection.ServoTargets.Count;
+            Require(Complete(GimbalController.RequestScreenTargetAsync(0, 0, 0)).Submitted &&
+                connection.ServoTargets.Count == commands + count, "One/two-axis gimbal dispatched the wrong outputs");
+        }
+        var input = new GimbalInputState();
+        input.CanMove(true, 0, 0, 1, 1);
+        Require(input.CanMove(true, 1, 0, 1, 1) && !input.CanMove(true, 1, 0, 1, 2),
+            "Changing camera gimbal bindings retained a held joystick input");
+        foreach (string change in new[] { "camera", "calibration", "slider" })
+        {
+            connection = Reset();
+            config = new NOMADConfig { SelectedVideoInputName = "Camera A", SelectedGimbalAxes = new[]
+            {
+                new ServoGimbalAxis { Axis = "Pitch", Channel = 14 },
+                new ServoGimbalAxis { Axis = "Yaw", Channel = 15 },
+            } };
+            OutputController.Initialize(config); GimbalController.ApplyProfile(config);
+            var held = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            connection.Configure = () => held.Task;
+            var pending = GimbalController.RequestScreenTargetAsync(10, 0, 20);
+            WaitForConfigure(connection);
+            if (change == "camera") { config.SelectedVideoInputName = "Camera B"; }
+            else if (change == "calibration") { config.SelectedGimbalAxes[1].MaximumPwm = 1900; }
+            else { GimbalController.NotifyServoInput(config, 14, 1800); }
+            held.SetResult(true);
+            result = Complete(pending);
+            Require(!result.Submitted && connection.ServoTargets.Count == 1,
+                "A changed " + change + " dispatched the remaining axes of a retired gimbal pose");
+        }
+    }
     private static int Main()
     {
         var connection = Reset();
@@ -409,6 +472,7 @@ internal static class NativeOutputTests
         NeutralAndDispatchedTracking();
         PendingManualRetirement();
         SharedTrackingClaim();
+        ServoGimbalTargets();
         RefusesChangedTarget(c => c.sysidcurrent = 8, "system selection");
         RefusesChangedTarget(c => c.compidcurrent = 9, "component selection");
         RefusesChangedTarget(c => c.BaseStream = new MissionPlanner.TestStream(), "stream replacement");

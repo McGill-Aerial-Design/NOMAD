@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -26,6 +27,8 @@ internal static partial class VideoLifetimeTests
         private volatile bool _stopping;
         private Exception _failure;
         private int _mountTargets;
+        private readonly List<(int Channel, int Pwm)> _servoTargets = new List<(int Channel, int Pwm)>();
+        internal (int Channel, int Pwm)[] ServoTargets { get { lock (_gate) { return _servoTargets.ToArray(); } } }
         internal bool StreamAttitude = true;
         private float _heading;
         private long _attitudeTicks;
@@ -134,6 +137,12 @@ internal static partial class VideoLifetimeTests
                         var command = packet.ToStructure<MAVLink.mavlink_command_long_t>();
                         if (command.command == (ushort)MAVLink.MAV_CMD.DO_MOUNT_CONTROL)
                         { Interlocked.Increment(ref _mountTargets); }
+                        else if (command.command == (ushort)MAVLink.MAV_CMD.DO_SET_SERVO)
+                        {
+                            lock (_gate) { _servoTargets.Add(((int)command.param1, (int)command.param2)); }
+                            Send(MAVLink.MAVLINK_MSG_ID.COMMAND_ACK, new MAVLink.mavlink_command_ack_t
+                            { command = command.command, result = (byte)MAVLink.MAV_RESULT.ACCEPTED });
+                        }
                     }
                 }
                 catch (IOException) { }

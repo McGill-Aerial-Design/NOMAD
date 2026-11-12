@@ -197,6 +197,10 @@ namespace NOMAD.MissionPlanner
             if (!Visible || FindForm()?.Visible != true) { return false; }
             if (!_input.TrackingCalibrated)
             { SetTrackingStatus("Calibrate this input in Settings → Video before tracking"); return false; }
+            if (_input.ServoGimbalAxes.Count > 0 && !_input.ServoGimbalAxes.Any(axis => axis.Axis == "Pitch" || axis.Axis == "Yaw"))
+            { SetTrackingStatus("Automatic tracking needs a pitch or yaw gimbal axis"); return false; }
+            if (_input.ServoGimbalAxes.Any(axis => axis.Axis == "Roll") && Math.Abs(GimbalController.TargetRollDeg) > .1)
+            { SetTrackingStatus("Level the gimbal roll before automatic tracking"); return false; }
             if (!_input.DropOldFrames || _input.QueueMaxBuffers != 1)
             { SetTrackingStatus("Tracking needs Drop old frames and a one-frame queue in Settings → Video"); return false; }
             float currentPitch = GimbalController.TargetPitchDeg, currentYaw = GimbalController.TargetYawDeg;
@@ -303,7 +307,7 @@ namespace NOMAD.MissionPlanner
                 (byte)MAVLink.MAV_AUTOPILOT.ARDUPILOTMEGA;
         }
 
-        private bool TrackingInputCurrent(long revision, long sequence)
+        private bool TrackingInputCurrent(long revision, long sequence, long? receivedSnapshot = null)
         {
             OutputController.NativeTarget target;
             MAVState mav;
@@ -311,10 +315,10 @@ namespace NOMAD.MissionPlanner
             lock (_visionGate)
             {
                 if (!_tracking || _trackingPaused || !_regionReady || !_trackingVisible ||
-                    revision != _trackingRevision || sequence != _latestSequence)
+                    revision != _trackingRevision || (receivedSnapshot.HasValue ? sequence > _latestSequence : sequence != _latestSequence))
                 { return false; }
                 target = _trackingTarget; mav = _trackingMav;
-                received = _latestReceivedTicks; videoGeneration = _trackingVideoGeneration;
+                received = receivedSnapshot ?? _latestReceivedTicks; videoGeneration = _trackingVideoGeneration;
                 regionRevision = _regionRevision; claim = _trackingClaim;
             }
             double age = (Stopwatch.GetTimestamp() - received) / (double)Stopwatch.Frequency;
@@ -407,7 +411,8 @@ namespace NOMAD.MissionPlanner
             {
                 lock (_visionGate) { _lastRequestTicks = Stopwatch.GetTimestamp(); }
                 var result = await GimbalController.RequestTrackingTargetAsync(pitch, yaw, generation, manual,
-                    () => TrackingInputCurrent(revision, sample.Sequence)).ConfigureAwait(false);
+                    () => TrackingInputCurrent(revision, sample.Sequence,
+                        _input.ServoGimbalAxes.Count > 0 ? sample.ReceivedTicks : (long?)null), _input.Name).ConfigureAwait(false);
                 if (result.Submitted)
                 {
                     Interlocked.Increment(ref _submittedTrackingCommands);
@@ -420,7 +425,9 @@ namespace NOMAD.MissionPlanner
                             _trackingPitch = pitch; _trackingYaw = yaw; _trackingAircraftHeading = heading;
                             _lastStepTicks = sample.ReceivedTicks;
                             // Carry rate clipping; TryStep's deliberate Object attenuation is already excluded.
-                            _trackingUnappliedYawChange = yaw == _input.YawMinDeg || yaw == _input.YawMaxDeg
+                            _trackingUnappliedYawChange = (_input.ServoGimbalAxes.Count > 0 &&
+                                !_input.ServoGimbalAxes.Any(axis => axis.Axis == "Yaw")) ||
+                                yaw == _input.YawMinDeg || yaw == _input.YawMaxDeg
                                 ? 0 : headingChange - compensation;
                             _trackingStatus = yaw == _input.YawMinDeg || yaw == _input.YawMaxDeg
                                 ? "Tracking · pan target limit"

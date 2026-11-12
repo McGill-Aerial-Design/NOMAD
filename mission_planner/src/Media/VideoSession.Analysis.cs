@@ -92,7 +92,8 @@ namespace NOMAD.MissionPlanner
             internal DisplayWindow(VideoSession owner, long generation, CancellationToken token)
             {
                 _owner = owner; _generation = generation; _token = token;
-                Completion = Task.Run((Action)Run);
+                Completion = Task.Factory.StartNew(Run, CancellationToken.None,
+                    TaskCreationOptions.LongRunning, TaskScheduler.Default);
             }
             internal void Offer(DisplayCandidate candidate)
             {

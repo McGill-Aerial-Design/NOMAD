@@ -165,6 +165,8 @@ namespace NOMAD.MissionPlanner
                 Log.Error("Active video input was not saved: " + error.Message);
                 return false;
             }
+            GimbalJoystickWindow.CloseSingleton();
+            GimbalController.ApplyProfile(config);
             try { _hudVideo?.UpdateInput(BuildHudVideoPipeline(config.SelectedVideoInput),
                 VideoPipeline.ShareKey(config.SelectedVideoInput)); }
             catch (Exception error) { Log.Error("Video selection saved; HUD source change failed: " + error.Message); }

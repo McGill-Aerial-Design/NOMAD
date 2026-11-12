@@ -36,6 +36,11 @@ namespace NOMAD.MissionPlanner
         internal string[] Operations => Behavior == "ServoBidirectional" ? new[] { "negative", "positive" } :
             Behavior == "ServoPosition" ? new[] { "position" } : new[] { "activate" };
 
+        internal int ServoPwm(string operation, double? position = null) => operation == "safe" ? Safe :
+            operation == "position" ? Minimum + (int)Math.Round(position.Value * (Maximum - Minimum),
+                MidpointRounding.AwayFromZero) :
+            operation == "negative" || (Behavior == "ServoToggle" && Reversed) ? Minimum : Maximum;
+
         internal static List<PayloadDefinition> Parse(JToken token)
         {
             if (token == null || token.Type == JTokenType.Null) { return new List<PayloadDefinition>(); }

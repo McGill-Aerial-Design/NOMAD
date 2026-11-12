@@ -16,7 +16,7 @@ namespace NOMAD.MissionPlanner
         private Func<VideoCaptureDevice[]> _getVideoDevices = VideoCaptureDevice.Enumerate;
         private TextBox _txtVideoName;
         private NumericUpDown _numVideoLatency, _numVideoQueue;
-        private CheckBox _chkVideoDrop;
+        private CheckBox _chkVideoDrop, _chkRtspSkipOptions;
         private Button _btnRemoveVideo;
         private VideoInputProfile _editingVideoInput;
         private bool _loadingVideo;
@@ -91,6 +91,8 @@ namespace NOMAD.MissionPlanner
             y += 32;
             _chkVideoDrop = AddCheckBox(tab, "Drop old frames", 20, y);
             y += 32;
+            _chkRtspSkipOptions = AddCheckBox(tab, "Skip RTSP OPTIONS and keep-alives", 20, y);
+            y += 32;
 
             _chkAutoStartHudVideo = AddCheckBox(tab, "Start video on HUD", 20, y);
             y += 35;
@@ -112,6 +114,9 @@ namespace NOMAD.MissionPlanner
             _toolTips.SetToolTip(_numVideoLatency, "RTSP jitter buffering, not end-to-end video delay. Range: 0–5000 ms.");
             _toolTips.SetToolTip(_numVideoQueue, "Decoded-frame queue: 1–120 frames. The display still shows only the latest frame.");
             _toolTips.SetToolTip(_chkVideoDrop, "Drop older decode-queue frames and bound RTSP jitter buffering when full.");
+            _toolTips.SetToolTip(_chkRtspSkipOptions,
+                "For receivers such as EDGE T3 that reset OPTIONS requests. Disables RTSP keep-alives; " +
+                "leave off for servers that require them.");
             info.Click += (sender, args) => _toolTips.Show(help, info, 0, info.Height, 15000);
             tab.Controls.Add(info);
             y += 40;
@@ -122,6 +127,7 @@ namespace NOMAD.MissionPlanner
 
         private void AddVisionSettings(TabPage tab, ref int y)
         {
+            AddServoGimbalSettings(tab, ref y);
             AddSectionLabel(tab, "Vision and gimbal calibration", ref y);
             AddLabel(tab, "Detection model:", 20, y);
             _cmbVisionModel = AddComboBox(tab, 180, y, 340, Array.Empty<string>());
@@ -212,6 +218,7 @@ namespace NOMAD.MissionPlanner
 
         private void LoadVideoInput(VideoInputProfile input)
         {
+            LoadServoGimbalSettings(input);
             _editingVideoInput = input;
             _txtVideoName.Text = input?.Name ?? "";
             _cmbVideoSourceType.SelectedIndex = input?.SourceType == "Camera" ? 1 : 0;
@@ -222,6 +229,7 @@ namespace NOMAD.MissionPlanner
             _numVideoLatency.Value = input?.LatencyMs ?? 100;
             _numVideoQueue.Value = input?.QueueMaxBuffers ?? 1;
             _chkVideoDrop.Checked = input?.DropOldFrames ?? true;
+            _chkRtspSkipOptions.Checked = input?.RtspSkipOptions ?? false;
             LoadModelChoices(input?.DetectorModelProfilePath ?? "");
             _chkTrackingCalibrated.Checked = input?.TrackingCalibrated ?? false;
             _cmbTrackingMode.SelectedItem = input?.TrackingMode ?? "Object";
@@ -238,7 +246,7 @@ namespace NOMAD.MissionPlanner
             _cmbVisionPitchSign.SelectedIndex = input?.PitchSign == -1 ? 1 : 0;
             _cmbVisionYawSign.SelectedIndex = input?.YawSign == -1 ? 1 : 0;
             foreach (var control in new Control[] { _txtVideoName, _txtVideoUrl, _cmbVideoTransport,
-                _numVideoLatency, _numVideoQueue, _chkVideoDrop, _btnRemoveVideo, _cmbVisionModel,
+                _numVideoLatency, _numVideoQueue, _chkVideoDrop, _chkRtspSkipOptions, _btnRemoveVideo, _cmbVisionModel,
                 _chkTrackingCalibrated, _numVisionFov, _numVisionPitchMin, _numVisionPitchMax,
                 _numVisionYawMin, _numVisionYawMax, _numVisionRate, _cmbVisionPitchSign, _cmbVisionYawSign,
                 _btnVisionModelBrowse, _cmbTrackingMode, _cmbObjectTracker, _chkGroundPrediction, _numGroundPlaneHeight, _numCameraDelay })
@@ -256,6 +264,7 @@ namespace NOMAD.MissionPlanner
             _numVideoLatency.Enabled = selected && !camera;
             _numVideoQueue.Enabled = selected && !camera;
             _chkVideoDrop.Enabled = selected && !camera;
+            _chkRtspSkipOptions.Enabled = selected && !camera;
             _cmbVideoDevice.Enabled = selected && camera;
             _btnVideoDevices.Enabled = selected && camera;
             _lblVideoDevices.Enabled = selected && camera;
@@ -332,6 +341,7 @@ namespace NOMAD.MissionPlanner
                 RtspTransport = (string)_cmbVideoTransport.SelectedItem,
                 LatencyMs = (int)_numVideoLatency.Value, QueueMaxBuffers = (int)_numVideoQueue.Value,
                 DropOldFrames = _chkVideoDrop.Checked,
+                RtspSkipOptions = _chkRtspSkipOptions.Checked,
                 DetectorModelProfilePath = (_cmbVisionModel.SelectedItem as VisionModelChoice)?.Path ?? "",
                 TrackingCalibrated = _chkTrackingCalibrated.Checked,
                 TrackingMode = (string)_cmbTrackingMode.SelectedItem,
@@ -345,6 +355,7 @@ namespace NOMAD.MissionPlanner
                 PitchSign = _cmbVisionPitchSign.SelectedIndex == 1 ? -1 : 1,
                 YawSign = _cmbVisionYawSign.SelectedIndex == 1 ? -1 : 1,
                 TrackingMaxRateDegSec = (int)_numVisionRate.Value,
+                ServoGimbalAxes = _editingGimbalAxes.Select(axis => axis.Copy()).ToList(),
             };
             input.Validate();
             if (Config.VideoInputs.Any(other => !ReferenceEquals(other, _editingVideoInput) &&
