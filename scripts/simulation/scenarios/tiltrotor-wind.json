@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "name": "Tiltrotor tricopter / 4 m/s west wind",
+  "backend": "gazebo",
+  "wsl_graphics_adapter": "NVIDIA",
+  "vehicle": "ArduPlane",
+  "frame": "JSON:127.0.0.1",
+  "home": [-35.363261, 149.16523, 584, 0],
+  "system_id": 201,
+  "seed": 173,
+  "physics_hz": 1000,
+  "defaults_local": ["tiltrotor.parm"],
+  "aircraft_model_local": "../models/tiltrotor_tricopter",
+  "texture": "../../../local/simulation/assets/aerial_grass_rock_diff_1k.jpg",
+  "texture_sha256": "57b8041bfe0d0f01430e4dbaad45e7ddddf0a9fc97317f90dbc51f7b0d9e1b5d",
+  "spawn": [0, 0, 0.16, 0, 0, 0],
+  "wind": [4, 0, 0],
+  "notes": "Steady 4 m/s wind from the west in Gazebo ENU axes. All LiftDrag surfaces use it; ArduPlane's JSON SITL link still estimates wind from its own synthetic sensors, so expect a mismatch with the world wind."
+}

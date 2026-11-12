@@ -23,8 +23,11 @@ case "$target" in
         cd "$sim_root/sources/ardupilot"
         ./waf configure --board sitl --no-submodule-update --disable-tests 2>&1 | tee "$sim_root/logs/ap-configure.log"
         ./waf copter -j4 2>&1 | tee "$sim_root/logs/ap-build.log"
-        sha256sum build/sitl/bin/arducopter > "$sim_root/logs/arducopter.sha256"
-        python3 "$script_dir/build_manifest.py" "$sim_root" ardupilot "$sim_root/sources/ardupilot/build/sitl/bin/arducopter"
+        ./waf plane -j4 2>&1 | tee "$sim_root/logs/ap-plane-build.log"
+        sha256sum build/sitl/bin/arducopter build/sitl/bin/arduplane > "$sim_root/logs/ardupilot.sha256"
+        python3 "$script_dir/build_manifest.py" "$sim_root" ardupilot \
+            "$sim_root/sources/ardupilot/build/sitl/bin/arducopter" \
+            "$sim_root/sources/ardupilot/build/sitl/bin/arduplane"
         ;;
     gazebo)
         export GZ_VERSION=harmonic

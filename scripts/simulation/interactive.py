@@ -18,7 +18,7 @@ import threading
 import time
 from pathlib import Path
 
-from interactive_world import asset_path, component
+from interactive_world import SITL_EXECUTABLES, asset_path, component
 from interactive_world import create as create_world
 from owned_processes import stop as stop_owned
 from rtp_relay import RtpRelay
@@ -46,6 +46,9 @@ def recipe(path):
     for name in ("name", "frame"):
         if not isinstance(value.get(name), str) or not value[name].strip() or any(ord(c) < 32 for c in value[name]):
             raise ValueError("Invalid scenario " + name)
+    vehicle = value.get("vehicle", "ArduCopter")
+    if not isinstance(vehicle, str) or vehicle not in SITL_EXECUTABLES:
+        raise ValueError("Scenario vehicle must be ArduCopter or ArduPlane")
     if type(value.get("system_id", 201)) is not int or not 1 <= value.get("system_id", 201) <= 254:
         raise ValueError("Simulator system ID must be 1..254")
     if "home" in value:
@@ -87,6 +90,16 @@ def recipe(path):
             or not 1 <= camera["fps"] <= 30
         ):
             raise ValueError("camera requires a Gazebo camera_model, even dimensions up to 1920x1080 and fps 1..30")
+    if "wind" in value:
+        wind = value["wind"]
+        if (
+            value["backend"] != "gazebo"
+            or not isinstance(wind, list)
+            or len(wind) != 3
+            or not all(type(v) in (int, float) and math.isfinite(v) for v in wind)
+            or any(abs(v) > 30 for v in wind)
+        ):
+            raise ValueError("Wind requires a Gazebo scenario and three finite ENU values up to 30 m/s")
     value["_sha256"] = hashlib.sha256(raw).hexdigest()
     return value
 
@@ -170,7 +183,7 @@ def main():
     scenario = recipe(scenario_path)
     if args.world and scenario["backend"] != "gazebo":
         raise ValueError("A world override requires a Gazebo scenario; last_letter is a separate headless backend")
-    ap_build = component(workspace, "ardupilot")
+    ap_build = component(workspace, "ardupilot", SITL_EXECUTABLES[scenario.get("vehicle", "ArduCopter")])
     binary = Path(ap_build["binary"])
     home = scenario.get("home")
     processes, relay, stopping = [], None, False
@@ -178,6 +191,7 @@ def main():
     result = {
         "scenario": scenario,
         "scenario_file": str(scenario_path),
+        "vehicle": scenario.get("vehicle", "ArduCopter"),
         "ardupilot_build": ap_build,
         "ready": False,
         "cleanup_errors": [],
@@ -375,6 +389,7 @@ def main():
             "schema": 1,
             "name": scenario["name"],
             "backend": dynamics,
+            "vehicle": scenario.get("vehicle", "ArduCopter"),
             "host": address,
             "mavlink_port": tcp_port,
             "system_id": scenario.get("system_id", 201),

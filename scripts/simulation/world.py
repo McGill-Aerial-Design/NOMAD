@@ -140,7 +140,9 @@ def create(
             ("gz-sim-scene-broadcaster-system", "SceneBroadcaster"),
             ("gz-sim-user-commands-system", "UserCommands"),
         ):
-            ET.SubElement(world.find("world"), "plugin", filename=filename, name="gz::sim::systems::" + name)
+            plugin = ET.SubElement(world.find("world"), "plugin", filename=filename, name="gz::sim::systems::" + name)
+            if name == "SceneBroadcaster":
+                ET.SubElement(plugin, "max_publish_period").text = "0.033"
     plane_normal, plane_point = (0, 0, 1), (0, 0, 0)
     if occlusion:
         wall = ET.fromstring("""<model name="test_occluder"><static>true</static><pose>6 9 6 0 0 0</pose>

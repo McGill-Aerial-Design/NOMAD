@@ -246,7 +246,8 @@ def create(site, inputs, output, ground_cache=None):
       <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
       <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
         <render_engine>ogre2</render_engine></plugin>
-      <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+      <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster">
+        <max_publish_period>0.033</max_publish_period></plugin>
       <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
       <scene><ambient>0.55 0.55 0.55 1</ambient><background>0.54 0.70 0.85 1</background><shadows>true</shadows></scene>
       <spherical_coordinates><surface_model>EARTH_WGS84</surface_model><world_frame_orientation>ENU</world_frame_orientation>
