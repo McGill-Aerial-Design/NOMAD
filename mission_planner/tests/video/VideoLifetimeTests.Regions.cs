@@ -27,6 +27,7 @@ internal static partial class VideoLifetimeTests
                 Check(player.SelectRegion(new RectangleF(40, 30, 20, 20)), "Independent sample selection failed");
                 PlayerVisionFrame(player, pipeline, Color.Blue);
                 var selected = player.DisplayedVideoFrame;
+                CheckTrackingOutlineVisibility(player, true);
                 var sample = new VideoTrackingSample(selected.Image.Size, selected.Sequence + 1, selected.Generation,
                     Stopwatch.GetTimestamp(), DateTime.UtcNow, selected.Region, selected.Motion);
                 var session = GetField<VideoSession>(player, "_session");
@@ -36,14 +37,70 @@ internal static partial class VideoLifetimeTests
                 Tick(player);
                 Check(player.RegionReady && player.DisplayedVideoFrame.Region == null && player.StartTracking(),
                     "New plain display pixels invalidated a verified tracking sample");
+                CheckTrackingOutlineVisibility(player, true);
                 typeof(EmbeddedVideoPlayer).GetMethod("UpdateVisionSample",
                     System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
                     .Invoke(player, new object[] { sample });
                 Check(player.RegionReady && player.IsTracking &&
                     GetField<long>(player, "_latestSequence") == sample.Sequence,
                     "A newer tracking sample was compared with the newer display sequence");
-                player.StopTracking(); player.StopStream();
+                player.StopTracking();
+                var wrongRevision = new VideoRegionResult(sample.Region.Revision + 1, VisualTrackingMode.Object,
+                    new VisualTrackingResult(VisualTrackingState.Verified, "Wrong selection", sample.Region.Bounds,
+                        sample.Region.AimPoint));
+                foreach (var invalid in new[]
+                {
+                    new VideoTrackingSample(sample.ImageSize, sample.Sequence, sample.Generation,
+                        Stopwatch.GetTimestamp() - Stopwatch.Frequency, DateTime.UtcNow, sample.Region),
+                    new VideoTrackingSample(sample.ImageSize, sample.Sequence, sample.Generation - 1,
+                        Stopwatch.GetTimestamp(), DateTime.UtcNow, sample.Region),
+                    new VideoTrackingSample(new Size(200, 160), sample.Sequence, sample.Generation,
+                        Stopwatch.GetTimestamp(), DateTime.UtcNow, sample.Region),
+                    new VideoTrackingSample(sample.ImageSize, sample.Sequence, sample.Generation,
+                        Stopwatch.GetTimestamp(), DateTime.UtcNow, wrongRevision),
+                })
+                {
+                    SetField(player, "_latestTrackingSample", invalid);
+                    CheckTrackingOutlineVisibility(player, false);
+                }
+                session.PublishVideoFrame(sample.Generation, new VideoFrame(SolidVideoImage(Color.Green),
+                    Array.Empty<VideoDetection>(), sample.Sequence + 200, sample.Generation,
+                    Stopwatch.GetTimestamp(), DateTime.UtcNow, "", sample.Region));
+                Tick(player);
+                CheckTrackingOutlineVisibility(player, true);
+                var searching = new VideoRegionResult(sample.Region.Revision, VisualTrackingMode.Object,
+                    new VisualTrackingResult(VisualTrackingState.Searching, "Searching"));
+                session.PublishTrackingSample(sample.Generation, new VideoTrackingSample(sample.ImageSize,
+                    sample.Sequence + 201, sample.Generation, Stopwatch.GetTimestamp(), DateTime.UtcNow, searching));
+                Tick(player);
+                Check(player.DisplayedVideoFrame.Region.Found && !player.RegionReady,
+                    "A late Searching sample did not retire the displayed frame's older verified result");
+                CheckTrackingOutlineVisibility(player, false);
+                player.StopStream();
+                CheckTrackingOutlineVisibility(player, false);
             }
+        }
+    }
+
+    private static void CheckTrackingOutlineVisibility(EmbeddedVideoPlayer player, bool expected)
+    {
+        foreach (var size in new[] { new Size(100, 80), new Size(320, 240) })
+        using (var box = new PictureBox { Size = size, Image = player.DisplayedVideoFrame?.Image })
+        using (var bitmap = new Bitmap(size.Width, size.Height))
+        using (var graphics = Graphics.FromImage(bitmap))
+        {
+            typeof(EmbeddedVideoPlayer).GetMethod("OnVideoPaint",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .Invoke(player, new object[] { box, new PaintEventArgs(graphics, box.ClientRectangle) });
+            bool yellow = false;
+            for (int y = 0; y < bitmap.Height && !yellow; y++)
+            for (int x = 0; x < bitmap.Width && !yellow; x++)
+            {
+                var color = bitmap.GetPixel(x, y);
+                yellow = color.R > 200 && color.G > 200 && color.B < 80;
+            }
+            Check(yellow == expected, "Tracking outline visibility did not match the latest verified sample: " + size +
+                "; expected=" + expected + "; displayed region=" + player.DisplayedVideoFrame?.Region?.State);
         }
     }
 
@@ -136,9 +193,10 @@ internal static partial class VideoLifetimeTests
                 {
                     var tracker = trackers[trackers.Count - 1];
                     Check(current.Region.Found && current.Region.Revision == selected && current.Region.Bounds.Value.X == 30 &&
-                        tracker.InitialColor.ToArgb() == Color.Red.ToArgb() && ReferenceEquals(tracker.InitializedImage, source.Image),
+                        tracker.InitialColor.ToArgb() == Color.Red.ToArgb() && !ReferenceEquals(tracker.InitializedImage, source.Image),
                         "Selection initialized against a newer image or published mismatching target results");
-                    Check(tracker.InitializedImage.GetPixel(0, 0).ToArgb() == Color.Red.ToArgb(),
+                    CheckDisposed(tracker.InitializedImage);
+                    Check(source.Image.GetPixel(0, 0).ToArgb() == Color.Red.ToArgb(),
                         "Initializing selection disposed pixels still owned by the source envelope");
                     tracker.Found = false;
                 }

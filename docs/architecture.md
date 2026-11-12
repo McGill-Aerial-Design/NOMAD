@@ -118,9 +118,12 @@ publication. Frame IDs/request epochs and parent source/model/selection revision
 fence late results. Selected frames and exports retain immutable pixel leases.
 
 Capture, detection and tracking have independent lanes, each with latest-only pending
-work. A four-frame/100 ms alignment window emits matching overlays or plain video;
+work. A four-frame/100 ms alignment window emits matching detection overlays or plain video;
 late overlays never rewind displayed frames. Tracking consumes its own timestamped
 samples and retains the 500 ms source-age limit independently of display cadence.
+The selected outline uses the latest fresh verified tracking sample from the same
+source and image size. Unverified, stale or retired selections clear the outline; exported
+frame results remain matched to their source frame.
 Each source has one native receiver across its camera, UDP or RTSP viewers.
 Native custom output helpers execute off UI, outside the short controller state lock,
 with one shared reservation held until actual native completion.

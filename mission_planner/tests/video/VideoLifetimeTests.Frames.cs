@@ -2,6 +2,7 @@
 // Copyright 2026 The NOMAD Authors
 using System;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Threading;
 using NOMAD.MissionPlanner;
@@ -10,19 +11,30 @@ internal static partial class VideoLifetimeTests
 {
     private static void RetainedFrameLifetime()
     {
-        var pixels = SolidVideoImage(Color.CornflowerBlue);
+        var pixels = MediaPixels.Own(SolidVideoImage(Color.CornflowerBlue), 0);
         var frame = new VideoFrame(pixels, Array.Empty<VideoDetection>(), 7, 3,
             System.Diagnostics.Stopwatch.GetTimestamp(), DateTime.UtcNow, "owned model");
+        long allocated = MediaPixels.AllocatedBytes;
         var retained = frame.Retain();
+        var bits = pixels.LockBits(new Rectangle(Point.Empty, pixels.Size), ImageLockMode.ReadOnly,
+            PixelFormat.Format32bppArgb);
+        try
+        {
+            Check(retained.Image.GetPixel(0, 0).ToArgb() == Color.CornflowerBlue.ToArgb() &&
+                !ReferenceEquals(retained.Image, pixels) && MediaPixels.AllocatedBytes == allocated,
+                "Retained consumers must have independent GDI handles over the same bounded pixel storage");
+        }
+        finally { pixels.UnlockBits(bits); }
         frame.Dispose(); frame.Dispose();
-        Check(ReferenceEquals(retained.Image, pixels) && retained.Sequence == 7 && retained.Generation == 3 &&
-            pixels.GetPixel(0, 0).ToArgb() == Color.CornflowerBlue.ToArgb(),
+        Check(retained.Sequence == 7 && retained.Generation == 3 &&
+            retained.Image.GetPixel(0, 0).ToArgb() == Color.CornflowerBlue.ToArgb(),
             "Releasing display invalidated retained pixels or copied the envelope identity");
         bool rejected = false;
         try { frame.Retain(); } catch (ObjectDisposedException) { rejected = true; }
         Check(rejected, "A released envelope acquired another reference");
         retained.Dispose(); retained.Dispose();
         CheckDisposed(pixels);
+        CheckDisposed(retained.Image);
     }
 
     private static void FreshReceiptsDoNotEstablishFreshCapture()

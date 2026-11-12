@@ -56,8 +56,13 @@ namespace NOMAD.MissionPlanner
 
         private void PaintSelectedRegion(PictureBox box, Graphics graphics, RectangleF area, float scale)
         {
-            var result = _displayedVideoFrame?.Region;
-            bool verified = result?.Revision == _regionRevision && result.Found;
+            var frame = _displayedVideoFrame;
+            var sample = _latestTrackingSample;
+            var result = sample?.Region;
+            bool verified = _regionReady && _selectedRegion.HasValue && frame?.Fresh == true &&
+                sample?.Fresh == true && sample.Generation == frame.Generation && frame.Generation == _session.Generation &&
+                sample.ImageSize == frame.Image.Size && result?.Revision == _regionRevision && result.Found &&
+                _session.IsRegionCurrent(_regionRevision);
             RectangleF? region = verified ? result.Bounds : null;
             bool dragging = ReferenceEquals(box, _dragBox);
             if (dragging && VideoGeometry.TryImageRegion(_dragStart, _dragEnd, _dragImageSize,
