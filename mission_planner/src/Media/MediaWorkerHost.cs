@@ -30,7 +30,7 @@ namespace NOMAD.MissionPlanner
         private static long _nextEpoch;
         internal static bool FixtureMode;
         internal static string FixtureDirectory;
-        internal static int WorkerId => _current?.Id ?? 0;
+        internal static long WorkerEpoch => _current?.Epoch ?? 0;
         internal static Task ShutdownCompletion => Volatile.Read(ref _shutdownCompletion);
         internal static string DiagnosticStatus
         {
