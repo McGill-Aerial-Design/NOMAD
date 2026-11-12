@@ -70,7 +70,7 @@ internal static partial class VideoLifetimeTests
                 second.Start("fixture", "owned-media-fixture");
                 WaitMedia(() => session.TrackerReady && session.State == VideoState.Streaming &&
                     second.State == VideoState.Streaming, "shared worker startup", 120000);
-                int original = MediaWorkerHost.WorkerId;
+                long original = MediaWorkerHost.WorkerEpoch;
                 using (var frame = NextVideoFrame(session))
                 { Check(session.RequestRegion(frame, new RectangleF(8, 8, 16, 16)) != 0, "Worker selection refused"); }
                 WaitMedia(() =>
@@ -110,19 +110,19 @@ internal static partial class VideoLifetimeTests
                     "Held inference blocked live video or UI: frames=" + frames + ", gap=" + maximumGap + ", ticks=" + uiTicks + ", tracking samples=" + trackingSamples);
                 Console.WriteLine("  Held inference: frames=" + frames + ", maximum gap=" + maximumGap +
                     " ms, UI ticks=" + uiTicks + ", independent tracking samples=" + trackingSamples);
-                WaitMedia(() => MediaWorkerHost.WorkerId != original && session.State == VideoState.Streaming &&
+                WaitMedia(() => MediaWorkerHost.WorkerEpoch > original && session.State == VideoState.Streaming &&
                     second.State == VideoState.Streaming, "one plain-video recovery", 10000);
                 Check(!session.DetectionEnabled && !session.HasRegion(2),
                     "Worker restart restored detection or selection authority");
                 stats = MediaWorkerHost.FixtureStats();
                 Check(stats.Width == 1 && stats.Height == 0 && stats.Mode == 0,
                     "Plain recovery reconstructed a detector/tracker or duplicate capture");
-                int replacement = MediaWorkerHost.WorkerId;
+                long replacement = MediaWorkerHost.WorkerEpoch;
                 MediaWorkerHost.CrashFixture();
                 WaitMedia(() => session.State == VideoState.Stopped && second.State == VideoState.Stopped,
                     "second fault reaches stopped state");
                 Thread.Sleep(400);
-                Check(MediaWorkerHost.WorkerId == replacement && !MediaWorkerHost.CanRecover,
+                Check(MediaWorkerHost.WorkerEpoch == replacement && !MediaWorkerHost.CanRecover,
                     "Second fault restarted the worker without operator retry");
                 var stop = Stopwatch.StartNew(); session.Stop(); second.Stop(); stop.Stop();
                 Check(stop.ElapsedMilliseconds < 100, "Stop waited for a media process");
@@ -199,9 +199,9 @@ internal static partial class VideoLifetimeTests
                     if (stage == "model load") { session.ConfigureDetection(true, "fixture:hang-load"); }
                     string pipeline = stage == "start" ? "fixture:hang-start" :
                         stage == "read" ? "fixture:hang-read" : stage == "dispose" ? "fixture:hang-dispose" : "fixture";
-                    int priorWorker = MediaWorkerHost.WorkerId;
+                    long priorWorker = MediaWorkerHost.WorkerEpoch;
                     session.Start(pipeline);
-                    WaitMedia(() => MediaWorkerHost.WorkerId != priorWorker, "fresh held-operation worker", 120000);
+                    WaitMedia(() => MediaWorkerHost.WorkerEpoch > priorWorker, "fresh held-operation worker for " + stage, 120000);
                     if (stage == "initialize" || stage == "track")
                     {
                         WaitMedia(() => session.TrackerReady, "tracker before held " + stage);

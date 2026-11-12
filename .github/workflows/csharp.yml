@@ -45,6 +45,21 @@ jobs:
           if ($exe.VersionInfo.FileVersion -ne $env:MP_VERSION) { throw "Unexpected Mission Planner version" }
           New-Item -ItemType Directory -Force -Path $env:MP_DIR | Out-Null
           Copy-Item -Path (Join-Path $exe.Directory.FullName '*') -Destination $env:MP_DIR -Recurse -Force
+      - name: Stage reviewed host GStreamer runtime for native fixtures
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'gstreamer-1.14.4.zip'
+          $url = 'https://firmware.ardupilot.org/Tools/MissionPlanner/gstreamer/gstreamer-1.0-x86_64-1.14.4.zip'
+          Invoke-WebRequest $url -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive).Hash -ne '2CAF7F56963136B846ACC3EF078055D6989DE3A02879EB320164CF312D7208DE') {
+            throw 'Reviewed GStreamer runtime checksum differs.'
+          }
+          $runtime = Join-Path $env:RUNNER_TEMP 'gstreamer'
+          Expand-Archive -LiteralPath $archive -DestinationPath $runtime
+          $libraries = @(Get-ChildItem -LiteralPath $runtime -Recurse -Filter libgstreamer-1.0-0.dll)
+          if ($libraries.Count -ne 1 -or !(Test-Path -LiteralPath (Join-Path $libraries[0].Directory.FullName 'libgstapp-1.0-0.dll'))) {
+            throw 'Reviewed GStreamer runtime is incomplete.'
+          }
+          "GSTREAMER_1_0_ROOT_X86_64=$($libraries[0].Directory.Parent.FullName)" >> $env:GITHUB_ENV
       - name: Build-only isolation tests
         run: powershell -NoProfile -File scripts/build/test_build_plugin_windows.ps1
       - name: Build product DLL (never install)
