@@ -211,14 +211,14 @@ internal static partial class VideoLifetimeTests
                     }
                     string operation = stage == "model load" ? "detector" : stage == "tracker load" ? "tracker" : stage;
                     if (stage != "dispose")
-                    { WaitMedia(() => (MediaWorkerHost.FixtureStats().Text ?? "").Split(',').Contains(operation),
+                    { WaitMedia(() => (MediaWorkerHost.FixtureStats().Text ?? "").Split(',').Contains("held " + operation),
                         "native entry for held " + stage); }
                     if (stage == "dispose") { WaitMedia(() => session.State == VideoState.Streaming, "capture before disposal"); }
                     var timer = Stopwatch.StartNew();
                     session.Stop();
                     Check(timer.ElapsedMilliseconds < 100, "Stop waited for held " + stage);
                     if (stage == "dispose")
-                    { WaitMedia(() => (MediaWorkerHost.FixtureStats().Text ?? "").Split(',').Contains("dispose"),
+                    { WaitMedia(() => (MediaWorkerHost.FixtureStats().Text ?? "").Split(',').Contains("held dispose"),
                         "held capture disposal"); }
                     Check(!session.Completion.IsCompleted, "Held " + stage + " falsely reported completed cleanup");
                     Wait(session.Completion, "held " + stage + " process cleanup");
