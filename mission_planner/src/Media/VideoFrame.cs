@@ -8,12 +8,12 @@ using System.Threading;
 
 namespace NOMAD.MissionPlanner
 {
-    // Retained envelopes share immutable pixels; each consumer releases its own envelope.
+    // Retained envelopes share immutable pixels, with a separate GDI handle for each consumer.
     internal sealed class VideoFrame : IDisposable
     {
-        private readonly SharedImage _image;
+        private readonly Bitmap _image;
         private int _disposed;
-        internal Bitmap Image => _image.Image;
+        internal Bitmap Image => _image;
         internal IReadOnlyList<VideoDetection> Detections { get; }
         internal long Sequence { get; }
         internal long Generation { get; }
@@ -35,7 +35,7 @@ namespace NOMAD.MissionPlanner
             if (copy.Any(detection => detection == null || detection.Bounds.Right > image.Width ||
                 detection.Bounds.Bottom > image.Height))
             { throw new ArgumentException("Detection exceeds its image."); }
-            _image = new SharedImage(image);
+            _image = image;
             Detections = Array.AsReadOnly(copy);
             Sequence = sequence;
             Generation = generation;
@@ -49,8 +49,7 @@ namespace NOMAD.MissionPlanner
 
         private VideoFrame(VideoFrame source)
         {
-            _image = source._image;
-            _image.Retain();
+            _image = MediaPixels.Clone(source._image);
             Detections = source.Detections;
             Sequence = source.Sequence;
             Generation = source.Generation;
@@ -70,25 +69,7 @@ namespace NOMAD.MissionPlanner
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) == 0) { _image.Release(); }
-        }
-
-        private sealed class SharedImage
-        {
-            internal readonly Bitmap Image;
-            private int _references = 1;
-            internal SharedImage(Bitmap image) { Image = image; }
-            internal void Retain()
-            {
-                int count;
-                do
-                {
-                    count = Volatile.Read(ref _references);
-                    if (count == 0) { throw new ObjectDisposedException(nameof(VideoFrame)); }
-                } while (Interlocked.CompareExchange(ref _references, count + 1, count) != count);
-            }
-            internal void Release()
-            { if (Interlocked.Decrement(ref _references) == 0) { MediaPixels.Dispose(Image); } }
+            if (Interlocked.Exchange(ref _disposed, 1) == 0) { MediaPixels.Dispose(_image); }
         }
     }
 

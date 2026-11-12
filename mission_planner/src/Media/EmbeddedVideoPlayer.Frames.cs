@@ -51,12 +51,12 @@ namespace NOMAD.MissionPlanner
                 old?.Dispose();
                 _lblStatus.Text = $"Streaming {frame.Image.Width}x{frame.Image.Height}";
                 _lblStatus.ForeColor = Color.LimeGreen;
-                _videoBox.Invalidate();
-                _fullscreenBox?.Invalidate();
             }
             var sample = _session.TakeTrackingSample();
             if (sample != null) { UpdateVisionSample(sample); }
             UpdateVisionStatus();
+            _videoBox.Invalidate();
+            _fullscreenBox?.Invalidate();
             if (_session.State == VideoState.Stopped)
             {
                 _playbackRequested = false;

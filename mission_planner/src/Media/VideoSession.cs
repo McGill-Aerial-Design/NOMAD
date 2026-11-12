@@ -167,14 +167,14 @@ namespace NOMAD.MissionPlanner
                 var detection = new DetectionWorker(this, source.Token);
                 var tracking = new RegionWorker(this, source.Token);
                 var display = new DisplayWindow(this, generation, source.Token);
-                var detector = new AnalysisLane(candidate =>
+                var detector = new AnalysisLane((candidate, frame) =>
                 {
                     try
                     {
                         var current = detection.Current(candidate.Frame.DetectionRevision,
                             candidate.Detect, candidate.Model);
                         var values = candidate.Detect && current != null
-                            ? current.Detect(candidate.Frame.Image, detection.Token) : Array.Empty<VideoDetection>();
+                            ? current.Detect(frame.Image, detection.Token) : Array.Empty<VideoDetection>();
                         lock (candidate.Gate)
                         { candidate.Detections = values; candidate.Identity = current?.Identity ?? ""; }
                     }
@@ -182,11 +182,10 @@ namespace NOMAD.MissionPlanner
                     catch (Exception error) { detection.Fail(candidate.Frame.DetectionRevision, error); }
                     finally { lock (candidate.Gate) { candidate.DetectionDone = true; } }
                 }, source.Token, cleanup: detection.Dispose);
-                var tracker = new AnalysisLane(candidate =>
+                var tracker = new AnalysisLane((candidate, frame) =>
                 {
                     try
                     {
-                        var frame = candidate.Frame;
                         var region = tracking.Update(frame.Image, frame.ReceivedTicks, frame.Sequence, frame.Motion);
                         lock (candidate.Gate) { candidate.Region = region; }
                         if (region != null)

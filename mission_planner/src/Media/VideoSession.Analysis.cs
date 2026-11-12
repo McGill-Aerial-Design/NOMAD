@@ -28,14 +28,15 @@ namespace NOMAD.MissionPlanner
         {
             private readonly object _gate = new object();
             private readonly AutoResetEvent _ready = new AutoResetEvent(false);
-            private readonly Action<DisplayCandidate> _process;
+            private readonly Action<DisplayCandidate, VideoFrame> _process;
             private readonly CancellationToken _token;
             private readonly Action _initialize, _cleanup;
             private DisplayCandidate _pending;
             private VideoFrame _lease;
             private bool _stopped;
             internal Task Completion { get; }
-            internal AnalysisLane(Action<DisplayCandidate> process, CancellationToken token, Action initialize = null, Action cleanup = null)
+            internal AnalysisLane(Action<DisplayCandidate, VideoFrame> process, CancellationToken token,
+                Action initialize = null, Action cleanup = null)
             {
                 _process = process; _token = token; _initialize = initialize; _cleanup = cleanup;
                 Completion = Task.Factory.StartNew(Run, CancellationToken.None,
@@ -65,7 +66,7 @@ namespace NOMAD.MissionPlanner
                         }
                         if (candidate == null)
                         { WaitHandle.WaitAny(new[] { _ready, _token.WaitHandle }); continue; }
-                        using (lease) { _process(candidate); }
+                        using (lease) { _process(candidate, lease); }
                     }
                 }
                 finally
