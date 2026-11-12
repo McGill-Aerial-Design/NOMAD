@@ -43,6 +43,7 @@ if ($result -ne 0) {
 }
 if ($result -ne 0) { exit $result }
 $nativeSources = @(
+    (Join-Path $repoRoot 'mission_planner/src/Config/ServoGimbalAxis.cs'),
     (Join-Path $repoRoot 'mission_planner/src/Control/GimbalCommand.cs'),
     (Join-Path $repoRoot 'mission_planner/src/Control/GimbalController.cs'),
     (Join-Path $repoRoot 'mission_planner/src/Input/GimbalInputState.cs'),
@@ -51,7 +52,9 @@ $nativeSources = @(
     (Join-Path $repoRoot 'mission_planner/tests/gimbal/NativeOutputTests.cs')
 )
 $nativeExe = Join-Path $outDir 'NativeOutputTests.exe'
-& $csc /nologo /target:exe /langversion:latest /r:System.Windows.Forms.dll /r:System.Drawing.dll "/out:$nativeExe" @nativeSources
+$json = Join-Path ${env:ProgramFiles(x86)} 'Mission Planner/Newtonsoft.Json.dll'
+Copy-Item -LiteralPath $json -Destination $outDir -Force
+& $csc /nologo /target:exe /langversion:latest /r:System.Windows.Forms.dll /r:System.Drawing.dll "/r:$json" "/out:$nativeExe" @nativeSources
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $nativeExe
 exit $LASTEXITCODE

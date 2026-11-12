@@ -33,7 +33,9 @@ namespace NOMAD.MissionPlanner
             }
             else
             {
-                source = $"rtspsrc location={VideoStreamAddress.QuotedRtspUrl(input.Url)} " +
+                string compatibility = input.RtspSkipOptions
+                    ? "name=nomad_rtsp_no_options do-rtsp-keep-alive=false " : "";
+                source = $"rtspsrc {compatibility}location={VideoStreamAddress.QuotedRtspUrl(input.Url)} " +
                     $"protocols={input.RtspTransport.ToLowerInvariant()} " +
                     $"latency={input.LatencyMs.ToString(CultureInfo.InvariantCulture)} " +
                     $"drop-on-latency={input.DropOldFrames.ToString().ToLowerInvariant()} do-retransmission=false ! " +

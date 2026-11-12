@@ -88,7 +88,10 @@ namespace NOMAD.MissionPlanner
             var buttons = ControlFactory.ButtonRow(save, cancel); buttons.Dock = DockStyle.Bottom;
             footer.Controls.Add(_error); footer.Controls.Add(buttons); Controls.Add(footer);
             AcceptButton = save; CancelButton = cancel;
-            _behavior.SelectedIndexChanged += (sender, args) => ShowBehavior(); ShowBehavior();
+            _behavior.SelectedIndexChanged += (sender, args) => ShowBehavior();
+            _hazardous.CheckedChanged += (sender, args) => ShowBehavior();
+            _count.ValueChanged += (sender, args) => ShowBehavior();
+            ShowBehavior();
         }
 
         private TableLayoutPanel Add(string label, Control control)
@@ -107,11 +110,14 @@ namespace NOMAD.MissionPlanner
             _safeRow.Visible = behavior == "ServoPosition";
             _reversedRow.Visible = behavior == "ServoToggle";
             _holdRow.Visible = motion; _pulseRow.Visible = behavior == "RelayPulse";
-            _primaryRow.Visible = _safeLabelRow.Visible = !motion;
+            bool continuous = behavior == "ServoPosition" && !_hazardous.Checked && _count.Value == 0;
+            _primaryRow.Visible = !motion && !continuous;
+            _safeLabelRow.Visible = !motion;
             _negativeRow.Visible = _neutralLabelRow.Visible = _positiveRow.Visible = motion;
             _tips.SetToolTip(_behavior, motion ? "Safe equals neutral. Live SERVOx_TRIM must match before motion; hold is bounded." :
                 behavior == "ServoToggle" ? "Safe is the inactive endpoint: minimum, or maximum when reversed." :
-                behavior == "RelayPulse" ? "Relay pulse is bounded; explicit Safe turns the relay off." : "");
+                behavior == "RelayPulse" ? "Relay pulse is bounded; explicit Safe turns the relay off." :
+                continuous ? "The slider sends position changes directly. Safe remains available." : "");
         }
 
         protected override void Dispose(bool disposing)

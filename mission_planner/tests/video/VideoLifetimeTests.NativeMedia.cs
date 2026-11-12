@@ -2,6 +2,9 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -9,6 +12,44 @@ using NOMAD.MissionPlanner;
 
 internal static partial class VideoLifetimeTests
 {
+    private static void NativeRtspDiscovery(bool skipOptions)
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var request = Task.Run(() =>
+            {
+                using (var client = listener.AcceptTcpClient())
+                {
+                    client.ReceiveTimeout = 3000;
+                    using (var reader = new StreamReader(client.GetStream()))
+                    { return reader.ReadLine(); }
+                }
+            });
+            MediaWorkerHost.RequestStart();
+            using (var session = new VideoSession(MediaWorkerPipeline.Create))
+            {
+                session.Start(VideoPipeline.Build(new VideoInputProfile
+                {
+                    Name = "Loopback receiver", Url = "rtsp://127.0.0.1:" + port + "/",
+                    RtspTransport = "UDP", RtspSkipOptions = skipOptions,
+                }));
+                WaitMedia(() => request.IsCompleted || session.State == VideoState.Stopped,
+                    "native RTSP discovery", 120000);
+                Check(request.IsCompleted, "RTSP discovery stopped before reaching the receiver: " + session.Error);
+                string first = request.GetAwaiter().GetResult();
+                session.Stop();
+                Wait(session.Completion, "native RTSP discovery cleanup");
+                string method = skipOptions ? "DESCRIBE " : "OPTIONS ";
+                Check(first?.StartsWith(method, StringComparison.Ordinal) == true,
+                    "RTSP discovery did not honor the receiver's OPTIONS setting. Received: " + first);
+            }
+        }
+        finally { listener.Stop(); }
+    }
+
     private static void NativeMediaTransport()
     {
         MediaWorkerHost.RequestStart();

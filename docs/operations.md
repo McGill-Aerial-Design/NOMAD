@@ -82,6 +82,13 @@ gimbal controls are not offered. Actions show payload names and retain stable ID
 Unavailable saved bindings remain visible for correction. Continuous position only
 lists nonhazardous position payloads without confirmation requirements.
 
+On the Payloads panel, those nonhazardous proportional outputs send slider changes
+directly, without an Activate button. Rows use the available width and show the
+requested PWM in microseconds. Fast changes keep only the latest input at up to
+20 updates per second; stale or retired input is dropped. The readout is a target,
+not measured servo feedback. Other payloads retain their configured confirmations
+and action buttons. **Safe** remains available and retires pending slider input.
+
 Disconnect the aircraft before Listen, select one device, then move a button,
 toggle or axis. Listen detects both button edges and axis movement. For an axis,
 choose continuous or two/three-position interpretation; for paired buttons, listen

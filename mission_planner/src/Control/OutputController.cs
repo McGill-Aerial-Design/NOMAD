@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using MissionPlanner;
 namespace NOMAD.MissionPlanner
@@ -39,6 +41,8 @@ namespace NOMAD.MissionPlanner
         private static int _submittedMode = -1;
         internal static Func<MAVLinkInterface> CurrentConnection = () => MainV2.comPort;
         internal static event Action ConnectionChanged;
+        internal static IReadOnlyList<ServoGimbalAxis> GimbalAxes
+        { get { lock (Gate) { return _config?.SelectedGimbalAxes; } } }
         // Shared reservation for one admitted host helper, including its native retries.
         private static bool _payloadBusy;
         internal static long Generation
@@ -135,12 +139,19 @@ namespace NOMAD.MissionPlanner
             }
         }
         internal static async Task<GimbalRequestResult> SendGimbalTargetAsync(int mode, double? pitch, double? roll,
-            double yaw, long generation, Func<bool> inputStillCurrent)
+            double yaw, long generation, Func<bool> inputStillCurrent, string videoInputName = null)
         {
             RefreshConnection();
             MAVLinkInterface connection;
             byte system, component;
             bool configure;
+            IReadOnlyList<ServoGimbalAxis> binding;
+            ServoGimbalAxis[] axes;
+            string inputName;
+            long bindingRevision = GimbalController.BindingRevision;
+            bool BindingCurrent() => _config != null && inputName == _config.SelectedVideoInputName &&
+                bindingRevision == GimbalController.BindingRevision &&
+                ReferenceEquals(binding, _config.SelectedGimbalAxes) && ServoGimbalAxis.Same(axes, _config.SelectedGimbalAxes);
             lock (Gate)
             {
                 if (generation != _generation || _config == null || inputStillCurrent?.Invoke() == false)
@@ -153,16 +164,35 @@ namespace NOMAD.MissionPlanner
                 {
                     return Result(GimbalRequestOutcome.NotSent, "Select a live, writable Mission Planner aircraft.");
                 }
+                binding = _config.SelectedGimbalAxes;
+                inputName = _config.SelectedVideoInputName;
+                try
+                {
+                    ServoGimbalAxis.Validate(binding ?? Array.Empty<ServoGimbalAxis>());
+                    axes = binding?.Select(axis => axis.Copy()).ToArray() ?? Array.Empty<ServoGimbalAxis>();
+                }
+                catch (Newtonsoft.Json.JsonException)
+                { return Result(GimbalRequestOutcome.NotSent, "Review the servo gimbal calibration; no command was sent."); }
+                bool custom = axes.Length != 0;
+                if (custom && videoInputName != null && !string.Equals(videoInputName, inputName, StringComparison.OrdinalIgnoreCase))
+                { return Result(GimbalRequestOutcome.NotSent, "The video input changed; no gimbal command was sent."); }
                 if (mode < 0 || mode > 3 || pitch.HasValue != roll.HasValue || !Finite(yaw) ||
                     yaw < GimbalCommand.YAW_MIN_DEG || yaw > GimbalCommand.YAW_MAX_DEG ||
                     (!pitch.HasValue && yaw != 0) ||
                     (pitch.HasValue && mode != (int)MountMode.MavlinkTargeting) ||
-                    (pitch.HasValue && (!Finite(pitch.Value) || !Finite(roll.Value) ||
+                    (pitch.HasValue && (!Finite(pitch.Value) || !Finite(roll.Value))) ||
+                    (!custom && pitch.HasValue && (
                     pitch < GimbalCommand.PITCH_MIN_DEG || pitch > GimbalCommand.PITCH_MAX_DEG ||
                     roll < GimbalCommand.ROLL_MIN_DEG || roll > GimbalCommand.ROLL_MAX_DEG)))
                 {
                     return Result(GimbalRequestOutcome.NotSent, "Invalid gimbal mode or target; no command was sent.");
                 }
+                if (custom && (!pitch.HasValue ||
+                    (!axes.Any(axis => axis.Axis == "Pitch") && pitch.Value != 0) ||
+                    (!axes.Any(axis => axis.Axis == "Roll") && roll.Value != 0) ||
+                    (!axes.Any(axis => axis.Axis == "Yaw") && yaw != 0) || axes.Any(axis =>
+                    !axis.TryPwm(axis.Axis == "Pitch" ? pitch.Value : axis.Axis == "Roll" ? roll.Value : yaw, out _))))
+                { return Result(GimbalRequestOutcome.NotSent, "Servo gimbals require calibrated angle targets; no command was sent."); }
                 // Busy is returned only before invoking any native command helper.
                 if (_payloadBusy || connection.giveComport)
                 { return Result(GimbalRequestOutcome.Busy, "Mission Planner is busy; no gimbal command was sent."); }
@@ -178,11 +208,33 @@ namespace NOMAD.MissionPlanner
                     RefreshConnection();
                     lock (Gate)
                     {
-                        if (generation != _generation || inputStillCurrent?.Invoke() == false ||
+                        if (generation != _generation || !BindingCurrent() || inputStillCurrent?.Invoke() == false ||
                             connection != _connection || connection != CurrentConnection() || connection.BaseStream != _stream ||
                             connection.BaseStream?.IsOpen != true || connection.ReadOnly || connection.logreadmode ||
                             connection.giveComport)
                         { return Result(GimbalRequestOutcome.NotSent, "Gimbal input was retired; no command was sent."); }
+                    }
+                    if (axes.Length != 0)
+                    {
+                        bool dispatched = false;
+                        foreach (var axis in axes)
+                        {
+                            RefreshConnection();
+                            lock (Gate)
+                            {
+                                if (generation != _generation || !BindingCurrent() || inputStillCurrent?.Invoke() == false ||
+                                    connection != _connection || connection != CurrentConnection() || connection.BaseStream != _stream ||
+                                    connection.BaseStream?.IsOpen != true || connection.ReadOnly || connection.logreadmode || connection.giveComport)
+                                { return Result(dispatched ? GimbalRequestOutcome.Unknown : GimbalRequestOutcome.NotSent,
+                                    "Servo gimbal input changed; already-dispatched commands may finish."); }
+                            }
+                            axis.TryPwm(axis.Axis == "Pitch" ? pitch.Value : axis.Axis == "Roll" ? roll.Value : yaw, out int pwm);
+                            dispatched = true;
+                            if (!await connection.doCommandAsync(system, component, MAVLink.MAV_CMD.DO_SET_SERVO,
+                                axis.Channel, pwm, 0, 0, 0, 0, 0, true).ConfigureAwait(false))
+                            { return Result(GimbalRequestOutcome.Unknown, "Servo target not confirmed; check before retrying."); }
+                        }
+                        return Result(GimbalRequestOutcome.Submitted, "Servo targets acknowledged; physical position not observed.");
                     }
                     // Native helpers may emit before returning a Task; never invoke them on the UI or under Gate.
                     if (configure && !await connection.doCommandAsync(system, component,
@@ -201,7 +253,7 @@ namespace NOMAD.MissionPlanner
                         RefreshConnection();
                         lock (Gate)
                         {
-                            if (generation != _generation || inputStillCurrent?.Invoke() == false ||
+                            if (generation != _generation || !BindingCurrent() || inputStillCurrent?.Invoke() == false ||
                                 connection != _connection || connection != CurrentConnection() || connection.BaseStream != _stream ||
                                 connection.BaseStream?.IsOpen != true || connection.ReadOnly || connection.logreadmode ||
                                 connection.giveComport)

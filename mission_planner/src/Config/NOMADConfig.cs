@@ -30,6 +30,7 @@ namespace NOMAD.MissionPlanner
         public string SelectedVideoInputName { get; set; } = "";
         [JsonIgnore] public VideoInputProfile SelectedVideoInput => VideoInputs?.FirstOrDefault(input =>
             input != null && string.Equals(input.Name, SelectedVideoInputName, System.StringComparison.OrdinalIgnoreCase));
+        [JsonIgnore] public IReadOnlyList<ServoGimbalAxis> SelectedGimbalAxes => SelectedVideoInput?.ServoGimbalAxes;
 
         /// <summary>
         /// Auto-start video on Mission Planner's HUD when plugin loads.

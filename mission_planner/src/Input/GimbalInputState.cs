@@ -6,16 +6,18 @@ namespace NOMAD.MissionPlanner
     internal sealed class GimbalInputState
     {
         private long _generation = -1;
+        private long _binding = -1;
         private bool _centered;
         internal void Reset()
         {
             _centered = false;
         }
-        internal bool CanMove(bool valid, float x, float y, long generation)
+        internal bool CanMove(bool valid, float x, float y, long generation, long binding = 0)
         {
-            if (_generation != generation)
+            if (_generation != generation || _binding != binding)
             {
                 _generation = generation;
+                _binding = binding;
                 _centered = false;
             }
             if (!valid || float.IsNaN(x) || float.IsNaN(y) || float.IsInfinity(x) ||

@@ -79,6 +79,8 @@ namespace NOMAD.MissionPlanner
         public float JoystickGimbalMaxRateDegSec = 60;
         public string JoystickGimbalHorizontalAxis = "Yaw", JoystickGimbalVerticalAxis = "Pitch";
         public bool JoystickGimbalHorizontalInverted, JoystickGimbalVerticalInverted;
+        public string SelectedVideoInputName = "";
+        public IReadOnlyList<ServoGimbalAxis> SelectedGimbalAxes { get; set; }
         public JArray Inputs = new JArray();
         internal bool HasSameOutputSettings(NOMADConfig other) => JToken.DeepEquals(ActuatorDefinitions, other.ActuatorDefinitions);
     }

@@ -87,7 +87,8 @@ namespace NOMAD.MissionPlanner
                 var generation = ++_generation;
                 _error = null;
                 _state = VideoState.Starting;
-                _worker = Task.Run(() => Run(pipeline, shareKey, generation, token));
+                _worker = Task.Factory.StartNew(() => Run(pipeline, shareKey, generation, token), CancellationToken.None,
+                    TaskCreationOptions.LongRunning, TaskScheduler.Default);
                 return true;
             }
         }

@@ -11,16 +11,54 @@ using NOMAD.MissionPlanner;
 
 internal static partial class VideoLifetimeTests
 {
+    private static void VideoThreadPoolAvailability()
+    {
+        ThreadPool.GetMinThreads(out int minimum, out int minimumIo);
+        ThreadPool.GetMaxThreads(out int maximum, out int maximumIo);
+        var pipeline = new FakeVideoPipeline();
+        VideoSession first = null, second = null;
+        try
+        {
+            Check(ThreadPool.SetMinThreads(2, minimumIo) && ThreadPool.SetMaxThreads(2, maximumIo),
+                "Could not establish the two-worker thread-pool fixture");
+            first = new VideoSession(() => pipeline); second = new VideoSession(() => pipeline);
+            first.Start("fixture", "thread-pool-fixture"); second.Start("fixture", "thread-pool-fixture");
+            Check(SpinWait.SpinUntil(() => first.State == VideoState.Streaming &&
+                second.State == VideoState.Streaming, TimeSpan.FromSeconds(3)),
+                "Shared video startup exhausted the two-worker thread pool");
+            pipeline.Frames.Add(SolidVideoImage(Color.Blue));
+            using (var a = NextVideoFrame(first))
+            using (var b = NextVideoFrame(second))
+            { Check(a.Fresh && b.Fresh, "Shared video did not deliver fresh frames with a bounded thread pool"); }
+            var work = Task.Run(() => 1);
+            Check(work.Wait(1000) && work.Result == 1, "Live video prevented unrelated thread-pool work");
+        }
+        finally
+        {
+            ThreadPool.SetMaxThreads(maximum, maximumIo);
+            ThreadPool.SetMinThreads(minimum, minimumIo);
+            first?.Dispose(); second?.Dispose();
+            if (first != null) { Wait(first.Completion, "first bounded-pool video cleanup"); }
+            if (second != null) { Wait(second.Completion, "second bounded-pool video cleanup"); }
+        }
+        CheckClean(pipeline);
+    }
+
     private static void MediaWorkerIsolation()
     {
+        VideoTrackingSample lastTracking = null;
+        ThreadPool.GetMinThreads(out int minimum, out int minimumIo);
+        ThreadPool.GetMaxThreads(out int maximum, out int maximumIo);
         string directory = Path.Combine(Path.GetTempPath(), "NOMAD-media-fixture-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         var modules = Process.GetCurrentProcess().Modules.Cast<ProcessModule>()
             .Select(module => module.ModuleName).ToArray();
         MediaWorkerHost.FixtureMode = true; MediaWorkerHost.FixtureDirectory = directory;
-        MediaWorkerHost.RequestStart();
         try
         {
+            Check(ThreadPool.SetMinThreads(2, minimumIo) && ThreadPool.SetMaxThreads(2, maximumIo),
+                "Could not establish the two-worker native media fixture");
+            MediaWorkerHost.RequestStart();
             bool rejected = false;
             try { MediaWire.PixelBytes(16385, 1); } catch (InvalidDataException) { rejected = true; }
             Check(rejected, "Transport accepted an oversized frame");
@@ -35,7 +73,15 @@ internal static partial class VideoLifetimeTests
                 int original = MediaWorkerHost.WorkerId;
                 using (var frame = NextVideoFrame(session))
                 { Check(session.RequestRegion(frame, new RectangleF(8, 8, 16, 16)) != 0, "Worker selection refused"); }
-                WaitMedia(() => session.TakeTrackingSample()?.Region?.Found == true, "independent native tracking sample");
+                WaitMedia(() =>
+                {
+                    var sample = session.TakeTrackingSample();
+                    if (sample != null) { lastTracking = sample; }
+                    return sample?.Region?.Found == true;
+                }, "independent native tracking sample");
+                // Throughput and fault recovery retain their normal-pool budget after constrained startup is proven.
+                ThreadPool.SetMaxThreads(maximum, maximumIo);
+                ThreadPool.SetMinThreads(minimum, minimumIo);
                 var stats = MediaWorkerHost.FixtureStats();
                 Check(stats.Width == 1, "Shared viewers opened more than one child capture");
                 session.ConfigureDetection(true, "fixture:hang");
@@ -118,9 +164,16 @@ internal static partial class VideoLifetimeTests
                 !module.ModuleName.StartsWith("libgstreamer", StringComparison.OrdinalIgnoreCase))),
                 "NOMAD loaded native media libraries in the parent");
         }
-        catch (Exception error) { Console.Error.WriteLine("Media fixture failure: " + error); throw; }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine("Media fixture failure: " + error + "; last tracking=" +
+                lastTracking?.Region?.Status + "; worker=" + MediaWorkerHost.DiagnosticStatus);
+            throw;
+        }
         finally
         {
+            ThreadPool.SetMaxThreads(maximum, maximumIo);
+            ThreadPool.SetMinThreads(minimum, minimumIo);
             MediaWorkerHost.Shutdown(); Wait(MediaWorkerHost.ShutdownCompletion, "owned media process exit");
             MediaWorkerHost.FixtureMode = false; MediaWorkerHost.FixtureDirectory = null;
             MediaWorkerHost.RequestStart();

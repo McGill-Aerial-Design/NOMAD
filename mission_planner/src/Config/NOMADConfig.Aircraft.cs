@@ -58,7 +58,8 @@ namespace NOMAD.MissionPlanner
             var active = JObject.FromObject(other);
             return candidate.Properties().Where(property => property.Name.StartsWith("Joystick", System.StringComparison.Ordinal) ||
                 property.Name == nameof(Inputs) || property.Name == nameof(ActuatorDefinitions) || property.Name == nameof(GimbalMountMode))
-                .All(property => JToken.DeepEquals(property.Value, active[property.Name]));
+                .All(property => JToken.DeepEquals(property.Value, active[property.Name])) &&
+                ServoGimbalAxis.Same(SelectedGimbalAxes, other.SelectedGimbalAxes);
         }
 
         private void ValidateAircraftSettings()

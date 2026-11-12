@@ -25,7 +25,7 @@ namespace NOMAD.MissionPlanner
             return btn;
         }
 
-        private sealed class ThemedButton : Button
+        internal class ThemedButton : Button
         {
             protected override void OnPaint(PaintEventArgs args)
             {

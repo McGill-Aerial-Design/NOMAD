@@ -85,8 +85,9 @@ namespace NOMAD.MissionPlanner
             }
             if (!OutputController.IsCurrentProfile(_config) || _generation != OutputController.Generation)
             { _gimbalInput.Reset(); return; }
-            if (hasGimbal && _gimbalInput.CanMove(gimbalValid, roll, pitch, _generation))
-            { GimbalController.ApplyStick(roll, pitch, dt, true); }
+            long gimbalBinding = GimbalController.BindingRevision;
+            if (hasGimbal && _gimbalInput.CanMove(gimbalValid, roll, pitch, _generation, gimbalBinding))
+            { GimbalController.ApplyStick(roll, pitch, GimbalController.MaxRateDegSec, dt, true, _generation, gimbalBinding); }
         }
         private static void AddDigitalEvents(InputBinding binding, InputControlState state, int previous, bool ready,
             List<(string Id, string Operation, string Input)> events, List<(InputBinding Binding, string Action)> active)

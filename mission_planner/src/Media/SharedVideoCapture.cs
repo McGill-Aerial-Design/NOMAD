@@ -115,7 +115,8 @@ namespace NOMAD.MissionPlanner
                             {
                                 capture = new Capture(_key, pipeline, _factory);
                                 Captures.Add(_key, capture);
-                                capture.Worker = Task.Run(() => capture.Run());
+                                capture.Worker = Task.Factory.StartNew(capture.Run, CancellationToken.None,
+                                    TaskCreationOptions.LongRunning, TaskScheduler.Default);
                             }
                             else if (!string.Equals(capture.Pipeline, pipeline, StringComparison.OrdinalIgnoreCase))
                             { throw new InvalidOperationException("This video input is already playing with different receiver settings."); }

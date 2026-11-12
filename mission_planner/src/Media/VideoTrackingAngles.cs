@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 using System;
+using System.Linq;
 using System.Drawing;
 
 namespace NOMAD.MissionPlanner
@@ -62,6 +63,11 @@ namespace NOMAD.MissionPlanner
                 pitchError * elapsed)), calibration.PitchMinDeg, calibration.PitchMaxDeg);
             yaw = GimbalCommand.Clamp(currentYaw + (float)Math.Max(-step, Math.Min(step,
                 yawError * elapsed - aircraftYawChange)), calibration.YawMinDeg, calibration.YawMaxDeg);
+            if (calibration.ServoGimbalAxes.Count > 0)
+            {
+                if (!calibration.ServoGimbalAxes.Any(axis => axis.Axis == "Pitch")) { pitch = currentPitch; }
+                if (!calibration.ServoGimbalAxes.Any(axis => axis.Axis == "Yaw")) { yaw = currentYaw; }
+            }
             return Math.Abs(pitch - currentPitch) >= .01 || Math.Abs(yaw - currentYaw) >= .01;
         }
     }

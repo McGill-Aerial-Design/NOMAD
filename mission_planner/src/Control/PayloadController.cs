@@ -17,6 +17,7 @@ namespace NOMAD.MissionPlanner
             internal string Intent;
             internal readonly HashSet<string> NeutralInputs = new HashSet<string>();
             internal bool Known, Active, Recovery;
+            internal int? TargetPwm;
             internal string Status = "";
         }
         internal static PayloadController Current { get; private set; }
@@ -76,6 +77,8 @@ namespace NOMAD.MissionPlanner
         {
             lock (_gate) { return _states.TryGetValue(id, out var state) ? state.Status : "Output unavailable."; }
         }
+        internal int? TargetPwm(string id)
+        { lock (_gate) { return _states.TryGetValue(id, out var state) ? state.TargetPwm : null; } }
         internal Task WaitForPendingAsync()
         { lock (_gate) { return _pending; } }
         private void ResetInput()
@@ -88,7 +91,7 @@ namespace NOMAD.MissionPlanner
             if (_generation == generation) { return; }
             _generation = generation;
             ResetInput();
-            foreach (var state in _states.Values) { state.Known = false; }
+            foreach (var state in _states.Values) { state.Known = false; state.TargetPwm = null; }
         }
 
         internal Task<string> ActAsync(string id, string operation, double? value = null,
@@ -124,6 +127,7 @@ namespace NOMAD.MissionPlanner
                 { return SetStatus(id, "Invalid payload action or position; no command sent."); }
                 if (safe)
                 {
+                    if (!definition.Relay) { GimbalController.NotifyServoInput(_config, definition.Channel, definition.Safe); }
                     if (!_safePending.Add(id)) { return Task.FromResult("Safe command is already pending."); }
                     _stopping = true;
                     _stopRequested = true;
@@ -137,6 +141,14 @@ namespace NOMAD.MissionPlanner
                 { return SetStatus(id, "Position input requires a nonhazardous payload without confirmations."); }
                 if (!Confirmed(definition, state, operation, value, source, inputId))
                 { return SetStatus(id, "Confirmation incomplete or neutral needed."); }
+                if (!definition.Relay)
+                {
+                    int pwm = definition.ServoPwm(operation, value);
+                    var axis = _config.SelectedGimbalAxes?.FirstOrDefault(item => item.Channel == definition.Channel);
+                    if (axis != null && (definition.Timed || !axis.TryAngle(pwm, out _)))
+                    { return SetStatus(id, "Payload output exceeds the active gimbal calibration; no command sent."); }
+                    GimbalController.NotifyServoInput(_config, definition.Channel, pwm);
+                }
                 if (definition.Timed && !ReserveRepeat(definition.Id))
                 { return SetStatus(id, "Another timed action is active."); }
                 _busy = true;
@@ -211,8 +223,7 @@ namespace NOMAD.MissionPlanner
                     { return await SetStatus(definition.Id, "Relay initialization was rejected; pulse not started."); }
                 }
                 if (!StillCurrent()) { return await SetStatus(definition.Id, "Input retired; no activation sent."); }
-                int pwm = operation == "position" ? definition.Minimum + (int)Math.Round(value.Value * (definition.Maximum - definition.Minimum), MidpointRounding.AwayFromZero) :
-                    operation == "negative" || (definition.Behavior == "ServoToggle" && definition.Reversed) ? definition.Minimum : definition.Maximum;
+                int pwm = definition.ServoPwm(operation, value);
                 attempted = true;
                 bool accepted;
                 if (definition.Behavior == "RelayPulse")
@@ -224,6 +235,7 @@ namespace NOMAD.MissionPlanner
                     definition.Channel, definition.Relay ? 1 : pwm, current: StillCurrent).ConfigureAwait(false); }
                 lock (_gate)
                 {
+                    if (!definition.Relay) { state.TargetPwm = pwm; }
                     state.Known = accepted && target.IsCurrent;
                     state.Active = accepted;
                     if (!target.IsCurrent) { state.Recovery = true; }
@@ -258,6 +270,7 @@ namespace NOMAD.MissionPlanner
                 {
                     state.Known = accepted && target.IsCurrent;
                     state.Active = false;
+                    if (!definition.Relay) { state.TargetPwm = definition.Safe; }
                     state.Recovery = !state.Known;
                     if (accepted)
                     {

@@ -31,9 +31,39 @@ holds 1-120 frames; **Drop old frames** bounds old queue/jitter data. Display an
 appsink still retain the latest frame, so playback is not lossless recording.
 Configure bitrate, resolution and encoding at the source. NOMAD accepts the endpoint;
 camera-server administration and network setup remain external.
+For EDGE T3 receivers that reset the connection during RTSP negotiation, select UDP
+and enable **Skip RTSP OPTIONS and keep-alives**. Leave it off for servers that
+require RTSP keep-alives. Existing inputs default to off.
 URLs may contain credentials: review exports before sharing.
 
 ## Vision and gimbal tracking
+
+### Per-input gimbal outputs
+
+In **Settings → Video → Gimbal outputs → Configure**, leave servo outputs off to
+use Mission Planner's native mount, or enable one to three of **Pitch**, **Yaw** and
+**Roll**. Each enabled axis has a distinct flight-controller output (1–16), minimum
+and maximum PWM, minimum and maximum angle in degrees, and reversal. PWM must stay
+within 500–2500 µs; increasing angle limits must fit ±180° and contain the calibrated
+zero target. Existing inputs keep native mount control.
+
+Configure the flight-controller outputs to accept servo commands in Mission Planner
+before use; NOMAD does not reassign servo functions. ArduPilot's
+[servo-command requirements](https://ardupilot.org/copter/docs/common-mavlink-mission-command-messages-mav_cmd.html#mav-cmd-do-set-servo)
+still apply. Targets use the selected MP connection and its native ACK/retry handling.
+Acknowledgements do not establish physical position.
+
+The existing joystick screen-axis mapping selects which axes the pad moves.
+Automatic region tracking steers the configured pitch/yaw axes and requires level
+roll. Tracking travel limits must fit the servo calibration. After changing a mapping,
+confirm the calibration again before automatic tracking. Changing inputs retires
+gimbal requests and requires a centered physical-stick sample before motion resumes.
+
+A direct payload output may share a gimbal channel when its PWM calibration fits
+the gimbal's limits. Manual slider/actions on that channel disarm automatic tracking;
+tracking requires explicit Start again. Native timed-repeat payloads cannot share a
+gimbal output. Commands already dispatched through MP may still finish after input
+retirement; no remaining axes are sent from a retired gimbal request.
 
 Choose **Object** or **Area**, then click or drag a selection. **Detect** can propose
 recognized objects but is optional. Once visually verified, select **Start tracking**

@@ -36,8 +36,11 @@ internal static partial class VideoLifetimeTests
                 Run("native capture pipeline stays NULL and preserves exact UTF-8 device identity", () => CaptureNativeNull(args[2]));
                 return 0;
             }
+            Run("shared video leaves a bounded thread pool available", VideoThreadPoolAvailability);
             Run("owned media worker faults preserve parent UI and bounded plain recovery", MediaWorkerIsolation);
             Run("owned media worker held operations and high-rate display alignment", MediaWorkerHeldOperations);
+            Run("native RTSP discovery preserves normal OPTIONS", () => NativeRtspDiscovery(false));
+            Run("native RTSP discovery tolerates receivers that reset OPTIONS", () => NativeRtspDiscovery(true));
             Run("native media transport and opt-in isolated GPU pipeline", NativeMediaTransport);
             Run("local capture inputs share playback and exact device ownership", LocalCaptureInputs);
             Run("local capture profile validation and configuration round trip", LocalCaptureProfiles);
@@ -110,6 +113,9 @@ internal static partial class VideoLifetimeTests
             Run("generic visual worker selection, replacement, loss and retirement", GenericVisualWorker);
             Run("pending tracker initialization waits for a fresh result without control admission", PendingRegionInitialization);
             Run("tracking samples stay independent of newer plain display frames", TrackingSampleDisplayIndependence);
+            Run("continuous payload sliders send calibrated PWM and preserve Safe", ContinuousPayloadSlider);
+            Run("servo gimbal calibration and video profiles stay isolated", ServoGimbalConfiguration);
+            Run("video servo gimbal tracking yields to a shared payload slider", ServoGimbalTracking);
             Run("zoom selection, manual override and observation ownership", VisionSelectionAndObservation);
             Run("natural EOF retires selection and calibration validates", VisionEndAndCalibration);
             return 0;
@@ -130,10 +136,12 @@ internal static partial class VideoLifetimeTests
         }
     }
 
+    private static string _videoUserData;
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static void ConfigureVideoTestStorage()
     {
-        var directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "owned-user-data");
+        var directory = Path.Combine(Path.GetTempPath(), "NOMAD-Video-" + Guid.NewGuid().ToString("N"));
+        _videoUserData = directory;
         Directory.CreateDirectory(directory);
         MissionPlanner.Utilities.Settings.CustomUserDataDirectory = directory;
         MissionPlanner.Utilities.Settings.AppConfigName = "NOMAD-VideoTests-" + Guid.NewGuid().ToString("N");
@@ -143,6 +151,12 @@ internal static partial class VideoLifetimeTests
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static void CleanupVideoTestStorage()
     {
+        if (_videoUserData != null && Directory.Exists(_videoUserData) &&
+            Directory.GetParent(_videoUserData).FullName.TrimEnd(Path.DirectorySeparatorChar) ==
+                Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar) &&
+            Path.GetFileName(_videoUserData).StartsWith("NOMAD-Video-") &&
+            Guid.TryParseExact(Path.GetFileName(_videoUserData).Substring("NOMAD-Video-".Length), "N", out _))
+        { Directory.Delete(_videoUserData, true); }
         string metadata = MissionPlanner.Utilities.Settings.GetDataDirectory().TrimEnd(Path.DirectorySeparatorChar);
         if (Path.GetFileName(metadata).StartsWith("NOMAD-VideoTests-") && Directory.Exists(metadata) &&
             Directory.GetParent(metadata).FullName == Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData))

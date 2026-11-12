@@ -109,6 +109,7 @@ internal static partial class VideoLifetimeTests
             GetField<TextBox>(form, "_txtVideoName").Text = "Renamed";
             GetField<TextBox>(form, "_txtVideoUrl").Text = "rtsp://edited.invalid/live";
             GetField<NumericUpDown>(form, "_numVideoLatency").Value = 700;
+            GetField<CheckBox>(form, "_chkRtspSkipOptions").Checked = true;
             GetField<NumericUpDown>(form, "_numVisionFov").Value = 110;
             GetField<NumericUpDown>(form, "_numVisionRate").Value = 60;
             GetField<NumericUpDown>(form, "_numVisionYawMin").Value = -170;
@@ -122,9 +123,12 @@ internal static partial class VideoLifetimeTests
             selector.SelectedIndex = 1;
             Check(GetField<TextBox>(form, "_txtVideoUrl").Text == "rtsp://second.invalid/live",
                 "Switching named video input did not load its independent fields.");
+            Check(!GetField<CheckBox>(form, "_chkRtspSkipOptions").Checked,
+                "RTSP compatibility leaked to another input.");
             GetField<NumericUpDown>(form, "_numVideoQueue").Value = 9;
             selector.SelectedIndex = 0;
             Check(GetField<TextBox>(form, "_txtVideoName").Text == "Renamed" &&
+                GetField<CheckBox>(form, "_chkRtspSkipOptions").Checked &&
                 GetField<NumericUpDown>(form, "_numVisionFov").Value == 110 &&
                 GetField<NumericUpDown>(form, "_numVisionRate").Value == 60 &&
                 GetField<CheckBox>(form, "_chkTrackingCalibrated").Checked &&
@@ -147,6 +151,7 @@ internal static partial class VideoLifetimeTests
             typeof(NOMADSettingsForm).GetMethod("SaveSettings", flags).Invoke(form, null);
             var saved = form.Config.Clone();
             Check(saved.SelectedVideoInput.Name == "Renamed" && saved.SelectedVideoInput.LatencyMs == 700 &&
+                saved.SelectedVideoInput.RtspSkipOptions &&
                 saved.SelectedVideoInput.TrackingCalibrated && saved.SelectedVideoInput.HorizontalFovDeg == 110 &&
                 saved.SelectedVideoInput.TrackingMaxRateDegSec == 60 &&
                 saved.SelectedVideoInput.TrackingMode == "Area" && saved.SelectedVideoInput.ObjectTracker == "GPU" &&
