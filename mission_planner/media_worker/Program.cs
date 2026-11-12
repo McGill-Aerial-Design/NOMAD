@@ -184,6 +184,12 @@ namespace NOMAD.MissionPlanner
                 Task.Run(() => { try { Cancellation.Cancel(); } catch { } });
             }
 
+            private void HoldFixture()
+            {
+                LastOperation = "held " + LastOperation;
+                Thread.Sleep(Timeout.Infinite);
+            }
+
             internal void Execute(MediaMessage request, MediaMessage reply)
             {
                 var token = Cancellation.Token; token.ThrowIfCancellationRequested();
@@ -203,7 +209,7 @@ namespace NOMAD.MissionPlanner
                         {
                             _fixtureModel = request.Text;
                             _fixturePeriod = request.Text == "fixture:120" ? 8 : request.Text == "fixture:60" ? 16 : 33;
-                            if (_fixtureModel == "fixture:hang-start") { Thread.Sleep(Timeout.Infinite); }
+                            if (_fixtureModel == "fixture:hang-start") { HoldFixture(); }
                         }
                         else { _pipeline.Start(request.Text, token); }
                         break;
@@ -211,7 +217,7 @@ namespace NOMAD.MissionPlanner
                         if (_pending != null) { throw new InvalidDataException(); }
                         if (_fixture)
                         {
-                            if (_fixtureModel == "fixture:hang-read") { Thread.Sleep(Timeout.Infinite); }
+                            if (_fixtureModel == "fixture:hang-read") { HoldFixture(); }
                             Thread.Sleep(_fixturePeriod); token.ThrowIfCancellationRequested();
                             _pending = new Bitmap(64, 48); _ticks = Stopwatch.GetTimestamp(); _utc = DateTime.UtcNow;
                         }
@@ -225,7 +231,7 @@ namespace NOMAD.MissionPlanner
                         break;
                     case "detector":
                         Begin(120000); _fixtureModel = request.Model;
-                        if (_fixture && request.Model == "fixture:hang-load") { Thread.Sleep(Timeout.Infinite); }
+                        if (_fixture && request.Model == "fixture:hang-load") { HoldFixture(); }
                         if (_fixture && request.Model.StartsWith("fixture:", StringComparison.Ordinal))
                         { _fixtureDetector = true; reply.Text = "fixture"; }
                         else { _detector = VisionDetectorFactory.Create(request.Model, token); reply.Text = _detector.Identity; }
@@ -236,7 +242,7 @@ namespace NOMAD.MissionPlanner
                         {
                             if (_fixtureDetector)
                             {
-                                if (_fixtureModel == "fixture:hang") { Thread.Sleep(Timeout.Infinite); }
+                                if (_fixtureModel == "fixture:hang") { HoldFixture(); }
                                 reply.Detections = Array.Empty<MediaDetection>();
                             }
                             else { reply.Detections = _detector.Detect(frame, token).Select(MediaDetection.From).ToArray(); }
@@ -245,7 +251,7 @@ namespace NOMAD.MissionPlanner
                         break;
                     case "tracker":
                         Begin(120000); _gpu = request.Gpu; _fixtureTracker = _fixture;
-                        if (_fixture && _gpu) { Thread.Sleep(Timeout.Infinite); }
+                        if (_fixture && _gpu) { HoldFixture(); }
                         if (!_fixtureTracker) { _tracker = VisualTrackerFactory.Create(token, (VisualTrackingMode)request.Mode, _gpu); }
                         reply.Text = (_tracker as EfficientTamVisualTracker)?.Provider ?? "CPU";
                         break;
@@ -262,10 +268,10 @@ namespace NOMAD.MissionPlanner
                                 if (_fixtureTracker && request.Operation == "initialize")
                                 {
                                     _fixtureModel = request.Bounds?.X == 14 ? "fixture:hang-track" : "";
-                                    if (request.Bounds?.X == 13) { Thread.Sleep(Timeout.Infinite); }
+                                    if (request.Bounds?.X == 13) { HoldFixture(); }
                                 }
                                 if (_fixtureTracker && request.Operation == "track" && _fixtureModel == "fixture:hang-track")
-                                { Thread.Sleep(Timeout.Infinite); }
+                                { HoldFixture(); }
                                 if (_fixtureTracker)
                                 { reply.State = (int)VisualTrackingState.Verified; reply.Bounds = new RectangleF(8, 8, 16, 16);
                                   reply.Aim = new PointF(16, 16); reply.Text = "Verified fixture"; }
@@ -309,7 +315,7 @@ namespace NOMAD.MissionPlanner
             {
                 LastOperation = "dispose";
                 Cancel();
-                if (_fixture && _fixtureModel == "fixture:hang-dispose") { Thread.Sleep(Timeout.Infinite); }
+                if (_fixture && _fixtureModel == "fixture:hang-dispose") { HoldFixture(); }
                 try { _tracker?.Dispose(); _detector?.Dispose(); _pipeline?.Dispose(); }
                 finally { MediaPixels.Dispose(_pending); _pending = null; Cancellation.Dispose(); }
             }
