@@ -14,10 +14,13 @@ def patches(name):
     return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(PATCHES.glob(name + "-*.patch"))}
 
 
-def record(workspace, name, binary):
+def record(workspace, name, binary, extra_binaries=()):
     workspace = Path(workspace).resolve(strict=True)
     binary = Path(binary).resolve(strict=True)
     binary.relative_to(workspace)
+    extras = [Path(value).resolve(strict=True) for value in extra_binaries]
+    for extra in extras:
+        extra.relative_to(workspace)
     if not name.isidentifier():
         raise ValueError("Invalid source component name")
     source = workspace / "sources" / name
@@ -35,7 +38,7 @@ def record(workspace, name, binary):
             ["git", "-C", str(source), "submodule", "status", "--recursive"], text=True
         ).splitlines(),
     }
-    artifacts = [binary, *binary.parent.glob("*.so*")]
+    artifacts = [binary, *extras, *binary.parent.glob("*.so*")]
     manifest["artifacts"] = {}
     for artifact in artifacts:
         artifact = artifact.resolve(strict=True)
@@ -58,8 +61,11 @@ def verify(workspace, name, revision, binary):
     manifest = json.loads((workspace / "logs" / f"{name}-build.json").read_text())
     if manifest.get("schema") != 1 or "artifacts" not in manifest:
         raise ValueError("Build manifest needs regeneration with the current build tool")
-    if manifest["source"] != revision or Path(manifest["binary"]).resolve(strict=True) != binary:
+    if manifest["source"] != revision:
         raise ValueError("Built source/executable binding mismatch")
+    primary = Path(manifest["binary"]).resolve(strict=True).relative_to(workspace)
+    if str(primary) not in manifest["artifacts"]:
+        raise ValueError("Recorded executable is absent from the artifact manifest")
     source = workspace / "sources" / name
     current = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
     dirty = subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip()
@@ -72,7 +78,8 @@ def verify(workspace, name, revision, binary):
     ).splitlines()
     if submodules != manifest["submodules"] or any(line.startswith(("+", "U")) for line in submodules):
         raise ValueError("Upstream submodule changed after the recorded build")
-    if str(binary.relative_to(workspace)) not in manifest["artifacts"]:
+    selected = str(binary.relative_to(workspace))
+    if selected not in manifest["artifacts"]:
         raise ValueError("Executable is absent from the artifact manifest")
     for relative, expected in manifest["artifacts"].items():
         artifact = (workspace / relative).resolve(strict=True)
@@ -85,8 +92,8 @@ def verify(workspace, name, revision, binary):
         dirty = subprocess.check_output(["git", "-C", str(path), "status", "--porcelain"], text=True).strip()
         if current != expected or dirty:
             raise ValueError("Built dependency changed after the recorded build")
-    return manifest
+    return dict(manifest, binary=str(binary), sha256=manifest["artifacts"][selected])
 
 
 if __name__ == "__main__":
-    record(sys.argv[1], sys.argv[2], sys.argv[3])
+    record(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:])

@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+# ArduPlane vectored-yaw tilt-tricopter baseline for the NOMAD Gazebo fixture.
+# Derived from Tricopter_1p8kg_aircraft.json. Yaw/approach settings have limited
+# simulator checks; aerodynamic coefficients and physical flight remain unvalidated.
+#
+# Motors 1/2/4 on SERVO1/3/4; the two front tilt servos are vectored yaw
+# (SERVO6 left = 75, SERVO8 right = 76). At Q_TILT_YAW_ANGLE=15 the hover
+# command is 15/105 = 14.29% of travel, which is 0 degrees with the logged
+# -15..+90 degree endpoints below.
+Q_ENABLE 1
+Q_FRAME_CLASS 7
+Q_FRAME_TYPE 1
+Q_TILT_ENABLE 1
+Q_TILT_MASK 3
+Q_TILT_TYPE 2
+Q_TILT_YAW_ANGLE 15
+Q_TILT_MAX 45
+Q_TILT_RATE_UP 30
+Q_TILT_RATE_DN 30
+Q_ASSIST_SPEED 8
+# Hover at GUIDED destinations; ordinary GUIDED legs can still use fixed wing.
+Q_GUIDED_MODE 1
+# Slow heading demand and strengthen rate damping for servo-vectored yaw.
+Q_A_ANG_YAW_P 2
+Q_A_RAT_YAW_P 0.5
+# Start braking earlier and spread the nose-up pitch ramp over ten seconds.
+Q_TRANS_DECEL 0.7
+Q_BACKTRANS_MS 10000
+WP_LOITER_RAD 180
+Q_M_PWM_MIN 1000
+Q_M_PWM_MAX 2000
+Q_M_SPIN_MIN 0.10
+Q_M_SPIN_MAX 0.95
+Q_M_THST_HOVER 0.55
+
+SERVO1_FUNCTION 33
+SERVO1_MIN 1000
+SERVO1_MAX 2000
+SERVO1_TRIM 1000
+SERVO3_FUNCTION 34
+SERVO3_MIN 1000
+SERVO3_MAX 2000
+SERVO3_TRIM 1000
+SERVO4_FUNCTION 36
+SERVO4_MIN 1000
+SERVO4_MAX 2000
+SERVO4_TRIM 1000
+
+SERVO6_FUNCTION 75
+# Tilt trims are ignored by the Q tilt output; the Q controller commands the
+# 15/105 hover neutral and transition directly.
+SERVO6_MIN 920
+SERVO6_MAX 2060
+SERVO6_TRIM 1400
+SERVO6_REVERSED 0
+SERVO8_FUNCTION 76
+SERVO8_MIN 850
+SERVO8_MAX 2050
+SERVO8_TRIM 1900
+SERVO8_REVERSED 1
+
+SERVO7_FUNCTION 4
+SERVO7_MIN 1000
+SERVO7_MAX 1800
+SERVO7_TRIM 1500
+SERVO9_FUNCTION 4
+SERVO9_MIN 1100
+SERVO9_MAX 1950
+SERVO9_TRIM 1600
+SERVO10_FUNCTION 19
+SERVO10_MIN 900
+SERVO10_MAX 2000
+SERVO10_TRIM 1500

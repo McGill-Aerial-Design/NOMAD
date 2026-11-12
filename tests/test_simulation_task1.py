@@ -92,6 +92,9 @@ def test_generated_scene_keeps_literal_local_asset_paths(task1, ground_fixture, 
     output = tmp_path / "Mission Planner" / "run" / "site"
     info = world.create(site, inputs, output, cache)
     tree = ET.parse(output / "task1.sdf")
+    broadcaster = tree.find("world/plugin[@name='gz::sim::systems::SceneBroadcaster']")
+    assert broadcaster is not None
+    assert broadcaster.findtext("max_publish_period") == "0.033"
     assert tree.findtext("world/{http://gazebosim.org/schema}policies/parallel_postupdates") == "false"
     assert "<gz:policies>" in (output / "task1.sdf").read_text()
     paths = [node.text for node in tree.iter() if node.tag in ("uri", "albedo_map")]

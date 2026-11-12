@@ -76,16 +76,29 @@ The parser in `interactive.py` and world generator in `interactive_world.py` own
 | `home`, `system_id` | Home is `[latitude, longitude, altitude_m, heading_deg]`, or a loaded world's georeference; system ID defaults to 201 |
 | `defaults`, `defaults_local` | Paths relative to the Linux workspace and scenario file respectively |
 | `world`, `aircraft_model`, `camera_model`, `spawn` | Prepared local SDF/assets; ENU heading 0 and a free aircraft. Spawn is six values when the world has no matching aircraft pose |
+| `aircraft_model_local` | Model directory resolved relative to the scenario file; use it for repo-owned models instead of workspace paths |
+| `vehicle`, `wind` | `ArduCopter` (default) or `ArduPlane`, selecting the recorded SITL binary; Gazebo-only steady ENU wind in m/s, each component within ±30 and injected into the generated world |
 | `physics_hz` | Use 1000 for flight tests. 400 is camera-only experimentation and fails the pinned Copter's gyro pre-arm requirements |
 | `camera` | Even width 16..1920, height 16..1080, FPS 1..30; optional `bitrate_kbps` 100..50000 and `use_cuda` |
 | `wsl_graphics_adapter` | Optional WSLg D3D12 device-name substring for this run; verify actual server/GUI renderer logs |
 | `last_letter_model` | Prepared recipe for the separate headless backend |
+
+Generated worlds cap `SceneBroadcaster` at 30 Hz so the GUI does not receive every
+1000 Hz physics step; `physics_hz` still sets the physics and IMU rate.
 
 Camera rate is per simulation second; a slow simulation delivers fewer wall-clock
 frames. Resolution/aspect changes affect geometry and require matching calibration.
 NVENC needs an existing `nvh264enc` plugin/driver. Keep machine-specific adapter and
 asset paths in local scenario copies. Changing physics, scenery or encoding changes
 evidence conditions; speed alone does not establish healthy autopilot timing.
+
+### Tiltrotor tricopter fixture
+
+`scenarios/tiltrotor.json` (calm) and `tiltrotor-wind.json` (steady 4 m/s from the
+west) select ArduPlane and the repo-owned `models/tiltrotor_tricopter`. The
+`ardupilot` build records both Copter and Plane; `vehicle` selects a verified binary.
+The fixture's geometry, controls and limitations are documented beside the
+[model](https://github.com/McGill-Aerial-Design/NOMAD/blob/main/scripts/simulation/models/tiltrotor_tricopter/README.md).
 
 ## Running and inspecting
 

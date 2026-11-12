@@ -315,3 +315,97 @@ def test_gui_readiness_requires_render_signal_and_live_process(launcher):
     assert not wait(alive, frame, time.monotonic() + 1, lambda: False)
     frame.set()
     assert wait(alive, frame, time.monotonic() + 1, lambda: True)
+
+
+@pytest.mark.parametrize("vehicle", ["ArduRover", "arduplane", "", None, [], {}])
+def test_unknown_vehicle_is_rejected(launcher, tmp_path, vehicle):
+    interactive, _ = launcher
+    path = tmp_path / "scenario.json"
+    path.write_text(
+        json.dumps({"schema": 1, "name": "Custom", "backend": "gazebo", "frame": "JSON", "vehicle": vehicle})
+    )
+    with pytest.raises(ValueError, match="vehicle"):
+        interactive.recipe(path)
+
+
+@pytest.mark.parametrize(
+    "wind",
+    [
+        [0, 0],
+        [0, 0, 0, 0],
+        [math.nan, 0, 0],
+        [math.inf, 0, 0],
+        [31, 0, 0],
+        [-31, 0, 0],
+        [True, 0, 0],
+        "0 0 0",
+        None,
+    ],
+)
+def test_bad_wind_cannot_launch(launcher, tmp_path, wind):
+    interactive, _ = launcher
+    path = tmp_path / "scenario.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "name": "Tiltrotor",
+                "backend": "gazebo",
+                "frame": "JSON",
+                "wind": wind,
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="Wind"):
+        interactive.recipe(path)
+
+
+def test_wind_requires_gazebo_backend(launcher, tmp_path):
+    interactive, _ = launcher
+    path = tmp_path / "scenario.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "name": "Copter",
+                "backend": "sitl",
+                "frame": "quad",
+                "wind": [1, 0, 0],
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="Wind"):
+        interactive.recipe(path)
+
+
+@pytest.mark.parametrize("wind, expected", [([4, 0, 0], ["4 0 0"]), ([0, 0, 0], []), (None, ["9 9 9"])])
+def test_world_wind_override_and_local_model(launcher, tmp_path, monkeypatch, wind, expected):
+    _, builder = launcher
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    model = tmp_path / "aircraft models/local"
+    model.mkdir(parents=True)
+    original = (
+        '<sdf version="1.9"><model name="local"><link name="body"/>'
+        '<plugin name="ArduPilotPlugin"><fdm_port_in>9002</fdm_port_in></plugin></model></sdf>'
+    )
+    (model / "model.sdf").write_text(original)
+    monkeypatch.setattr(builder, "component", lambda *_: {"binary": str(workspace / "libArduPilotPlugin.so")})
+    world = tmp_path / "field.sdf"
+    world.write_text("""<sdf version="1.9"><world name="field">
+      <spherical_coordinates><latitude_deg>44</latitude_deg><longitude_deg>-75</longitude_deg>
+        <elevation>123</elevation></spherical_coordinates>
+      <wind><linear_velocity>9 9 9</linear_velocity></wind></world></sdf>""")
+    recipe = {"aircraft_model_local": "aircraft models/local", "world": str(world), "spawn": [0, 0, 0.3, 0, 0, 0]}
+    if wind is not None:
+        recipe["wind"] = wind
+    run = tmp_path / "run"
+    run.mkdir()
+    info = builder.create(workspace, run, recipe, tmp_path / "scenario.json", 12345, 23456)
+    rendered = ET.parse(info["world"]).getroot().find("world")
+    assert [element.findtext("linear_velocity") for element in rendered.findall("wind")] == expected
+    assert rendered.findtext("plugin[@name='gz::sim::systems::SceneBroadcaster']/max_publish_period") == "0.033"
+    assert info["home"] == [44, -75, 123, 0]
+    assert rendered.findtext("include/uri") == "model://local"
+    assert ET.parse(run / "models/local/model.sdf").findtext(".//fdm_port_in") == "12345"
+    assert (model / "model.sdf").read_text() == original

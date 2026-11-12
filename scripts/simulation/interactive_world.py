@@ -10,10 +10,15 @@ from pathlib import Path
 
 from build_manifest import verify
 
+SITL_EXECUTABLES = {"ArduCopter": "arducopter", "ArduPlane": "arduplane"}
 
-def component(workspace, name):
+
+def component(workspace, name, executable=None):
     recorded = json.loads((workspace / "logs" / f"{name}-build.json").read_text())
-    return verify(workspace, name, recorded["source"], Path(recorded["binary"]))
+    binary = Path(recorded["binary"])
+    if executable is not None:
+        binary = binary.with_name(executable)
+    return verify(workspace, name, recorded["source"], binary)
 
 
 def asset_path(value, root):
@@ -99,6 +104,12 @@ def create(workspace, run, recipe, scenario_path, fdm_port, video_port, world_ov
             )
             if name == "Sensors":
                 ET.SubElement(plugin, "render_engine").text = "ogre2"
+    for plugin in world.findall("plugin"):
+        if plugin.get("name") == "gz::sim::systems::SceneBroadcaster":
+            period = plugin.find("max_publish_period")
+            if period is None:
+                period = ET.SubElement(plugin, "max_publish_period")
+            period.text = "0.033"
     physics = world.find("physics")
     if physics is None:
         physics = ET.SubElement(world, "physics", name="fixed", type="ignore")
@@ -128,7 +139,20 @@ def create(workspace, run, recipe, scenario_path, fdm_port, video_port, world_ov
         if coordinates.find(key) is None:
             ET.SubElement(coordinates, key)
         coordinates.find(key).text = str(value)
-    model_source = asset_path(recipe["aircraft_model"], workspace)
+    wind = recipe.get("wind")
+    if wind is not None:
+        for existing in list(world.findall("wind")):
+            world.remove(existing)
+        if any(wind):
+            element = ET.Element("wind")
+            ET.SubElement(element, "linear_velocity").text = " ".join(str(value) for value in wind)
+            world.append(element)
+    if recipe.get("aircraft_model_local"):
+        model_source = asset_path(recipe["aircraft_model_local"], scenario_path.parent)
+    elif recipe.get("aircraft_model"):
+        model_source = asset_path(recipe["aircraft_model"], workspace)
+    else:
+        raise ValueError("Provide aircraft_model or aircraft_model_local")
     models = run / "models"
     models.mkdir()
     target = models / model_source.name
@@ -232,6 +256,7 @@ def create(workspace, run, recipe, scenario_path, fdm_port, video_port, world_ov
     return {
         "world": str(destination),
         "physics_hz": recipe.get("physics_hz", 1000),
+        "wind": wind,
         "home": home,
         "renderer_build": renderer,
         "camera": camera_info,

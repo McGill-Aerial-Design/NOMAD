@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+import hashlib
 import importlib
 import json
 import math
@@ -306,6 +307,46 @@ def test_build_manifest_rejects_changed_runtime_model(tooling, monkeypatch, tmp_
     dirty = True
     with pytest.raises(ValueError, match="source/model changed"):
         manifest.verify(tmp_path, "example", "pin", binary)
+
+
+@pytest.mark.parametrize(
+    "executable, state",
+    [
+        (None, "recorded"),
+        ("arduplane", "recorded"),
+        ("other", "unrecorded"),
+        ("arduplane", "modified"),
+        ("arduplane", "missing"),
+    ],
+)
+def test_component_selects_only_verified_build_artifacts(tooling, monkeypatch, tmp_path, executable, state):
+    manifest = tooling("build_manifest")
+    builder = tooling("interactive_world")
+    (tmp_path / "sources/ardupilot").mkdir(parents=True)
+    (tmp_path / "logs").mkdir()
+    binaries = tmp_path / "outputs"
+    binaries.mkdir()
+    copter, plane = binaries / "arducopter", binaries / "arduplane"
+    copter.write_bytes(b"copter")
+    plane.write_bytes(b"plane")
+    monkeypatch.setattr(
+        manifest.subprocess, "check_output", lambda command, **_: "pin\n" if "rev-parse" in command else ""
+    )
+    manifest.record(tmp_path, "ardupilot", copter, [plane])
+    if state == "unrecorded":
+        (binaries / executable).write_bytes(b"unrecorded")
+    elif state == "modified":
+        plane.write_bytes(b"changed")
+    elif state == "missing":
+        plane.unlink()
+    if state == "recorded":
+        selected = builder.component(tmp_path, "ardupilot", executable)
+        binary = binaries / (executable or "arducopter")
+        assert selected["binary"] == str(binary)
+        assert selected["sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
+    else:
+        with pytest.raises((ValueError, FileNotFoundError)):
+            builder.component(tmp_path, "ardupilot", executable)
 
 
 def test_rtp_bridge_preserves_datagram_and_stops(tooling):
