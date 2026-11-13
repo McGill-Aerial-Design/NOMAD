@@ -265,6 +265,19 @@ try {
     $videoCopy = $loadMethod.Invoke($null, [object[]]@([string]$videoExport)).Clone()
     if ($videoCopy.SelectedVideoInput.Url -ne $video.SelectedVideoInput.Url) { throw 'Video export/load/clone lost the source.' }
     Assert-ThrowsMessage '{"RouterLocalPort":0}' 'ports'
+    foreach ($interval in @(100, 500, 5000)) {
+        $intervalConfig = Load-Config ('{"LinkMonitorInterval":' + $interval + '}')
+        if ($intervalConfig.Clone().LinkMonitorInterval -ne $interval) { throw 'Refresh interval boundary changed.' }
+    }
+    foreach ($value in @('-1', '0', '99', '5001', '2147483647', '500.5', '"500"', 'null', 'true')) {
+        Assert-ThrowsMessage ('{"LinkMonitorInterval":' + $value + '}') 'LinkMonitorInterval'
+    }
+    $invalidInterval = [Activator]::CreateInstance($configType)
+    $invalidInterval.LinkMonitorInterval = [int]::MaxValue
+    $invalidExport = Join-Path $temporary 'invalid-interval.json'
+    $rejected = $false
+    try { $invalidInterval.ExportToFile($invalidExport) } catch { $rejected = $true }
+    if (!$rejected -or (Test-Path -LiteralPath $invalidExport)) { throw 'Export persisted an invalid refresh interval.' }
     $screenDefaults = Load-Config '{}'
     if ($screenDefaults.JoystickGimbalHorizontalAxis -ne 'Yaw' -or
         $screenDefaults.JoystickGimbalVerticalAxis -ne 'Pitch' -or

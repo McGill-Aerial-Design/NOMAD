@@ -62,7 +62,8 @@ namespace MissionPlanner.Joystick
     }
     public sealed class JoystickBase : IDisposable
     {
-        public static IList<string> getDevices() => new List<string>();
+        public static int Enumerations;
+        public static IList<string> getDevices() { Enumerations++; return new List<string>(); }
         public static JoystickBase Create(Func<MissionPlanner.MAVLinkInterface> connection) => new JoystickBase();
         public bool AcquireJoystick(string device) => true;
         public IMyJoystickState GetCurrentState() => null;
@@ -607,7 +608,7 @@ internal static class PayloadTests
         Check(NomadJoystickService.TryReadAxisNorm(new Sample { Raw = 32767 }, "X", false, 0, out float midpoint) && midpoint == 0 &&
             NomadJoystickService.TryReadAxisNorm(new Sample { Raw = 32768 }, "X", false, 0, out midpoint) && midpoint == 0,
             "Unsigned axis midpoint lost zero-deadzone center");
-        var now = DateTime.UtcNow;
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
         var listen = new InputListenState(now);
         listen.Sample(new Sample { Buttons = new[] { true, false } }, false, now);
         listen.Sample(new Sample { Buttons = new[] { true, false }, Raw = 33000 }, false, now);
@@ -619,7 +620,10 @@ internal static class PayloadTests
         Check(!listen.Active && listen.Axis == "X", "Generic Listen failed to detect an axis without choosing its type");
         listen = new InputListenState(now); listen.Sample(new Sample(), false, now); listen.Sample(new Sample { Raw = 65535 }, true, now);
         Check(!listen.Active && listen.Axis == null && listen.Button == null, "New connection did not retire capture before detection");
-        listen = new InputListenState(now); listen.Sample(new Sample(), false, now.AddSeconds(16));
+        listen = new InputListenState(now);
+        listen.Sample(new Sample(), false, now + 14 * System.Diagnostics.Stopwatch.Frequency);
+        Check(listen.Active, "Listen stopped before its fifteen-second deadline");
+        listen.Sample(new Sample(), false, now + 15 * System.Diagnostics.Stopwatch.Frequency);
         Check(!listen.Active, "Listen deadline did not retire capture");
         listen = new InputListenState(now); listen.Sample(null, false, now);
         Check(!listen.Active, "Device loss did not retire capture");
@@ -768,9 +772,31 @@ internal static class PayloadTests
             }
         }
     }
+    private static void HidReacquisitionClock()
+    {
+        using var service = new NomadJoystickService(new NOMADConfig());
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var acquire = typeof(NomadJoystickService).GetField("_lastAcquire", flags);
+        var tick = typeof(NomadJoystickService).GetMethod("OnTick", flags);
+        Check(acquire.FieldType == typeof(long), "HID reacquisition still depends on wall time");
+        service.Start();
+        int before = MissionPlanner.Joystick.JoystickBase.Enumerations;
+        tick.Invoke(service, new object[] { null, EventArgs.Empty });
+        Check(MissionPlanner.Joystick.JoystickBase.Enumerations == before + 1,
+            "HID startup did not attempt immediate device acquisition");
+        acquire.SetValue(service, System.Diagnostics.Stopwatch.GetTimestamp() - 2 * System.Diagnostics.Stopwatch.Frequency);
+        tick.Invoke(service, new object[] { null, EventArgs.Empty });
+        Check(MissionPlanner.Joystick.JoystickBase.Enumerations == before + 1,
+            "HID discovery repeated before its three-second interval");
+        acquire.SetValue(service, System.Diagnostics.Stopwatch.GetTimestamp() - 4 * System.Diagnostics.Stopwatch.Frequency);
+        tick.Invoke(service, new object[] { null, EventArgs.Empty });
+        Check(MissionPlanner.Joystick.JoystickBase.Enumerations == before + 2,
+            "HID discovery stayed suppressed after its reacquisition interval");
+    }
+
     private static int Main()
     {
-        BusyActivationKeepsInputAvailable(); BusyPositionRetriesFreshSamples();
+        HidReacquisitionClock(); BusyActivationKeepsInputAvailable(); BusyPositionRetriesFreshSamples();
         BlockingNativeRequests();
         StableConflictDoesNotRetireOtherInput(); AbsentDeviceDoesNotRetireOtherInput(); MixedInputArbitration(); NamedInputSafety(); InvalidDefinitions(); NativeMappings(); TrimAndTargetFences(); StopAndFaults(); SequentialSafeDrain(); SafeRejectionOutcomes(); ConfirmationAndHid(); ConflictSafetySurvivesNewInput(); RepeatSurvivesRetirement(); MixedBatchRetiresAcrossAircraftChange();
         Console.WriteLine("Payload tests passed (native mappings, strict calibration, ACK faults, HID edges, stale targets and repeat lifetime).");

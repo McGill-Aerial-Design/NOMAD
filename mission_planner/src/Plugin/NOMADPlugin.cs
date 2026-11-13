@@ -111,7 +111,7 @@ namespace NOMAD.MissionPlanner
                 // Capture arrow keys at the application message-pump level so
                 // focused buttons, grids, and non-NOMAD views cannot consume them
                 // while the operator has enabled gimbal keyboard control.
-                _gimbalArrowKeyFilter = new GimbalArrowKeyFilter(_profiles);
+                _gimbalArrowKeyFilter = new GimbalArrowKeyFilter(_profiles) { CanSave = () => !_savingSettings };
 
                 // Physical joystick service — starts only if either channel is enabled in config.
                 _joystickService = new NomadJoystickService(_config);
@@ -339,7 +339,7 @@ namespace NOMAD.MissionPlanner
                     _termination = new TerminationController(_config);
                     NOMADMainScreen.SetTerminationController(_termination);
                     PayloadController.ApplyProfile(_config);
-                    _gimbalArrowKeyFilter = new GimbalArrowKeyFilter(_profiles);
+                    _gimbalArrowKeyFilter = new GimbalArrowKeyFilter(_profiles) { CanSave = () => !_savingSettings };
                     AudioAlerts.ApplyConfig(_config);
                     ApplyRouterClientSettings(connectionChanged);
                     try
@@ -356,7 +356,7 @@ namespace NOMAD.MissionPlanner
                     ReferenceEquals(previousOwner, PayloadController.Current))
                 {
                     _gimbalArrowKeyFilter?.Dispose();
-                    _gimbalArrowKeyFilter = new GimbalArrowKeyFilter(_profiles);
+                    _gimbalArrowKeyFilter = new GimbalArrowKeyFilter(_profiles) { CanSave = () => !_savingSettings };
                     try { previousService?.RestartWithConfig(); }
                     catch (Exception error) { Log.Error("Previous joystick restart failed: " + error.Message); }
                 }

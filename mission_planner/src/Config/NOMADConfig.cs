@@ -49,7 +49,7 @@ namespace NOMAD.MissionPlanner
         public bool RouterClientEnabled { get; set; } = false;
 
         /// <summary>
-        /// Link monitoring interval in milliseconds.
+        /// Status refresh interval in milliseconds, from 100 to 5000.
         /// </summary>
         public int LinkMonitorInterval { get; set; } = 500;
 

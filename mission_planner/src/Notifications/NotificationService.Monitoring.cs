@@ -2,6 +2,7 @@
 // Copyright 2026 The NOMAD Authors
 
 using System;
+using System.Diagnostics;
 using MissionPlanner;
 
 namespace NOMAD.MissionPlanner
@@ -52,7 +53,7 @@ namespace NOMAD.MissionPlanner
             _lastEkfPositionValidity = -1;
             _altBand = -1;
             _lastBatterySeverity.Clear();
-            _lastBatterySpeechUtc.Clear();
+            _lastBatterySpeechTicks.Clear();
             lock (_lock) { _lastNotificationTime.Clear(); }
         }
 
@@ -157,13 +158,13 @@ namespace NOMAD.MissionPlanner
 
         private bool CanSpeakBattery(int idx)
         {
-            var now = DateTime.UtcNow;
-            if (_lastBatterySpeechUtc.TryGetValue(idx, out var last)
-                && now - last < BatterySpeechInterval)
+            long now = Stopwatch.GetTimestamp();
+            if (_lastBatterySpeechTicks.TryGetValue(idx, out var last)
+                && (now - last) / (double)Stopwatch.Frequency < BatterySpeechInterval.TotalSeconds)
             {
                 return false;
             }
-            _lastBatterySpeechUtc[idx] = now;
+            _lastBatterySpeechTicks[idx] = now;
             return true;
         }
 

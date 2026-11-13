@@ -63,6 +63,10 @@ namespace NOMAD.MissionPlanner
             y += 32;
             AddLabel(tab, "Source URL:", 20, y);
             _txtVideoUrl = AddTextBox(tab, 180, y, 440);
+            _txtVideoUrl.TextChanged += (sender, args) =>
+            {
+                if (!_loadingVideo) { _chkTrackingCalibrated.Checked = false; }
+            };
             y += 32;
             AddLabel(tab, "Capture device:", 20, y);
             _cmbVideoDevice = AddComboBox(tab, 180, y, 330, Array.Empty<string>());

@@ -117,6 +117,7 @@ internal static partial class VideoLifetimeTests
             Run("oversized optional model catalog preserves plain video and exact selection", OversizedCatalogKeepsPlainVideo);
             Run("observation retains selection-time model provenance after a swap", ObservationSelectionModelProvenance);
             Run("model-only selection preserves source and generic region ownership", ModelSwitchKeepsRegionAndSource);
+            Run("model catalog publication follows a shared path across cameras", ModelCatalogSharedPath);
             Run("model construction cancellation joins and disposes during shutdown", ModelLoadShutdown);
             Run("bounded gimbal tracking angles", BoundedTrackingAngles);
             Run("generic visual worker selection, replacement, loss and retirement", GenericVisualWorker);

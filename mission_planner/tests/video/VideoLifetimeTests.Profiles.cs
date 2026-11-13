@@ -89,6 +89,7 @@ internal static partial class VideoLifetimeTests
     {
         var config = VideoConfig();
         config.AircraftName = "Alpha";
+        config.SelectedVideoInput.TrackingCalibrated = true;
         config.VideoInputs.Add(new VideoInputProfile { Name = "Second", Url = "rtsp://second.invalid/live" });
         var profiles = new NOMADProfiles(config);
         string firstId = profiles.SelectedId;
@@ -106,8 +107,15 @@ internal static partial class VideoLifetimeTests
             Check(GetField<Label>(form, "_profileContext").Text == "Editing: Renamed Alpha",
                 "The persistent Settings context did not track an aircraft rename.");
             var selector = GetField<ComboBox>(form, "_cmbVideoInputs");
+            var calibrated = GetField<CheckBox>(form, "_chkTrackingCalibrated");
+            Check(calibrated.Checked, "Loading a saved video input lost its calibration confirmation.");
             GetField<TextBox>(form, "_txtVideoName").Text = "Renamed";
             GetField<TextBox>(form, "_txtVideoUrl").Text = "rtsp://edited.invalid/live";
+            Check(!calibrated.Checked, "A replacement network camera inherited the previous calibration confirmation.");
+            typeof(NOMADSettingsForm).GetMethod("SaveVideoInput", BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(form, null);
+            Check(!form.Config.SelectedVideoInput.TrackingCalibrated && profiles.Selected.Config.SelectedVideoInput.TrackingCalibrated,
+                "Saving the changed camera retained its calibration or changed the active profile before acceptance.");
             GetField<NumericUpDown>(form, "_numVideoLatency").Value = 700;
             GetField<CheckBox>(form, "_chkRtspSkipOptions").Checked = true;
             GetField<NumericUpDown>(form, "_numVisionFov").Value = 110;

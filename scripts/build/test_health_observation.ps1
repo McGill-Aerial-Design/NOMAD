@@ -22,6 +22,17 @@ function Invoke-HealthObservationTests {
 
     $service = [Activator]::CreateInstance($serviceType)
     try {
+        $speech = $serviceType.GetMethod('CanSpeakBattery', $private)
+        if (!$speech.Invoke($service, [object[]]@([int]1))) { throw 'Initial battery warning was suppressed.' }
+        $ticks = $serviceType.GetField('_lastBatterySpeechTicks', $private).GetValue($service)
+        $ticks[[int]1] = [Diagnostics.Stopwatch]::GetTimestamp() - 9 * [Diagnostics.Stopwatch]::Frequency
+        if ($speech.Invoke($service, [object[]]@([int]1))) { throw 'Battery speech repeated before ten seconds.' }
+        $ticks[[int]1] = [Diagnostics.Stopwatch]::GetTimestamp() - 11 * [Diagnostics.Stopwatch]::Frequency
+        if (!$speech.Invoke($service, [object[]]@([int]1))) { throw 'Battery speech stayed suppressed after ten seconds.' }
+    } finally { $service.Dispose() }
+
+    $service = [Activator]::CreateInstance($serviceType)
+    try {
         $context = $serviceType.GetMethod('ObserveHealthContext', $private)
         $first = New-Object object[] 3
         $second = New-Object object[] 3
@@ -54,7 +65,7 @@ function Invoke-HealthObservationTests {
                     throw 'Changed native connection/MAV/state retained another aircraft baseline.'
                 }
             }
-            foreach ($name in @('_lastBatterySeverity','_lastBatterySpeechUtc','_lastNotificationTime')) {
+            foreach ($name in @('_lastBatterySeverity','_lastBatterySpeechTicks','_lastNotificationTime')) {
                 if ($serviceType.GetField($name, $private).GetValue($service).Count -ne 0) {
                     throw 'Changed native context retained battery state or notification cooldown.'
                 }

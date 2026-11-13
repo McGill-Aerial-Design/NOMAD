@@ -185,10 +185,10 @@ namespace NOMAD.MissionPlanner
             long revision = ++_modelRevision;
             Player.UpdateDetectionModel(_modelPath);
             _models.Enabled = false;
-            _ = LoadModelChoicesAsync(input.Name, _modelPath, revision);
+            _ = LoadModelChoicesAsync(_modelPath, revision);
         }
 
-        private async Task LoadModelChoicesAsync(string inputName, string path, long revision)
+        private async Task LoadModelChoicesAsync(string path, long revision)
         {
             List<VisionModelChoice> choices = null;
             string error = null;
@@ -203,7 +203,6 @@ namespace NOMAD.MissionPlanner
                 choices = new List<VisionModelChoice> { new VisionModelChoice(path, "Current model (catalog unavailable)") };
             }
             if (IsDisposed || _shutdown.IsCancellationRequested || revision != _modelRevision ||
-                !string.Equals(_config.SelectedVideoInput?.Name, inputName, StringComparison.OrdinalIgnoreCase) ||
                 !VisionModelCatalog.SamePath(_config.SelectedVideoInput?.DetectorModelProfilePath, path)) { return; }
             _loading = true;
             try

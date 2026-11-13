@@ -87,7 +87,7 @@ namespace NOMAD.MissionPlanner
         private int _lastEkfPositionValidity = -1;
         private int _lastGpsFix = -1;
         private readonly Dictionary<int, int> _lastBatterySeverity = new Dictionary<int, int>();
-        private readonly Dictionary<int, DateTime> _lastBatterySpeechUtc = new Dictionary<int, DateTime>();
+        private readonly Dictionary<int, long> _lastBatterySpeechTicks = new Dictionary<int, long>();
         private static readonly TimeSpan BatterySpeechInterval = TimeSpan.FromSeconds(10);
 
         public event EventHandler<NotificationEventArgs> NotificationAdded;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using IMyJoystickState = MissionPlanner.Joystick.IMyJoystickState;
 namespace NOMAD.MissionPlanner
 {
@@ -9,18 +10,19 @@ namespace NOMAD.MissionPlanner
     {
         private bool[] _previous;
         private readonly Dictionary<string, float> _baseline = new Dictionary<string, float>();
-        private readonly DateTime _deadline;
+        private readonly long _startedTicks;
         internal bool Active { get; private set; } = true;
         internal int? Button { get; private set; }
         internal string Axis { get; private set; }
         internal string Status { get; private set; } = "Move one button, toggle or axis.";
-        internal InputListenState(DateTime now) { _deadline = now.AddSeconds(15); }
+        internal InputListenState(long now) { _startedTicks = now; }
         internal void Stop(string status) { Active = false; Status = status; }
-        internal void Sample(IMyJoystickState sample, bool connected, DateTime now)
+        internal void Sample(IMyJoystickState sample, bool connected, long now)
         {
             if (!Active) { return; }
             if (connected) { Stop("Disconnect the aircraft before listening."); return; }
-            if (now >= _deadline) { Stop("Listen timed out. Try again."); return; }
+            if ((now - _startedTicks) / (double)Stopwatch.Frequency >= 15)
+            { Stop("Listen timed out. Try again."); return; }
             if (sample == null) { Stop("Input device is unavailable."); return; }
             try
             {

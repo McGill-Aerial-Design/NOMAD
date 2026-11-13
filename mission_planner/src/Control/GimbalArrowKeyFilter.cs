@@ -26,6 +26,7 @@ namespace NOMAD.MissionPlanner
 
         public static bool Enabled => s_current?._enabled ?? false;
         public static event Action<bool> EnabledChanged;
+        internal Func<bool> CanSave { get; set; }
 
         public GimbalArrowKeyFilter(NOMADProfiles profiles)
         {
@@ -40,6 +41,8 @@ namespace NOMAD.MissionPlanner
         public static void SetEnabled(bool enabled)
         {
             if (s_current == null || s_current._enabled == enabled) return;
+            if (s_current.CanSave?.Invoke() == false)
+            { throw new InvalidOperationException("Wait for the current profile save to finish, then try again."); }
 
             bool previous = s_current._config.GimbalArrowKeysEnabled;
             s_current._config.GimbalArrowKeysEnabled = enabled;

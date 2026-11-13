@@ -109,7 +109,7 @@ namespace NOMAD.MissionPlanner
                 if (IsReparsePath(directory.FullName))
                 { throw new IOException("Managed model profiles cannot be written through a reparse directory."); }
             }
-            foreach (string path in new[] { target, target + ".tmp", target + ".bak" })
+            foreach (string path in new[] { target, target + ".bak" })
             {
                 if (IsReparsePath(path))
                 { throw new IOException("Managed model profiles cannot replace a reparse file."); }

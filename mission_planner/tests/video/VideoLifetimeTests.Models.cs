@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Newtonsoft.Json;
 using NOMAD.MissionPlanner;
@@ -442,6 +443,23 @@ internal static partial class VideoLifetimeTests
                 "Closing Manage after an edit could not reload the same model path without restarting video");
         }
         CheckClean(pipeline);
+    }
+
+    private static void ModelCatalogSharedPath()
+    {
+        var config = TwoInputs();
+        using var host = new VideoInputPlayer(config, true, CancellationToken.None, () => new FakeVideoPipeline(),
+            null, (owner, name, path) => Task.FromResult(true));
+        var selector = GetField<ComboBox>(host, "_models");
+        WaitUi(() => selector.SelectedItem != null, "initial shared model catalog");
+        config.SelectedVideoInputName = "Alternate";
+        host.RefreshInput();
+        selector.Items.Clear(); selector.Enabled = false;
+        var load = typeof(VideoInputPlayer).GetMethod("LoadModelChoicesAsync", BindingFlags.Instance | BindingFlags.NonPublic);
+        var completion = (Task)load.Invoke(host, new object[] { "", GetField<long>(host, "_modelRevision") });
+        WaitUi(completion, "shared-path catalog publication after camera switch");
+        Check(selector.Enabled && selector.SelectedItem is VisionModelChoice choice && choice.Path == "",
+            "Switching cameras with the same model path stranded the pending catalog or disabled its selector.");
     }
 
     private static void ModelLoadShutdown()

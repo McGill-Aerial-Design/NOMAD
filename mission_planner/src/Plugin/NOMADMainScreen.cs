@@ -197,6 +197,7 @@ namespace NOMAD.MissionPlanner
 
         private void ShowView(string viewName)
         {
+            if (_currentView != null && _currentViewName == viewName) { return; }
             _currentViewName = viewName;
             UpdateSidebarButtonState(viewName);
 

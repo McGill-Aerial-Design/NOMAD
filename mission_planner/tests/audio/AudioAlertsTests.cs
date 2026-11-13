@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 using System;
 using System.Collections.Concurrent;
+using System.Collections;
+using Stopwatch = System.Diagnostics.Stopwatch;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -69,6 +71,38 @@ internal static class AudioAlertsTests
         AudioAlerts.Shutdown();
         var worker = typeof(AudioAlerts).GetField("_speechWorker", BindingFlags.Static | BindingFlags.NonPublic);
         Wait(() => worker.GetValue(null) == null, "Muted speech worker did not retire");
+    }
+    private static void CooldownClocks()
+    {
+        var flags = BindingFlags.Static | BindingFlags.NonPublic;
+        var played = (IDictionary)typeof(AudioAlerts).GetField("_lastPlayed", flags).GetValue(null);
+        var spoken = (IDictionary)typeof(AudioAlerts).GetField("_lastSpoken", flags).GetValue(null);
+        Require(played.GetType().GenericTypeArguments[1] == typeof(long) &&
+            spoken.GetType().GenericTypeArguments[1] == typeof(long),
+            "Audio cooldowns still use wall-clock timestamps and can stall after a backward clock correction");
+        AudioAlerts.ApplyConfig(new NOMADConfig());
+        var queueLock = typeof(AudioAlerts).GetField("_queueLock", flags).GetValue(null);
+        lock (queueLock)
+        {
+            long recent = Stopwatch.GetTimestamp() - 9 * Stopwatch.Frequency;
+            played[AlertKind.BatteryCritical] = recent;
+            AudioAlerts.Play(AlertKind.BatteryCritical);
+            Require((long)played[AlertKind.BatteryCritical] == recent, "Critical beep repeated before ten seconds");
+            long elapsed = Stopwatch.GetTimestamp() - 11 * Stopwatch.Frequency;
+            played[AlertKind.BatteryCritical] = elapsed;
+            AudioAlerts.Play(AlertKind.BatteryCritical);
+            Require((long)played[AlertKind.BatteryCritical] > elapsed, "Critical beep remained suppressed after ten seconds");
+            AudioAlerts.Shutdown(); // Retire queued beep work before the compile-time fixture can reach Console.Beep.
+        }
+        AudioAlerts.ApplyConfig(new NOMADConfig());
+        const string phrase = "elapsed cooldown";
+        spoken[phrase] = Stopwatch.GetTimestamp() - 9 * Stopwatch.Frequency;
+        AudioAlerts.Speak(phrase);
+        AudioAlerts.Speak(phrase);
+        Wait(() => System.Speech.Synthesis.SpeechSynthesizer.Spoken.Contains(phrase), "Elapsed speech cooldown stayed muted");
+        Stop();
+        Require(System.Speech.Synthesis.SpeechSynthesizer.Spoken.Count(text => text == phrase) == 1,
+            "Identical speech repeated before its cooldown elapsed");
     }
     private static int Main()
     {
@@ -158,6 +192,7 @@ internal static class AudioAlertsTests
             .Invoke(null, new object[] { AlertKind.BatteryWarning, retired });
         Require(System.Media.SoundPlayer.Players.Count == players, "A retired beep pattern opened an audio device");
         Stop();
+        CooldownClocks();
         Console.WriteLine("PASS audio mute, stale initialization, reenable, altitude and resource retirement");
         return 0;
     }

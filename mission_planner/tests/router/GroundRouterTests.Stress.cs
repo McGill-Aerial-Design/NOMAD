@@ -126,8 +126,14 @@ internal static partial class GroundRouterTests
             Check(bed.Router.Links.Single(link => link.Type == "LTE").BytesSentOutbound > 0, "outbound byte counter advanced");
             Check(!string.IsNullOrEmpty(bed.Router.GetStatusSummary()), "status summary available");
 
+            Check(bed.Router.Links.Single(link => link.Type == "LTE").HeartbeatCount > 0,
+                "heartbeat count established before reset");
             bed.Router.ResetCounters();
             CheckEq(bed.Router.Links.Single(link => link.Type == "LTE").FramesReceived, 0, "counters reset");
+            CheckEq(bed.Router.Links.Single(link => link.Type == "LTE").HeartbeatCount, 0, "heartbeat counter reset");
+            bed.SendLte(Frames.Heartbeat(1, 9, 1));
+            Check(await WaitUntil(() => bed.Router.Links.Single(link => link.Type == "LTE").HeartbeatCount == 1, 2000),
+                "next heartbeat starts a fresh counter");
             if (TestFailedSoFar) bed.DumpLogs("bidirectional stress");
         }
     }
