@@ -230,8 +230,7 @@ namespace NOMAD.MissionPlanner
             const int gapX = 6;
             int textX = severityW + padL + badgeW + gapX;
 
-            var message = notification.Message;
-            if (message.Length > 120) message = message.Substring(0, 117) + "...";
+            var message = notification.Message ?? "";
             var timeText = notification.TimestampFormatted;
 
             // Use a temporary large width for initial measurement — the labels will
@@ -325,6 +324,18 @@ namespace NOMAD.MissionPlanner
                 AutoEllipsis = true,
             };
             panel.Controls.Add(lblMessage);
+
+            void ReflowText()
+            {
+                int width = Math.Max(1, panel.ClientSize.Width - textX - padR);
+                lblTitle.SetBounds(textX, padY, width,
+                    lblTitle.GetPreferredSize(new Size(width, 0)).Height);
+                lblMessage.SetBounds(textX, lblTitle.Bottom + 1, width,
+                    lblMessage.GetPreferredSize(new Size(width, 0)).Height);
+                panel.Height = Math.Max(lblMessage.Bottom, leftBottom) + padY;
+            }
+            panel.SizeChanged += (sender, args) => ReflowText();
+            ReflowText();
 
             // Hover effect
             var normalBg = Color.FromArgb(35, 35, 38);

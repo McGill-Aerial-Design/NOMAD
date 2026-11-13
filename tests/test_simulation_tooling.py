@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import hashlib
 import importlib
+import io
 import json
 import math
 import os
@@ -313,7 +314,8 @@ def test_capture_identity_is_exact_and_never_guessed_after_corruption(tooling):
 
 
 @pytest.mark.parametrize("home_workspace", [False, True])
-def test_visible_readiness_failure_still_cleans_owned_processes(tooling, monkeypatch, tmp_path, home_workspace):
+@pytest.mark.parametrize("failure", ["readiness", "relay", "relay_at_stop", "relay_at_close", None])
+def test_supervisor_faults_fail_and_clean_owned_processes(tooling, monkeypatch, tmp_path, home_workspace, failure):
     supervisor = tooling("supervise")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -343,7 +345,24 @@ def test_visible_readiness_failure_still_cleans_owned_processes(tooling, monkeyp
     monkeypatch.setattr(supervisor.signal, "signal", lambda *_: None)
     monkeypatch.setattr(supervisor.signal, "SIGHUP", 1, raising=False)
     monkeypatch.setattr(supervisor, "create_world", lambda *_: run / "world.sdf")
-    monkeypatch.setattr(supervisor, "RtpRelay", lambda: types.SimpleNamespace(stats={}, close=lambda: None))
+    relay_stats = {"error": "Injected relay failure" if failure == "relay" else None}
+
+    def close_relay():
+        if failure == "relay_at_close":
+            relay_stats["error"] = "Injected relay failure"
+
+    monkeypatch.setattr(supervisor, "RtpRelay", lambda: types.SimpleNamespace(stats=relay_stats, close=close_relay))
+    if failure != "readiness":
+        (run / "frames").mkdir()
+        (run / "frames/1.json").write_text("{}")
+    monkeypatch.setattr(sys, "stdin", io.StringIO("STOP\n"))
+
+    def ready(*_):
+        if failure == "relay_at_stop":
+            relay_stats["error"] = "Injected relay failure"
+        return [sys.stdin], [], []
+
+    monkeypatch.setattr(supervisor.select, "select", ready)
     original_read = Path.read_text
 
     def read(path, *args, **kwargs):
@@ -368,15 +387,21 @@ def test_visible_readiness_failure_still_cleans_owned_processes(tooling, monkeyp
     def command(args, **_):
         if args[0] == "git":
             return supervisor.AP_REVISION + "\n"
-        raise RuntimeError("Injected camera readiness failure")
+        if failure == "readiness":
+            raise RuntimeError("Injected camera readiness failure")
+        return "pid=101,"
 
     monkeypatch.setattr(supervisor.subprocess, "Popen", start)
     monkeypatch.setattr(supervisor.subprocess, "check_output", command)
     monkeypatch.setattr(supervisor, "stop_owned", stop)
-    with pytest.raises(RuntimeError, match="Injected camera readiness failure"):
+    if failure in ("readiness", "relay"):
+        with pytest.raises(RuntimeError, match="Injected camera readiness failure|RTP relay failed"):
+            supervisor.main()
+    else:
         supervisor.main()
     result = json.loads((run / "linux.json").read_text())
-    assert stopped == [101, 100] and not result["passed"]
+    assert stopped == ([101, 100] if failure == "readiness" else [101, 102, 100])
+    assert result["passed"] == (failure is None)
     assert result["owned_process_exited"] and result["renderer_exited"]
 
 

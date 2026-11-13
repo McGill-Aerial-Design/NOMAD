@@ -90,4 +90,107 @@ try {
     $form.PerformLayout()
     if ($form.Text -ne 'NOMAD Setup') { throw 'Setup window failed to construct.' }
 } finally { $form.Dispose() }
-Write-Output 'Installer package passed: embedded DLL/media bundle/licenses, version/hash, framework-only references, administrator manifest and UI construction. No installation invoked.'
+
+# Exercise the real packager with a compiler that changes an input after consuming it.
+$temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+$fixture = Join-Path $temporaryRoot ('NOMAD-installer-build-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $fixture | Out-Null
+try {
+    foreach ($relative in @('scripts/build/build_plugin_installer.ps1',
+        'mission_planner/packaging/installer/Program.cs', 'mission_planner/packaging/installer/InstallEngine.cs',
+        'mission_planner/packaging/installer/app.manifest', 'mission_planner/src/Plugin/MissionPlannerVersion.cs',
+        'scripts/release/mission-planner-target.json', 'LICENSE', 'NOTICE')) {
+        $destination = Join-Path $fixture $relative
+        New-Item -ItemType Directory -Path (Split-Path $destination) -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $root $relative) -Destination $destination
+    }
+    $fixturePayload = Join-Path $fixture 'payload.dll'
+    $payload = $assembly.GetManifestResourceStream('NOMAD.Payload.dll')
+    $output = [IO.File]::Create($fixturePayload)
+    try { $payload.CopyTo($output) } finally { $output.Dispose(); $payload.Dispose() }
+    [IO.File]::WriteAllText((Join-Path $fixture 'payload.sha256'), $manifest.plugin_sha256)
+    [IO.File]::WriteAllText((Join-Path $fixture 'source.sha'), $manifest.plugin_source_sha)
+    @'
+function Get-CurrentPluginBuild {
+    param($RepoRoot, $PluginPath)
+    if ((Get-FileHash -LiteralPath $PluginPath).Hash -ne (Get-Content (Join-Path $RepoRoot 'payload.sha256'))) {
+        throw 'Fixture payload changed during compilation.'
+    }
+}
+function Find-RoslynCompiler { return (Join-Path $PSScriptRoot 'compiler.ps1') }
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'scripts/build/windows_build_tools.ps1')
+    @'
+$fixtureRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+$outputArgument = @($args | Where-Object { $_.StartsWith('/out:') })
+if ($outputArgument.Count -ne 1) { throw 'Fixture compiler did not receive one output path.' }
+[IO.File]::WriteAllText($outputArgument[0].Substring(5), 'Synthetic setup; never execute.')
+switch (Get-Content (Join-Path $fixtureRoot 'mutation.txt')) {
+    'source' {
+        [IO.File]::AppendAllText((Join-Path $fixtureRoot 'mission_planner/packaging/installer/InstallEngine.cs'), '// changed')
+    }
+    'proof' { [IO.File]::WriteAllText((Join-Path $fixtureRoot 'payload.sha256'), '0' * 64) }
+    'payload' {
+        $stream = [IO.File]::OpenWrite((Join-Path $fixtureRoot 'payload.dll'))
+        try { $stream.SetLength($stream.Length + 1) } finally { $stream.Dispose() }
+    }
+}
+$global:LASTEXITCODE = 0
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'scripts/build/compiler.ps1')
+    @'
+param($OutputDirectory)
+function git { $global:LASTEXITCODE = 0; return (Get-Content (Join-Path $PSScriptRoot 'source.sha')) }
+& (Join-Path $PSScriptRoot 'scripts/build/build_plugin_installer.ps1') `
+    -PluginPath (Join-Path $PSScriptRoot 'payload.dll') -OutputDirectory $OutputDirectory
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'run.ps1')
+    foreach ($mutation in @('none', 'source', 'proof', 'payload')) {
+        Copy-Item -LiteralPath (Join-Path $root 'mission_planner/packaging/installer/InstallEngine.cs') `
+            -Destination (Join-Path $fixture 'mission_planner/packaging/installer/InstallEngine.cs') -Force
+        [IO.File]::WriteAllText((Join-Path $fixture 'payload.sha256'), $manifest.plugin_sha256)
+        [IO.File]::WriteAllText((Join-Path $fixture 'mutation.txt'), $mutation)
+        $caseOutput = Join-Path $fixture $mutation
+        $start = New-Object Diagnostics.ProcessStartInfo
+        $start.FileName = Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
+        $start.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $fixture 'run.ps1') + '" "' + $caseOutput + '"'
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        $start.RedirectStandardOutput = $start.RedirectStandardError = $true
+        $process = [Diagnostics.Process]::Start($start)
+        try {
+            $stdout = $process.StandardOutput.ReadToEndAsync()
+            $stderr = $process.StandardError.ReadToEndAsync()
+            if (!$process.WaitForExit(30000)) {
+                $process.Kill()
+                [void]$process.WaitForExit(3000)
+                throw "Installer build fixture exceeded 30 seconds: $mutation"
+            }
+            $diagnostic = $stdout.Result + $stderr.Result
+            $proof = Join-Path $caseOutput 'installer-manifest.json'
+            if ($mutation -eq 'none') {
+                if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $proof)) {
+                    throw "Unchanged installer inputs failed: $diagnostic"
+                }
+                $saved = Get-Content -LiteralPath $proof -Raw | ConvertFrom-Json
+                $expected = (Get-FileHash -LiteralPath (Join-Path $root 'mission_planner/packaging/installer/InstallEngine.cs')).Hash
+                if ($saved.inputs_sha256.'mission_planner/packaging/installer/InstallEngine.cs' -ne $expected) {
+                    throw 'Installer proof omitted the source used by the compiler.'
+                }
+            } else {
+                $expected = switch ($mutation) {
+                    'source' { 'Installer inputs changed' }
+                    'proof' { 'Fixture payload changed' }
+                    'payload' { 'Plugin payload changed' }
+                }
+                if ($process.ExitCode -eq 0 -or (Test-Path -LiteralPath $proof) -or !$diagnostic.Contains($expected)) {
+                    throw "Installer accepted changed $mutation inputs or failed for the wrong reason: $diagnostic"
+                }
+            }
+        } finally { $process.Dispose() }
+    }
+} finally {
+    $resolved = [IO.Path]::GetFullPath($fixture)
+    if (!$resolved.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        (Split-Path $resolved -Leaf) -notlike 'NOMAD-installer-build-*') { throw 'Unexpected installer fixture cleanup path.' }
+    Remove-Item -LiteralPath $resolved -Recurse -Force
+}
+Write-Output ('Installer package passed: embedded DLL/media bundle/licenses, version/hash, framework-only references, ' +
+    'administrator manifest, UI construction and rejection of inputs changed during packaging. No installation invoked.')

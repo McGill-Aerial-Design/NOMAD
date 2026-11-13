@@ -59,6 +59,19 @@ internal static partial class VideoLifetimeTests
             Check(ThreadPool.SetMinThreads(2, minimumIo) && ThreadPool.SetMaxThreads(2, maximumIo),
                 "Could not establish the two-worker native media fixture");
             MediaWorkerHost.RequestStart();
+            foreach (var prerequisite in new[]
+            {
+                ("fixture:no-nvidia", MediaWire.NvidiaUnavailable),
+                ("fixture:vc-runtime", MediaWire.VisualCppRequired),
+                ("fixture:private-error", MediaWire.OperationUnavailable),
+            })
+            {
+                string diagnostic = null;
+                try { using (var unavailable = new MediaWorkerDetector(prerequisite.Item1, CancellationToken.None)) { } }
+                catch (InvalidOperationException error) { diagnostic = error.Message; }
+                Check(diagnostic == prerequisite.Item2,
+                    "Real media worker lost a safe prerequisite or exposed a private error: " + diagnostic);
+            }
             bool rejected = false;
             try { MediaWire.PixelBytes(16385, 1); } catch (InvalidDataException) { rejected = true; }
             Check(rejected, "Transport accepted an oversized frame");

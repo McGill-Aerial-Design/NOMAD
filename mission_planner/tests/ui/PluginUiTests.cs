@@ -49,6 +49,7 @@ internal static class PluginUiTests
         Gesture();
         Menu();
         NotificationRows();
+        NotificationClockAndLayout(directory);
         ToastAttachmentLifetime();
         QueuedUiUpdates();
         FlightDataMenuLifetime();
@@ -138,7 +139,7 @@ internal static class PluginUiTests
         older.Timestamp = DateTime.Now.AddMinutes(-1);
         service.AddNotification(NotificationSeverity.Critical, NotificationCategory.System, "Newest", "Fixture");
         var newest = service.Notifications[0];
-        newest.Timestamp = older.Timestamp.AddSeconds(1);
+        newest.Timestamp = older.Timestamp.AddHours(-1);
         panel.Size = new Size(700, 400);
         panel.RefreshNotificationList();
         panel.PerformLayout(); list.PerformLayout();
@@ -159,6 +160,38 @@ internal static class PluginUiTests
         Application.DoEvents();
         Check(list.Controls.Count == 0 && rows.All(row => row.IsDisposed),
             "A queued notification returned after Clear or removed rows were not disposed.");
+    }
+
+    private static void NotificationClockAndLayout(string directory)
+    {
+        using var service = new NotificationService();
+        service.AddNotification(NotificationSeverity.Warning, NotificationCategory.System, "Clock", "First warning");
+        var cooldowns = (System.Collections.IDictionary)typeof(NotificationService)
+            .GetField("_lastNotificationTime", Hidden).GetValue(service);
+        Check(cooldowns["System_Clock"] is long, "Warning cooldown does not use a monotonic clock");
+        cooldowns["System_Clock"] = System.Diagnostics.Stopwatch.GetTimestamp() - 29 * System.Diagnostics.Stopwatch.Frequency;
+        service.AddNotification(NotificationSeverity.Warning, NotificationCategory.System, "Clock", "Too soon");
+        Check(service.Notifications.Count == 1, "Warning cooldown admitted an early repeat");
+        cooldowns["System_Clock"] = System.Diagnostics.Stopwatch.GetTimestamp() - 31 * System.Diagnostics.Stopwatch.Frequency;
+        service.AddNotification(NotificationSeverity.Warning, NotificationCategory.System, "Clock", "Elapsed repeat");
+        Check(service.Notifications.Count == 2, "Elapsed warning cooldown still suppressed a repeat");
+        service.ClearAll();
+        const string title = "Battery warning: review the aircraft before continuing";
+        const string message = "Battery voltage is below the configured warning level. Check the aircraft's voltage " +
+            "and remaining capacity, then follow the operator procedure. Keep the full warning visible while resizing this window.";
+        service.AddNotification(NotificationSeverity.Warning, NotificationCategory.Battery, title, message);
+        using var panel = new NotificationPanel(service);
+        Capture(panel, directory, "notifications-narrow.png", new Size(380, 520));
+        var list = (Panel)typeof(NotificationPanel).GetField("_notificationListPanel", Hidden).GetValue(panel);
+        var row = list.Controls[0];
+        var body = row.Controls.OfType<Label>().SingleOrDefault(label => label.Text == message);
+        Check(body != null, "Notification permanently truncated its message");
+        Check(body.Height >= body.GetPreferredSize(new Size(body.Width, 0)).Height && body.Bottom <= row.ClientSize.Height,
+            "Narrow notification clipped its wrapped message");
+        int narrowHeight = row.Height;
+        Capture(panel, directory, "notifications-wide.png", new Size(760, 460));
+        Check(row.Height < narrowHeight && body.Height >= body.GetPreferredSize(new Size(body.Width, 0)).Height,
+            "Notification did not reflow after widening the window");
     }
 
     private static void ToastAttachmentLifetime()
@@ -496,6 +529,18 @@ internal static class PluginUiTests
             using var player = new VideoInputPlayer(config, true, CancellationToken.None,
                 () => throw new InvalidOperationException("A stopped render must not start a pipeline."), (owner, name) => false);
             Capture(player, directory, "video-selector.png", new Size(800, 500));
+            var videoSession = (VideoSession)typeof(EmbeddedVideoPlayer).GetField("_session", Hidden).GetValue(player.Player);
+            var visionStatus = (Label)typeof(EmbeddedVideoPlayer).GetField("_lblVisionStatus", Hidden).GetValue(player.Player);
+            foreach (var prerequisite in new[] { ("gpu", MediaWire.NvidiaUnavailable), ("runtime", MediaWire.VisualCppRequired) })
+            {
+                typeof(VideoSession).GetField("_trackerError", Hidden).SetValue(videoSession, prerequisite.Item2);
+                typeof(EmbeddedVideoPlayer).GetMethod("UpdateVisionStatus", Hidden).Invoke(player.Player, null);
+                Check(visionStatus.Text == prerequisite.Item2, "Vision status hid its actionable prerequisite");
+                Capture(player, directory, "vision-" + prerequisite.Item1 + ".png", new Size(800, 500));
+                Capture(player, directory, "vision-" + prerequisite.Item1 + "-narrow.png", new Size(380, 500));
+                Check(visionStatus.Height >= visionStatus.GetPreferredSize(new Size(visionStatus.Width, 0)).Height,
+                    "Vision prerequisite was clipped in a narrow viewport");
+            }
             foreach (var name in new[] { "GimbalJoystickWindow", "NotificationToast+ToastForm" })
             {
                 var type = typeof(NOMADConfig).Assembly.GetType("NOMAD.MissionPlanner." + name, true);

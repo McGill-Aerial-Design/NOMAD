@@ -118,6 +118,7 @@ internal static partial class VideoLifetimeTests
                 new Func<VideoCaptureDevice[]>(() => { throw new System.ComponentModel.Win32Exception(5); }));
             refresh();
             Check(((VideoCaptureDevice)picker.SelectedItem).Path == second.ToUpperInvariant() &&
+                GetField<Label>(form, "_lblVideoDevices").Enabled &&
                 GetField<Label>(form, "_lblVideoDevices").Text.Contains("unavailable"),
                 "A device enumeration error discarded the saved camera or failed silently");
         }

@@ -10,6 +10,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Timers;
 using MissionPlanner;
@@ -75,7 +76,7 @@ namespace NOMAD.MissionPlanner
 
         private readonly List<Notification> _notifications = new List<Notification>();
         private readonly object _lock = new object();
-        private readonly Dictionary<string, DateTime> _lastNotificationTime = new Dictionary<string, DateTime>();
+        private readonly Dictionary<string, long> _lastNotificationTime = new Dictionary<string, long>();
         private Timer _monitorTimer;
         private bool _disposed;
         private int _pollGuard;
@@ -98,7 +99,7 @@ namespace NOMAD.MissionPlanner
             {
                 lock (_lock)
                 {
-                    return _notifications.OrderByDescending(n => n.Timestamp).ToList();
+                    return _notifications.AsEnumerable().Reverse().ToList();
                 }
             }
         }
@@ -143,7 +144,6 @@ namespace NOMAD.MissionPlanner
         public void AddNotification(NotificationSeverity severity, NotificationCategory category, string title, string message)
         {
             var key = $"{category}_{title}";
-            if (IsOnCooldown(key)) return;
 
             var notification = new Notification
             {
@@ -155,10 +155,13 @@ namespace NOMAD.MissionPlanner
 
             lock (_lock)
             {
+                long now = Stopwatch.GetTimestamp();
+                if (_lastNotificationTime.TryGetValue(key, out long last) &&
+                    (now - last) / (double)Stopwatch.Frequency < NOTIFICATION_COOLDOWN_SECONDS) { return; }
                 _notifications.Add(notification);
                 while (_notifications.Count > MAX_NOTIFICATIONS)
                     _notifications.RemoveAt(0);
-                _lastNotificationTime[key] = DateTime.Now;
+                _lastNotificationTime[key] = now;
             }
 
             NotificationAdded?.Invoke(this, new NotificationEventArgs { Notification = notification });
@@ -180,15 +183,6 @@ namespace NOMAD.MissionPlanner
                 _notifications.Clear();
             }
             NotificationsCleared?.Invoke(this, EventArgs.Empty);
-        }
-
-        private bool IsOnCooldown(string key)
-        {
-            lock (_lock)
-            {
-                return _lastNotificationTime.TryGetValue(key, out var lastTime)
-                    && (DateTime.Now - lastTime).TotalSeconds < NOTIFICATION_COOLDOWN_SECONDS;
-            }
         }
 
         private string GetGpsFixName(int fix)

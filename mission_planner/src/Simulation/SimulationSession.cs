@@ -67,7 +67,7 @@ namespace NOMAD.MissionPlanner
         private readonly ISimulationConnection _native;
         private readonly Func<SimulationPreferences, SimulationScenario, string, Task<ProcessStartInfo>> _command;
         private Run _run;
-        private string _phase = "Stopped", _message = "Choose a tools folder and scenario to begin.";
+        private string _phase = "Stopped", _message = "Review WSL, the prepared simulator folder and scenario, then Start.";
         private string _lastDirectory, _lastName;
         private bool _disposed;
         internal event Action Changed;

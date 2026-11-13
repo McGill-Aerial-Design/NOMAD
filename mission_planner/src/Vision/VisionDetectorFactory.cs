@@ -26,7 +26,7 @@ namespace NOMAD.MissionPlanner
             {
                 // Native/model errors can contain operator paths; the UI gets one safe diagnostic.
                 throw new InvalidOperationException("Vision model could not load. Check the model profile, " +
-                    "SHA256 and supported YOLOX format; Windows x64 is required.");
+                    "SHA256 and supported YOLOX format; Windows x64 is required.", error);
             }
         }
 
@@ -44,7 +44,7 @@ namespace NOMAD.MissionPlanner
             catch (Exception error) when (!(error is OutOfMemoryException))
             {
                 throw new InvalidOperationException("ONNX weights could not load. Check the local file, SHA256 and " +
-                    "raw YOLOX export; Windows x64 is required.");
+                    "raw YOLOX export; Windows x64 is required.", error);
             }
         }
 

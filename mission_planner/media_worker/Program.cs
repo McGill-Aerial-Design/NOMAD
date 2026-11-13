@@ -134,7 +134,8 @@ namespace NOMAD.MissionPlanner
                         try { resource.Execute(request, reply); }
                         catch (Exception error)
                         {
-                            reply.Error = error is OperationCanceledException ? "canceled" : "Media operation unavailable.";
+                            reply.Error = error is OperationCanceledException ? "canceled" :
+                                MediaWire.OperatorError(error.GetBaseException().Message);
                         }
                         finally { Interlocked.Exchange(ref resource.Active, 0); NativeProgress.Current = null; }
                     }
@@ -231,6 +232,12 @@ namespace NOMAD.MissionPlanner
                         break;
                     case "detector":
                         Begin(120000); _fixtureModel = request.Model;
+                        if (_fixture && request.Model == "fixture:no-nvidia")
+                        { throw new InvalidOperationException("Tracker load failed", new NotSupportedException(MediaWire.NvidiaUnavailable)); }
+                        if (_fixture && request.Model == "fixture:vc-runtime")
+                        { throw new InvalidOperationException(MediaWire.VisualCppRequired); }
+                        if (_fixture && request.Model == "fixture:private-error")
+                        { throw new IOException("private model path and camera credentials"); }
                         if (_fixture && request.Model == "fixture:hang-load") { HoldFixture(); }
                         if (_fixture && request.Model.StartsWith("fixture:", StringComparison.Ordinal))
                         { _fixtureDetector = true; reply.Text = "fixture"; }

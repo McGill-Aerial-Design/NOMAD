@@ -170,6 +170,7 @@ internal static partial class VideoLifetimeTests
     private static void GenericVisualWorker()
     {
         AreaAfterObjectLoadFailure();
+        SlowTrackerModeReselection();
         var pipeline = new FakeVideoPipeline();
         var trackers = new List<FakeVisualTracker>();
         using (var session = new VideoSession(() => pipeline, createTracker: (token, mode) =>
@@ -192,6 +193,7 @@ internal static partial class VideoLifetimeTests
                 pipeline.Frames.Add(SolidVideoImage(Color.Blue));
                 using (var current = NextVideoFrame(session))
                 {
+                    Check(trackers.Count == 1, "First selection discarded the warmed visual tracker");
                     var tracker = trackers[trackers.Count - 1];
                     Check(current.Region.Found && current.Region.Revision == selected && current.Region.Bounds.Value.X == 30 &&
                         tracker.InitialColor.ToArgb() == Color.Red.ToArgb() && !ReferenceEquals(tracker.InitializedImage, source.Image),
@@ -255,6 +257,49 @@ internal static partial class VideoLifetimeTests
             "Drag region did not use the same zoom/letterbox mapping as clicks");
         var scaled = VideoGeometry.DefaultRegion(new PointF(1000, 1000), new Size(4000, 3000));
         Check(scaled.Width == 400 && scaled.Height == 400, "Click region became too small after tracker downscale");
+    }
+
+    private static void SlowTrackerModeReselection()
+    {
+        var pipeline = new FakeVideoPipeline();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        int areaLoads = 0;
+        using (var session = new VideoSession(() => pipeline, createTracker: (token, mode) =>
+        {
+            if (mode == VisualTrackingMode.Area)
+            { Interlocked.Increment(ref areaLoads); entered.Set(); Wait(release, "slow Area constructor release"); }
+            return new FakeVisualTracker();
+        }))
+        {
+            session.Start("fake"); Wait(pipeline.ReadEntered, "slow mode source");
+            AwaitCapture(() => session.TrackerReady, "slow mode warmup");
+            pipeline.Frames.Add(SolidVideoImage(Color.Red));
+            using (var source = NextVideoFrame(session))
+            {
+                Check(session.RequestRegion(source, new RectangleF(10, 10, 20, 20), VisualTrackingMode.Area) != 0,
+                    "Alternate mode selection was refused");
+                pipeline.Frames.Add(SolidVideoImage(Color.Blue));
+                Wait(entered, "slow Area constructor");
+                try { Thread.Sleep(600); } finally { release.Set(); }
+                VideoTrackingSample expired = null;
+                AwaitCapture(() =>
+                { expired = session.TakeTrackingSample() ?? expired; return expired?.Region?.State == VisualTrackingState.Lost; },
+                    "expired selection after slow mode construction");
+            }
+            using (var expired = session.TakeFrame()) { }
+            pipeline.Frames.Add(SolidVideoImage(Color.Green));
+            using (var fresh = NextVideoFrame(session))
+            {
+                Check(session.RequestRegion(fresh, new RectangleF(10, 10, 20, 20), VisualTrackingMode.Area) != 0,
+                    "Fresh reselection was refused after mode construction");
+                pipeline.Frames.Add(SolidVideoImage(Color.Blue));
+                using (var verified = NextVideoFrame(session))
+                { Check(verified.Region?.Found == true && areaLoads == 1,
+                    "Fresh reselection reloaded the ready alternate-mode tracker or failed to verify"); }
+            }
+        }
+        CheckClean(pipeline);
     }
 
     private static void AreaAfterObjectLoadFailure()
