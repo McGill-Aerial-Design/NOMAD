@@ -55,8 +55,9 @@ namespace NOMAD.MissionPlanner
                     {
                         lock (Gate)
                         {
-                            if (!IsCurrent || current?.Invoke() == false || Connection.giveComport)
+                            if (!IsCurrent || current?.Invoke() == false)
                             { throw new InvalidOperationException("Aircraft or input changed; no new command was sent."); }
+                            if (Connection.giveComport) { throw new NativeRequestBusyException(); }
                         }
                         return await Connection.doCommandAsync(System, Component, command,
                             p1, p2, p3, p4, 0, 0, 0, true).ConfigureAwait(false);
@@ -79,8 +80,9 @@ namespace NOMAD.MissionPlanner
                     {
                         lock (Gate)
                         {
-                            if (!IsCurrent || Connection.giveComport)
+                            if (!IsCurrent)
                             { throw new InvalidOperationException("Aircraft changed; no parameter request was sent."); }
+                            if (Connection.giveComport) { throw new NativeRequestBusyException(); }
                         }
                         return await Connection.GetParamAsync(System, Component, name).ConfigureAwait(false);
                     }).ConfigureAwait(false);

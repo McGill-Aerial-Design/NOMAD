@@ -105,6 +105,7 @@ internal static class RouterStatusUiTests
         var events = new[] { "LinkStatusChanged", "FailoverOccurred", "ActiveLinkChanged", "LogMessage" };
         using (var panel = new LinkHealthPanel(manager, new NOMADConfig()))
         {
+            var handle = panel.Handle;
             var log = (ListBox)typeof(LinkHealthPanel).GetField("_lstLog", PrivateInstance).GetValue(panel);
             var handler = (EventHandler<string>)typeof(MAVLinkConnectionManager)
                 .GetField("LogMessage", PrivateInstance).GetValue(manager);

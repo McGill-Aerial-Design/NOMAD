@@ -2,6 +2,7 @@
 // Copyright 2026 The NOMAD Authors
 using System;
 using System.Drawing;
+using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -64,6 +65,60 @@ internal static partial class VideoLifetimeTests
                     tracking.ClientSize.Height >= text.Height, "Tracking toggle resized or clipped when its state changed");
             }
         }
+    }
+
+    private static void SnapshotFilesAndFailure()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "NOMAD-Snapshot-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using (var player = new EmbeddedVideoPlayer(
+                new VideoInputProfile { Name = "Snapshot", Url = "udp://@:5600" }, true,
+                CancellationToken.None, () => throw new InvalidOperationException("Snapshot test must not start video.")))
+            {
+                var source = new Bitmap(2, 2);
+                SetField(player, "_displayFrame", source);
+                source.SetPixel(0, 0, Color.Red);
+                string first = player.TakeSnapshot(directory);
+                source.SetPixel(0, 0, Color.Blue);
+                string second = player.TakeSnapshot(directory);
+                Check(first != null && second != null && first != second && Directory.GetFiles(directory).Length == 2,
+                    "Repeated snapshots reused a filename or did not create two files");
+                using (var red = new Bitmap(first))
+                using (var blue = new Bitmap(second))
+                {
+                    Check(red.RawFormat.Guid == System.Drawing.Imaging.ImageFormat.Png.Guid &&
+                        blue.RawFormat.Guid == System.Drawing.Imaging.ImageFormat.Png.Guid &&
+                        red.GetPixel(0, 0).ToArgb() == Color.Red.ToArgb() &&
+                        blue.GetPixel(0, 0).ToArgb() == Color.Blue.ToArgb(),
+                        "Snapshot files did not preserve each capture as a PNG");
+                }
+                bool rejected = false;
+                try { EmbeddedVideoPlayer.WriteSnapshot(source, first); }
+                catch (IOException) { rejected = true; }
+                using (var unchanged = new Bitmap(first))
+                {
+                    Check(rejected && unchanged.GetPixel(0, 0).ToArgb() == Color.Red.ToArgb(),
+                        "A snapshot collision overwrote or removed an existing capture");
+                }
+                Check(player.TakeSnapshot(first) == null && GetField<Label>(player, "_lblStatus").ForeColor == Color.Red &&
+                    GetField<Label>(player, "_lblStatus").Text.Contains("could not be saved") &&
+                    source.GetPixel(0, 0).ToArgb() == Color.Blue.ToArgb() && Directory.GetFiles(directory).Length == 2,
+                    "A failed snapshot escaped, claimed success, changed files or disposed the displayed source");
+                string previousDirectory = Environment.CurrentDirectory;
+                try
+                {
+                    Environment.CurrentDirectory = directory;
+                    Check(player.TakeSnapshot("") == null && player.TakeSnapshot(".") == null &&
+                        GetField<Label>(player, "_lblStatus").ForeColor == Color.Red &&
+                        Directory.GetFiles(directory).Length == 2,
+                        "An unavailable Desktop or relative destination wrote to the host working directory");
+                }
+                finally { Environment.CurrentDirectory = previousDirectory; }
+            }
+        }
+        finally { Directory.Delete(directory, true); }
     }
 
     private static void DisabledButtonsKeepContrast()

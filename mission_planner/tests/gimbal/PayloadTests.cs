@@ -172,6 +172,94 @@ internal static class PayloadTests
             }
         }
     }
+    private static void BusyActivationKeepsInputAvailable()
+    {
+        var fixture = Reset(Definition("servo", "ServoToggle", 8));
+        fixture.Connection.giveComport = true;
+        string busy = Act(fixture.Owner, "servo", "activate");
+        Check(busy.Contains("busy") && !busy.Contains("uncertain") && fixture.Connection.Commands.Count == 0,
+            "Known unsent native contention was reported as an uncertain activation");
+        fixture.Connection.giveComport = false;
+        Check(Act(fixture.Owner, "servo", "activate").Contains("Command accepted") &&
+            fixture.Connection.Commands.Count == 1, "Busy refusal required Safe before a fresh explicit activation");
+
+        var pulse = Definition("pump", "RelayPulse", 1); pulse["pulse_ms"] = 1500;
+        fixture = Reset(pulse, Definition("winch", "ServoBidirectional", 10, 1500));
+        fixture.Connection.Send = command =>
+        {
+            if (command.Kind == MAVLink.MAV_CMD.DO_SET_RELAY) { fixture.Connection.giveComport = true; }
+            return Task.FromResult(true);
+        };
+        busy = Act(fixture.Owner, "pump", "activate");
+        Check(busy.Contains("busy") && !busy.Contains("uncertain") && fixture.Connection.Commands.Count == 1 &&
+            fixture.Connection.Commands[0].Kind == MAVLink.MAV_CMD.DO_SET_RELAY && fixture.Connection.Commands[0].Second == 0,
+            "Busy repeat admission did not preserve the acknowledged relay OFF without activation");
+        fixture.Connection.giveComport = false;
+        fixture.Connection.Send = command => Task.FromResult(true);
+        Check(!PayloadController.HasPendingWork && Act(fixture.Owner, "winch", "positive").Contains("Command accepted") &&
+            fixture.Connection.Commands.Count == 2 && fixture.Connection.Commands[1].Kind == MAVLink.MAV_CMD.DO_REPEAT_SERVO,
+            "An unsent repeat retained the shared native repeat reservation");
+        Act(fixture.Owner, "winch", "safe");
+    }
+    private static void BusyPositionRetriesFreshSamples()
+    {
+        foreach (bool hostBusy in new[] { true, false })
+        {
+            var fixture = Reset(Definition("position", "ServoPosition", 9, 1500));
+            MapPosition(fixture.Config);
+            var service = new NomadJoystickService(fixture.Config);
+            Position(service, true, 0);
+            Check(fixture.Connection.Commands.Count == 1 && fixture.Connection.Commands[0].Second == 1500,
+                "Busy position fixture did not establish its centered output");
+            var held = new TaskCompletionSource<bool>();
+            Task request = Task.CompletedTask;
+            if (hostBusy) { fixture.Connection.giveComport = true; }
+            else
+            {
+                fixture.Connection.Send = command => held.Task;
+                request = OutputController.CaptureTarget(fixture.Config).SendAsync(MAVLink.MAV_CMD.DO_SET_SERVO, 8, 1000);
+                WaitCommands(fixture.Connection, 2, "Held independent native request");
+            }
+            int before = fixture.Connection.Commands.Count;
+            Position(service, true, 1);
+            Check(fixture.Connection.Commands.Count == before,
+                "Continuous HID position overlapped an independent native request");
+            fixture.Connection.giveComport = false;
+            fixture.Connection.Send = command => Task.FromResult(true);
+            held.SetResult(true); Wait(request);
+            Position(service, true, 1);
+            Check(fixture.Connection.Commands.Count == before + 1 && fixture.Connection.Commands.Last().Second == 2000,
+                "Unchanged fresh HID position did not resume after native contention cleared");
+            Position(service, true, 1);
+            Check(fixture.Connection.Commands.Count == before + 1, "Unchanged accepted HID position was duplicated");
+            Act(fixture.Owner, "position", "safe");
+            int afterSafe = fixture.Connection.Commands.Count;
+            Position(service, true, 1);
+            Check(fixture.Connection.Commands.Count == afterSafe && fixture.Connection.Commands.Last().Second == 1500,
+                "Held HID position overrode an explicit UI Safe without fresh movement");
+            Act(fixture.Owner, "position", "position", 0.25);
+            int afterManual = fixture.Connection.Commands.Count;
+            Position(service, true, 1);
+            Check(fixture.Connection.Commands.Count == afterManual && fixture.Connection.Commands.Last().Second == 1250,
+                "Held HID position overrode an explicit UI target without fresh movement");
+            fixture.Connection.giveComport = true;
+            string busy = fixture.Owner.ActAsync("position", "position", 1, "hid", "position_input").GetAwaiter().GetResult();
+            Check(busy.Contains("busy") && fixture.Connection.Commands.Count == afterManual,
+                "Busy admission race dispatched a position command");
+            fixture.Connection.giveComport = false;
+            Position(service, true, 1);
+            Check(fixture.Connection.Commands.Count == afterManual + 1 && fixture.Connection.Commands.Last().Second == 2000,
+                "Known busy HID admission remained cached after the native request finished");
+            fixture.Connection.giveComport = true;
+            fixture.Owner.ActAsync("position", "position", 1, "hid", "position_input").GetAwaiter().GetResult();
+            fixture.Connection.giveComport = false;
+            Act(fixture.Owner, "position", "safe");
+            afterSafe = fixture.Connection.Commands.Count;
+            Position(service, true, 1);
+            Check(fixture.Connection.Commands.Count == afterSafe && fixture.Connection.Commands.Last().Second == 1500,
+                "Explicit Safe did not retire a previously busy held HID position");
+        }
+    }
     private sealed class Sample : MissionPlanner.Joystick.IMyJoystickState
     {
         internal bool[] Buttons = new bool[6];
@@ -682,6 +770,7 @@ internal static class PayloadTests
     }
     private static int Main()
     {
+        BusyActivationKeepsInputAvailable(); BusyPositionRetriesFreshSamples();
         BlockingNativeRequests();
         StableConflictDoesNotRetireOtherInput(); AbsentDeviceDoesNotRetireOtherInput(); MixedInputArbitration(); NamedInputSafety(); InvalidDefinitions(); NativeMappings(); TrimAndTargetFences(); StopAndFaults(); SequentialSafeDrain(); SafeRejectionOutcomes(); ConfirmationAndHid(); ConflictSafetySurvivesNewInput(); RepeatSurvivesRetirement(); MixedBatchRetiresAcrossAircraftChange();
         Console.WriteLine("Payload tests passed (native mappings, strict calibration, ACK faults, HID edges, stale targets and repeat lifetime).");

@@ -6,6 +6,18 @@ sim_root=${1:-"$HOME/nomad-simulation"}
 target=${2:-gazebo}
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 bash "$script_dir/prepare_linux.sh" "$sim_root" --check
+sim_root=$(realpath -- "$sim_root")
+for output in build logs python cache/pip build/ardupilot_gazebo-patched build/gazebo-plugin \
+    build/nomad-test-system build/last-letter build/gazebo-plugin/CMakeCache.txt build/gazebo-plugin/CMakeFiles \
+    sources/ardupilot/build logs/python-packages.txt logs/ap-configure.log logs/ap-build.log logs/ap-plane-build.log \
+    logs/ardupilot.sha256 logs/ardupilot-build.json logs/gazebo-configure.log logs/gazebo-build.log \
+    logs/ardupilot_gazebo-build.json logs/nomad-test-system-build.json logs/last-letter-configure.log \
+    logs/last-letter-build.log logs/last_letter-build.json; do
+    resolved=$(realpath -m -- "$sim_root/$output")
+    [[ "$resolved" = "$sim_root/"* ]] || {
+        echo "Build output escapes the owned workspace: $output" >&2; exit 1;
+    }
+done
 mkdir -p "$sim_root/build" "$sim_root/logs"
 export PYTHONNOUSERSITE=1
 unset PYTHONPATH

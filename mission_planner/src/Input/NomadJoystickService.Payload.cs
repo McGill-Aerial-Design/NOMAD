@@ -120,9 +120,11 @@ namespace NOMAD.MissionPlanner
         private void DrivePosition(InputBinding binding, InputControlState state)
         {
             if (!InputBinding.Split(binding.Action, out var id, out _) || PayloadController.Current?.Find(id)?.Continuous != true) { return; }
-            double position = (state.Value + 1.0) / 2;
-            if ((_positions.TryGetValue(binding.Id, out var previous) && Math.Abs(previous - position) < 0.001) || PayloadController.HasPendingWork) { return; }
             var owner = PayloadController.Current;
+            double position = (state.Value + 1.0) / 2;
+            if ((_positions.TryGetValue(binding.Id, out var previous) && Math.Abs(previous - position) < 0.001 &&
+                !owner.LastActivationWasBusy(id)) || PayloadController.HasPendingWork ||
+                OutputController.CaptureTarget(_config)?.NativeRequestBusy == true) { return; }
             long generation = _generation, revision = Interlocked.Read(ref _inputRevision);
             _positions[binding.Id] = position; _touched.Add((id, binding.Id));
             _ = owner.ActAsync(id, "position", position, "hid", binding.Id,

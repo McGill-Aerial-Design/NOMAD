@@ -11,6 +11,7 @@
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace NOMAD.MissionPlanner
@@ -61,6 +62,12 @@ namespace NOMAD.MissionPlanner
             _notificationService.NotificationsCleared += OnNotificationsCleared;
 
             // Load existing notifications
+            RefreshNotificationList();
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
             RefreshNotificationList();
         }
 
@@ -166,23 +173,9 @@ namespace NOMAD.MissionPlanner
         // Event Handlers
         // ============================================================
 
-        private void OnNotificationAdded(object sender, NotificationEventArgs e)
-        {
-            UiAsync.RunSync(this, () =>
-            {
-                AddNotificationItem(e.Notification, insertAtTop: true);
-                UpdateUnreadCount();
-            }, "OnNotificationAdded");
-        }
+        private void OnNotificationAdded(object sender, NotificationEventArgs e) => RefreshNotificationList();
 
-        private void OnNotificationsCleared(object sender, EventArgs e)
-        {
-            UiAsync.RunSync(this, () =>
-            {
-                _notificationListPanel.Controls.Clear();
-                UpdateUnreadCount();
-            }, "OnNotificationsCleared");
-        }
+        private void OnNotificationsCleared(object sender, EventArgs e) => RefreshNotificationList();
 
         // ============================================================
         // Public Methods
@@ -195,11 +188,11 @@ namespace NOMAD.MissionPlanner
         {
             UiAsync.RunSync(this, () =>
             {
-                _notificationListPanel.Controls.Clear();
+                while (_notificationListPanel.Controls.Count > 0) { _notificationListPanel.Controls[0].Dispose(); }
 
-                foreach (var notification in _notificationService.Notifications)
+                foreach (var notification in _notificationService.Notifications.Take(50).Reverse())
                 {
-                    AddNotificationItem(notification, insertAtTop: false);
+                    _notificationListPanel.Controls.Add(CreateNotificationItemPanel(notification));
                 }
 
                 UpdateUnreadCount();
@@ -218,27 +211,6 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // Private Methods
         // ============================================================
-
-        private void AddNotificationItem(Notification notification, bool insertAtTop)
-        {
-            var panel = CreateNotificationItemPanel(notification);
-
-            if (insertAtTop)
-            {
-                _notificationListPanel.Controls.Add(panel);
-                _notificationListPanel.Controls.SetChildIndex(panel, 0);
-            }
-            else
-            {
-                _notificationListPanel.Controls.Add(panel);
-            }
-
-            // Limit visible items
-            while (_notificationListPanel.Controls.Count > 50)
-            {
-                _notificationListPanel.Controls.RemoveAt(_notificationListPanel.Controls.Count - 1);
-            }
-        }
 
         private Panel CreateNotificationItemPanel(Notification notification)
         {
@@ -289,6 +261,10 @@ namespace NOMAD.MissionPlanner
                 Margin = new Padding(0, 0, 0, 2),
                 Padding = new Padding(0),
                 Tag = notification,
+            };
+            panel.Disposed += (sender, args) =>
+            {
+                titleFont.Dispose(); messageFont.Dispose(); timeFont.Dispose(); badgeFont.Dispose();
             };
 
             // Severity indicator bar (left edge)

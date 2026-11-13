@@ -7,6 +7,8 @@
 
 using System;
 using System.Drawing;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace NOMAD.MissionPlanner
@@ -159,25 +161,53 @@ namespace NOMAD.MissionPlanner
             _fullscreenForm.Show();
         }
 
-        public void TakeSnapshot()
+        public void TakeSnapshot() => TakeSnapshot(Environment.GetFolderPath(Environment.SpecialFolder.Desktop));
+
+        internal string TakeSnapshot(string directory)
         {
             ValidateUiThread();
             var source = _displayFrame;
             if (source == null)
             {
                 _lblStatus.Text = "No frame available";
-                return;
+                return null;
             }
 
-            var path = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-                $"NOMAD_{DateTime.Now:yyyyMMdd_HHmmss}.png");
-            using (var snapshot = (Bitmap)source.Clone())
+            try
             {
-                snapshot.Save(path);
+                if (string.IsNullOrWhiteSpace(directory) || !Path.IsPathRooted(directory))
+                { throw new ArgumentException("An absolute snapshot folder is required."); }
+                string path = Path.Combine(directory, $"NOMAD_{DateTime.Now:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}.png");
+                WriteSnapshot(source, path);
+                _lblStatus.Text = $"Saved: {Path.GetFileName(path)}";
+                _lblStatus.ForeColor = Color.LimeGreen;
+                return path;
             }
-            _lblStatus.Text = $"Saved: {System.IO.Path.GetFileName(path)}";
-            _lblStatus.ForeColor = Color.LimeGreen;
+            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException ||
+                error is ExternalException || error is ArgumentException || error is NotSupportedException)
+            {
+                _lblStatus.Text = "Snapshot could not be saved; check the output folder";
+                _lblStatus.ForeColor = Color.Red;
+                return null;
+            }
+        }
+
+        internal static void WriteSnapshot(Bitmap source, string path)
+        {
+            bool created = false;
+            try
+            {
+                using (var snapshot = (Bitmap)source.Clone())
+                using (var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                { created = true; snapshot.Save(output, System.Drawing.Imaging.ImageFormat.Png); }
+            }
+            catch
+            {
+                try { if (created) { File.Delete(path); } }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+                throw;
+            }
         }
 
         internal void UpdateInput(VideoInputProfile input)

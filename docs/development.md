@@ -9,6 +9,8 @@ Run commands from the repository root. Preserve operator profiles and ignored ev
 Windows needs the reviewed Mission Planner host from
 [target metadata](https://github.com/McGill-Aerial-Design/NOMAD/blob/main/scripts/release/mission-planner-target.json),
 Visual Studio/MSBuild with Roslyn and the .NET Framework 4.8 targeting pack, plus Pixi.
+The build checks the host version in `%ProgramFiles(x86)%\Mission Planner` before preparing assets or compiling.
+Both plugin and worker use that verified folder, including the worker's copied support libraries.
 Python/Pixi supports development, documentation and simulator tools.
 
 ```powershell
