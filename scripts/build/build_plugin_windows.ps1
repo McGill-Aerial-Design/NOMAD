@@ -1,4 +1,5 @@
 # NOMAD Mission Planner plugin build (installation is separate).
+$ErrorActionPreference = 'Stop'
 Write-Host "======================================" -ForegroundColor Cyan
 Write-Host " NOMAD Mission Planner Plugin Build" -ForegroundColor Cyan
 Write-Host "======================================" -ForegroundColor Cyan
@@ -28,11 +29,22 @@ if (-not $msbuild) {
 Write-Host "  Found: $msbuild" -ForegroundColor Green
 Write-Host ""
 
+$target = (Get-Content (Join-Path $RepoRoot 'scripts/release/mission-planner-target.json') -Raw | ConvertFrom-Json).version
+if ($target -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid reviewed Mission Planner target' }
+$hostDirectory = Join-Path ${env:ProgramFiles(x86)} 'Mission Planner'
+$hostPath = Join-Path $hostDirectory 'MissionPlanner.exe'
+if (!(Test-Path -LiteralPath $hostPath -PathType Leaf)) { throw 'Mission Planner reference host is missing.' }
+$hostVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($hostPath)
+$actualVersion = '{0}.{1}.{2}' -f $hostVersion.FileMajorPart, $hostVersion.FileMinorPart, $hostVersion.FileBuildPart
+if ($actualVersion -ne $target) {
+    throw "Mission Planner reference version mismatch: expected $target, found $actualVersion."
+}
+
 # Step 2: Clean previous build
 & (Join-Path $PSScriptRoot 'prepare_vision.ps1')
 if (-not $?) { throw 'Pinned vision input preparation failed.' }
 Write-Host "[2/4] Cleaning previous build..." -ForegroundColor Yellow
-& $msbuild $ProjectFile /t:Clean /p:Configuration=$Configuration /v:minimal /nologo
+& $msbuild $ProjectFile /t:Clean /p:Configuration=$Configuration "/p:MissionPlannerDir=$hostDirectory" /v:minimal /nologo
 $cleanExitCode = $LASTEXITCODE
 if ($cleanExitCode -ne 0) {
     Write-Host "ERROR: Clean failed!" -ForegroundColor Red
@@ -44,8 +56,6 @@ Write-Host ""
 # Embed the version, source revision and reviewed host identity.
 $sourceSha = & git -C $RepoRoot rev-parse --verify HEAD
 if ($LASTEXITCODE -ne 0 -or $sourceSha -notmatch '^[0-9a-f]{40}$') { throw 'Plugin source identity is unavailable' }
-$target = (Get-Content (Join-Path $RepoRoot 'scripts/release/mission-planner-target.json') -Raw | ConvertFrom-Json).version
-if ($target -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid reviewed Mission Planner target' }
 $csharpPath = Join-Path $RepoRoot 'build/release/ReleaseIdentity.cs'
 New-Item -ItemType Directory -Path (Split-Path $csharpPath) -Force | Out-Null
 @"
@@ -64,12 +74,12 @@ namespace NOMAD.MissionPlanner {
 "@ | Set-Content -LiteralPath $csharpPath -Encoding UTF8
 
 $sourceHashes = Get-PluginSourceHashes $RepoRoot
-& (Join-Path $PSScriptRoot 'build_media_worker.ps1') -MSBuild $msbuild -RepoRoot $RepoRoot
+& (Join-Path $PSScriptRoot 'build_media_worker.ps1') -MSBuild $msbuild -RepoRoot $RepoRoot -HostDirectory $hostDirectory
 if (-not $?) { throw 'Private media worker build failed.' }
 
 # Step 3: Build project
 Write-Host "[3/4] Building plugin..." -ForegroundColor Yellow
-& $msbuild $ProjectFile /t:Build /p:Configuration=$Configuration /v:minimal /nologo
+& $msbuild $ProjectFile /t:Build /p:Configuration=$Configuration "/p:MissionPlannerDir=$hostDirectory" /v:minimal /nologo
 $buildExitCode = $LASTEXITCODE
 if ($buildExitCode -ne 0) {
     Write-Host "ERROR: Build failed!" -ForegroundColor Red

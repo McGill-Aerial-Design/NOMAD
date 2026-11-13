@@ -17,6 +17,108 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture
+def linux_build(tmp_path):
+    scripts, commands, workspace = (tmp_path / name for name in ("scripts", "commands", "owned workspace"))
+    for directory in (scripts, commands, workspace):
+        directory.mkdir()
+    source = Path(__file__).resolve().parents[1] / "scripts/simulation/build_linux.sh"
+    (scripts / source.name).write_bytes(source.read_bytes())
+    (workspace / ".nomad-simulation-owned").write_text("NOMAD simulation sources v1\n")
+    (scripts / "prepare_linux.sh").write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        '[[ "$1" = /* && ! -L "$1" && $(cat "$1/.nomad-simulation-owned") = "NOMAD simulation sources v1" ]]\n'
+    )
+    (scripts / "patches").mkdir()
+    (scripts / "patches/ardupilot_gazebo-fixture.patch").write_text("fixture\n")
+    for name, command in {
+        "git": "tar -cf - --files-from /dev/null",
+        "patch": "exit 0",
+        "cmake": "echo 'Fixture reached cmake'; exit 91",
+        "python3": "echo 'Unexpected Python invocation' >&2; exit 92",
+    }.items():
+        path = commands / name
+        path.write_text("#!/usr/bin/env bash\nset -euo pipefail\n" + command + "\n")
+        path.chmod(0o755)
+    environment = dict(os.environ, PATH=str(commands) + os.pathsep + os.defpath)
+    return scripts / source.name, workspace, environment
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux build path containment")
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "build",
+        "logs",
+        "python",
+        "cache/pip",
+        "build/ardupilot_gazebo-patched",
+        "build/gazebo-plugin",
+        "build/nomad-test-system",
+        "build/last-letter",
+        "build/gazebo-plugin/CMakeCache.txt",
+        "build/gazebo-plugin/CMakeFiles",
+        "sources/ardupilot/build",
+        "logs/python-packages.txt",
+        "logs/ap-configure.log",
+        "logs/ap-build.log",
+        "logs/ap-plane-build.log",
+        "logs/ardupilot.sha256",
+        "logs/ardupilot-build.json",
+        "logs/gazebo-configure.log",
+        "logs/gazebo-build.log",
+        "logs/ardupilot_gazebo-build.json",
+        "logs/nomad-test-system-build.json",
+        "logs/last-letter-configure.log",
+        "logs/last-letter-build.log",
+        "logs/last_letter-build.json",
+    ],
+)
+def test_linux_build_rejects_escaping_outputs_before_mutation(linux_build, tmp_path, relative):
+    script, workspace, environment = linux_build
+    external = tmp_path / "external output"
+    external.mkdir()
+    for name in ("keep.txt", "ardupilot_gazebo-patched/keep.txt", "CMakeFiles/keep.txt"):
+        path = external / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("preserve external content\n")
+    link = workspace / relative
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(external / "keep.txt" if link.suffix else external)
+    before = {p.relative_to(external): p.read_bytes() for p in external.rglob("*") if p.is_file()}
+    result = subprocess.run(
+        ["bash", str(script), str(workspace), "gazebo"], env=environment, capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert link.is_symlink(), "Build removed an external output link before rejecting it"
+    assert before == {p.relative_to(external): p.read_bytes() for p in external.rglob("*") if p.is_file()}, (
+        "Build changed external output before rejecting it"
+    )
+    assert "Build output escapes the owned workspace" in result.stderr, result.stdout + result.stderr
+    assert "Fixture reached cmake" not in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux build path containment")
+def test_linux_build_accepts_contained_output_links_and_canonical_workspace(linux_build):
+    script, workspace, environment = linux_build
+    generated = workspace / "generated"
+    generated.mkdir()
+    (workspace / "build").symlink_to(generated)
+    interpreter = workspace / "python/bin/python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(sys.executable)
+    result = subprocess.run(
+        ["bash", str(script), str(workspace / ".." / workspace.name), "gazebo"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 91, result.stdout + result.stderr
+    assert "Fixture reached cmake" in result.stdout
+    assert "Build output escapes" not in result.stderr
+
+
 @pytest.mark.parametrize("rate", [True, 0, 500, 400.0])
 def test_rendered_fixture_rejects_unsupported_physics_rate(tooling, tmp_path, rate):
     with pytest.raises(ValueError, match="physics_hz"):

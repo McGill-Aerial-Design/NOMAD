@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -47,6 +48,7 @@ internal static class PluginUiTests
             "A cached video selector invoked the retired plugin callback.");
         Gesture();
         Menu();
+        NotificationRows();
         QueuedUiUpdates();
         FlightDataMenuLifetime();
         SameScreen();
@@ -79,8 +81,15 @@ internal static class PluginUiTests
     private static void QueuedUiUpdates()
     {
         using var owner = new Control();
-        var handle = owner.Handle;
         var run = typeof(NOMADConfig).Assembly.GetType("NOMAD.MissionPlanner.UiAsync", true).GetMethod("RunSync");
+        bool premature = false;
+        var earlyWorker = new Thread(() => run.Invoke(null,
+            new object[] { owner, (Action)(() => premature = true), "before handle" }));
+        earlyWorker.IsBackground = true;
+        earlyWorker.Start();
+        Check(earlyWorker.Join(2000), "Pre-handle UI callback blocked its worker.");
+        Check(!premature && !owner.IsHandleCreated, "UI callback ran on a worker before its owner had a handle.");
+        var handle = owner.Handle;
         int unhandled = 0;
         bool completed = false;
         Exception workerError = null;
@@ -110,6 +119,45 @@ internal static class PluginUiTests
             Check(!completed, "Disposed owner accepted a UI update.");
         }
         finally { Application.ThreadException -= onError; }
+    }
+
+    private static void NotificationRows()
+    {
+        using var service = new NotificationService();
+        using var panel = new NotificationPanel(service);
+        service.AddNotification(NotificationSeverity.Info, NotificationCategory.System, "Before handle", "Fixture");
+        var handle = panel.Handle;
+        var list = (Panel)typeof(NotificationPanel).GetField("_notificationListPanel", Hidden).GetValue(panel);
+        Check(list.Controls.Count == 1 && ReferenceEquals(list.Controls[0].Tag, service.Notifications[0]),
+            "Handle creation did not load the current notification snapshot.");
+        var old = list.Controls[0];
+        panel.RefreshNotificationList();
+        Check(old.IsDisposed && list.Controls.Count == 1, "Notification refresh retained an undisposed row.");
+        var older = service.Notifications[0];
+        older.Timestamp = DateTime.Now.AddMinutes(-1);
+        service.AddNotification(NotificationSeverity.Critical, NotificationCategory.System, "Newest", "Fixture");
+        var newest = service.Notifications[0];
+        newest.Timestamp = older.Timestamp.AddSeconds(1);
+        panel.Size = new Size(700, 400);
+        panel.RefreshNotificationList();
+        panel.PerformLayout(); list.PerformLayout();
+        var newestRow = list.Controls.Cast<Control>().Single(row => ReferenceEquals(row.Tag, newest));
+        var olderRow = list.Controls.Cast<Control>().Single(row => ReferenceEquals(row.Tag, older));
+        Check(newestRow.Top < olderRow.Top,
+            $"Newest notification was below the older row: newest={newestRow.Top}, older={olderRow.Top}.");
+        for (int index = 0; index < 55; index++)
+        { service.AddNotification(NotificationSeverity.Info, NotificationCategory.System, "Row " + index, "Fixture"); }
+        Check(list.Controls.Count == 50, "Notification rows exceeded their visible bound.");
+        var rows = list.Controls.Cast<Control>().ToArray();
+        var worker = new Thread(() =>
+            service.AddNotification(NotificationSeverity.Warning, NotificationCategory.System, "Queued", "Fixture"));
+        worker.IsBackground = true;
+        worker.Start();
+        Check(worker.Join(2000), "Notification publisher blocked the UI.");
+        service.ClearAll();
+        Application.DoEvents();
+        Check(list.Controls.Count == 0 && rows.All(row => row.IsDisposed),
+            "A queued notification returned after Clear or removed rows were not disposed.");
     }
 
     private static void FlightDataMenuLifetime()

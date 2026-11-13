@@ -52,7 +52,8 @@ function Get-PluginSourceHashes {
             $hashes[$file.FullName.Substring($root.Length + 1)] = (Get-FileHash -LiteralPath $file.FullName).Hash
         }
     }
-    foreach ($relative in @('scripts/build/build_media_worker.ps1','scripts/build/build_plugin_windows.ps1','scripts/build/windows_build_tools.ps1')) {
+    foreach ($relative in @('scripts/build/build_media_worker.ps1','scripts/build/build_plugin_windows.ps1',
+        'scripts/build/windows_build_tools.ps1','scripts/build/prepare_vision.ps1')) {
         $file = Join-Path $root $relative
         if (Test-Path -LiteralPath $file -PathType Leaf) { $hashes[$relative] = (Get-FileHash -LiteralPath $file).Hash }
     }

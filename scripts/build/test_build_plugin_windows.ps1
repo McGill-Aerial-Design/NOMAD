@@ -145,7 +145,13 @@ function New-TestFixture {
         New-SyntheticMediaStep -Fixture $fixture
         [IO.File]::WriteAllText((Join-Path $fixture.Project 'NOMADPlugin.csproj'), '<Project />')
         New-ReleaseIdentityFixture -Fixture $fixture -SourceBuildScript $SourceBuildScript
-        [IO.File]::WriteAllText((Join-Path $fixture.Install 'MissionPlanner.exe'), 'installation sentinel')
+        $hostSource = Join-Path $fixture.Tools 'MissionPlanner.cs'
+        $target = (Get-Content (Join-Path $fixture.Repo 'scripts/release/mission-planner-target.json') -Raw |
+            ConvertFrom-Json).version
+        [IO.File]::WriteAllText($hostSource,
+            "[assembly: System.Reflection.AssemblyFileVersion(`"$target.0`")] public class Host { public static void Main() {} }")
+        & $fixture.Compiler /nologo /target:exe "/out:$(Join-Path $fixture.Install 'MissionPlanner.exe')" $hostSource
+        if ($LASTEXITCODE -ne 0) { throw 'Could not compile versioned Mission Planner reference fixture.' }
         [IO.File]::WriteAllText((Join-Path $fixture.InstallPlugins 'existing-plugin.txt'), 'preserve this file')
         [IO.File]::WriteAllText($fixture.UnrelatedPlugin, 'preserve the unrelated copy')
         New-NativeMsBuildTestDouble -Fixture $fixture
@@ -172,9 +178,10 @@ function New-SyntheticMediaStep {
     param([pscustomobject]$Fixture)
     # Dispatch/proof fixtures use synthetic payloads; native vision has its own executable gate.
     $source = @'
-param([string]$MSBuild, [string]$RepoRoot)
+param([string]$MSBuild, [string]$RepoRoot, [string]$HostDirectory)
 $ErrorActionPreference = 'Stop'
 [IO.File]::AppendAllText($env:MOCK_MSBUILD_LOG, "media-worker=$RepoRoot" + [Environment]::NewLine)
+[IO.File]::AppendAllText($env:MOCK_MSBUILD_LOG, "media-host=$HostDirectory" + [Environment]::NewLine)
 $output = Join-Path $RepoRoot 'build/media_worker'
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 $bundle = [ordered]@{}
@@ -410,6 +417,7 @@ function Set-TestEnvironment {
     [Environment]::SetEnvironmentVariable('ProgramFiles(x86)', $Fixture.ProgramFilesRoot, 'Process')
     $env:LOCALAPPDATA = $Fixture.LocalAppData
     $env:USERPROFILE = $Fixture.Root
+    $env:MissionPlannerDir = Join-Path $Fixture.Root 'Unreviewed Host Override'
     $env:MOCK_MSBUILD_LOG = $Fixture.MockLog
 
     $resolvedMsbuild = (Get-Command msbuild -ErrorAction Stop).Source
@@ -474,6 +482,10 @@ function Test-BuildOnlySuccess {
         -Message 'The script did not dispatch MSBuild from the project path with spaces'
     Assert-Contains -Text $result.Log -Expected '/t:Clean' -Message 'The clean target did not run'
     Assert-Contains -Text $result.Log -Expected '/t:Build' -Message 'The build target did not run'
+    Assert-Equal @($result.Log.Split([Environment]::NewLine, [StringSplitOptions]::RemoveEmptyEntries) |
+        Where-Object { $_.Contains('/p:MissionPlannerDir=' + $Fixture.Install) }).Count 2 `
+        'Clean and build must explicitly use the verified host despite an environment override'
+    Assert-Contains $result.Log "media-host=$($Fixture.Install)" 'Worker preparation must receive the verified host'
     $clean = $result.Log.IndexOf('/t:Clean', [StringComparison]::Ordinal)
     $media = $result.Log.IndexOf('media-worker=', [StringComparison]::Ordinal)
     $build = $result.Log.IndexOf('/t:Build', [StringComparison]::Ordinal)
@@ -536,17 +548,19 @@ function Test-BuildProof {
     $added = Join-Path $Fixture.Project 'Unexpected.cs'
     $proof = Join-Path $Fixture.Repo 'build/release/plugin-build.json'
     $target = Join-Path $Fixture.Repo 'scripts/release/mission-planner-target.json'
+    $preparation = Join-Path (Split-Path $Fixture.Script) 'prepare_vision.ps1'
     $originals = @{}
-    foreach ($path in @($project, $proof, $target, $Fixture.Artifact)) {
+    foreach ($path in @($project, $proof, $target, $preparation, $Fixture.Artifact)) {
         $originals[$path] = [IO.File]::ReadAllBytes($path)
     }
-    foreach ($mutation in @('change', 'add', 'payload', 'target', 'proof', 'media')) {
+    foreach ($mutation in @('change', 'add', 'payload', 'target', 'preparation', 'proof', 'media')) {
         try {
             switch ($mutation) {
                 'change' { [IO.File]::AppendAllText($project, '<!-- changed after build -->') }
                 'add' { [IO.File]::WriteAllText($added, '// added after build') }
                 'payload' { [IO.File]::AppendAllText($Fixture.Artifact, 'changed payload') }
                 'target' { [IO.File]::WriteAllText($target, '{"version":"9.9.9"}') }
+                'preparation' { [IO.File]::AppendAllText($preparation, '# changed asset preparation') }
                 'proof' { [IO.File]::WriteAllText($proof, '{}') }
                 'media' {
                     $changed = Get-Content -LiteralPath $proof -Raw | ConvertFrom-Json
@@ -570,7 +584,7 @@ function Test-BuildProof {
         }
     }
     $null = Get-CurrentPluginBuild -RepoRoot $Fixture.Repo -PluginPath $Fixture.Artifact
-    Write-Host 'Build proof rejects changed/added sources, payload, host target and invalid plugin/media proof.'
+    Write-Host 'Build proof rejects changed/added sources, asset preparation, payload, host target and invalid plugin/media proof.'
 }
 
 function Test-EmbeddedMediaBundle {
@@ -622,10 +636,30 @@ function Test-ChangedReviewedTarget {
     $original = Get-Content -LiteralPath $targetPath -Raw
     try {
         [IO.File]::WriteAllText($targetPath, '{"version":"2.3.4"}')
-        Test-BuildOnlySuccess -Fixture $Fixture
+        $result = Invoke-BuildScript -Fixture $Fixture
+        Assert-ExitCode $result 1 'Unreviewed reference host'
+        Assert-Contains $result.Output 'Mission Planner reference version mismatch' 'Unreviewed host lacked a diagnostic'
+        Assert-Equal ([string]::IsNullOrEmpty($result.Log)) $true 'MSBuild ran against an unreviewed host'
+        Assert-Equal $result.Output.Contains('Synthetic pinned vision preparation') $false `
+            'Asset preparation ran against an unreviewed host'
     } finally {
         [IO.File]::WriteAllText($targetPath, $original)
     }
+}
+
+function Test-MissingReferenceHost {
+    param([pscustomobject]$Fixture)
+    $hostPath = Join-Path $Fixture.Install 'MissionPlanner.exe'
+    $preserved = Join-Path $Fixture.Tools 'PreservedMissionPlanner.exe'
+    Move-Item -LiteralPath $hostPath -Destination $preserved
+    try {
+        $result = Invoke-BuildScript -Fixture $Fixture
+        Assert-ExitCode $result 1 'Missing reference host'
+        Assert-Contains $result.Output 'Mission Planner reference host is missing' 'Missing host lacked a diagnostic'
+        Assert-Equal ([string]::IsNullOrEmpty($result.Log)) $true 'MSBuild ran without a reference host'
+        Assert-Equal $result.Output.Contains('Synthetic pinned vision preparation') $false `
+            'Asset preparation ran without a reference host'
+    } finally { Move-Item -LiteralPath $preserved -Destination $hostPath }
 }
 
 function Test-BuildFailure {
@@ -688,6 +722,7 @@ function Save-ProcessEnvironment {
         ProgramFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)', 'Process')
         LocalAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA', 'Process')
         UserProfile = [Environment]::GetEnvironmentVariable('USERPROFILE', 'Process')
+        MissionPlannerDir = [Environment]::GetEnvironmentVariable('MissionPlannerDir', 'Process')
         MockLog = [Environment]::GetEnvironmentVariable('MOCK_MSBUILD_LOG', 'Process')
         CleanExit = [Environment]::GetEnvironmentVariable('MOCK_CLEAN_EXIT', 'Process')
         BuildExit = [Environment]::GetEnvironmentVariable('MOCK_BUILD_EXIT', 'Process')
@@ -706,6 +741,7 @@ function Restore-ProcessEnvironment {
     [Environment]::SetEnvironmentVariable('ProgramFiles(x86)', $Original.ProgramFilesX86, 'Process')
     [Environment]::SetEnvironmentVariable('LOCALAPPDATA', $Original.LocalAppData, 'Process')
     [Environment]::SetEnvironmentVariable('USERPROFILE', $Original.UserProfile, 'Process')
+    [Environment]::SetEnvironmentVariable('MissionPlannerDir', $Original.MissionPlannerDir, 'Process')
     [Environment]::SetEnvironmentVariable('MOCK_MSBUILD_LOG', $Original.MockLog, 'Process')
     [Environment]::SetEnvironmentVariable('MOCK_CLEAN_EXIT', $Original.CleanExit, 'Process')
     [Environment]::SetEnvironmentVariable('MOCK_BUILD_EXIT', $Original.BuildExit, 'Process')
@@ -754,6 +790,7 @@ try {
     Test-BuildProof -Fixture $fixture
     Test-EmbeddedMediaBundle -Fixture $fixture
     Test-ChangedReviewedTarget -Fixture $fixture
+    Test-MissingReferenceHost -Fixture $fixture
     Test-SourceChangedDuringBuild -Fixture $fixture
     Test-WorkerBuildFailure -Fixture $fixture
     Test-BuildFailure -Fixture $fixture

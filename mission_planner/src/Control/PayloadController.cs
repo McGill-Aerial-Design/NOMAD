@@ -17,6 +17,7 @@ namespace NOMAD.MissionPlanner
             internal string Intent;
             internal readonly HashSet<string> NeutralInputs = new HashSet<string>();
             internal bool Known, Active, Recovery;
+            internal bool LastActivationBusy;
             internal int? TargetPwm;
             internal string Status = "";
         }
@@ -79,6 +80,8 @@ namespace NOMAD.MissionPlanner
         }
         internal int? TargetPwm(string id)
         { lock (_gate) { return _states.TryGetValue(id, out var state) ? state.TargetPwm : null; } }
+        internal bool LastActivationWasBusy(string id)
+        { lock (_gate) { return _states.TryGetValue(id, out var state) && state.LastActivationBusy && !state.Recovery; } }
         internal Task WaitForPendingAsync()
         { lock (_gate) { return _pending; } }
         private void ResetInput()
@@ -127,6 +130,7 @@ namespace NOMAD.MissionPlanner
                 { return SetStatus(id, "Invalid payload action or position; no command sent."); }
                 if (safe)
                 {
+                    state.LastActivationBusy = false;
                     if (!definition.Relay) { GimbalController.NotifyServoInput(_config, definition.Channel, definition.Safe); }
                     if (!_safePending.Add(id)) { return Task.FromResult("Safe command is already pending."); }
                     _stopping = true;
@@ -152,6 +156,7 @@ namespace NOMAD.MissionPlanner
                 if (definition.Timed && !ReserveRepeat(definition.Id))
                 { return SetStatus(id, "Another timed action is active."); }
                 _busy = true;
+                state.LastActivationBusy = false;
                 _stopRequested = false;
                 _pending = ActivateAsync(definition, state, operation, value, target, inputStillCurrent);
                 return _pending;
@@ -221,6 +226,12 @@ namespace NOMAD.MissionPlanner
                     attempted = true;
                     if (!await target.SendAsync(MAVLink.MAV_CMD.DO_SET_RELAY, definition.Channel, 0, current: StillCurrent).ConfigureAwait(false))
                     { return await SetStatus(definition.Id, "Relay initialization was rejected; pulse not started."); }
+                    lock (_gate)
+                    {
+                        state.Known = target.IsCurrent;
+                        state.Active = false;
+                        state.Recovery |= !state.Known;
+                    }
                 }
                 if (!StillCurrent()) { return await SetStatus(definition.Id, "Input retired; no activation sent."); }
                 int pwm = definition.ServoPwm(operation, value);
@@ -245,6 +256,12 @@ namespace NOMAD.MissionPlanner
                 return await SetStatus(definition.Id, accepted ? "Command accepted." :
                     "Command not confirmed. Check payload.");
             }
+            catch (OutputController.NativeRequestBusyException)
+            {
+                repeatAttempted = false;
+                lock (_gate) { state.LastActivationBusy = true; }
+                return await SetStatus(definition.Id, "Mission Planner is busy; no activation sent.");
+            }
             catch (Exception error)
             {
                 lock (_gate) { state.Recovery |= attempted; state.Known = false; }
@@ -268,6 +285,7 @@ namespace NOMAD.MissionPlanner
                     definition.Channel, definition.Relay ? 0 : definition.Safe).ConfigureAwait(false);
                 lock (_gate)
                 {
+                    state.LastActivationBusy = false;
                     state.Known = accepted && target.IsCurrent;
                     state.Active = false;
                     if (!definition.Relay) { state.TargetPwm = definition.Safe; }
@@ -288,7 +306,7 @@ namespace NOMAD.MissionPlanner
             }
             catch (Exception error)
             {
-                lock (_gate) { state.Known = false; state.Recovery = true; }
+                lock (_gate) { state.LastActivationBusy = false; state.Known = false; state.Recovery = true; }
                 return await SetStatus(definition.Id, "Safe outcome uncertain. Inspect before retrying. " + error.Message);
             }
             finally { lock (_gate) { _safePending.Remove(definition.Id); _stopping = _safePending.Count != 0; } }
