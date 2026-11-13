@@ -92,7 +92,10 @@ namespace NOMAD.MissionPlanner
                     _owner._detectionEnabled = false;
                     _owner._detectionLoading = false;
                     ++_owner._detectionRevision;
-                    _owner._visionError = "Selected model unavailable; video continues. Review the model or press Detect to retry.";
+                    string message = MediaWire.OperatorError(error.GetBaseException().Message);
+                    _owner._visionError = message == MediaWire.OperationUnavailable
+                        ? "Selected model unavailable; video continues. Review the model or press Detect to retry."
+                        : message + " Video continues.";
                 }
                 Log.Error("Detection model failed: " + error);
             }

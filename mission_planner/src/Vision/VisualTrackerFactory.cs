@@ -21,7 +21,7 @@ namespace NOMAD.MissionPlanner
                 catch (Exception) when (cancellationToken.IsCancellationRequested)
                 { throw new OperationCanceledException(cancellationToken); }
                 catch (Exception error) when (!(error is OutOfMemoryException))
-                { throw new InvalidOperationException("GPU Object tracker could not load: " + error.Message); }
+                { throw new InvalidOperationException("GPU Object tracker could not load: " + error.Message, error); }
             }
             try
             {
@@ -31,7 +31,7 @@ namespace NOMAD.MissionPlanner
             catch (Exception) when (cancellationToken.IsCancellationRequested)
             { throw new OperationCanceledException(cancellationToken); }
             catch (Exception error) when (!(error is OutOfMemoryException))
-            { throw new InvalidOperationException("Visual tracker could not load. Windows x64 is required."); }
+            { throw new InvalidOperationException("Visual tracker could not load. Windows x64 is required.", error); }
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]

@@ -358,7 +358,7 @@ namespace NOMAD.MissionPlanner
                         token.ThrowIfCancellationRequested();
                         if (reply.Error != null)
                         { if (reply.Error == "canceled") { throw new OperationCanceledException(token); }
-                          throw new InvalidOperationException("Media operation unavailable; review the model or source."); }
+                          throw new InvalidOperationException(MediaWire.OperatorError(reply.Error)); }
                         return reply;
                     }
                     catch (IOException)

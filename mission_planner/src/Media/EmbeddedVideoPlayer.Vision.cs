@@ -125,6 +125,13 @@ namespace NOMAD.MissionPlanner
             Toolbar.SetColumnSpan(VisionOptions, 2);
             _lblVisionStatus = new Label
             { Dock = DockStyle.Bottom, Height = 36, ForeColor = Color.Gainsboro, TextAlign = ContentAlignment.MiddleLeft };
+            void FitVisionStatus()
+            {
+                _lblVisionStatus.Height = Math.Max(36,
+                    _lblVisionStatus.GetPreferredSize(new Size(Math.Max(1, _lblVisionStatus.Width), 0)).Height);
+            }
+            _lblVisionStatus.SizeChanged += (sender, args) => FitVisionStatus();
+            _lblVisionStatus.TextChanged += (sender, args) => FitVisionStatus();
             Controls.Add(_lblVisionStatus);
             UpdateVisionStatus();
         }
@@ -525,7 +532,7 @@ namespace NOMAD.MissionPlanner
             { DisarmTracking("Video stale"); }
             string error = _session.TrackerError ?? _session.VisionError;
             _lblVisionStatus.Text = _trackingFeedback ?? (IsTracking ? TrackingStatus.Replace(" selected region", "") :
-                _session.TrackerLoading ? "Loading tracker" : error != null ? "Vision unavailable" : WaitingForRegionInitialization ? "Selecting target" :
+                _session.TrackerLoading ? "Loading tracker" : error != null ? error : WaitingForRegionInitialization ? "Selecting target" :
                 SelectedRegion.HasValue && !RegionReady ? _trackingMode + " searching" :
                 !_input.TrackingCalibrated ? "Gimbal tracking needs calibration: Settings → Video" :
                 RegionReady ? "Target selected · Start tracking to move the gimbal" : "Click or drag on the video to select a target");

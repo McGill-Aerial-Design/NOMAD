@@ -130,7 +130,7 @@ namespace NOMAD.MissionPlanner
         }
         private static Button Button(string text, Action click)
         {
-            var button = new Button { Text = text, UseMnemonic = false, AutoSize = true, MinimumSize = new Size(90, 29),
+            var button = new ControlFactory.ThemedButton { Text = text, UseMnemonic = false, AutoSize = true, MinimumSize = new Size(90, 29),
                 FlatStyle = FlatStyle.Flat, BackColor = NOMADTheme.BUTTON_BG, ForeColor = NOMADTheme.TEXT_PRIMARY };
             button.Click += (sender, args) => click();
             return button;

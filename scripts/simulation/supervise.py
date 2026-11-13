@@ -316,6 +316,8 @@ def main():
             while process.poll() is None and time.monotonic() < end and not stopping:
                 if renderer is not None:
                     check_renderer(renderer, args.run)
+                if relay is not None and relay.stats.get("error"):
+                    raise RuntimeError("RTP relay failed: " + relay.stats["error"])
                 if gui is not None and gui.poll() is not None:
                     raise RuntimeError("Owned Gazebo GUI exited during the case")
                 if last_letter is not None and last_letter.poll() is not None:
@@ -360,6 +362,8 @@ def main():
                 result["passed"] = False
                 result["cleanup_errors"].append(str(error))
             result["rtp_relay"] = relay.stats
+            if relay.stats.get("error"):
+                result["passed"] = False
         if (args.run / "capture-error.txt").exists():
             result["passed"] = False
             result["capture_error"] = "Renderer capture/pose recording failed; inspect capture-error.txt"

@@ -7,7 +7,19 @@ Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 if (!$PluginPath) { $PluginPath = Join-Path $root 'mission_planner/src/bin/Release/NOMADPlugin.dll' }
 if (!$OutputDirectory) { $OutputDirectory = Join-Path $root 'build/installer' }
+$directory = Join-Path $root 'mission_planner/packaging/installer'
+$sources = @((Join-Path $directory 'Program.cs'), (Join-Path $directory 'InstallEngine.cs'),
+    (Join-Path $root 'mission_planner/src/Plugin/MissionPlannerVersion.cs'))
+$inputs = $sources + @((Join-Path $directory 'app.manifest'), $PSCommandPath,
+    (Join-Path $PSScriptRoot 'windows_build_tools.ps1'),
+    (Join-Path $root 'scripts/release/mission-planner-target.json'), (Join-Path $root 'LICENSE'), (Join-Path $root 'NOTICE'))
+$inputHashes = @{}
+foreach ($path in $inputs) {
+    $relative = $path.Substring($root.Length + 1).Replace('\','/')
+    $inputHashes[$relative] = (Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant()
+}
 $PluginPath = (Resolve-Path -LiteralPath $PluginPath).Path
+$hash = (Get-FileHash -LiteralPath $PluginPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($PluginPath)
 if ($info.ProductVersion -notmatch '^(?<version>\d+\.\d+\.\d+)\+(?<source>[a-f0-9]{40})$') {
     throw 'Build the reviewed plugin first; release version/source metadata is required.'
@@ -29,7 +41,6 @@ if ($identity.GetField('MissionPlannerTarget', $flags).GetRawConstantValue() -ne
     $identity.GetField('SourceSha', $flags).GetRawConstantValue() -ne $source) {
     throw 'Plugin embedded identity differs from the packaging inputs.'
 }
-$hash = (Get-FileHash -LiteralPath $PluginPath -Algorithm SHA256).Hash.ToLowerInvariant()
 . (Join-Path $PSScriptRoot 'windows_build_tools.ps1')
 $null = Get-CurrentPluginBuild -RepoRoot $root -PluginPath $PluginPath
 $compiler = Find-RoslynCompiler
@@ -50,21 +61,25 @@ namespace NOMAD.Installer {
     }
 }
 "@ | Set-Content -LiteralPath $generated -Encoding UTF8
-$directory = Join-Path $root 'mission_planner/packaging/installer'
 [xml]$nativeManifest = Get-Content -LiteralPath (Join-Path $directory 'app.manifest') -Raw
 $nativeManifest.assembly.assemblyIdentity.version = $version + '.0'
 $nativeManifestPath = Join-Path $output 'Setup.manifest'
 $nativeManifest.Save($nativeManifestPath)
 $exe = Join-Path $output "NOMAD-$version-Setup.exe"
-$sources = @((Join-Path $directory 'Program.cs'), (Join-Path $directory 'InstallEngine.cs'),
-    (Join-Path $root 'mission_planner/src/Plugin/MissionPlannerVersion.cs'), $generated)
 & $compiler /nologo /target:winexe /platform:anycpu /langversion:latest /optimize+ /deterministic+ `
     /r:System.Windows.Forms.dll /r:System.Drawing.dll "/out:$exe" `
     "/win32manifest:$nativeManifestPath" "/resource:$PluginPath,NOMAD.Payload.dll" `
-    "/resource:$root/LICENSE,NOMAD.LICENSE" "/resource:$root/NOTICE,NOMAD.NOTICE" @sources
+    "/resource:$root/LICENSE,NOMAD.LICENSE" "/resource:$root/NOTICE,NOMAD.NOTICE" @sources $generated
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-$inputs = @($sources | Where-Object { $_ -ne $generated }) + @((Join-Path $directory 'app.manifest'), $PSCommandPath,
-    (Join-Path $root 'scripts/release/mission-planner-target.json'), (Join-Path $root 'LICENSE'), (Join-Path $root 'NOTICE'))
+foreach ($relative in $inputHashes.Keys) {
+    if ((Get-FileHash -LiteralPath (Join-Path $root $relative)).Hash -ne $inputHashes[$relative]) {
+        throw 'Installer inputs changed during compilation; rebuild before packaging setup.'
+    }
+}
+if ((Get-FileHash -LiteralPath $PluginPath).Hash -ne $hash) {
+    throw 'Plugin payload changed during compilation; rebuild before packaging setup.'
+}
+$null = Get-CurrentPluginBuild -RepoRoot $root -PluginPath $PluginPath
 $manifest = [ordered]@{
     version = $version
     plugin_source_sha = $source
@@ -72,11 +87,7 @@ $manifest = [ordered]@{
     reviewed_mission_planner = $target
     installer_source_sha = $installerSource
     installer_sha256 = (Get-FileHash -LiteralPath $exe).Hash.ToLowerInvariant()
-    inputs_sha256 = @{}
-}
-foreach ($path in $inputs) {
-    $relative = $path.Substring($root.Length + 1).Replace('\','/')
-    $manifest.inputs_sha256[$relative] = (Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant()
+    inputs_sha256 = $inputHashes
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'installer-manifest.json')
 $checksums = @(

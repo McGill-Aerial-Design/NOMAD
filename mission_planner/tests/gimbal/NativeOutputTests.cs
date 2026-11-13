@@ -392,6 +392,26 @@ internal static class NativeOutputTests
     }
     private static void ServoGimbalTargets()
     {
+        foreach (bool reversed in new[] { false, true })
+        {
+            var fractionalConnection = Reset();
+            var axis = new ServoGimbalAxis { MinimumAngleDeg = -30.1, MaximumAngleDeg = 30.1, Reversed = reversed };
+            var fractionalConfig = new NOMADConfig { SelectedGimbalAxes = new[] { axis } };
+            OutputController.Initialize(fractionalConfig); GimbalController.ApplyProfile(fractionalConfig);
+            foreach (int endpoint in new[] { 1000, 2000 })
+            {
+                Require(axis.TryAngle(endpoint, out float angle) && axis.TryPwm(angle, out int pwm) && pwm == endpoint,
+                    "A fractional calibration endpoint could not round-trip its PWM: " + endpoint);
+                Require(Complete(GimbalController.RequestScreenTargetAsync(angle, 0, 0)).Submitted &&
+                    fractionalConnection.ServoTargets.Last() == (1, endpoint),
+                    "A fractional calibration endpoint did not reach the native servo helper");
+            }
+            int before = fractionalConnection.ServoTargets.Count;
+            foreach (float angle in new[] { -30.10001f, 30.10001f })
+            { Require(!Complete(GimbalController.RequestScreenTargetAsync(angle, 0, 0)).Submitted,
+                "A target outside the fractional calibration was accepted"); }
+            Require(fractionalConnection.ServoTargets.Count == before, "An invalid fractional target reached a servo");
+        }
         var connection = Reset();
         var config = new NOMADConfig { SelectedVideoInputName = "Camera A", SelectedGimbalAxes = new[]
         {

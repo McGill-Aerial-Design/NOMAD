@@ -268,7 +268,7 @@ namespace NOMAD.MissionPlanner
             _chkRtspSkipOptions.Enabled = selected && !camera;
             _cmbVideoDevice.Enabled = selected && camera;
             _btnVideoDevices.Enabled = selected && camera;
-            _lblVideoDevices.Enabled = selected && camera;
+            _lblVideoDevices.Visible = selected && camera;
         }
 
         private void LoadVideoDevices(VideoCaptureDevice[] devices, string selectedPath, bool refreshed)

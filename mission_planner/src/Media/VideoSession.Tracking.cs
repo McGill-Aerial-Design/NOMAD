@@ -109,7 +109,8 @@ namespace NOMAD.MissionPlanner
                 }
                 try
                 {
-                    _tracker = _owner._createTracker(_token, _owner._trackerMode);
+                    _mode = _owner._trackerMode;
+                    _tracker = _owner._createTracker(_token, _mode);
                     lock (_owner._gate) { _owner._trackerReady = true; _owner._trackerError = null; }
                 }
                 catch (OperationCanceledException) { }
@@ -134,7 +135,8 @@ namespace NOMAD.MissionPlanner
                 using (selection)
                 try
                 {
-                    if (revision != _revision) { Clear(); _revision = revision; }
+                    if (revision != _revision)
+                    { Clear(_cancellation == null && (selection == null || selection.Mode == _mode)); _revision = revision; }
                     if (selection != null)
                     {
                         double age = (Stopwatch.GetTimestamp() - selection.ReceivedTicks) / (double)Stopwatch.Frequency;
@@ -161,7 +163,7 @@ namespace NOMAD.MissionPlanner
                             }
                             finally { lock (_owner._gate) { _owner._trackerLoading = false; } }
                             if (!selection.Frame.Fresh)
-                            { return Lost("Tracker ready; select the current image again"); }
+                            { return Lost("Tracker ready; select the current image again", keepWarm: true); }
                         }
                         _cancellation = CancellationTokenSource.CreateLinkedTokenSource(_token);
                         lock (_owner._gate)
@@ -204,7 +206,7 @@ namespace NOMAD.MissionPlanner
                 catch (Exception) { return Lost("Selection failed; choose a larger textured region"); }
             }
 
-            private VideoRegionResult Lost(string status)
+            private VideoRegionResult Lost(string status, bool keepWarm = false)
             {
                 bool current;
                 lock (_owner._gate)
@@ -212,7 +214,7 @@ namespace NOMAD.MissionPlanner
                     current = _revision == _owner._selectionRevision;
                     if (current) { _owner._selectionFound = false; _owner._selectionActive = false; }
                 }
-                Clear();
+                Clear(keepWarm);
                 if (!current) { return null; }
                 return _lastResult = new VideoRegionResult(_revision, _mode,
                     new VisualTrackingResult(VisualTrackingState.Lost, status));
@@ -227,8 +229,9 @@ namespace NOMAD.MissionPlanner
                     motion.Ground, out var point) ? point : (PointF?)null;
             }
 
-            private void Clear()
+            private void Clear(bool keepWarm = false)
             {
+                bool keepTracker = keepWarm && _cancellation == null;
                 var source = _cancellation;
                 _cancellation = null;
                 _lastResult = null;
@@ -237,8 +240,8 @@ namespace NOMAD.MissionPlanner
                 _lastReceivedTicks = 0;
                 lock (_owner._gate)
                 { if (ReferenceEquals(_owner._selectionCancellation, source)) { _owner._selectionCancellation = null; } }
-                try { _tracker?.Dispose(); }
-                finally { _tracker = null; source?.Dispose(); }
+                try { if (!keepTracker) { _tracker?.Dispose(); } }
+                finally { if (!keepTracker) { _tracker = null; } source?.Dispose(); }
             }
 
             public void Dispose()

@@ -26,7 +26,11 @@ namespace NOMAD.MissionPlanner
         internal bool TryPwm(double angle, out int pwm)
         {
             pwm = 0;
-            if (!Calibrated || !Finite(angle) || angle < MinimumAngleDeg || angle > MaximumAngleDeg) { return false; }
+            if (!Calibrated || !Finite(angle)) { return false; }
+            // Controller targets and PWM feedback carry the float representation of these double limits.
+            if (angle == (double)(float)MinimumAngleDeg) { angle = MinimumAngleDeg; }
+            else if (angle == (double)(float)MaximumAngleDeg) { angle = MaximumAngleDeg; }
+            if (angle < MinimumAngleDeg || angle > MaximumAngleDeg) { return false; }
             double fraction = (angle - MinimumAngleDeg) / (MaximumAngleDeg - MinimumAngleDeg);
             if (Reversed) { fraction = 1 - fraction; }
             pwm = (int)Math.Round(MinimumPwm + fraction * (MaximumPwm - MinimumPwm), MidpointRounding.AwayFromZero);

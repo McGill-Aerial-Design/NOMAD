@@ -51,6 +51,12 @@ namespace NOMAD.MissionPlanner
     {
         internal const int Version = 1, MaximumMessage = 1024 * 1024;
         internal const int MaximumPixels = 64 * 1024 * 1024;
+        internal const string NvidiaUnavailable = "No NVIDIA DirectX 12 adapter found.";
+        internal const string VisualCppRequired = "Vision needs the Microsoft Visual C++ 2015-2022 " +
+            "Redistributable (x64) 14.44 or later. Install the latest version from Microsoft.";
+        internal const string OperationUnavailable = "Media operation unavailable; review the model or source.";
+        internal static string OperatorError(string message) =>
+            message == NvidiaUnavailable || message == VisualCppRequired ? message : OperationUnavailable;
         private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false, true);
         private static readonly JsonSerializerSettings Settings = new JsonSerializerSettings
         { TypeNameHandling = TypeNameHandling.None, MissingMemberHandling = MissingMemberHandling.Error, MaxDepth = 16 };

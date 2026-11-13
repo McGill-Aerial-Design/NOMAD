@@ -38,7 +38,7 @@ namespace NOMAD.MissionPlanner
             Add(termination, _terminationRows);
             var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
             _read = Button("Read aircraft settings", async (s, e) => await ReadSettings(config));
-            _apply = Button("Apply changed settings…", async (s, e) => await ApplySettings());
+            _apply = Button("Apply changes…", async (s, e) => await ApplySettings());
             _apply.Enabled = false;
             buttons.Controls.Add(_read); buttons.Controls.Add(_apply);
             Add(group, buttons);
