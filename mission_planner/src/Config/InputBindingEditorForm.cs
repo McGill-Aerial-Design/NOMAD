@@ -163,7 +163,8 @@ namespace NOMAD.MissionPlanner
             if (device == null) { _status.Text = "Select one available, unambiguous device."; return; }
             _capture = NomadJoystickService.CreateAndAcquire(device);
             if (_capture == null) { _status.Text = "Input device could not be acquired."; return; }
-            _second = second; _listen = new InputListenState(DateTime.UtcNow); PollListen(this, EventArgs.Empty);
+            _second = second; _listen = new InputListenState(System.Diagnostics.Stopwatch.GetTimestamp());
+            PollListen(this, EventArgs.Empty);
         }
         private string ReadyStatus() => Connected ? "Disconnect the aircraft before listening." :
             NomadJoystickService.ResolveDeviceName(Value(_device), _available) == null ? "Select one available, unambiguous device." :
@@ -179,7 +180,8 @@ namespace NOMAD.MissionPlanner
         private void PollListen(object sender, EventArgs args)
         {
             UpdateListenAvailability(); if (_listen == null) { return; }
-            _listen.Sample(Connected ? null : NomadJoystickService.SafeGetState(_capture), Connected, DateTime.UtcNow);
+            _listen.Sample(Connected ? null : NomadJoystickService.SafeGetState(_capture), Connected,
+                System.Diagnostics.Stopwatch.GetTimestamp());
             _status.Text = _listen.Status; if (_listen.Active) { return; }
             var detected = _listen;
             StopListen(detected.Status);

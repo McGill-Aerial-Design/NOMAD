@@ -54,9 +54,13 @@ internal static class PluginUiTests
         QueuedUiUpdates();
         FlightDataMenuLifetime();
         SameScreen();
+        SameViewNavigation(directory);
+        VideoSourceCalibration(directory);
+        ModelCatalogNavigation(directory);
         Theme(directory);
         SettingsInputPause();
         GimbalScreenAxes();
+        GimbalPreferenceFailure(directory);
         InputEditorInterpretation(directory);
         using (var form = new NOMADForm())
         using (var widget = new TerminationWidget(null, CancellationToken.None))
@@ -262,18 +266,18 @@ internal static class PluginUiTests
                 "Input editor roundtrip changed source or stable identity.");
             var device = (ComboBox)typeof(InputBindingEditorForm).GetField("_device", Hidden).GetValue(editor);
             Check(((KeyValuePair<string, string>)device.SelectedItem).Value.StartsWith("Unavailable:"), "Missing device was not visibly unavailable.");
-            var axisDetection = new InputListenState(DateTime.UtcNow);
+            var axisDetection = new InputListenState(System.Diagnostics.Stopwatch.GetTimestamp());
             typeof(InputListenState).GetProperty("Axis", Hidden).SetValue(axisDetection, "Y");
             typeof(InputBindingEditorForm).GetMethod("ApplyDetection", Hidden).Invoke(editor, new object[] { axisDetection, source == "ButtonPair" });
             string interpreted = ((KeyValuePair<string, string>)sourceChoice.SelectedItem).Key;
             Check(interpreted == (source == "Button" ? "Axis" : source), "Listen changed an explicit switch interpretation or a paired endpoint.");
             var listenField = typeof(InputBindingEditorForm).GetField("_listen", Hidden);
-            var pending = new InputListenState(DateTime.UtcNow); listenField.SetValue(editor, pending);
+            var pending = new InputListenState(System.Diagnostics.Stopwatch.GetTimestamp()); listenField.SetValue(editor, pending);
             sourceChoice.SelectedItem = InputBindingEditorForm.SourceChoices[interpreted == "Button" ? 2 : 0];
             Check(!pending.Active && listenField.GetValue(editor) == null &&
                 !((Button)typeof(InputBindingEditorForm).GetField("_stopListen", Hidden).GetValue(editor)).Enabled,
                 "Changing input type did not cancel and clean up Listen.");
-            pending = new InputListenState(DateTime.UtcNow); listenField.SetValue(editor, pending);
+            pending = new InputListenState(System.Diagnostics.Stopwatch.GetTimestamp()); listenField.SetValue(editor, pending);
             device.Items.Add(new KeyValuePair<string, string>("another missing", "Unavailable: another missing"));
             device.SelectedIndex = device.Items.Count - 1;
             Check(!pending.Active && listenField.GetValue(editor) == null, "Changing device did not retire Listen.");
@@ -341,6 +345,48 @@ internal static class PluginUiTests
                 "Gimbal screen omitted its updated yaw target readout.");
         }
         finally { window.Close(); OutputController.Shutdown(); }
+    }
+
+    private static void GimbalPreferenceFailure(string directory)
+    {
+        string blocker = Path.Combine(directory, "profile-parent-blocker");
+        File.WriteAllText(blocker, "Owned save-failure fixture");
+        var profiles = new NOMADProfiles(new NOMADConfig { AircraftName = "Preference failure fixture" });
+        typeof(NOMADProfiles).GetField("_path", Hidden).SetValue(profiles, Path.Combine(blocker, "profiles.json"));
+        OutputController.Initialize(profiles.Selected.Config);
+        GimbalController.ApplyProfile(profiles.Selected.Config);
+        GimbalController.SetTargetAngles(0, 0);
+        using var filter = new GimbalArrowKeyFilter(profiles);
+        using var service = new NotificationService();
+        var previous = NotificationService.Shared;
+        NotificationService.Shared = service;
+        using var window = (Form)typeof(GimbalJoystickWindow).GetConstructor(Hidden, null,
+            new[] { typeof(NOMADConfig) }, null).Invoke(new object[] { profiles.Selected.Config });
+        try
+        {
+            var checkbox = (CheckBox)typeof(GimbalJoystickWindow).GetField("_chkArrowKeys", Hidden).GetValue(window);
+            checkbox.Checked = true;
+            Check(!checkbox.Checked && !GimbalArrowKeyFilter.Enabled && !profiles.Selected.Config.GimbalArrowKeysEnabled &&
+                service.Notifications.Count == 1 && service.Notifications[0].Severity == NotificationSeverity.Warning,
+                "Failed keyboard-preference save escaped the UI, retained a false checkbox, or hid its warning.");
+            Capture(window, directory, "gimbal-save-failure.png", window.Size);
+            using var notifications = new NotificationPanel(service);
+            Capture(notifications, directory, "gimbal-save-warning.png", new Size(450, 260));
+            string validPath = Path.Combine(directory, "keyboard-profile.json");
+            typeof(NOMADProfiles).GetField("_path", Hidden).SetValue(profiles, validPath);
+            bool saving = true;
+            filter.CanSave = () => !saving;
+            checkbox.Checked = true;
+            Check(!checkbox.Checked && !GimbalArrowKeyFilter.Enabled && !profiles.Selected.Config.GimbalArrowKeysEnabled &&
+                !File.Exists(validPath), "A concurrent save admitted a keyboard preference or changed its UI state.");
+            saving = false;
+            checkbox.Checked = true;
+            Check(checkbox.Checked && GimbalArrowKeyFilter.Enabled &&
+                NOMADProfiles.LoadFromPaths(validPath, validPath + ".bak").Selected.Config.GimbalArrowKeysEnabled,
+                "Keyboard preference could not be retried after the other save completed.");
+            Capture(window, directory, "gimbal-save-recovered.png", window.Size);
+        }
+        finally { window.Close(); OutputController.Shutdown(); NotificationService.Shared = previous; }
     }
 
     private static void Gesture()
@@ -443,6 +489,74 @@ internal static class PluginUiTests
         yield return root;
         foreach (Control child in root.Controls)
         { foreach (Control nested in Tree(child)) { yield return nested; } }
+    }
+
+    private static void SameViewNavigation(string directory)
+    {
+        var config = new NOMADConfig { AircraftName = "Navigation fixture" };
+        config.VideoInputs.Add(new VideoInputProfile { Name = "Example camera", Url = "rtsp://camera.invalid/live" });
+        config.SelectedVideoInputName = "Example camera";
+        using var screen = new NOMADMainScreen(config);
+        var show = typeof(NOMADMainScreen).GetMethod("ShowView", Hidden);
+        show.Invoke(screen, new object[] { "Video" });
+        var view = (NOMADVideoView)typeof(NOMADMainScreen).GetField("_videoView", Hidden).GetValue(screen);
+        var player = ((VideoInputPlayer)typeof(NOMADVideoView).GetField("_videoHost", Hidden).GetValue(view)).Player;
+        string status = player.TrackingStatus;
+        int removals = 0;
+        view.Parent.ControlRemoved += (sender, args) => { if (ReferenceEquals(args.Control, view)) { removals++; } };
+        show.Invoke(screen, new object[] { "Video" });
+        Check(removals == 0 && player.TrackingStatus == status,
+            "Selecting the current Video page detached it or interrupted its tracking state.");
+        Capture(screen, directory, "video-navigation.png", new Size(1180, 760));
+        screen.Scale(new SizeF(1.5f, 1.5f));
+        Capture(screen, directory, "video-navigation-150.png", new Size(1380, 980));
+        show.Invoke(screen, new object[] { "Links" });
+        Check(removals == 1 && player.TrackingStatus != status,
+            "Leaving Video did not retire its tracking state.");
+    }
+
+    private static void VideoSourceCalibration(string directory)
+    {
+        var config = new NOMADConfig { AircraftName = "Example Copter" };
+        config.VideoInputs.Add(new VideoInputProfile { Name = "Example camera", Url = "rtsp://camera.invalid/live",
+            TrackingCalibrated = true });
+        config.SelectedVideoInputName = "Example camera";
+        using var settings = new NOMADSettingsForm(new NOMADProfiles(config));
+        var tabs = (TabControl)typeof(NOMADSettingsForm).GetField("_tabControl", Hidden).GetValue(settings);
+        var video = tabs.TabPages.Cast<TabPage>().Single(page => page.Text == "Video");
+        tabs.SelectedTab = video;
+        ((TextBox)typeof(NOMADSettingsForm).GetField("_txtVideoUrl", Hidden).GetValue(settings)).Text =
+            "rtsp://replacement-camera.invalid/live";
+        var calibrated = (CheckBox)typeof(NOMADSettingsForm).GetField("_chkTrackingCalibrated", Hidden).GetValue(settings);
+        Check(!calibrated.Checked, "Changed network source still displays a calibration confirmation.");
+        Capture(settings, directory, "camera-source-changed.png", settings.Size);
+        video.ScrollControlIntoView(calibrated);
+        Capture(settings, directory, "camera-calibration-review.png", settings.Size);
+        settings.Scale(new SizeF(1.5f, 1.5f));
+        video.ScrollControlIntoView(calibrated);
+        Capture(settings, directory, "camera-calibration-review-150.png", settings.Size);
+    }
+
+    private static void ModelCatalogNavigation(string directory)
+    {
+        var config = new NOMADConfig();
+        config.VideoInputs.Add(new VideoInputProfile { Name = "Camera A", Url = "rtsp://camera-a.invalid/live" });
+        config.VideoInputs.Add(new VideoInputProfile { Name = "Camera B", Url = "rtsp://camera-b.invalid/live" });
+        config.SelectedVideoInputName = "Camera A";
+        using var host = new VideoInputPlayer(config, true, CancellationToken.None,
+            () => throw new InvalidOperationException("A stopped render must not start capture."),
+            (owner, name) => { owner.SelectedVideoInputName = name; return true; },
+            (owner, name, path) => System.Threading.Tasks.Task.FromResult(false));
+        config.SelectedVideoInputName = "Camera B";
+        host.RefreshInput();
+        var models = (ComboBox)typeof(VideoInputPlayer).GetField("_models", Hidden).GetValue(host);
+        var deadline = System.Diagnostics.Stopwatch.StartNew();
+        while (models.SelectedItem == null && deadline.ElapsedMilliseconds < 2000)
+        { Application.DoEvents(); Thread.Sleep(1); }
+        Check(models.Enabled && models.SelectedItem != null, "Camera switch left model selection unavailable.");
+        Tree(host).OfType<Button>().Single(button => button.AccessibleName == "Video options").PerformClick();
+        Capture(host, directory, "model-catalog-camera-switch.png", new Size(900, 600));
+        Capture(host, directory, "model-catalog-camera-switch-narrow.png", new Size(380, 600));
     }
 
     private static void RetainsTheme(Control root)

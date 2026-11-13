@@ -24,9 +24,10 @@ namespace NOMAD.MissionPlanner
             return Deserialize(json);
         }
 
-        internal static void WriteAtomically(string path, string json)
+        internal static void WriteAtomically(string path, string json, bool keepBackup = true)
         {
-            var temporary = path + ".tmp";
+            var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            bool created = false;
             try
             {
                 var dir = Path.GetDirectoryName(path);
@@ -34,13 +35,17 @@ namespace NOMAD.MissionPlanner
                 {
                     Directory.CreateDirectory(dir);
                 }
-                File.WriteAllText(temporary, json);
+                using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    created = true;
+                    using (var writer = new StreamWriter(stream)) { writer.Write(json); }
+                }
 
                 if (File.Exists(path))
                 {
                     // Atomic rename + backup. Replace() requires the destination
                     // to exist; otherwise fall through to a plain Move().
-                    File.Replace(temporary, path, path + ".bak", ignoreMetadataErrors: true);
+                    File.Replace(temporary, path, keepBackup ? path + ".bak" : null, ignoreMetadataErrors: true);
                 }
                 else
                 {
@@ -52,7 +57,7 @@ namespace NOMAD.MissionPlanner
                 Log.Error($"Failed to save config - {ex.Message}");
                 try
                 {
-                    File.Delete(temporary);
+                    if (created) { File.Delete(temporary); }
                 }
                 catch
                 {
@@ -74,7 +79,7 @@ namespace NOMAD.MissionPlanner
                 Directory.CreateDirectory(directory);
 
             var profile = JObject.FromObject(this);
-            WriteAtomically(path, profile.ToString(Formatting.Indented));
+            WriteAtomically(path, profile.ToString(Formatting.Indented), keepBackup: false);
         }
 
         private static NOMADConfig Deserialize(string json)
@@ -132,6 +137,8 @@ namespace NOMAD.MissionPlanner
             { throw new JsonSerializationException("RouterClientEnabled must be boolean."); }
             if (document[nameof(RouterLocalPort)] != null && document[nameof(RouterLocalPort)].Type != JTokenType.Integer)
             { throw new JsonSerializationException("RouterLocalPort must be an integer."); }
+            if (document[nameof(LinkMonitorInterval)] != null && document[nameof(LinkMonitorInterval)].Type != JTokenType.Integer)
+            { throw new JsonSerializationException("LinkMonitorInterval must be an integer."); }
         }
 
         private static void ValidateRouterLinks(JToken token)
@@ -166,6 +173,8 @@ namespace NOMAD.MissionPlanner
             ValidateVideoSettings();
             ValidateAircraftSettings();
             ValidateInputBindings();
+            if (LinkMonitorInterval < 100 || LinkMonitorInterval > 5000)
+            { throw new JsonSerializationException("LinkMonitorInterval must be between 100 and 5000 milliseconds."); }
             if (RouterLocalPort < 1 || RouterLocalPort > 65535)
             {
                 throw new JsonSerializationException("Router ports must be between 1 and 65535.");

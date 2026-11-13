@@ -378,7 +378,16 @@ namespace NOMAD.MissionPlanner
                 Margin = new Padding(NOMADTheme.GAP, 4, 0, 0),
             };
             _chkArrowKeys.CheckedChanged += (s, e) =>
-                GimbalArrowKeyFilter.SetEnabled(_chkArrowKeys.Checked);
+            {
+                try { GimbalArrowKeyFilter.SetEnabled(_chkArrowKeys.Checked); }
+                catch (Exception error)
+                {
+                    _chkArrowKeys.Checked = GimbalArrowKeyFilter.Enabled;
+                    Log.Warn("Arrow key setting was not saved: " + error.Message);
+                    NotificationService.Shared?.AddNotification(NotificationSeverity.Warning, NotificationCategory.System,
+                        "Arrow key setting was not saved", error.Message);
+                }
+            };
             flow.Controls.Add(_chkArrowKeys);
 
             HighlightModeButtons();

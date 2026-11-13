@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using System.Windows.Forms;
@@ -16,13 +17,13 @@ namespace NOMAD.MissionPlanner
         private Timer _timer;
         private readonly Dictionary<string, JoystickBase> _devices = new Dictionary<string, JoystickBase>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, PropertyInfo> AxisProps = BuildAxisMap();
-        private DateTime _lastAcquire = DateTime.MinValue, _lastTick;
+        private long _lastAcquire = -1, _lastTick;
         public NomadJoystickService(NOMADConfig config) { _config = config ?? throw new ArgumentNullException(nameof(config)); }
         public static IReadOnlyList<string> AxisNames => InputBinding.Axes;
         public bool NeedsToRun() => InputBinding.Parse(_config.Inputs).Any(binding => binding.Enabled);
         public void Start()
         {
-            Stop(); _lastTick = DateTime.UtcNow; _lastAcquire = DateTime.MinValue;
+            Stop(); _lastTick = Stopwatch.GetTimestamp(); _lastAcquire = -1;
             _timer = new Timer { Interval = 50 }; _timer.Tick += OnTick; _timer.Start();
         }
         public void Stop()
@@ -67,8 +68,8 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var now = DateTime.UtcNow;
-                if (now - _lastAcquire > TimeSpan.FromSeconds(3))
+                long now = Stopwatch.GetTimestamp();
+                if (_lastAcquire < 0 || (now - _lastAcquire) / (double)Stopwatch.Frequency > 3)
                 {
                     _lastAcquire = now;
                     var available = EnumerateDevices();
@@ -91,7 +92,7 @@ namespace NOMAD.MissionPlanner
                     var sample = SafeGetState(item.Value); samples[item.Key] = sample;
                     if (sample == null) { var device = item.Value; _devices.Remove(item.Key); ReleaseJoy(ref device); }
                 }
-                float dt = (float)(now - _lastTick).TotalSeconds; _lastTick = now;
+                float dt = (float)((now - _lastTick) / (double)Stopwatch.Frequency); _lastTick = now;
                 TranslateInputs(samples, dt > 0 && dt <= 0.5f ? dt : 0.05f);
             }
             catch (Exception error) { ResetInputs(true); Log.Error("HID input failed: " + error.Message); }

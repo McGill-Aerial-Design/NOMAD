@@ -61,6 +61,14 @@ function Invoke-AircraftProfileTests {
     $portable = Join-Path $directory 'portable.json'
     $restored.ExportToFile($portable)
     $portableText = [IO.File]::ReadAllText($portable)
+    [IO.File]::WriteAllText($portable + '.tmp', 'Unrelated temporary file')
+    [IO.File]::WriteAllText($portable + '.bak', 'Unrelated backup file')
+    $restored.ExportToFile($portable)
+    if (![IO.File]::Exists($portable + '.tmp') -or
+        [IO.File]::ReadAllText($portable + '.tmp') -cne 'Unrelated temporary file' -or
+        [IO.File]::ReadAllText($portable + '.bak') -cne 'Unrelated backup file') {
+        throw 'Export overwrote an unrelated staging or backup sibling.'
+    }
     if ($portableText.Contains('Profile Alpha')) {
         throw 'Single-aircraft export included another aircraft configuration.'
     }
@@ -170,14 +178,16 @@ function Invoke-AircraftProfileTests {
     [IO.File]::WriteAllText($primary, $validPrimary)
     $failedSave = Load-Profiles
     $failedSave.SelectedId = $added.Id
-    New-Item -ItemType Directory -Path ($primary + '.tmp') | Out-Null
+    $heldPrimary = [IO.File]::Open($primary, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     $rejected = $false
-    try { $failedSave.Save() } catch { $rejected = $true }
+    try { $failedSave.Save() } catch { $rejected = $true } finally { $heldPrimary.Dispose() }
     if (-not $rejected -or [IO.File]::ReadAllText($primary) -cne $validPrimary -or
         [IO.File]::ReadAllText($backup) -cne $validBackup) {
         throw 'A failed profile save replaced the previous persisted selection or backup.'
     }
-    [IO.Directory]::Delete($primary + '.tmp')
+    if ([IO.Directory]::GetFiles($directory, ([IO.Path]::GetFileName($primary) + '.*.tmp')).Count -ne 0) {
+        throw 'A failed profile save leaked its owned staging file.'
+    }
     foreach ($invalid in @('{"UnknownSetting":null}', '{"GimbalMountMode":4}', '{"GimbalMountMode":null}',
         '{"ActuatorDefinitions":{}}', '{"ActuatorDefinitions":[1]}', '{"FlightControllerModel":3}',
         '{"Inputs":null}', '{"Inputs":[{"Id":"invalid"}]}',
@@ -211,15 +221,15 @@ function Invoke-AircraftProfileTests {
             $afterToggle.Aircraft[1].Config.GimbalArrowKeysEnabled) {
             throw 'The live keyboard toggle did not persist only the active aircraft profile.'
         }
-        New-Item -ItemType Directory -Path ($primary + '.tmp') | Out-Null
+        $heldPrimary = [IO.File]::Open($primary, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
         $rejected = $false
         try { $filterType.GetMethod('SetEnabled').Invoke($null, [object[]]@($false)) | Out-Null }
         catch { $rejected = $true }
+        finally { $heldPrimary.Dispose() }
         if (-not $rejected -or -not $filterType.GetProperty('Enabled').GetValue($null, $null) -or
             -not (Load-Profiles).Selected.Config.GimbalArrowKeysEnabled) {
             throw 'A failed keyboard-toggle save changed live or persisted aircraft settings.'
         }
-        [IO.Directory]::Delete($primary + '.tmp')
     } finally { $filter.Dispose() }
     Write-Host 'Aircraft profile persistence, isolation, export and storage fault checks passed.'
 }

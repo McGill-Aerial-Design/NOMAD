@@ -297,6 +297,7 @@ namespace NOMAD.MissionPlanner
                 {
                     var s = link.Stats;
                     s.FramesReceived = s.FramesForwarded = s.FramesDuplicate = s.FrameErrors = 0;
+                    s.HeartbeatCount = 0;
                     s.BytesReceived = s.BytesSentOutbound = link.PreviousBytes = link.Seen = link.Lost = 0;
                     s.PacketLossPercent = s.DataRateBps = 0;
                     link.Sequences.Clear();

@@ -11,6 +11,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Media;
 using System.Speech.Synthesis;
@@ -36,8 +37,8 @@ namespace NOMAD.MissionPlanner
             { AlertKind.BatteryCritical, TimeSpan.FromSeconds(10) },
         };
 
-        private static readonly Dictionary<AlertKind, DateTime> _lastPlayed = new Dictionary<AlertKind, DateTime>();
-        private static readonly Dictionary<string, DateTime> _lastSpoken = new Dictionary<string, DateTime>();
+        private static readonly Dictionary<AlertKind, long> _lastPlayed = new Dictionary<AlertKind, long>();
+        private static readonly Dictionary<string, long> _lastSpoken = new Dictionary<string, long>();
         private static readonly object _lock = new object();
         private static SpeechSynthesizer _tts;
         private static readonly object _ttsLock = new object();
@@ -124,13 +125,14 @@ namespace NOMAD.MissionPlanner
 
             lock (_lock)
             {
+                long now = Stopwatch.GetTimestamp();
                 if (!ignoreRateLimit
                     && _lastPlayed.TryGetValue(kind, out var last)
-                    && DateTime.UtcNow - last < MinInterval[kind])
+                    && (now - last) / (double)Stopwatch.Frequency < MinInterval[kind].TotalSeconds)
                 {
                     return;
                 }
-                _lastPlayed[kind] = DateTime.UtcNow;
+                _lastPlayed[kind] = now;
             }
 
             Task.Run(() =>
@@ -355,13 +357,14 @@ namespace NOMAD.MissionPlanner
 
             lock (_lock)
             {
+                long now = Stopwatch.GetTimestamp();
                 if (!ignoreRateLimit
                     && _lastSpoken.TryGetValue(text, out var last)
-                    && (DateTime.UtcNow - last).TotalSeconds < SpeechMinIntervalSec)
+                    && (now - last) / (double)Stopwatch.Frequency < SpeechMinIntervalSec)
                 {
                     return;
                 }
-                _lastSpoken[text] = DateTime.UtcNow;
+                _lastSpoken[text] = now;
             }
 
             EnqueueSpeech(new SpeechItem { Text = text, Component = component, Revision = revision });

@@ -169,7 +169,7 @@ namespace NOMAD.MissionPlanner
                 {
                     string output = dialog.FileName;
                     await Task.Run(() => NOMADConfig.WriteAtomically(output,
-                        JsonConvert.SerializeObject(VisionModelProfile.Load(selected.Path), Formatting.Indented)));
+                        JsonConvert.SerializeObject(VisionModelProfile.Load(selected.Path), Formatting.Indented), keepBackup: false));
                 }
             }
         }
