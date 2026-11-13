@@ -50,8 +50,23 @@ zero target. Existing inputs keep native mount control.
 Configure the flight-controller outputs to accept servo commands in Mission Planner
 before use; NOMAD does not reassign servo functions. ArduPilot's
 [servo-command requirements](https://ardupilot.org/copter/docs/common-mavlink-mission-command-messages-mav_cmd.html#mav-cmd-do-set-servo)
-still apply. Targets use the selected MP connection and its native ACK/retry handling.
-Acknowledgements do not establish physical position.
+still apply. Targets use the selected MP connection. Manual commands and the first
+tracking pose use native ACK/retry handling. Once those axes are acknowledged,
+active tracking streams fresh absolute PWM positions through MP without waiting
+for each update's ACK. A new tracking owner, connection, camera or calibration
+requires acknowledgement again. Streamed updates do not confirm acceptance;
+acknowledgements do not establish physical position.
+
+These calibrations support normal position servos: PWM selects an angle.
+Continuous-rotation servos need a neutral/speed calibration and are not supported
+by this position mapping. Servo tracking uses image-error PID feedback, a filtered
+derivative, limited acceleration and anti-windup to move the requested position.
+The servo's own controller still drives its motor. The camera delay estimate and
+receiver buffering reduce feedback gain for delayed imagery. Set the camera delay
+to its measured value; wrong delay or angle calibration can still cause poor tracking.
+The tracking rate setting limits requested angle change, not measured shaft speed.
+Stop, loss of verified imagery and manual input clear the controller state;
+busy requests do not advance it. No old position sequence is queued for later replay.
 
 The existing joystick screen-axis mapping selects which axes the pad moves.
 Automatic region tracking steers the configured pitch/yaw axes and requires level
@@ -83,13 +98,29 @@ Select tightly around the whole object with visible edges. Drag padding is not
 part of the measured object. The aim can lie between legs or inside a hole;
 foreground evidence establishes identity separately from the aiming pixel.
 The CPU tracker retains original appearance and one verified working view.
+Sparse forward/backward optical flow proposes local motion. A bounded foreground
+pass runs first; a failed appearance/continuity check retries full segmentation.
+Both paths must pass the same identity checks before steering. Unchanged appearances
+do not rebuild the working reference.
+Small targets with a tight outline, weak foreground separation or an escaping foreground
+component can use the embedded ViTTrack model on the CPU. Its original template stays
+fixed; rejected frames cannot train it or move accepted search bounds. Three matched
+updates are required before it takes over. If it rejects the initial frames,
+a usable foreground tracker is retained. Two plausible competing model peaks retire
+an established selection when recent appearance independently confirms the original
+object is present; a later quorum cannot resolve that identity ambiguity. Competing
+peaks without that appearance witness pause tracking.
+Recovery also requires agreement with the last verified appearance and three
+consistent matches. Five seconds without a verified match retires this template
+selection. Its search follows accepted bounds; provisional matches never move them.
 Predicted masks are not learned. Small selections can use a larger processing
 image, which costs CPU but cannot recover detail absent from the camera.
 
 Recovery needs three consistent matches. The CPU tracker can search globally
 using retained appearance/features, but uniform colour alone is insufficient.
 Its short local recovery window can still accept an indistinguishable nearby decoy;
-this case is unqualified. A completely unseen side or full occlusion may need reselection.
+this case is unqualified. Overlapping lookalikes can also produce merged model bounds.
+A completely unseen side or full occlusion may need reselection.
 
 **Settings -> Video -> Object tracker** selects GPU Object tracking for that input;
 restart the video view for the setting to take effect. The tested model/runtime and
@@ -105,6 +136,15 @@ details are absent. Model memory cannot reliably distinguish identical objects.
 Use Area for a fixed point on grass, pavement or a wall. Include distinctive
 local texture and surrounding features. The original point remains fixed as
 perspective changes; verified working-view updates cannot relocate it.
+Checked local flow uses a smaller feature budget, with competing-placement checks
+on every frame. Failed local flow and recovery retain the full feature budget.
+Checked flow from the original operator reference also supports the initial
+three-match confirmation when stronger corners elsewhere dominate the global budget.
+Receipt gaps and loss retire that local continuity; three distinctive feature matches
+are required before flow can authorize tracking again.
+Working views reuse descriptors from the current frame near measured plane inliers.
+If that sparse set cannot support a new view, the tracker detects reference features
+near the measured inliers before learning it.
 
 | State | Behavior |
 |---|---|
@@ -136,6 +176,12 @@ pitch/yaw with roll zero; fresh aircraft attitude/rates compensate body yaw insi
 the same travel/rate bounds. Requested/reported target angles may be estimates,
 not measured orientation. Check axes and actual motion on the installed mount.
 Decoder receipt age does not measure exposure delay or detect every upstream freeze.
+Fresh tracking samples can drive roughly 30 Hz gimbal requests when processing and
+native command completion keep up. Busy requests drop that sample; no command backlog
+is replayed. Recovery and difficult segmentation can take longer than one video frame.
+Delayed analysis pauses steering while fresh video, aircraft telemetry and control
+ownership preserve the tracking intent. A fresh verified result can resume it.
+Video/UI input gaps and telemetry or ownership loss still require an explicit restart.
 
 ### GPS and altitude search prediction
 

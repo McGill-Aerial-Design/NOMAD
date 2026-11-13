@@ -30,6 +30,7 @@ internal static partial class VideoLifetimeTests
         private readonly List<(int Channel, int Pwm)> _servoTargets = new List<(int Channel, int Pwm)>();
         internal (int Channel, int Pwm)[] ServoTargets { get { lock (_gate) { return _servoTargets.ToArray(); } } }
         internal bool StreamAttitude = true;
+        internal int ServoAckLimit = int.MaxValue, ServoAckDelayMs;
         private float _heading;
         private long _attitudeTicks;
         internal int MountTargets => Volatile.Read(ref _mountTargets);
@@ -73,7 +74,7 @@ internal static partial class VideoLifetimeTests
                 system_status = (byte)MAVLink.MAV_STATE.ACTIVE,
             });
 
-        internal void Pump(int milliseconds, bool dispatchUi = true)
+        internal void Pump(int milliseconds, bool dispatchUi = true, bool precise = false)
         {
             var clock = Stopwatch.StartNew();
             while (clock.ElapsedMilliseconds < milliseconds)
@@ -81,6 +82,7 @@ internal static partial class VideoLifetimeTests
                 if (StreamAttitude && (Stopwatch.GetTimestamp() - _attitudeTicks) / (double)Stopwatch.Frequency > .1)
                 { Attitude(_heading); }
                 if (!Connection.giveComport && _serial.BytesToRead > 0) { Connection.readPacket(); }
+                else if (precise) { Thread.Yield(); }
                 else { Thread.Sleep(1); }
                 if (dispatchUi) { Application.DoEvents(); }
                 if (_failure != null) { throw new InvalidOperationException("Synthetic tracking peer failed", _failure); }
@@ -139,9 +141,18 @@ internal static partial class VideoLifetimeTests
                         { Interlocked.Increment(ref _mountTargets); }
                         else if (command.command == (ushort)MAVLink.MAV_CMD.DO_SET_SERVO)
                         {
-                            lock (_gate) { _servoTargets.Add(((int)command.param1, (int)command.param2)); }
-                            Send(MAVLink.MAVLINK_MSG_ID.COMMAND_ACK, new MAVLink.mavlink_command_ack_t
-                            { command = command.command, result = (byte)MAVLink.MAV_RESULT.ACCEPTED });
+                            bool acknowledge;
+                            lock (_gate)
+                            {
+                                _servoTargets.Add(((int)command.param1, (int)command.param2));
+                                acknowledge = _servoTargets.Count <= ServoAckLimit;
+                            }
+                            if (acknowledge)
+                            {
+                                if (ServoAckDelayMs > 0) { Thread.Sleep(ServoAckDelayMs); }
+                                Send(MAVLink.MAVLINK_MSG_ID.COMMAND_ACK, new MAVLink.mavlink_command_ack_t
+                                { command = command.command, result = (byte)MAVLink.MAV_RESULT.ACCEPTED });
+                            }
                         }
                     }
                 }

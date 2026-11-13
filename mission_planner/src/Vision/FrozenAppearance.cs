@@ -129,6 +129,10 @@ namespace NOMAD.MissionPlanner
         internal static bool MatchesMasked(Mat a, Mat b, Mat aColour, Mat bColour, Mat aMask, Mat bMask,
             double minimum, System.Drawing.PointF anchor)
         {
+            a.GetArray(out byte[] aPixels); b.GetArray(out byte[] bPixels);
+            aMask.GetArray(out byte[] aCoverage); bMask.GetArray(out byte[] bCoverage);
+            aColour.GetArray(out Vec3b[] aColours); bColour.GetArray(out Vec3b[] bColours);
+            int aWidth = a.Width, bWidth = b.Width;
             if (!Correlation(new Rect(0, 0, a.Width, a.Height), minimum, 0, 0)) { return false; }
             var centre = new Rect(Math.Max(3, Math.Min(a.Width - 19, (int)anchor.X - 8)),
                 Math.Max(3, Math.Min(a.Height - 19, (int)anchor.Y - 8)), 16, 16);
@@ -146,13 +150,14 @@ namespace NOMAD.MissionPlanner
                 for (int y = region.Top; y < region.Bottom; y++)
                 for (int x = region.Left; x < region.Right; x++)
                 {
-                    if (aMask.At<byte>(y, x) == 0) { continue; }
+                    int ai = y * aWidth + x, bi = (y + offsetY) * bWidth + x + offsetX;
+                    if (aCoverage[ai] == 0) { continue; }
                     possible++;
-                    if (bMask.At<byte>(y + offsetY, x + offsetX) == 0) { continue; }
+                    if (bCoverage[bi] == 0) { continue; }
                     count++;
-                    double av = a.At<byte>(y, x), bv = b.At<byte>(y + offsetY, x + offsetX);
+                    double av = aPixels[ai], bv = bPixels[bi];
                     sa += av; sb += bv; aa += av * av; bb += bv * bv; ab += av * bv;
-                    var ac = aColour.At<Vec3b>(y, x); var bc = bColour.At<Vec3b>(y + offsetY, x + offsetX);
+                    var ac = aColours[ai]; var bc = bColours[bi];
                     for (int c = 0; c < 3; c++) { ca[c] += ac[c]; cb[c] += bc[c]; }
                 }
                 if (count < 8 || count < possible * .6) { return false; }

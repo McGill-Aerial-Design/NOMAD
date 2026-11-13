@@ -8,7 +8,8 @@ param([string]$LinuxWorkspace = '~/nomad-simulation', [switch]$Rendered, [switch
     [ValidateSet(400,1000)][int]$PhysicsHz=1000,
     [ValidateSet('orbit','flyby','direct','approach')][string]$ObjectMotion='orbit',
     [ValidateSet(5,15)][int]$ObjectAltitude=5, [ValidateSet(5,10)][int]$ObjectSpeed=5,
-    [ValidateRange(100,50000)][int]$EncoderKbps=800)
+    [ValidateSet('Static','Moving','Occlusion','Lookalike')][string]$TargetCase='Static',
+    [ValidateRange(100,50000)][int]$EncoderKbps=800, [switch]$CpuOnly)
 $ErrorActionPreference = 'Stop'
 if ($Rendered -and $LastLetter) { throw 'Only one flight dynamics backend may own a run.' }
 if (!$Rendered -and $PhysicsHz -ne 1000) { throw 'A nondefault physics rate requires rendered Gazebo.' }
@@ -63,10 +64,11 @@ try {
             ' --encoder-kbps ' + $EncoderKbps
     }
     if ($Visible) { $start.Arguments += ' --visible' }
+    if ($CpuOnly) { $start.Arguments += ' --cpu-only' }
     if ($VideoCase -eq 'Occlusion') { $start.Arguments += ' --occlusion' }
     if ($VideoCase -eq 'Object') {
         $start.Arguments += ' --object-motion ' + $ObjectMotion + ' --object-altitude ' + $ObjectAltitude +
-            ' --object-speed ' + $ObjectSpeed
+            ' --object-speed ' + $ObjectSpeed + ' --target-case ' + $TargetCase.ToLowerInvariant()
     }
     if ($DurationSeconds) { $start.Arguments += ' --endurance-seconds ' + $DurationSeconds }
     if ($LastLetter) { $start.Arguments += ' --last-letter' }
@@ -96,6 +98,7 @@ try {
     $native.EnvironmentVariables['NOMAD_SIMULATION_VISIBLE'] = $(if ($Visible) { '1' } else { '0' })
     $native.EnvironmentVariables['NOMAD_SIMULATION_PREVIEW'] = $(if ($Preview) { '1' } else { '0' })
     $native.EnvironmentVariables['NOMAD_SIMULATION_DURATION'] = $DurationSeconds.ToString()
+    if ($CpuOnly) { $native.EnvironmentVariables['NOMAD_SIMULATION_OBJECT_TRACKER'] = 'CPU' }
     if ($Rendered) {
         $prefix = Join-Path $run 'host/media/gstreamer/1.0/x86_64'
         $temp = Join-Path $run 'temp'
@@ -115,6 +118,7 @@ try {
     $nativeDeadline = if ($DurationSeconds) { ($DurationSeconds + 120) * 1000 } elseif ($Preview) {270000} `
         elseif ($VideoCase -eq 'Object') {150000} elseif ($Rendered) {90000} else {60000}
     $nativeDeadline = [Math]::Min($nativeDeadline, [Math]::Max(1, 2400000 - $wholeClock.ElapsedMilliseconds))
+    if ($CpuOnly -and $Rendered) { $nativeDeadline = 600000 }
     if (!$fixture.WaitForExit([int]$nativeDeadline)) {
         throw 'Controlled native API deadline exceeded.'
     }

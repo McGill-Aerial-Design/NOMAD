@@ -30,14 +30,14 @@ internal static partial class VisualTrackerTests
                 }
                 Check(result.Found, (pencil ? "Thin pencil" : "Turning foreground") +
                     " lost on independent background/appearance change at frame " + frame + ": " + result.Status +
-                    "; " + ((CsrtVisualTracker)tracker).LastObjectDiagnostic);
+                    "; " + ((ObjectVisualTracker)tracker).LastObjectDiagnostic);
             }
-            Check(((CsrtVisualTracker)tracker).LearnedViews > 0, "Verified foreground views never adapted");
+            Check(((ObjectVisualTracker)tracker).LearnedViews > 0, "Verified foreground views never adapted");
             Check(verified >= 23, "Always-searching Object tracker cannot pass rotation/background positives");
         }
         RejectOccluderAfterLearning();
         RejectRemovedThinObject();
-        ThinInitialMaskDimensions();
+        ThinForegroundSupport();
         ForegroundGeometryNeedsTheObject();
         HighResolutionSmallObject();
         WholeObjectCentre();
@@ -51,7 +51,7 @@ internal static partial class VisualTrackerTests
     {
         using (var field = SmallObjectField())
         using (var first = SmallObjectFrame(field, 960, 44))
-        using (var tracker = new CsrtVisualTracker())
+        using (var tracker = new ObjectVisualTracker())
         {
             tracker.Initialize(first, new RectangleF(922, 502, 76, 76), CancellationToken.None);
             int verified = 0;
@@ -228,7 +228,7 @@ internal static partial class VisualTrackerTests
     private static void HighResolutionSmallObject()
     {
         using (var first = SmallObjectHdFrame(0))
-        using (var tracker = new CsrtVisualTracker())
+        using (var tracker = new ObjectVisualTracker())
         {
             tracker.Initialize(first, new RectangleF(949, 465, 22, 150), CancellationToken.None);
             Check(tracker.ProcessingImageSize == new Size(1280, 720),
@@ -272,14 +272,15 @@ internal static partial class VisualTrackerTests
             Console.WriteLine("HD thin Object: 12 verified moving frames; max " + maximum + " ms, 1280x720 budget.");
         }
         using (var high = new Bitmap(1920, 1080))
-        using (var normal = VisualTrackingImage.Scale(high))
-        using (var detailed = VisualTrackingImage.Scale(high, 1280))
+        using (var normal = VisualTrackingImage.Color(high))
+        using (var detailed = VisualTrackingImage.Color(high, 1280))
         using (var low = new Bitmap(320, 240))
-        using (var unchanged = VisualTrackingImage.Scale(low, 1280))
+        using (var unchanged = VisualTrackingImage.Color(low, 1280))
         {
-            Check(normal.Size == new Size(640, 360) && detailed.Size == new Size(1280, 720) && unchanged.Size == low.Size,
+            Check(normal.Width == 640 && normal.Height == 360 && detailed.Width == 1280 && detailed.Height == 720 &&
+                unchanged.Width == low.Width && unchanged.Height == low.Height,
                 "Tracking image budgets changed the default Area scale or invented pixels by upscaling");
-            Throws<ArgumentOutOfRangeException>(() => VisualTrackingImage.Scale(high, 1281),
+            Throws<ArgumentOutOfRangeException>(() => VisualTrackingImage.Color(high, 1281),
                 "Object processing accepted an unbounded image dimension");
         }
     }
@@ -353,7 +354,7 @@ internal static partial class VisualTrackerTests
             for (int frame = 1; frame <= 8; frame++)
             using (var image = TurningObject(false, frame))
             { Check(tracker.Update(image, CancellationToken.None).Found, "Pre-occlusion foreground was never verified"); }
-            int learned = ((CsrtVisualTracker)tracker).LearnedViews;
+            int learned = ((ObjectVisualTracker)tracker).LearnedViews;
             Check(learned > 0, "Occluder test did not exercise an adapted appearance");
             for (int frame = 9; frame <= 12; frame++)
             using (var image = TurningObject(false, frame))
@@ -362,13 +363,13 @@ internal static partial class VisualTrackerTests
                 using (var obstruction = new SolidBrush(similarColour ? Color.FromArgb(190, 143, 102) : Color.DarkSlateGray))
                 { graphics.FillRectangle(obstruction, 265 + frame * 3 - 44, 164, 88, 90); }
                 Check(!tracker.Update(image, CancellationToken.None).Found &&
-                    ((CsrtVisualTracker)tracker).LearnedViews == learned,
+                    ((ObjectVisualTracker)tracker).LearnedViews == learned,
                     "An aiming-point occluder was accepted or learned after foreground adaptation");
             }
         }
     }
 
-    private static void ThinInitialMaskDimensions()
+    private static void ThinForegroundSupport()
     {
         foreach (int width in new[] { 2, 4, 6 })
         using (var image = new OpenCvSharp.Mat(480, 640, OpenCvSharp.MatType.CV_8UC3, new OpenCvSharp.Scalar(40, 40, 40)))
@@ -377,14 +378,10 @@ internal static partial class VisualTrackerTests
             using (var target = ObjectForeground.TryExtract(image, new Rectangle(230, 135, 50, 150),
                 new PointF(250 + width / 2f, 210), null, CancellationToken.None))
             {
-                Check(target != null, "Thin target foreground failed before native mask validation");
-                var box = target.Bounds; box.Inflate((8 - box.Width + 1) / 2, 0);
-                using (var mask = target.CreateNativeMask(box))
-                {
-                    Check(mask.Type() == OpenCvSharp.MatType.CV_32FC1 && mask.Width == box.Width && mask.Height == box.Height &&
-                        OpenCvSharp.Cv2.CountNonZero(mask) == target.Area,
-                        "Inflating a thin native box lost its foreground mask or admitted surrounding background");
-                }
+                Check(target != null, "Thin target foreground failed before mask support validation");
+                Check(target.Mask.Width == image.Width && target.Mask.Height == image.Height &&
+                    OpenCvSharp.Cv2.CountNonZero(target.Mask) == target.Area,
+                    "Thin foreground mask lost source coordinates or admitted surrounding background");
             }
         }
     }
@@ -406,11 +403,11 @@ internal static partial class VisualTrackerTests
                 tracker.Initialize(reference, new RectangleF(225, 135, 80, 170), CancellationToken.None);
                 // This near-colour scene is ambiguous; the coloured rotating shaft above is the paired positive.
                 tracker.Update(reference, CancellationToken.None);
-                int learned = ((CsrtVisualTracker)tracker).LearnedViews;
+                int learned = ((ObjectVisualTracker)tracker).LearnedViews;
                 for (int frame = 0; frame < 5; frame++)
                 {
                     var result = tracker.Update(background, CancellationToken.None);
-                    Check(!result.Found && ((CsrtVisualTracker)tracker).LearnedViews == learned,
+                    Check(!result.Found && ((ObjectVisualTracker)tracker).LearnedViews == learned,
                         "The unchanged near-colour background replaced the removed shaft or was learned as identity");
                 }
             }

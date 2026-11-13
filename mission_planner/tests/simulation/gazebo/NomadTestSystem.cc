@@ -37,7 +37,7 @@ class NomadTestSystem final : public gz::sim::System, public gz::sim::ISystemCon
     struct Pose
     {
         int64_t ns;
-        gz::math::Pose3d camera, occluder, body;
+        gz::math::Pose3d camera, occluder, body, selected, lookalike;
         gz::math::AxisAlignedBox bounds;
         bool haveOccluder{false};
         int64_t motionElapsed{-1};
@@ -66,6 +66,7 @@ class NomadTestSystem final : public gz::sim::System, public gz::sim::ISystemCon
     // Transport is destroyed before the state captured by its callbacks.
     gz::transport::Node node;
     gz::transport::Node::Publisher streaming;
+    gz::transport::Node::Publisher encodedImages;
     bool enabled{false};
     bool boundedPngs{false};
     unsigned int savedPngs{0};
@@ -81,6 +82,47 @@ class NomadTestSystem final : public gz::sim::System, public gz::sim::ISystemCon
     double motionSpeed{5};
     int64_t motionStart{-1}, motionNextPoll{0};
     bool motionComplete{false};
+    std::string targetCase{"static"};
+    gz::sim::Model selectedDeer, otherDeer, objectOccluder;
+    int64_t nextTargetUpdate{0};
+    bool targetCovered{false};
+
+    void MoveTargets(double elapsed, gz::sim::EntityComponentManager &ecm)
+    {
+        if (targetCase == "static" || elapsed < 0) { return; }
+        // Visual actors need camera-rate poses, not 1,000 expensive scene teleports per simulation second.
+        if (now < nextTargetUpdate) { return; }
+        nextTargetUpdate = now + 33333333;
+        if (selectedDeer.Entity() == gz::sim::kNullEntity)
+        {
+            world = gz::sim::worldEntity(ecm);
+            const gz::sim::World scene(world);
+            selectedDeer = gz::sim::Model(scene.ModelByName(ecm, "selected_deer"));
+            otherDeer = gz::sim::Model(scene.ModelByName(ecm, "other_deer"));
+            objectOccluder = gz::sim::Model(scene.ModelByName(ecm, "object_occluder"));
+            if (selectedDeer.Entity() == gz::sim::kNullEntity || otherDeer.Entity() == gz::sim::kNullEntity ||
+                objectOccluder.Entity() == gz::sim::kNullEntity) { throw std::runtime_error("Target fixture missing"); }
+        }
+        const double t = std::min(elapsed, motionDuration);
+        const gz::math::Vector3d selected(2 * sin(2 * M_PI * t / 12), sin(2 * M_PI * t / 8), .015);
+        selectedDeer.SetWorldPoseCmd(ecm, gz::math::Pose3d(selected, {0, 0, .2 * sin(2 * M_PI * t / 12)}));
+        if (targetCase == "occlusion" && t >= motionDuration * .3 && t <= motionDuration * .55)
+        {
+            const auto body = gz::sim::worldPose(aircraftBody.Entity(), ecm).Pos();
+            auto blocker = selected + .2 * (body - selected); blocker.Z(2);
+            objectOccluder.SetWorldPoseCmd(ecm, gz::math::Pose3d(blocker, {0, 0, 0}));
+            targetCovered = true;
+        }
+        else if (targetCovered)
+        { objectOccluder.SetWorldPoseCmd(ecm, {30, 30, 2, 0, 0, 0}); targetCovered = false; }
+        if (targetCase == "lookalike")
+        {
+            const double fraction = std::clamp((t - motionDuration * .2) / (motionDuration * .4), 0.0, 1.0);
+            const gz::math::Vector3d other = (1 - fraction) * gz::math::Vector3d(6, 8, .015) +
+                fraction * (selected + gz::math::Vector3d(-2.5, 0, 0));
+            otherDeer.SetWorldPoseCmd(ecm, gz::math::Pose3d(other, {0, 0, .2 * sin(2 * M_PI * t / 12)}));
+        }
+    }
 
     void MoveAircraft(gz::sim::EntityComponentManager &ecm)
     {
@@ -119,6 +161,7 @@ class NomadTestSystem final : public gz::sim::System, public gz::sim::ISystemCon
         // This is an independent kinematic BODY disturbance, not autopilot flight dynamics or camera targeting.
         aircraftBody.SetLinearVelocity(ecm, velocity);
         aircraftBody.SetAngularVelocity(ecm, angular);
+        MoveTargets(t, ecm);
     }
 
     void MoveOccluder(gz::sim::EntityComponentManager &ecm)
@@ -179,10 +222,29 @@ class NomadTestSystem final : public gz::sim::System, public gz::sim::ISystemCon
     void OnImage(const gz::msgs::Image &value)
     {
         if (!running) { return; }
+        uint64_t sequence = 0; bool identified = false;
+        for (const auto &data : value.header().data())
+        {
+            if (data.key() == "seq" && data.value_size() == 1)
+            { sequence = std::stoull(data.value(0)); identified = true; }
+        }
+        if (!identified || sequence > 0xffffff || value.width() < 64 || value.height() < 64 ||
+            value.step() != value.width() * 3 || value.data().size() != size_t(value.width()) * value.height() * 3)
+        { std::ofstream(output / "capture-error.txt") << "Invalid capture stamp input\n"; return; }
+        // Test-only timecode, decoded and erased before NOMAD sees pixels; no truth labels or poses are encoded.
+        auto encoded = value;
+        auto &pixels = *encoded.mutable_data();
+        const uint64_t stamp = 0xa65cULL | (sequence << 16) | ((~sequence & 0xffffffULL) << 40);
+        for (unsigned y = 0; y < 64; ++y) for (unsigned x = 0; x < 64; ++x)
+        {
+            const char level = ((stamp >> ((y / 8) * 8 + x / 8)) & 1) ? char(255) : char(0);
+            for (unsigned channel = 0; channel < 3; ++channel) { pixels[y * value.step() + x * 3 + channel] = level; }
+        }
+        encodedImages.Publish(encoded);
         const auto received = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         std::lock_guard<std::mutex> lock(gate);
-        if (images.size() == 4) { images.pop_front(); ++droppedImages; }
+        if (images.size() == 16) { images.pop_front(); ++droppedImages; }
         images.push_back({value, received});
         changed.notify_one();
     }
@@ -190,7 +252,7 @@ class NomadTestSystem final : public gz::sim::System, public gz::sim::ISystemCon
     void OnMask(const gz::msgs::Image &value)
     {
         std::lock_guard<std::mutex> lock(gate);
-        if (masks.size() == 8) { masks.pop_front(); }
+        if (masks.size() == 32) { masks.pop_front(); }
         masks.push_back({value, 0}); changed.notify_one();
     }
 
@@ -257,11 +319,13 @@ class NomadTestSystem final : public gz::sim::System, public gz::sim::ISystemCon
                 name << "capture_" << std::setw(8) << std::setfill('0') << sequence;
                 const bool tail = !objectMotion.empty() && pose.motionElapsed >= (motionDuration - .5) * 1e9 &&
                     pose.motionElapsed <= (motionDuration + .5) * 1e9 && sequence % 6 == 0;
-                const bool savePng = !boundedPngs || (savedPngs < 120 && (sequence < 60 || sequence % 600 == 0 || tail));
+                const bool savePng = !boundedPngs || (savedPngs < 120 &&
+                    (sequence < 60 || sequence % 600 == 0 || tail));
                 if (savePng)
                 {
                     cv::Mat bgr; cv::cvtColor(rgb, bgr, cv::COLOR_RGB2BGR);
-                    if (!cv::imwrite((output / "frames" / (name.str() + ".png")).string(), bgr))
+                    if (!cv::imwrite((output / "frames" / (name.str() + ".png")).string(), bgr,
+                        {cv::IMWRITE_PNG_COMPRESSION, 1}))
                     { throw std::runtime_error("Capture PNG write failed"); }
                     ++savedPngs;
                 }
@@ -297,7 +361,8 @@ class NomadTestSystem final : public gz::sim::System, public gz::sim::ISystemCon
                     if (cv::norm(channels[0], channels[1], cv::NORM_INF) != 0 ||
                         cv::norm(channels[0], channels[2], cv::NORM_INF) != 0)
                     { throw std::runtime_error("Semantic label channels differ"); }
-                    if (!cv::imwrite((output / "frames" / maskName).string(), channels[0]))
+                    if (!cv::imwrite((output / "frames" / maskName).string(), channels[0],
+                        {cv::IMWRITE_PNG_COMPRESSION, 1}))
                     { throw std::runtime_error("Semantic mask write failed"); }
                     const int64_t maskNs = mask->header().stamp().sec() * 1000000000LL + mask->header().stamp().nsec();
                     metadata << ",\"mask\":\"" << maskName << "\",\"mask_delta_ns\":" << maskNs - stamp
@@ -305,6 +370,13 @@ class NomadTestSystem final : public gz::sim::System, public gz::sim::ISystemCon
                         << pose.body.Pos().X() << ',' << pose.body.Pos().Y() << ',' << pose.body.Pos().Z()
                         << "],\"body_quaternion\":[" << pose.body.Rot().W() << ',' << pose.body.Rot().X() << ','
                         << pose.body.Rot().Y() << ',' << pose.body.Rot().Z() << ']';
+                    if (targetCase != "static" && pose.motionElapsed >= 0)
+                    {
+                        metadata << ",\"selected_position\":[" << pose.selected.Pos().X() << ','
+                            << pose.selected.Pos().Y() << ',' << pose.selected.Pos().Z() << ']'
+                            << ",\"lookalike_position\":[" << pose.lookalike.Pos().X() << ','
+                            << pose.lookalike.Pos().Y() << ',' << pose.lookalike.Pos().Z() << ']';
+                    }
                 }
                 if (pose.haveOccluder)
                 {
@@ -344,6 +416,7 @@ public:
         if (sdf->HasElement("object_motion"))
         {
             objectMotion = sdf->Get<std::string>("object_motion");
+            if (sdf->HasElement("target_case")) { targetCase = sdf->Get<std::string>("target_case"); }
             motionSpeed = sdf->Get<double>("motion_speed");
             motionDuration = objectMotion == "orbit" ? 2 * M_PI * 20 / motionSpeed :
                 (objectMotion == "approach" ? 27 : 60) / motionSpeed;
@@ -374,6 +447,7 @@ public:
         imageHfov = sensor->Data().CameraSensor()->HorizontalFov().Radian();
         if (imageWidth < 16 || imageWidth > 1920 || imageHeight < 16 || imageHeight > 1080 || !std::isfinite(imageHfov))
         { throw std::runtime_error("Camera geometry outside owned fixture budget"); }
+        encodedImages = node.Advertise<gz::msgs::Image>("/nomad/encoded_rgb");
         node.Subscribe("/nomad/rgb", &NomadTestSystem::OnImage, this);
         streaming = node.Advertise<gz::msgs::Boolean>("/nomad/rgb/enable_streaming");
         writer = std::thread([this] { WriteImages(); });
@@ -415,6 +489,11 @@ public:
             Pose pose{ns, gz::sim::worldPose(camera, ecm)};
             if (!objectMotion.empty())
             { pose.body = gz::sim::worldPose(aircraftBody.Entity(), ecm); pose.motionElapsed = motionStart < 0 ? -1 : ns - motionStart; }
+            if (selectedDeer.Entity() != gz::sim::kNullEntity)
+            {
+                pose.selected = gz::sim::worldPose(selectedDeer.Entity(), ecm);
+                pose.lookalike = gz::sim::worldPose(otherDeer.Entity(), ecm);
+            }
             if (occlusion && occluderBody.Entity() != gz::sim::kNullEntity)
             {
                 if (!observedBounds)

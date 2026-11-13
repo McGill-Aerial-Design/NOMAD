@@ -39,6 +39,9 @@ namespace NOMAD.MissionPlanner
         private static long _generation;
         private static long _modeGeneration = -1;
         private static int _submittedMode = -1;
+        private static long _servoTrackingGeneration = -1, _servoTrackingClaim = -1, _servoTrackingBinding = -1;
+        private static string _servoTrackingInput;
+        private static ServoGimbalAxis[] _servoTrackingAxes;
         internal static Func<MAVLinkInterface> CurrentConnection = () => MainV2.comPort;
         internal static event Action ConnectionChanged;
         internal static IReadOnlyList<ServoGimbalAxis> GimbalAxes
@@ -139,12 +142,13 @@ namespace NOMAD.MissionPlanner
             }
         }
         internal static async Task<GimbalRequestResult> SendGimbalTargetAsync(int mode, double? pitch, double? roll,
-            double yaw, long generation, Func<bool> inputStillCurrent, string videoInputName = null)
+            double yaw, long generation, Func<bool> inputStillCurrent, string videoInputName = null,
+            long? trackingClaim = null)
         {
             RefreshConnection();
             MAVLinkInterface connection;
             byte system, component;
-            bool configure;
+            bool configure, acknowledgeServos;
             IReadOnlyList<ServoGimbalAxis> binding;
             ServoGimbalAxis[] axes;
             string inputName;
@@ -199,6 +203,11 @@ namespace NOMAD.MissionPlanner
                 system = (byte)_system;
                 component = (byte)_component;
                 configure = _modeGeneration != generation || _submittedMode != mode;
+                // Confirm each new tracking owner/binding once, then stream fresh absolute positions without ACK waits.
+                acknowledgeServos = !trackingClaim.HasValue || _servoTrackingGeneration != generation ||
+                    _servoTrackingClaim != trackingClaim.Value || _servoTrackingBinding != bindingRevision ||
+                    _servoTrackingInput != inputName || !ServoGimbalAxis.Same(axes, _servoTrackingAxes);
+                if (!trackingClaim.HasValue) { _servoTrackingClaim = -1; }
                 _payloadBusy = true;
             }
             try
@@ -231,10 +240,22 @@ namespace NOMAD.MissionPlanner
                             axis.TryPwm(axis.Axis == "Pitch" ? pitch.Value : axis.Axis == "Roll" ? roll.Value : yaw, out int pwm);
                             dispatched = true;
                             if (!await connection.doCommandAsync(system, component, MAVLink.MAV_CMD.DO_SET_SERVO,
-                                axis.Channel, pwm, 0, 0, 0, 0, 0, true).ConfigureAwait(false))
+                                axis.Channel, pwm, 0, 0, 0, 0, 0, acknowledgeServos).ConfigureAwait(false))
                             { return Result(GimbalRequestOutcome.Unknown, "Servo target not confirmed; check before retrying."); }
                         }
-                        return Result(GimbalRequestOutcome.Submitted, "Servo targets acknowledged; physical position not observed.");
+                        lock (Gate)
+                        {
+                            if (trackingClaim.HasValue && generation == _generation && BindingCurrent() &&
+                                inputStillCurrent?.Invoke() != false)
+                            {
+                                _servoTrackingGeneration = generation; _servoTrackingClaim = trackingClaim.Value;
+                                _servoTrackingBinding = bindingRevision; _servoTrackingInput = inputName;
+                                _servoTrackingAxes = axes;
+                            }
+                        }
+                        return Result(GimbalRequestOutcome.Submitted, acknowledgeServos
+                            ? "Servo targets acknowledged; physical position not observed."
+                            : "Servo targets sent; acceptance and physical position not observed.");
                     }
                     // Native helpers may emit before returning a Task; never invoke them on the UI or under Gate.
                     if (configure && !await connection.doCommandAsync(system, component,

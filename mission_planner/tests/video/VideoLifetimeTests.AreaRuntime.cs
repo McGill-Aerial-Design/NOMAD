@@ -377,7 +377,7 @@ internal static partial class VideoLifetimeTests
                 !(bool)selected["Found"] && (bool)selected["ReferenceRetained"] &&
                 selected["Box"].Type == Newtonsoft.Json.Linq.JTokenType.Null &&
                 selected["CanonicalAimPoint"].Type == Newtonsoft.Json.Linq.JTokenType.Null &&
-                (string)selected["Tracker"] != "OpenCV CSRT" && !(bool)metadata["TargetPosition"]["Available"],
+                (string)selected["Tracker"] == "OpenCV ORB planar reference" && !(bool)metadata["TargetPosition"]["Available"],
                 "Searching memory/estimated prior was exported as a current verified target or metric position");
         }
         finally { if (Directory.Exists(directory)) { Directory.Delete(directory, true); } }

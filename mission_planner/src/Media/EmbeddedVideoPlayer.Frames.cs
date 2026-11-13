@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 using System;
+using System.Diagnostics;
 using System.Drawing;
 
 namespace NOMAD.MissionPlanner
 {
     public partial class EmbeddedVideoPlayer
     {
+        private long _lastFrameTickTicks;
         private void OnFrameTick(object sender, EventArgs e)
         {
             try { RefreshFrame(); }
@@ -37,6 +39,11 @@ namespace NOMAD.MissionPlanner
                 Dispose();
                 return;
             }
+            long now = Stopwatch.GetTimestamp();
+            if (IsTracking && _lastFrameTickTicks != 0 &&
+                (now - _lastFrameTickTicks) / (double)Stopwatch.Frequency >= .5)
+            { DisarmTracking("Video UI update gap"); }
+            _lastFrameTickTicks = now;
             var frame = _session.TakeFrame();
             if (frame != null)
             {

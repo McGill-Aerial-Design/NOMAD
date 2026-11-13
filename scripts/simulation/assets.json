@@ -3,6 +3,16 @@
   "inspected": "2026-10-26",
   "assets": [
     {
+      "name": "red-deer-stag.glb", "group": "deer", "bytes": 8560476,
+      "url": "https://www.innerscene.com/api/library/red-deer-stag-9f27e209/download",
+      "sha256": "fc1d06c9f09d4f08529c4de2471d949bdd0c00379e3362be252e81ff75b97410",
+      "license": "CC0-1.0", "author": "Innerscene", "inspected": "2026-11-12",
+      "source": "https://www.innerscene.com/tools/library/3d-parts/red-deer-stag-9f27e209",
+      "license_url": "https://www.innerscene.com/tools/library/terms",
+      "source_length_m": 2.132851, "proxy_length_m": 1.524,
+      "note": "Current 43-node textured stag export; independent fixture snapshot, not the frozen Task 1 terrain dataset."
+    },
+    {
       "name": "courtyard.jpg", "group": "panorama", "bytes": 6296902,
       "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/courtyard.jpg",
       "sha256": "b11be77cdeca832d44d5067521444feac410d062c476ba4a95666afb4dfa758e",

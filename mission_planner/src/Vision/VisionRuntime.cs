@@ -24,6 +24,19 @@ namespace NOMAD.MissionPlanner
         private static IntPtr _openCvNative;
         internal static string BuiltinModelPath { get; private set; }
 
+        internal static string EnsureCpuTemplateModel(CancellationToken token)
+        {
+            EnsureLoaded(token);
+            lock (Gate)
+            {
+                string cache = Path.Combine(Path.GetDirectoryName(NOMADStorage.PluginsDirectory),
+                    "vision", "vittrack-2990f0b7cd44");
+                EnsureDirectory(cache);
+                Extract(cache, "ViTTrack-LICENSE.txt", "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30", token);
+                return Extract(cache, "vittrack.onnx", "2990f0b7cd44d92afa48cd97db6de7be113fc1d9594fddb74e2725c10478e91d", token);
+            }
+        }
+
         static VisionRuntime() { AppDomain.CurrentDomain.AssemblyResolve += ResolveManaged; }
 
         internal static void EnsureLoaded(CancellationToken token)

@@ -46,6 +46,23 @@ def test_searching_has_no_positive_credit():
     assert result["visible"] and not result["foreground"] and result["bbox_iou"] == 0
 
 
+@pytest.mark.parametrize("size", [(61, 47), (1920, 1080)])
+def test_sparse_pixel_error_matches_full_image_distance(size):
+    np = pytest.importorskip("numpy")
+    cv2 = pytest.importorskip("cv2")
+    width, height = size
+    image = np.zeros((height, width), dtype=np.uint8)
+    random = np.random.default_rng(173)
+    image[random.integers(8, height - 8, 30), random.integers(8, width - 8, 30)] = 10
+    selected = image == 10
+    distance = cv2.distanceTransform((~selected).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    halo = cv2.dilate(selected.astype(np.uint8), np.ones((3, 3), np.uint8))
+    for x, y in ((0, 0), (width - 1, height - 1), (width // 2, height // 2), (8, 8)):
+        result = scorer.measure(image, [0, 0, width, height], [x, y], True)
+        assert result["pixel_error"] == pytest.approx(float(distance[y, x]), abs=0.001)
+        assert result["foreground"] == bool(halo[y, x])
+
+
 def test_owned_marker_is_required(tmp_path):
     path = tmp_path / "run-0123456789abcdef0123456789abcdef"
     path.mkdir()

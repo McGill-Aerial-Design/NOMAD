@@ -52,7 +52,8 @@ def prepare_ground(root):
 def acquire(root, asset):
     path = root / asset["name"]
     if not path.exists():
-        with urllib.request.urlopen(asset["url"], timeout=30) as response:
+        request = urllib.request.Request(asset["url"], headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(request, timeout=30) as response:
             data = response.read(asset["bytes"] + 1)
         if len(data) != asset["bytes"] or hashlib.sha256(data).hexdigest() != asset["sha256"]:
             raise ValueError("Downloaded fixture differs from its explicit pin: " + asset["name"])
@@ -131,7 +132,7 @@ def prepare_video(root, assets, output):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("group", choices=("scene", "video", "panorama", "ground"))
+    parser.add_argument("group", choices=("scene", "video", "panorama", "ground", "deer"))
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
     root = repo / "local/simulation/assets"
@@ -146,7 +147,9 @@ def main():
         path = acquire(root, asset)
         if "model" in asset:
             extract_model(path, root / "models" / asset["model"])
-    if args.group == "scene":
+    if args.group == "deer":
+        print(root)
+    elif args.group == "scene":
         files = [root / "aerial_grass_rock_diff_1k.jpg", *sorted((root / "models").rglob("*"))]
         manifest = {
             "schema": 1,

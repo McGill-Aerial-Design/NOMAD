@@ -8,6 +8,40 @@ using NOMAD.MissionPlanner;
 
 internal static partial class VideoLifetimeTests
 {
+    private static void TrackingRequestCadence()
+    {
+        using (var peer = new TrackingPeer())
+        using (var form = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual,
+            Location = new Point(-2000, -2000), Size = new Size(800, 600) })
+        {
+            var pipeline = new FakeVideoPipeline();
+            var profile = new VideoInputProfile { Name = "Tracking cadence", Url = "udp://@:5600",
+                TrackingCalibrated = true, TrackingMaxRateDegSec = 60 };
+            using (var player = new EmbeddedVideoPlayer(profile, true, CancellationToken.None, () => pipeline,
+                peer.Config, createTracker: (token, mode) => new FakeVisualTracker()))
+            {
+                form.Controls.Add(player); form.Show(); player.StartStream();
+                Wait(pipeline.ReadEntered, "cadence video");
+                PlayerVisionFrame(player, pipeline, Color.Blue);
+                Check(player.SelectRegion(new RectangleF(65, 30, 20, 20)), "Cadence selection failed");
+                PlayerVisionFrame(player, pipeline, Color.Blue);
+                Check(player.StartTracking(), "Cadence tracking did not start");
+                var frame = player.DisplayedVideoFrame;
+                long received = System.Diagnostics.Stopwatch.GetTimestamp();
+                var sample = new VideoTrackingSample(frame.Image.Size, frame.Sequence + 1, frame.Generation,
+                    received, DateTime.UtcNow, frame.Region, frame.Motion);
+                SetField(player, "_lastRequestTicks", received - System.Diagnostics.Stopwatch.Frequency * 35 / 1000);
+                SetField(player, "_lastStepTicks", received - System.Diagnostics.Stopwatch.Frequency / 30);
+                typeof(EmbeddedVideoPlayer).GetMethod("UpdateVisionSample", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(player, new object[] { sample });
+                peer.Until(() => player.SubmittedTrackingCommands == 1, "native target from a fresh 30 Hz sample");
+                Check(peer.MountTargets > 0 && player.CommandedYawDeg > 0 && player.CommandedYawDeg <= 2,
+                    "30 Hz visual steering failed to deliver a bounded native mount target");
+                player.StopTracking();
+            }
+        }
+    }
+
     private static void TrackingBusyVisualTime()
     {
         using (var peer = new TrackingPeer())
@@ -37,7 +71,7 @@ internal static partial class VideoLifetimeTests
                 finally { busy.SetValue(null, false); }
                 Thread.Sleep(60); PlayerVisionFrame(player, pipeline, Color.Blue);
                 peer.Until(() => player.SubmittedTrackingCommands > 0, "fresh correction after native busy interval");
-                // Independent pinhole error is atan(25/50)=26.565 degrees; the existing .2s budget permits5.313.
+                // Independent pinhole error is atan(25/50)=26.565 degrees; the .2s budget permits5.313 degrees.
                 Check(player.CommandedYawDeg >= 4.8f && player.CommandedYawDeg <= 5.4f,
                     "Rejected busy samples consumed elapsed steering time: yaw=" + player.CommandedYawDeg);
                 player.StopTracking();

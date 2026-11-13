@@ -1,0 +1,23 @@
+{
+  "reference": "area-bootstrap.png",
+  "reference_sha256": "ec1079004c18cc2f8f3c55e8ad184b74640846055d211ea78e0a464a600f2e2f",
+  "selection": [
+    237.22385628619313,
+    158.65891691910417,
+    96.0,
+    48.0
+  ],
+  "source": "CPU-preprocessed natural Gazebo camera,1080p to640x360,seed173; no operator imagery",
+  "truth": "Identity transform of the original pixel point; local reference features are weaker than the global background",
+  "frames": [
+    {
+      "file": "area-bootstrap.png",
+      "capture": "stationary bootstrap",
+      "aim": [
+        285.22385628619315,
+        182.65891691910417
+      ],
+      "sha256": "ec1079004c18cc2f8f3c55e8ad184b74640846055d211ea78e0a464a600f2e2f"
+    }
+  ]
+}

@@ -102,8 +102,9 @@ $references = @('MissionPlanner.exe','MissionPlanner.Utilities.dll','MissionPlan
 # Native trackers live in the media worker, not the plugin DLL; the fixtures build them in-process
 # (through the plugin's InternalsVisibleTo("VideoLifetimeTests")), as test_plugin_vision.ps1 does.
 # MEDIA_WORKER selects VisionRuntime's native implementation; this copy shadows the plugin's stub (CS0436).
-$trackers = @('VisionRuntime', 'AreaVisualTracker', 'AreaVisualTracker.Matching', 'CsrtVisualTracker',
-    'CsrtVisualTracker.Object', 'EfficientTamVisualTracker', 'EfficientTamCore', 'FrozenAppearance',
+$trackers = @('VisionRuntime', 'AreaVisualTracker', 'AreaVisualTracker.Matching', 'ObjectVisualTracker',
+    'ObjectVisualTracker.Appearance', 'ObjectVisualTracker.Motion', 'CpuTemplateTracker', 'VisualFeatureMatching',
+    'EfficientTamVisualTracker', 'EfficientTamCore', 'FrozenAppearance',
     'VisualTrackingImage', 'ObjectRecoveryReference', 'ObjectForeground', 'GpuAdapter') |
     ForEach-Object { Join-Path $root "mission_planner/src/Vision/$_.cs" }
 & $compiler /nologo /target:exe /platform:x64 /define:MEDIA_WORKER /langversion:latest `

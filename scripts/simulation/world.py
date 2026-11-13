@@ -49,6 +49,7 @@ def create(
     physics_hz=1000,
     object_motion=None,
     encoder_kbps=800,
+    cpu_only=False,
 ):
     if type(physics_hz) is not int or physics_hz not in (400, 1000):
         raise ValueError("physics_hz must be 400 or 1000")
@@ -106,9 +107,14 @@ def create(
     stream.set("filename", str(workspace / "build/gazebo-plugin/libGstCameraPlugin.so"))
     stream.find("udp_host").text = rtp_host
     stream.find("udp_port").text = "15601"
-    ET.SubElement(stream, "image_topic").text = "/nomad/rgb"
+    ET.SubElement(stream, "image_topic").text = "/nomad/encoded_rgb"
     ET.SubElement(stream, "enable_topic").text = "/nomad/rgb/enable_streaming"
     ET.SubElement(stream, "bitrate").text = str(encoder_kbps)
+    if cpu_only:
+        cuda = stream.find("use_cuda")
+        if cuda is None:
+            cuda = ET.SubElement(stream, "use_cuda")
+        cuda.text = "false"
     camera.write(camera_path, encoding="utf-8", xml_declaration=True)
     texture(run / "ground.png")
     world = ET.fromstring("""<sdf version="1.9" xmlns:gz="http://gazebosim.org/schema"><world name="nomad">
@@ -223,11 +229,15 @@ def create(
         plane_normal, plane_point = (-math.sqrt(0.5), 0, math.sqrt(0.5)), (8.485281, 0, 3.514719)
     motion_info = None
     if object_motion:
-        from object_motion import configure
+        from object_motion import configure, disable_gravity
 
         motion_info = configure(world.find("world"), iris.getroot().find("model"), camera.getroot(), run, object_motion)
         iris.write(iris_path, encoding="utf-8", xml_declaration=True)
         camera.write(camera_path, encoding="utf-8", xml_declaration=True)
+        body_path = models / "iris_with_standoffs/model.sdf"
+        body = ET.parse(body_path)
+        disable_gravity(body.getroot())
+        body.write(body_path, encoding="utf-8", xml_declaration=True)
     path = run / "world.sdf"
     ET.ElementTree(world).write(path, encoding="utf-8", xml_declaration=True)
     files = [path, *sorted(file for file in models.rglob("*") if file.is_file()), run / "ground.png"]
@@ -268,7 +278,7 @@ def create(
                     "hfov_radians": float(sensor.findtext("camera/horizontal_fov")),
                     "hz": float(sensor.findtext("update_rate")),
                     "encoder_kbps": encoder_kbps,
-                    "use_cuda": bool(object_motion),
+                    "use_cuda": bool(object_motion) and not cpu_only,
                 },
                 "body_fixed": not bool(object_motion),
                 "plant_delay_ms": 100,

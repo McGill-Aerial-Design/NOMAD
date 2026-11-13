@@ -3,6 +3,8 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -12,6 +14,47 @@ using NOMAD.MissionPlanner;
 
 internal static partial class VideoLifetimeTests
 {
+    private static void NativeCpuTrackingLatency()
+    {
+        MediaWorkerHost.RequestStart();
+        using (var texture = AreaSurfaceImage())
+        foreach (var mode in new[] { VisualTrackingMode.Object, VisualTrackingMode.Area })
+        using (var low = new Bitmap(640, 480))
+        using (var image = new Bitmap(1920, 1440))
+        using (var tracker = VisualTrackerFactory.Create(CancellationToken.None, mode))
+        {
+            var selection = mode == VisualTrackingMode.Object ? new RectangleF(200, 200, 144, 144) :
+                new RectangleF(220, 170, 180, 140);
+            using (var graphics = Graphics.FromImage(low))
+            {
+                graphics.Clear(Color.FromArgb(40, 40, 40));
+                if (mode == VisualTrackingMode.Area) { graphics.DrawImageUnscaled(texture, 0, 0); }
+                else { graphics.DrawImage(texture, selection, new RectangleF(0, 0, 144, 144), GraphicsUnit.Pixel); }
+            }
+            using (var graphics = Graphics.FromImage(image)) { graphics.DrawImage(low, 0, 0, image.Width, image.Height); }
+            var selected = new RectangleF(selection.X * 3, selection.Y * 3, selection.Width * 3, selection.Height * 3);
+            var aim = new PointF(selected.X + selected.Width / 2, selected.Y + selected.Height / 2);
+            tracker.Initialize(image, selected, CancellationToken.None);
+            var timings = new List<double>();
+            for (int frame = 0; frame < 68; frame++)
+            {
+                var clock = Stopwatch.StartNew();
+                var result = tracker.Update(image, CancellationToken.None);
+                double milliseconds = clock.Elapsed.TotalMilliseconds;
+                if (frame < 8) { continue; }
+                Check(result.Found && Math.Abs(result.AimPoint.Value.X - aim.X) < 8 &&
+                    Math.Abs(result.AimPoint.Value.Y - aim.Y) < 8,
+                    "Real CPU worker lost the independently rendered " + mode + " target: " + result.Status);
+                timings.Add(milliseconds);
+            }
+            timings.Sort(); double p95 = timings[(int)Math.Ceiling(timings.Count * .95) - 1];
+            Console.WriteLine("  Native CPU " + mode + " 1920x1440, includes IPC: p50=" +
+                timings[timings.Count / 2].ToString("F2") + " ms, p95=" + p95.ToString("F2") +
+                " ms, max=" + timings.Last().ToString("F2") + " ms; 60/60 verified");
+            Check(timings.Last() < 1000, "CPU tracking exceeded the native worker progress deadline");
+        }
+    }
+
     private static void NativeRtspDiscovery(bool skipOptions)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);

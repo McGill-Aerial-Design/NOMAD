@@ -61,6 +61,8 @@ def main():
     parser.add_argument("--object-altitude", type=int, choices=(5, 15), default=5)
     parser.add_argument("--object-speed", type=int, choices=(5, 10), default=5)
     parser.add_argument("--encoder-kbps", type=int, default=800)
+    parser.add_argument("--cpu-only", action="store_true")
+    parser.add_argument("--target-case", choices=("static", "moving", "occlusion", "lookalike"), default="static")
     args = parser.parse_args()
     if args.object_motion and (
         not args.rendered or args.occlusion or args.endurance_seconds or args.scene == "photo-board"
@@ -185,10 +187,17 @@ def main():
                     args.occlusion,
                     bool(args.endurance_seconds),
                     args.physics_hz,
-                    dict(kind=args.object_motion, altitude_m=args.object_altitude, speed_m_s=args.object_speed)
+                    dict(
+                        kind=args.object_motion,
+                        altitude_m=args.object_altitude,
+                        speed_m_s=args.object_speed,
+                        cpu_only=args.cpu_only,
+                        target_case=args.target_case,
+                    )
                     if args.object_motion
                     else None,
                     args.encoder_kbps,
+                    args.cpu_only,
                 )
                 result["physics_hz"] = args.physics_hz
                 environment.update(
@@ -204,15 +213,20 @@ def main():
                         "GZ_SIM_RESOURCE_PATH": str(args.run / "models"),
                     }
                 )
+                if args.cpu_only:
+                    environment.update(LIBGL_ALWAYS_SOFTWARE="1", GALLIUM_DRIVER="llvmpipe", LP_NUM_THREADS="4")
+                    environment.pop("MESA_D3D12_DEFAULT_ADAPTER_NAME", None)
                 renderer_environment = dict(environment)
                 renderer_environment["QT_QPA_PLATFORM"] = "xcb"
                 renderer_environment["QT_XCB_GL_INTEGRATION"] = "xcb_glx"
                 renderer_environment["QT_LOGGING_RULES"] = "qt.qpa.gl=true"
                 result["graphics"] = {
-                    key: renderer_environment[key]
+                    key: renderer_environment.get(key)
                     for key in (
                         "GALLIUM_DRIVER",
                         "MESA_D3D12_DEFAULT_ADAPTER_NAME",
+                        "LIBGL_ALWAYS_SOFTWARE",
+                        "LP_NUM_THREADS",
                         "QT_QPA_PLATFORM",
                         "QT_XCB_GL_INTEGRATION",
                         "QT_LOGGING_RULES",
@@ -290,7 +304,13 @@ def main():
             else:
                 raise TimeoutError("Owned SITL listener not ready")
             end = time.monotonic() + (
-                args.endurance_seconds + 180 if args.endurance_seconds else 300 if args.visible else 120
+                args.endurance_seconds + 180
+                if args.endurance_seconds
+                else 660
+                if args.cpu_only
+                else 300
+                if args.visible
+                else 120
             )
             last_sample = 0
             while process.poll() is None and time.monotonic() < end and not stopping:

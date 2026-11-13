@@ -259,7 +259,8 @@ namespace NOMAD.MissionPlanner
         internal static Task<GimbalRequestResult> RequestTrackingTargetAsync(float pitch, float yaw,
             long generation, long manualRevision, Func<bool> inputStillCurrent, string videoInputName = null) =>
             SendAsync(MountMode.MavlinkTargeting, pitch, 0, yaw, generation, Interlocked.Read(ref _modeRevision),
-                () => manualRevision == ManualRevision && inputStillCurrent?.Invoke() == true, videoInputName);
+                () => manualRevision == ManualRevision && inputStillCurrent?.Invoke() == true, videoInputName,
+                CurrentTrackingClaim);
         private static long RecordManualInput()
         {
             Interlocked.Increment(ref _manualRevision);
@@ -274,9 +275,11 @@ namespace NOMAD.MissionPlanner
             return SendAsync(mode, pitch, roll, yaw, generation, revision, null);
         }
         private static async Task<GimbalRequestResult> SendAsync(MountMode mode, float? pitch, float? roll,
-            float yaw, long generation, long revision, Func<bool> inputStillCurrent, string videoInputName = null)
+            float yaw, long generation, long revision, Func<bool> inputStillCurrent, string videoInputName = null,
+            long? trackingClaim = null)
         {
-            bool Current() => revision == Interlocked.Read(ref _modeRevision) && inputStillCurrent?.Invoke() != false;
+            bool Current() => revision == Interlocked.Read(ref _modeRevision) && inputStillCurrent?.Invoke() != false &&
+                (!trackingClaim.HasValue || trackingClaim.Value == CurrentTrackingClaim);
             if (!Current())
             {
                 return new GimbalRequestResult(GimbalRequestOutcome.NotSent, "Gimbal input was retired; no command was sent.");
@@ -293,7 +296,7 @@ namespace NOMAD.MissionPlanner
                 }
                 var previousPose = LastSubmittedPose;
                 var result = await OutputController.SendGimbalTargetAsync((int)mode, pitch, roll, yaw, generation,
-                    Current, videoInputName).ConfigureAwait(false);
+                    Current, videoInputName, trackingClaim).ConfigureAwait(false);
                 if (result.Outcome != GimbalRequestOutcome.Busy)
                 {
                     SubmittedPose submitted = null;

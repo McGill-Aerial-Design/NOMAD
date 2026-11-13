@@ -142,7 +142,7 @@ namespace NOMAD.Simulation
                             Application.DoEvents();
                         }
                         var area = tracker as AreaVisualTracker;
-                        var target = tracker as CsrtVisualTracker;
+                        var target = tracker as ObjectVisualTracker;
                         output.WriteLine(json.Serialize(new { frame = Path.GetFileName(files[index]),
                             sha256 = Hash(files[index]), source_received_ticks = received, frequency, discontinuous = gap,
                             state = result.State.ToString(), result.Status, aim_x = result.AimPoint?.X,

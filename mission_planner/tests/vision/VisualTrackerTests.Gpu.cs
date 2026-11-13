@@ -142,7 +142,7 @@ internal static partial class VisualTrackerTests
     private static void GpuTrackerSetting()
     {
         using (var tracker = VisualTrackerFactory.Create(CancellationToken.None))
-        { Check(tracker is CsrtVisualTracker, "The default Object tracker must stay on the CPU tracker"); }
+        { Check(tracker is ObjectVisualTracker, "The default Object tracker must stay on the CPU tracker"); }
         using (var area = VisualTrackerFactory.Create(CancellationToken.None, VisualTrackingMode.Area, true))
         { Check(area is AreaVisualTracker, "The GPU Object setting replaced the Area tracker"); }
         Throws<IOException>(() => new EfficientTamVisualTracker(

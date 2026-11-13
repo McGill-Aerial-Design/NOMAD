@@ -139,9 +139,12 @@ that feature. Already-admitted MP helpers may finish after retirement; no new ne
 hold or termination command is invented. Native MP transport and OS/driver failures
 remain outside the media fault boundary.
 
-Default Object tracking uses CPU CSRT; explicit GPU Object tracking uses EfficientTAM
-through DirectML. Area retains its fixed-point tracker. GPU runs sharing model sessions
-are serialized in the child. Algorithms, calibrations and acceptance obligations remain
+Default Object tracking uses CPU sparse optical flow for motion proposals, followed by
+foreground geometry and retained-appearance verification; explicit GPU Object tracking uses EfficientTAM
+through DirectML. A small fixed-template ViTTrack CPU model handles tight or poorly separated
+selections after three-frame confirmation; it shares the existing ONNX Runtime CPU provider.
+Area retains its fixed-point tracker. GPU runs sharing model sessions
+are serialized in the child. Calibrations and acceptance obligations remain
 unchanged; process isolation does not qualify real-scene or physical tracking.
 
 Fence staging modifies a native editor draft; native Write/Read transfers it.

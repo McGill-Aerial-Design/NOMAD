@@ -1,0 +1,72 @@
+{
+  "selection": [
+    64,
+    67,
+    32,
+    32
+  ],
+  "frames": [
+    {
+      "file": "cpu-deer-0.png",
+      "sha256": "8eb2d5a94c12a45fdf0de4a8e2626266677761391f68a9e8989d479a2e7fc21e",
+      "bounds": [
+        68,
+        66,
+        26,
+        26
+      ]
+    },
+    {
+      "file": "cpu-deer-1.png",
+      "sha256": "1ab28d6f3ad932125e30a349691cf91ca5c0ca7380f95a3649bf20509636ba57",
+      "bounds": [
+        68,
+        66,
+        26,
+        26
+      ]
+    },
+    {
+      "file": "cpu-deer-2.png",
+      "sha256": "0a656d975e4cb945d8d3a40ebd96857e298044918691a970c527ad57697e6d58",
+      "bounds": [
+        68,
+        66,
+        26,
+        26
+      ]
+    },
+    {
+      "file": "cpu-deer-3.png",
+      "sha256": "c2578094d91c705d2b03828a4a01b552b48dfbe72127a8b38590851ba195c0a7",
+      "bounds": [
+        68,
+        66,
+        26,
+        26
+      ]
+    },
+    {
+      "file": "cpu-deer-4.png",
+      "sha256": "4baaf3f29bde28cb6f126988848be42deb2b3514a17739c83c60a0815283bb5f",
+      "bounds": [
+        68,
+        66,
+        26,
+        26
+      ]
+    },
+    {
+      "file": "cpu-deer-5.png",
+      "sha256": "0c124ae8e08d6fbfddfb43ea1de86b5b97697eccb9fa5007fb2bdb773869af00",
+      "bounds": [
+        68,
+        66,
+        26,
+        26
+      ]
+    }
+  ],
+  "source": "CPU-rendered Gazebo deer against grass, decoded H.264; semantic labels used only to score output",
+  "asset_sha256": "fc1d06c9f09d4f08529c4de2471d949bdd0c00379e3362be252e81ff75b97410"
+}

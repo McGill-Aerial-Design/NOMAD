@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -74,6 +75,79 @@ internal static partial class VideoLifetimeTests
         Check(VideoTrackingAngles.TryStep(yawOnly, new Size(100, 80), new PointF(80, 20), 0, 0, .1,
             out float pitch, out float yaw) && pitch == 0 && yaw > 0,
             "Single-axis tracking moved an unconfigured axis");
+    }
+
+    private static void ServoGimbalStreaming()
+    {
+        using (var peer = new TrackingPeer { ServoAckDelayMs = 80, ServoAckLimit = 2 })
+        using (var form = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual,
+            Location = new Point(-2000, -2000), ClientSize = new Size(900, 600) })
+        {
+            var input = new VideoInputProfile { Name = "Streaming servo", Url = "udp://@:5600",
+                TrackingCalibrated = true, TrackingMaxRateDegSec = 60, ServoGimbalAxes = new List<ServoGimbalAxis>
+                { PitchServo(), new ServoGimbalAxis { Axis = "Yaw", Channel = 15 } } };
+            peer.Config.VideoInputs.Add(input); peer.Config.SelectedVideoInputName = input.Name;
+            GimbalController.ApplyProfile(peer.Config);
+            var pipeline = new FakeVideoPipeline();
+            FakeVisualTracker tracker = null;
+            using (var player = new EmbeddedVideoPlayer(input, true, CancellationToken.None, () => pipeline, peer.Config,
+                createTracker: (token, mode) => tracker = new FakeVisualTracker { AimPoint = new PointF(80, 20) }))
+            {
+                form.Controls.Add(player); form.Show(); player.StartStream();
+                Wait(pipeline.ReadEntered, "streaming servo source");
+                PlayerVisionFrame(player, pipeline, Color.Blue);
+                Check(player.SelectRegion(new RectangleF(60, 10, 20, 20)), "Streaming servo selection failed");
+                PlayerVisionFrame(player, pipeline, Color.Blue);
+                Check(player.StartTracking(), "Streaming servo refused tracking");
+                peer.Pump(40); PlayerVisionFrame(player, pipeline, Color.Blue);
+                peer.Until(() => player.SubmittedTrackingCommands > 0, "initial acknowledged servo pose");
+                int commands = peer.ServoTargets.Length;
+                int frames = 0;
+                var clock = Stopwatch.StartNew();
+                while (clock.ElapsedMilliseconds < 1200)
+                {
+                    PlayerVisionFrame(player, pipeline, Color.Blue);
+                    frames++;
+                    peer.Pump(1, precise: true);
+                    while (clock.Elapsed.TotalSeconds < frames / 30.0) { peer.Pump(1, precise: true); }
+                }
+                double hz = (peer.ServoTargets.Length - commands) / 2.0 / clock.Elapsed.TotalSeconds;
+                double inputHz = frames / clock.Elapsed.TotalSeconds;
+                Check(player.IsTracking && hz >= 25 && hz <= 34,
+                    $"Native servo stream stalled: {hz:F1} Hz from {inputHz:F1} FPS; {player.TrackingStatus}");
+                Console.WriteLine($"  Native MP servo stream without update ACKs: {hz:F1} Hz from {inputHz:F1} FPS (two axes)");
+                var busy = typeof(OutputController).GetField("_payloadBusy", BindingFlags.NonPublic | BindingFlags.Static);
+                var before = GetField<ServoTrackingController>(player, "_servoTrackingController");
+                commands = peer.ServoTargets.Length;
+                try
+                {
+                    busy.SetValue(null, true);
+                    for (int frame = 0; frame < 5; frame++)
+                    { peer.Pump(34); PlayerVisionFrame(player, pipeline, Color.Blue); }
+                    Check(peer.ServoTargets.Length == commands &&
+                        before.Equals(GetField<ServoTrackingController>(player, "_servoTrackingController")),
+                        "Busy servo requests advanced PID state or dispatched a queued target");
+                }
+                finally { busy.SetValue(null, false); }
+                tracker.State = VisualTrackingState.Searching;
+                peer.Pump(34); PlayerVisionFrame(player, pipeline, Color.Blue);
+                Check(player.IsTracking && !player.RegionReady &&
+                    GetField<ServoTrackingController>(player, "_servoTrackingController").Equals(default(ServoTrackingController)),
+                    "Target loss did not pause servo steering and discard its accumulated controller state");
+                tracker.State = VisualTrackingState.Verified; tracker.AimPoint = new PointF(50, 40);
+                PlayerVisionFrame(player, pipeline, Color.Blue);
+                float heldPitch = player.CommandedPitchDeg, heldYaw = player.CommandedYawDeg;
+                peer.Pump(34); PlayerVisionFrame(player, pipeline, Color.Blue);
+                peer.Until(() => peer.ServoTargets.Length > commands, "fresh centered pose after servo recovery");
+                Check(player.CommandedPitchDeg == heldPitch && player.CommandedYawDeg == heldYaw,
+                    "Servo recovery released a stored PID correction on a centered target");
+                player.StopTracking(); commands = peer.ServoTargets.Length;
+                peer.Pump(34); PlayerVisionFrame(player, pipeline, Color.Blue); peer.Pump(80);
+                Check(!player.IsTracking && peer.ServoTargets.Length == commands,
+                    "Stopped servo tracking replayed an old position request");
+                player.StopStream();
+            }
+        }
     }
 
     private static void ServoGimbalTracking()

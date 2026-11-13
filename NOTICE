@@ -30,6 +30,12 @@ It also embeds the pinned EfficientTAM Ti512 graph export (build input 1), with 
 Apache-2.0 license retained as NOMAD.Vision.EfficientTAM-LICENSE.txt and extracted
 beside the model. Complete upstream license wording is retained.
 
+CPU Object tracking also embeds the ViTTrack September 2023 ONNX model distributed
+by OpenCV Zoo under Apache-2.0. Its unmodified SHA256 is
+2990f0b7cd44d92afa48cd97db6de7be113fc1d9594fddb74e2725c10478e91d.
+The worker retains the complete license as NOMAD.Vision.ViTTrack-LICENSE.txt and
+extracts it beside the model. Source: https://github.com/opencv/opencv_zoo/tree/main/models/object_tracking_vittrack.
+
 Region tracking additionally embeds OpenCvSharp4 4.10.0.20241108 and its Windows
 x64 OpenCvSharpExtern library (OpenCV 4.10.0). OpenCvSharp/OpenCV use Apache-2.0;
 the native library includes separately licensed third-party components and Intel

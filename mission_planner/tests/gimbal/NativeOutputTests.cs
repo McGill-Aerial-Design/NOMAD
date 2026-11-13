@@ -27,6 +27,7 @@ namespace MissionPlanner
         public readonly ManualResetEventSlim ConfigureEntered = new ManualResetEventSlim();
         public int Modes, Targets;
         public readonly List<(int Channel, int Pwm)> ServoTargets = new List<(int Channel, int Pwm)>();
+        public readonly List<bool> ServoAcknowledgements = new List<bool>();
         public byte LastSystem, LastComponent;
         public double Pitch, Roll, Yaw;
         public Action TargetDispatched;
@@ -36,12 +37,14 @@ namespace MissionPlanner
         public Task<bool> doCommandAsync(byte system, byte component, MAVLink.MAV_CMD command,
             float p1, float p2, float p3, float p4, float p5, float p6, float p7, bool requireack)
         {
-            if (command == MAVLink.MAV_CMD.DO_SET_SERVO) { ServoTargets.Add(((int)p1, (int)p2)); }
+            if (command == MAVLink.MAV_CMD.DO_SET_SERVO)
+            { ServoTargets.Add(((int)p1, (int)p2)); ServoAcknowledgements.Add(requireack); }
             else { Modes++; }
             LastSystem = system;
             LastComponent = component;
             AcknowledgementRequested = requireack;
             ConfigureEntered.Set();
+            if (command == MAVLink.MAV_CMD.DO_SET_SERVO && !requireack) { return Task.FromResult(true); }
             return Configure();
         }
         public void setMountControl(byte system, byte component, double pitch, double roll, double yaw, bool coordinates)
@@ -444,6 +447,65 @@ internal static class NativeOutputTests
                 "A changed " + change + " dispatched the remaining axes of a retired gimbal pose");
         }
     }
+    private static void ServoTrackingStream()
+    {
+        var connection = Reset();
+        var config = new NOMADConfig { SelectedGimbalAxes = new[]
+        {
+            new ServoGimbalAxis { Axis = "Pitch", Channel = 14 },
+            new ServoGimbalAxis { Axis = "Yaw", Channel = 15, Reversed = true },
+        } };
+        OutputController.Initialize(config); GimbalController.ApplyProfile(config); GimbalController.ClaimTracking();
+        Require(Complete(Track()).Submitted && connection.ServoAcknowledgements.SequenceEqual(new[] { true, true }),
+            "First tracking pose did not confirm both configured servo outputs");
+        // The link can continue writing while ACKs are delayed or absent.
+        var held = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.Configure = () => held.Task;
+        for (int frame = 0; frame < 30; frame++)
+        {
+            var result = Complete(Track(-12 + frame * .1f, 7 + frame * .1f));
+            Require(result.Submitted && !result.Message.Contains("acknowledged"),
+                "Continuous servo tracking waited on an ACK or claimed acceptance");
+        }
+        Require(connection.ServoTargets.Count == 62 && connection.ServoAcknowledgements.Skip(2).All(ack => !ack),
+            "Fresh servo targets were queued behind acknowledgements or emitted native retries");
+        int commands = connection.ServoTargets.Count;
+        Require(Complete(Track(current: () => false)).Outcome == GimbalRequestOutcome.NotSent &&
+            connection.ServoTargets.Count == commands, "A retired tracking sample entered the servo stream");
+        GimbalController.ClaimTracking(); connection.ConfigureEntered.Reset();
+        var pending = Track(); WaitForConfigure(connection);
+        GimbalController.SetTargetAngles(0, 0); held.SetResult(true);
+        Require(Complete(pending).Outcome == GimbalRequestOutcome.Unknown &&
+            connection.ServoTargets.Count == commands + 1 && connection.ServoAcknowledgements.Last(),
+            "A new claim skipped confirmation or manual override let its remaining servo axes through");
+        connection.Configure = () => Task.FromResult(true);
+        Require(Complete(Track()).Submitted && connection.ServoAcknowledgements.Skip(commands).All(ack => ack),
+            "Partially retired servo setup incorrectly enabled streaming");
+        config.SelectedGimbalAxes[0].MaximumPwm = 1900;
+        Require(Complete(Track()).Submitted && connection.ServoAcknowledgements.Last(),
+            "Changed calibration reused a previous servo stream's confirmation");
+        Require(Complete(Track()).Submitted && !connection.ServoAcknowledgements.Last(),
+            "Confirmed replacement calibration did not enable fresh streaming");
+        Require(Complete(GimbalController.RequestScreenTargetAsync(0, 0, 0)).Submitted &&
+            connection.ServoAcknowledgements.Last(), "A manual servo target lost native ACK/retry semantics");
+        Require(Complete(Track()).Submitted && connection.ServoAcknowledgements.Last(),
+            "Manual control did not invalidate the continuous servo confirmation");
+        GimbalController.ClaimTracking(); connection.Configure = () => Task.FromResult(false);
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            commands = connection.ServoTargets.Count;
+            Require(Complete(Track()).Outcome == GimbalRequestOutcome.Unknown &&
+                connection.ServoTargets.Count == commands + 1 && connection.ServoAcknowledgements.Last(),
+                "A rejected setup enabled servo streaming or dispatched its remaining axes");
+        }
+        connection.Configure = () => Task.FromResult(true);
+        Require(Complete(Track()).Submitted && Complete(Track()).Submitted && !connection.ServoAcknowledgements.Last(),
+            "Fresh confirmation after a rejected setup did not restore the servo stream");
+        connection.sysidcurrent = 8;
+        Require(Complete(Track()).Submitted && connection.LastSystem == 8 && connection.ServoAcknowledgements.Last(),
+            "New aircraft identity reused the previous servo stream's confirmation");
+    }
+
     private static int Main()
     {
         var connection = Reset();
@@ -473,6 +535,7 @@ internal static class NativeOutputTests
         PendingManualRetirement();
         SharedTrackingClaim();
         ServoGimbalTargets();
+        ServoTrackingStream();
         RefusesChangedTarget(c => c.sysidcurrent = 8, "system selection");
         RefusesChangedTarget(c => c.compidcurrent = 9, "component selection");
         RefusesChangedTarget(c => c.BaseStream = new MissionPlanner.TestStream(), "stream replacement");

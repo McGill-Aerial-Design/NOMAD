@@ -44,7 +44,6 @@ def canonical_fingerprint(path, geometry):
 
 
 def measure(image, bounds, aim, found):
-    import cv2
     import numpy as np
 
     if image.ndim != 2 or image.dtype != np.uint8:
@@ -81,11 +80,9 @@ def measure(image, bounds, aim, found):
     x, y = round(aim[0]), round(aim[1])
     if 0 <= y < image.shape[0] and 0 <= x < image.shape[1]:
         result["aim_label"] = int(image[y, x])
-        result["foreground"] = bool(cv2.dilate(selected.astype(np.uint8), np.ones((3, 3), np.uint8))[y, x])
+        result["foreground"] = bool(np.any(selected[max(0, y - 1) : y + 2, max(0, x - 1) : x + 2]))
         if truth:
-            result["pixel_error"] = float(
-                cv2.distanceTransform((~selected).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)[y, x]
-            )
+            result["pixel_error"] = float(np.hypot(xx - x, yy - y).min())
     if truth:
         result["bbox_iou"] = overlap(bounds, truth)
     for label in (20, 30):
@@ -158,13 +155,18 @@ def score(dataset, replay):
             raise ValueError("Saved RGB does not match its original receipt fingerprint")
         if source["stage"] != 40:
             continue
-        fingerprint = np.frombuffer(bytes.fromhex(source["fingerprint"]), dtype=np.uint8)
-        errors = np.mean((fingerprints - fingerprint) ** 2, axis=1)
-        best = min(errors)
-        if best > 100:
+        if "capture_sequence" in source:
+            plausible = [c for c in captures if c.get("sequence") == source["capture_sequence"]]
+            if source["capture_sequence"] is None:
+                plausible = []
+        else:
+            fingerprint = np.frombuffer(bytes.fromhex(source["fingerprint"]), dtype=np.uint8)
+            errors = np.mean((fingerprints - fingerprint) ** 2, axis=1)
+            best = min(errors)
+            plausible = [] if best > 100 else [c for c, error in zip(captures, errors) if error <= best + 1]
+        if not plausible:
             unavailable += 1
             continue
-        plausible = [c for c, error in zip(captures, errors) if error <= best + 1]
         plausible = [
             c
             for c in plausible

@@ -149,6 +149,15 @@ foreach ($notice in @(
     }
     Copy-Item -LiteralPath $source -Destination $runtime -Force
 }
+$cpuTracker = Get-PinnedFile 'vittrack.onnx' `
+    'https://huggingface.co/opencv/opencv_zoo/resolve/d4938dfc9d4ec5d098bfa33e98b3f3345a236586/models/object_tracking_vittrack/object_tracking_vittrack_2023sep.onnx' `
+    '2990f0b7cd44d92afa48cd97db6de7be113fc1d9594fddb74e2725c10478e91d'
+Copy-Item -LiteralPath $cpuTracker -Destination $runtime -Force
+$cpuNotice = Join-Path $noticesDirectory 'ViTTrack-LICENSE.txt'
+if ((Get-FileHash -LiteralPath $cpuNotice).Hash -ne 'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30') {
+    throw 'CPU tracker redistribution notice checksum mismatch.'
+}
+Copy-Item -LiteralPath $cpuNotice -Destination $runtime -Force
 # Re-exporting EfficientTAM does not reproduce the tested graph bytes, so the tested export is a pinned asset.
 $tracker = Get-PinnedFile 'nomad-efficienttam-ti512-1.zip' `
     'https://github.com/McGill-Aerial-Design/NOMAD/releases/download/tracker-model-efficienttam-ti512-1/nomad-efficienttam-ti512-1.zip' `
@@ -163,4 +172,5 @@ foreach ($entry in @(
 )) { Copy-PinnedEntry $tracker $entry[0] $entry[0] $entry[1] }
 Write-Host 'Pinned ONNX Runtime 1.24.4 DirectML build, DirectML 1.15.4 and YOLOX Nano build inputs verified.'
 Write-Host 'Pinned OpenCvSharp 4.10.0.20241108 tracker inputs and notices verified.'
+Write-Host 'Pinned ViTTrack CPU template model and license verified.'
 Write-Host 'Pinned EfficientTAM Ti512 tracker model asset 1 verified.'

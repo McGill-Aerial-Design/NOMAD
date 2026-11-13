@@ -199,7 +199,8 @@ namespace NOMAD.MissionPlanner
             _toolTips.SetToolTip(_numGroundPlaneHeight,
                 "Explicit horizontal surface height relative to aircraft HOME, not height above the camera.");
             _toolTips.SetToolTip(_numCameraDelay,
-                "Estimated camera/encoder delay before frame receipt; independent of receiver jitter buffering.");
+                "Estimated camera/encoder delay, in addition to receiver jitter buffering. " +
+                "Servo tracking reduces feedback gain as this delay increases.");
         }
 
         private void LoadVideoSettings(VideoInputProfile editing = null)
