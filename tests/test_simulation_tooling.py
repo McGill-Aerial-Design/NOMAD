@@ -17,6 +17,78 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux source path containment")
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "sources",
+        "sources/ardupilot",
+        "sources/ardupilot_gazebo",
+        "sources/last_letter",
+        "sources/yaml_cpp",
+        "sources/data_tamer",
+        "sources/nlopt",
+        "sources/ardupilot/.git",
+        "sources/ardupilot_gazebo/.git",
+        "sources/last_letter/.git",
+        "sources/yaml_cpp/.git",
+        "sources/data_tamer/.git",
+        "sources/nlopt/.git",
+    ],
+)
+def test_linux_prepare_rejects_escaping_sources_before_git(tmp_path, relative):
+    workspace, external, commands = (tmp_path / name for name in ("owned workspace", "external", "commands"))
+    for directory in (workspace, external, commands):
+        directory.mkdir()
+    (workspace / ".nomad-simulation-owned").write_text("NOMAD simulation sources v1\n")
+    sentinel = external / "keep.txt"
+    sentinel.write_text("Preserve unrelated checkout\n")
+    link = workspace / relative
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(external, target_is_directory=True)
+    git_log = tmp_path / "git-calls.txt"
+    git = commands / "git"
+    git.write_text('#!/usr/bin/env bash\nprintf "Unexpected git call\\n" >> "$GIT_LOG"\nexit 93\n')
+    git.chmod(0o755)
+    environment = dict(os.environ, PATH=str(commands) + os.pathsep + os.defpath, GIT_LOG=str(git_log))
+    script = Path(__file__).resolve().parents[1] / "scripts/simulation/prepare_linux.sh"
+    result = subprocess.run(
+        ["bash", str(script), str(workspace), "--prepare"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "Source path escapes the owned workspace" in result.stderr, result.stdout + result.stderr
+    assert not git_log.exists(), "Preparation invoked git before rejecting the escaping source"
+    assert link.is_symlink() and sentinel.read_text() == "Preserve unrelated checkout\n"
+    assert list(external.iterdir()) == [sentinel], "Preparation changed unrelated source contents"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux source path containment")
+def test_linux_prepare_accepts_contained_source_link(tmp_path):
+    workspace, commands = tmp_path / "owned workspace", tmp_path / "commands"
+    workspace.mkdir()
+    commands.mkdir()
+    (workspace / ".nomad-simulation-owned").write_text("NOMAD simulation sources v1\n")
+    (workspace / "contained sources").mkdir()
+    (workspace / "sources").symlink_to(workspace / "contained sources", target_is_directory=True)
+    git = commands / "git"
+    git.write_text('#!/usr/bin/env bash\necho "Contained sources reached git"\nexit 93\n')
+    git.chmod(0o755)
+    script = Path(__file__).resolve().parents[1] / "scripts/simulation/prepare_linux.sh"
+    result = subprocess.run(
+        ["bash", str(script), str(workspace), "--prepare"],
+        env=dict(os.environ, PATH=str(commands) + os.pathsep + os.defpath),
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 93 and "Contained sources reached git" in result.stdout, result.stdout + result.stderr
+    assert "Source path escapes" not in result.stderr
+
+
 @pytest.fixture
 def linux_build(tmp_path):
     scripts, commands, workspace = (tmp_path / name for name in ("scripts", "commands", "owned workspace"))

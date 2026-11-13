@@ -211,6 +211,7 @@ namespace NOMAD.MissionPlanner
 
         public override bool Exit()
         {
+            AudioAlerts.Shutdown();
             if (Host?.MainForm != null) { Host.MainForm.FormClosed -= OnHostClosed; }
             StopCustomControls();
             NOMADMainScreen.SetSimulationFactory(null);

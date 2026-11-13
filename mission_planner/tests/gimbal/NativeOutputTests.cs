@@ -447,6 +447,56 @@ internal static class NativeOutputTests
                 "A changed " + change + " dispatched the remaining axes of a retired gimbal pose");
         }
     }
+    private static void ContinuousManualServoTargets()
+    {
+        foreach (bool screen in new[] { false, true })
+        foreach (string interruption in new[] { "none", "slider", "mode", "arrow" })
+        {
+            var connection = Reset();
+            var config = new NOMADConfig { SelectedGimbalAxes = new[]
+            {
+                new ServoGimbalAxis { Axis = "Pitch", Channel = 14 },
+                new ServoGimbalAxis { Axis = "Yaw", Channel = 15 },
+                new ServoGimbalAxis { Axis = "Roll", Channel = 16 },
+            } };
+            OutputController.Initialize(config); GimbalController.ApplyProfile(config);
+            var held = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            connection.Configure = () => held.Task;
+            Action sample = () =>
+            {
+                if (screen) { GimbalController.ApplyScreenStick(1, 1, .05f, true); }
+                else { GimbalController.ApplyStick(1, 1, .05f, true); }
+            };
+            sample(); WaitForConfigure(connection);
+            try
+            {
+                sample(); sample();
+                if (interruption == "slider") { GimbalController.NotifyServoInput(config, 14, 1800); }
+                if (interruption == "mode") { GimbalController.SetMode(MountMode.Neutral); }
+                if (interruption == "arrow") { GimbalController.NudgeScreenTarget(1, 0, 2); }
+            }
+            finally { held.SetResult(true); }
+            DrainGimbal();
+            if (interruption != "none")
+            {
+                Require(connection.ServoTargets.Count == 1,
+                    interruption + " did not retire the remaining axes of a continuous manual pose");
+                continue;
+            }
+            Require(connection.ServoTargets.Select(target => target.Channel).SequenceEqual(new[] { 14, 15, 16 }) &&
+                connection.ServoAcknowledgements.All(ack => ack),
+                "Continuous manual samples starved later servo axes while the first ACK was pending");
+            Require(GimbalController.TargetPitchDeg == 9 && GimbalController.TargetYawDeg == (screen ? 9 : 0) &&
+                GimbalController.TargetRollDeg == (screen ? 0 : -9),
+                "An older manual command completion overwrote newer integrated input");
+            connection.Configure = () => Task.FromResult(true);
+            sample(); DrainGimbal();
+            Require(connection.ServoTargets.Count == 6 && connection.ServoTargets[3].Pwm > connection.ServoTargets[0].Pwm &&
+                (screen ? connection.ServoTargets[4].Pwm > connection.ServoTargets[1].Pwm :
+                    connection.ServoTargets[5].Pwm < connection.ServoTargets[2].Pwm),
+                "A fresh manual sample failed to send accumulated motion to later axes");
+        }
+    }
     private static void ServoTrackingStream()
     {
         var connection = Reset();
@@ -535,6 +585,7 @@ internal static class NativeOutputTests
         PendingManualRetirement();
         SharedTrackingClaim();
         ServoGimbalTargets();
+        ContinuousManualServoTargets();
         ServoTrackingStream();
         RefusesChangedTarget(c => c.sysidcurrent = 8, "system selection");
         RefusesChangedTarget(c => c.compidcurrent = 9, "component selection");

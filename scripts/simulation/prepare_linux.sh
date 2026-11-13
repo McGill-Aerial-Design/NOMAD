@@ -21,6 +21,13 @@ sim_root=$(realpath "$sim_root")
 [[ $(du -s -B1 "$sim_root" | cut -f1) -lt 10737418240 ]] || {
     echo '10 GiB source/build ceiling exceeded' >&2; exit 1;
 }
+for source in sources sources/ardupilot{,/.git} sources/ardupilot_gazebo{,/.git} sources/last_letter{,/.git} \
+    sources/yaml_cpp{,/.git} sources/data_tamer{,/.git} sources/nlopt{,/.git}; do
+    resolved=$(realpath -m -- "$sim_root/$source")
+    [[ "$resolved" = "$sim_root/"* ]] || {
+        echo "Source path escapes the owned workspace: $source" >&2; exit 1;
+    }
+done
 
 checkout() {
     local name=$1 url=$2 revision=$3

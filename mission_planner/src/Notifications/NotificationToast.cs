@@ -27,6 +27,7 @@ namespace NOMAD.MissionPlanner
         private static readonly List<ToastForm> _open = new List<ToastForm>();
         private static NotificationService _service;
         private static Form _mainForm;
+        private static long _attachment;
 
         /// <summary>
         /// Subscribe to a notification service; Warning/Critical notifications
@@ -45,6 +46,7 @@ namespace NOMAD.MissionPlanner
 
         public static void Detach()
         {
+            System.Threading.Interlocked.Increment(ref _attachment);
             if (_service != null)
             {
                 _service.NotificationAdded -= OnNotificationAdded;
@@ -60,21 +62,27 @@ namespace NOMAD.MissionPlanner
 
         private static void OnNotificationAdded(object sender, NotificationEventArgs e)
         {
+            long attachment = System.Threading.Interlocked.Read(ref _attachment);
             var n = e?.Notification;
             if (n == null || n.Severity == NotificationSeverity.Info) return;
 
             var form = _mainForm;
-            if (form == null || form.IsDisposed) return;
+            if (form == null || form.IsDisposed || !ReferenceEquals(sender, _service)) return;
+            Action show = () =>
+            {
+                if (attachment == System.Threading.Interlocked.Read(ref _attachment) &&
+                    ReferenceEquals(sender, _service) && ReferenceEquals(form, _mainForm)) { ShowToast(n); }
+            };
 
             try
             {
                 if (form.InvokeRequired)
                 {
-                    form.BeginInvoke((MethodInvoker)(() => ShowToast(n)));
+                    form.BeginInvoke(show);
                 }
                 else
                 {
-                    ShowToast(n);
+                    show();
                 }
             }
             catch (Exception ex)

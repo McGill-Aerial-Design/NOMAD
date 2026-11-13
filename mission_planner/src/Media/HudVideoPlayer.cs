@@ -108,6 +108,7 @@ namespace NOMAD.MissionPlanner
                 _setFrame(frame.Image);
                 old?.Dispose();
             }
+            if (_displayedVideoFrame?.Fresh == false) { ClearDisplay(); }
             if (_session.State == VideoState.Stopped)
             {
                 if (_session.Error != null)

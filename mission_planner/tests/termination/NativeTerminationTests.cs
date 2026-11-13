@@ -175,6 +175,7 @@ internal static class NativeTerminationTests
             peer.DiscoveryAccepted = true; peer.MissingRate = true;
             Require(!peer.CheckSupport(), "Absent extension parameter passed support check");
             peer.MissingRate = false;
+            peer.SendHeartbeat(0); peer.Pump(100);
             Require(peer.CheckSupport(), "Negative fixture did not establish support");
             var captured = peer.Capture();
             peer.SendHeartbeat(0, false); peer.Pump(100);
@@ -388,6 +389,18 @@ internal static class NativeTerminationTests
             peer.Pump(150);
             Require(peer.DiscoveryIndices.Count == 0 && !peer.CanRequest,
                 "Connection discovery started before the selected aircraft heartbeat");
+            var check = peer.BeginCheck();
+            Require(SpinWait.SpinUntil(() => check.IsCompleted, 1000) && !check.GetAwaiter().GetResult(),
+                "Explicit Check waited indefinitely for the first aircraft heartbeat");
+            var settings = (Task)Controller.GetMethod("WaitForDiscoveryAsync", HiddenInstance)
+                .Invoke(peer.ControllerInstance, null);
+            Require(SpinWait.SpinUntil(() => settings.IsCompleted, 1000),
+                "Explicit settings read waited indefinitely for the first aircraft heartbeat");
+            bool rejected = false;
+            try { settings.GetAwaiter().GetResult(); }
+            catch (InvalidOperationException error) { rejected = error.Message.Contains("heartbeat"); }
+            Require(rejected && peer.DiscoveryIndices.Count == 0 && peer.ParameterReads == 0,
+                "Missing-heartbeat actions sent native requests or did not explain the unavailable read");
             peer.SendHeartbeat(0);
             peer.WaitDiscovery();
             Require(peer.CanRequest && peer.DiscoveryIndices.Count == 3 && peer.ParameterReads == 3,

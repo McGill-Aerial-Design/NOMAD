@@ -256,8 +256,15 @@ namespace NOMAD.MissionPlanner
             UpdateBinding();
             Task automatic;
             OutputController.NativeTarget target;
-            lock (_gate) { automatic = _bindingDiscovery; target = _target; }
+            lock (_gate)
+            {
+                automatic = _bindingDiscovery; target = _target;
+                if (_disposed || target == null || !Fresh) { return false; }
+            }
+            if (!target.IsCurrent) { return false; }
             if (automatic.IsCompleted) { return await CheckNativeAsync(requireConfigured, target).ConfigureAwait(false); }
+            if (await Task.WhenAny(automatic, Task.Delay(DiscoveryTimeoutMilliseconds)).ConfigureAwait(false) != automatic)
+            { return false; }
             await automatic.ConfigureAwait(false);
             bool current = target?.IsCurrent == true;
             lock (_gate)
@@ -298,11 +305,23 @@ namespace NOMAD.MissionPlanner
                 automatic = _bindingDiscovery;
                 checking = _checking?.Task ?? Task.CompletedTask;
                 target = _target;
+                if (_disposed || target == null || !Fresh)
+                { throw new InvalidOperationException("Fresh aircraft heartbeat required before reading settings."); }
             }
-            await automatic.ConfigureAwait(false);
-            await checking.ConfigureAwait(false);
+            if (!target.IsCurrent) { throw new InvalidOperationException("Aircraft changed; read again."); }
+            var discovery = Task.WhenAll(automatic, checking);
+            if (await Task.WhenAny(discovery, Task.Delay(DiscoveryTimeoutMilliseconds)).ConfigureAwait(false) != discovery)
+            { throw new InvalidOperationException("Aircraft discovery is still pending; retry reading settings."); }
+            await discovery.ConfigureAwait(false);
+            bool current = target.IsCurrent;
+            lock (_gate)
+            {
+                if (_disposed || !current || !ReferenceEquals(_target, target) || !Fresh)
+                { throw new InvalidOperationException("Fresh aircraft heartbeat required before reading settings."); }
+            }
             // A retired controller's already-dispatched helper may still own the shared native request.
-            if (target != null) { await WaitForReadyAsync(target).ConfigureAwait(false); }
+            if (target.NativeRequestBusy)
+            { throw new InvalidOperationException("Aircraft request is still busy; retry reading settings."); }
         }
 
         private async Task<bool> CheckNativeAsync(bool requireConfigured, OutputController.NativeTarget target)
