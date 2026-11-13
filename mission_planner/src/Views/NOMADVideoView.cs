@@ -36,11 +36,12 @@ namespace NOMAD.MissionPlanner
             var mainLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 2,
-                RowCount = 1,
+                ColumnCount = 1,
+                RowCount = 2,
             };
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));
 
             var videoPanel = new Panel
             {
@@ -92,7 +93,7 @@ namespace NOMAD.MissionPlanner
             payloadsTitle.Dock = DockStyle.Top;
             controlsSection.Controls.Add(payloadsTitle);
 
-            mainLayout.Controls.Add(controlsSection, 1, 0);
+            mainLayout.Controls.Add(controlsSection, 0, 1);
             Controls.Add(mainLayout);
         }
 

@@ -188,7 +188,7 @@ namespace NOMAD.MissionPlanner
                 {
                     if (!link.Stats.IsOpen && !link.Opening &&
                         (now - link.LastAttempt) >= link.Config.ReconnectSeconds) { TryOpen(link, now); }
-                    link.Poll((bytes, count) => ProcessIncoming(link, bytes, count), now);
+                    link.Poll((bytes, count) => ProcessIncoming(link, bytes, count), now, _cfg.PacketTimeoutSec);
                 }
                 catch (Exception ex)
                 {

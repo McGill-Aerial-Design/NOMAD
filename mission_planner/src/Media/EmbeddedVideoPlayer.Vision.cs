@@ -33,6 +33,7 @@ namespace NOMAD.MissionPlanner
         private Button _detectButton, _trackButton;
         private bool _tracking;
         private string _trackingStatus = "Click or drag to select a target";
+        private string _trackingFeedback;
         private long _trackingRevision, _trackingManualRevision, _latestSequence, _latestReceivedTicks;
         private VideoTrackingSample _latestTrackingSample;
         private long _lastStepTicks, _lastRequestTicks, _nextRequestTicks, _trackingVideoGeneration;
@@ -94,17 +95,34 @@ namespace NOMAD.MissionPlanner
             var save = ControlFactory.Button("Save observation", async (sender, args) =>
                 await SaveObservationAsync(), width: 130, height: 28);
             var history = ControlFactory.Button("History", ShowTrackingHistory, width: 70, height: 28);
+            save.AutoSize = history.AutoSize = true;
+            VisionOptions = new FlowLayoutPanel
+            {
+                Name = "VideoOptions", Dock = DockStyle.Fill, AutoSize = true, WrapContents = true,
+                Margin = Padding.Empty, Visible = false,
+            };
+            VisionOptions.Controls.AddRange(new Control[] { save, history });
+            var more = ControlFactory.Button("More ▾", (sender, args) =>
+            {
+                VisionOptions.Visible = !VisionOptions.Visible;
+                ((Button)sender).Text = VisionOptions.Visible ? "Less ▴" : "More ▾";
+            }, width: 80, height: 28);
+            more.AccessibleName = "Video options";
+            more.AutoSize = true;
             controls.Controls.AddRange(new Control[] { _trackingModeSelector, _detectButton, _trackButton,
-                _clearAreaButton, save, history });
+                _clearAreaButton, more });
             _videoToolTips.SetToolTip(_trackingModeSelector,
                 "Object follows moving appearance. Area remembers a distinctive fixed planar surface, including walls.");
             _videoToolTips.SetToolTip(_detectButton, "Detect objects in video. Detection alone never moves the gimbal.");
             _videoToolTips.SetToolTip(_trackButton, "Follow the selected region with the gimbal.");
             _videoToolTips.SetToolTip(save, "Save the current image and observation details.");
             _videoToolTips.SetToolTip(history, "Review the last 32 selection and tracking transitions.");
-            Toolbar.RowCount = 2;
+            _videoToolTips.SetToolTip(more, "Detection model, saved observations and tracking history.");
+            Toolbar.RowCount = 3;
             Toolbar.Controls.Add(controls, 0, 1);
             Toolbar.SetColumnSpan(controls, 2);
+            Toolbar.Controls.Add(VisionOptions, 0, 2);
+            Toolbar.SetColumnSpan(VisionOptions, 2);
             _lblVisionStatus = new Label
             { Dock = DockStyle.Bottom, Height = 36, ForeColor = Color.Gainsboro, TextAlign = ContentAlignment.MiddleLeft };
             Controls.Add(_lblVisionStatus);
@@ -195,6 +213,7 @@ namespace NOMAD.MissionPlanner
         internal bool StartTracking()
         {
             ValidateUiThread();
+            _trackingFeedback = null;
             if (!Visible || FindForm()?.Visible != true) { return false; }
             if (!_input.TrackingCalibrated)
             { SetTrackingStatus("Calibrate this input in Settings → Video before tracking"); return false; }
@@ -260,13 +279,14 @@ namespace NOMAD.MissionPlanner
                 _servoTrackingController = default;
                 _trackingTarget = null; _trackingMav = null;
                 _trackingStatus = reason;
+                _trackingFeedback = null;
                 if (changed) { RecordTrackingEvent("tracking-retired"); }
             }
             _session?.RetireRegion();
         }
 
         private void SetTrackingStatus(string status)
-        { lock (_visionGate) { _trackingStatus = status; } UpdateVisionStatus(); }
+        { lock (_visionGate) { _trackingStatus = _trackingFeedback = status; } UpdateVisionStatus(); }
 
         private void RetireTrackingRequest(long revision, string reason)
         {
@@ -504,10 +524,11 @@ namespace NOMAD.MissionPlanner
             if (SelectedRegion.HasValue && RegionReady && _latestTrackingSample?.Fresh != true)
             { DisarmTracking("Video stale"); }
             string error = _session.TrackerError ?? _session.VisionError;
-            _lblVisionStatus.Text = IsTracking ? TrackingStatus.Replace(" selected region", "") :
+            _lblVisionStatus.Text = _trackingFeedback ?? (IsTracking ? TrackingStatus.Replace(" selected region", "") :
                 _session.TrackerLoading ? "Loading tracker" : error != null ? "Vision unavailable" : WaitingForRegionInitialization ? "Selecting target" :
                 SelectedRegion.HasValue && !RegionReady ? _trackingMode + " searching" :
-                !_input.TrackingCalibrated ? "Calibration required" : RegionReady ? "Target selected" : "Select a target";
+                !_input.TrackingCalibrated ? "Gimbal tracking needs calibration: Settings → Video" :
+                RegionReady ? "Target selected · Start tracking to move the gimbal" : "Click or drag on the video to select a target");
             string detail = TrackingStatus + (error == null ? "" : " | " + error) +
                 MotionEstimateDetail() +
                 (!_input.TrackingCalibrated ? " | Calibration: Settings → Video" : "");

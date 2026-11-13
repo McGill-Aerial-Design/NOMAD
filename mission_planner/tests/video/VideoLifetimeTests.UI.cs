@@ -30,11 +30,38 @@ internal static partial class VideoLifetimeTests
                 Check(!string.IsNullOrWhiteSpace(GetField<ToolTip>(player, "_videoToolTips").GetToolTip(button)),
                     $"Playback control {label} has no explanatory tooltip");
             }
+            Check(!player.VisionOptions.Visible, "Occasional video tools clutter the default toolbar");
+            var more = FindVideoButton(player, "Video options");
+            more.PerformClick();
+            Check(player.VisionOptions.Visible, "More did not reveal the video options");
+            more.PerformClick();
+            Check(!player.VisionOptions.Visible, "More did not collapse the video options");
+            for (int index = 0; index < 2; index++)
+            {
+                player.ToggleFullscreen();
+                var fullscreen = GetField<Form>(player, "_fullscreenForm");
+                Check(player.Toolbar.Parent == fullscreen && GetField<Label>(player, "_lblStatus").Parent == fullscreen &&
+                    GetField<Label>(player, "_lblVisionStatus").Parent == fullscreen &&
+                    GetField<Button>(player, "_trackButton").FindForm() == fullscreen,
+                    "Fullscreen hid playback, tracking controls or live warnings");
+                if (index == 0) { player.ToggleFullscreen(); }
+                else { fullscreen.Close(); }
+                Check(player.Toolbar.Parent == player && !player.Toolbar.IsDisposed &&
+                    GetField<Label>(player, "_lblVisionStatus").Parent == player &&
+                    GetField<Form>(player, "_fullscreenForm") == null,
+                    "Leaving fullscreen lost or disposed the player controls");
+            }
             player.Size = new Size(100, 450);
             player.PerformLayout();
             var toolbar = player.Controls.Find("VideoToolbar", true)[0];
             Check(toolbar.Height > 45 && toolbar.Height < player.Height,
                 "Narrow video toolbar failed to wrap its controls into available width");
+            player.ToggleFullscreen();
+            var closing = GetField<Form>(player, "_fullscreenForm");
+            var ownedToolbar = player.Toolbar;
+            player.Dispose();
+            Check(closing.IsDisposed && ownedToolbar.IsDisposed,
+                "Disposing an actively fullscreen player leaked its window or toolbar");
         }
     }
 
@@ -64,6 +91,33 @@ internal static partial class VideoLifetimeTests
                 Check(tracking.Size == fixedSize && !tracking.AutoSize && tracking.ClientSize.Width >= text.Width &&
                     tracking.ClientSize.Height >= text.Height, "Tracking toggle resized or clipped when its state changed");
             }
+        }
+    }
+
+    private static void TrackingFailureFeedback()
+    {
+        using (var form = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual,
+            Location = new Point(-2000, -2000), Size = new Size(800, 600) })
+        {
+            var pipeline = new FakeVideoPipeline();
+            using (var player = new EmbeddedVideoPlayer(new VideoInputProfile { Name = "Feedback", Url = "udp://@:5600",
+                TrackingCalibrated = true }, true, CancellationToken.None, () => pipeline,
+                createTracker: (token, mode) => new FakeVisualTracker()))
+            {
+                form.Controls.Add(player); form.Show(); player.StartStream();
+                Wait(pipeline.ReadEntered, "tracking refusal video");
+                PlayerVisionFrame(player, pipeline, Color.Blue);
+                Check(player.SelectRegion(new RectangleF(20, 20, 20, 20)), "Feedback target selection failed");
+                PlayerVisionFrame(player, pipeline, Color.Blue);
+                Check(!player.StartTracking(), "Tracking started without aircraft telemetry");
+                var status = GetField<Label>(player, "_lblVisionStatus");
+                Check(status.Text.Contains("fresh aircraft attitude and heartbeat"),
+                    "Tracking refusal was hidden behind a generic target status");
+                PlayerVisionFrame(player, pipeline, Color.Blue);
+                Check(status.Text.Contains("fresh aircraft attitude and heartbeat"),
+                    "The next visual sample erased the actionable tracking refusal");
+            }
+            CheckClean(pipeline);
         }
     }
 

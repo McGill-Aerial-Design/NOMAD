@@ -28,6 +28,7 @@ namespace NOMAD.MissionPlanner
         private readonly System.Collections.Generic.HashSet<int> _localPorts;
         private SerialPort _serial;
         private IPEndPoint _remote;
+        private IPEndPoint _parserPeer;
         private readonly byte[] _buffer = new byte[8192];
 
         internal PhysicalLink(LinkConfig config, System.Collections.Generic.HashSet<int> localPorts)
@@ -95,7 +96,7 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        internal void Poll(Action<byte[], int> receive, double now)
+        internal void Poll(Action<byte[], int> receive, double now, double packetTimeout = 3)
         {
             if (!ResolveRemote(now))
             {
@@ -130,8 +131,16 @@ namespace NOMAD.MissionPlanner
                     {
                         continue;
                     }
-                    Stats.LastRemote = sender;
+                    if (_remote == null && Stats.LastRemote != null && !Stats.LastRemote.Equals(sender) &&
+                        now - LastPacket < packetTimeout) { continue; }
+                    if (_parserPeer == null || !_parserPeer.Equals(sender))
+                    {
+                        Parser = new MavlinkFrameParser();
+                        _parserPeer = sender;
+                    }
+                    long frames = Parser.FramesEmitted;
                     receive(bytes, bytes.Length);
+                    if (Parser.FramesEmitted > frames) { Stats.LastRemote = sender; }
                 }
                 else
                 {
@@ -220,6 +229,7 @@ namespace NOMAD.MissionPlanner
             _udp = null; _tcp = null; _serial = null; _connecting = null; _resolving = null; _remote = null;
             Stats.IsOpen = false; Stats.IsConnected = false; Stats.Health = LinkHealth.Disconnected;
             Stats.LastRemote = null; Stats.LastPacketTime = DateTime.MinValue;
+            _parserPeer = null;
             Stats.LastHeartbeatTime = DateTime.MinValue; HealthySince = RouterClock.Unset;
             LastPacket = LastHeartbeat = RouterClock.Unset;
         }

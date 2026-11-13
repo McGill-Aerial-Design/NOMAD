@@ -20,6 +20,9 @@ namespace NOMAD.MissionPlanner
             var add = ControlFactory.Button("Add control", (sender, args) => EditInput(-1), width: 120);
             var edit = ControlFactory.Button("Edit", (sender, args) => EditInput(SelectedRow(_inputList)));
             var remove = ControlFactory.Button("Remove", (sender, args) => RemoveInput());
+            edit.Enabled = remove.Enabled = false;
+            _inputList.CurrentCellChanged += (sender, args) =>
+                edit.Enabled = remove.Enabled = SelectedRow(_inputList) >= 0;
             var buttons = ControlFactory.ButtonRow(add, edit, remove); buttons.Dock = DockStyle.None;
             buttons.Location = new Point(12, 290); tab.Controls.Add(buttons);
             AddLabel(tab, "Gimbal maximum rate (deg/s):", 12, 340);

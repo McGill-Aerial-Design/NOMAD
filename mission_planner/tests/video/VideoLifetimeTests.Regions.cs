@@ -169,6 +169,7 @@ internal static partial class VideoLifetimeTests
 
     private static void GenericVisualWorker()
     {
+        AreaAfterObjectLoadFailure();
         var pipeline = new FakeVideoPipeline();
         var trackers = new List<FakeVisualTracker>();
         using (var session = new VideoSession(() => pipeline, createTracker: (token, mode) =>
@@ -254,6 +255,52 @@ internal static partial class VideoLifetimeTests
             "Drag region did not use the same zoom/letterbox mapping as clicks");
         var scaled = VideoGeometry.DefaultRegion(new PointF(1000, 1000), new Size(4000, 3000));
         Check(scaled.Width == 400 && scaled.Height == 400, "Click region became too small after tracker downscale");
+    }
+
+    private static void AreaAfterObjectLoadFailure()
+    {
+        foreach (string initialMode in new[] { "Area", "Object" })
+        {
+            var pipeline = new FakeVideoPipeline();
+            int objectLoads = 0, areaLoads = 0;
+            using (var session = new VideoSession(() => pipeline, createTracker: (token, mode) =>
+            {
+                if (mode == VisualTrackingMode.Object)
+                { Interlocked.Increment(ref objectLoads); throw new InvalidOperationException("GPU unavailable"); }
+                Interlocked.Increment(ref areaLoads); return new FakeVisualTracker();
+            }, trackingProfile: new VideoInputProfile { TrackingMode = initialMode, ObjectTracker = "GPU" }))
+            {
+                session.Start("fake"); Wait(pipeline.ReadEntered, "mode-specific tracker warmup");
+                Check(SpinWait.SpinUntil(() => session.TrackerReady || session.TrackerError != null,
+                    TimeSpan.FromSeconds(5)), "Mode warmup did not complete");
+                Check(initialMode == "Area" ? objectLoads == 0 && areaLoads == 1 :
+                    objectLoads == 1 && !session.TrackerReady, "Warmup ignored the configured tracking mode");
+                pipeline.Frames.Add(SolidVideoImage(Color.Red));
+                using (var source = NextVideoFrame(session))
+                {
+                    var bounds = new RectangleF(20, 20, 20, 20);
+                    if (initialMode == "Object")
+                    { Check(session.RequestRegion(source, bounds) == 0, "Failed GPU Object silently fell back"); }
+                    long selected = session.RequestRegion(source, bounds, VisualTrackingMode.Area);
+                    Check(selected != 0, "Failed Object warmup blocked Area selection");
+                    pipeline.Frames.Add(SolidVideoImage(Color.Blue));
+                    using (var area = NextVideoFrame(session))
+                    {
+                        Check(area.Region?.Found == true && area.Region.Mode == VisualTrackingMode.Area &&
+                            session.TrackerReady && session.TrackerError == null,
+                            "Area did not verify independently or clear the failed Object error");
+                        Check(session.RequestRegion(area, bounds, VisualTrackingMode.Object) != 0,
+                            "Operator could not explicitly select Object again");
+                        pipeline.Frames.Add(SolidVideoImage(Color.Green));
+                        using (var failed = NextVideoFrame(session))
+                        { Check(failed.Region?.Found == false && !session.TrackerReady &&
+                            session.TrackerError?.Contains("GPU unavailable") == true,
+                            "Switching back to unavailable Object hid failure or substituted Area"); }
+                    }
+                }
+            }
+            CheckClean(pipeline);
+        }
     }
 
     private static void PendingRegionInitialization()

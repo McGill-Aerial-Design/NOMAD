@@ -20,10 +20,17 @@ namespace NOMAD.MissionPlanner
             AddLabel(tab, "Preferred enabled link:", 20, y);
             _cmbRouterPreferred = AddComboBox(tab, 235, y, 400, Array.Empty<string>()); y += 40;
             _linkList = CreateDefinitionList("Name", "Transport", "Endpoint", "Priority", "Enabled");
+            _linkList.Columns["Endpoint"].FillWeight = 220;
+            _linkList.Columns["Transport"].FillWeight = 70;
+            _linkList.Columns["Priority"].FillWeight = 60;
+            _linkList.Columns["Enabled"].FillWeight = 60;
             _linkList.Location = new Point(20, y); _linkList.Size = new Size(690, 210); tab.Controls.Add(_linkList); y += 225;
             var add = ControlFactory.Button("Add", (sender, args) => EditRouterLink(-1));
             var edit = ControlFactory.Button("Edit", (sender, args) => EditRouterLink(SelectedRow(_linkList)));
             var remove = ControlFactory.Button("Remove", (sender, args) => RemoveRouterLink());
+            edit.Enabled = remove.Enabled = false;
+            _linkList.CurrentCellChanged += (sender, args) =>
+                edit.Enabled = remove.Enabled = SelectedRow(_linkList) >= 0;
             var buttons = ControlFactory.ButtonRow(add, edit, remove); buttons.Dock = DockStyle.None;
             buttons.Location = new Point(20, y); tab.Controls.Add(buttons); y += 42;
             _linkError = new Label { Location = new Point(20, y), Size = new Size(690, 45), ForeColor = NOMADTheme.WARNING };

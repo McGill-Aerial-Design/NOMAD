@@ -13,6 +13,7 @@ namespace NOMAD.MissionPlanner
         private CancellationTokenSource _selectionCancellation;
         private long _selectionRevision;
         private bool _trackerReady, _selectionFound, _selectionActive, _trackerLoading;
+        private VisualTrackingMode _trackerMode;
         private string _trackerError;
         internal bool TrackerLoading { get { lock (_gate) { return _trackerLoading; } } }
         internal bool TrackerReady { get { lock (_gate) { return _trackerReady; } } }
@@ -27,7 +28,8 @@ namespace NOMAD.MissionPlanner
             if (source?.Fresh != true || !ValidRegion(bounds, source.Image.Size, true)) { return 0; }
             lock (_gate)
             {
-                if (!_trackerReady || _state != VideoState.Streaming || source.Generation != _generation || !source.Fresh)
+                if (_createTracker == null || _trackerLoading || (!_trackerReady && mode == _trackerMode) ||
+                    _state != VideoState.Streaming || source.Generation != _generation || !source.Fresh)
                 { return 0; }
                 var retained = source.Retain();
                 RetireRegion();
@@ -99,10 +101,15 @@ namespace NOMAD.MissionPlanner
                 if (_owner._createTracker == null) { return; }
                 if (_owner._plainRecovery)
                 { lock (_owner._gate) { _owner._trackerReady = true; } return; }
-                lock (_owner._gate) { _owner._trackerLoading = true; }
+                lock (_owner._gate)
+                {
+                    _owner._trackerLoading = true;
+                    _owner._trackerMode = _owner._trackingProfile.TrackingMode == "Area"
+                        ? VisualTrackingMode.Area : VisualTrackingMode.Object;
+                }
                 try
                 {
-                    _tracker = _owner._createTracker(_token, VisualTrackingMode.Object);
+                    _tracker = _owner._createTracker(_token, _owner._trackerMode);
                     lock (_owner._gate) { _owner._trackerReady = true; _owner._trackerError = null; }
                 }
                 catch (OperationCanceledException) { }
@@ -138,8 +145,20 @@ namespace NOMAD.MissionPlanner
                         _referenceSelection = selection.Bounds;
                         if (_tracker == null)
                         {
-                            lock (_owner._gate) { _owner._trackerLoading = true; }
-                            try { _tracker = _owner._createTracker(_token, _mode); }
+                            lock (_owner._gate)
+                            { _owner._trackerLoading = true; _owner._trackerMode = _mode; _owner._trackerError = null; }
+                            try
+                            {
+                                _tracker = _owner._createTracker(_token, _mode);
+                                lock (_owner._gate) { _owner._trackerReady = true; _owner._trackerError = null; }
+                            }
+                            catch (OperationCanceledException) { throw; }
+                            catch (Exception error)
+                            {
+                                lock (_owner._gate)
+                                { _owner._trackerReady = false; _owner._trackerError = error.Message + " Video continues."; }
+                                return Lost("Tracker unavailable; choose another mode or restart video");
+                            }
                             finally { lock (_owner._gate) { _owner._trackerLoading = false; } }
                             if (!selection.Frame.Fresh)
                             { return Lost("Tracker ready; select the current image again"); }

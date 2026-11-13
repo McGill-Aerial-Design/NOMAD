@@ -54,6 +54,7 @@ internal static partial class VideoLifetimeTests
             Run("camera close joins before reopen, source generations fence late pixels and networks stay separate",
                 SharedCameraClosingAndSourceChange);
             Run("playback controls attached", PlaybackControlsAttached);
+            Run("tracking refusal stays visible after fresh video", TrackingFailureFeedback);
             Run("silent video shows stale status and releases HUD pixels until fresh recovery", StaleVideoDisplay);
             Run("snapshot files preserve captures and handle write failure", SnapshotFilesAndFailure);
             Run("video toggles fit enabled labels at enlarged fonts", VideoToggleButtonSizing);

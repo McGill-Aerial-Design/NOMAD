@@ -351,10 +351,9 @@ try {
             throw 'Saving the screen-axis draft lost values or mutated the active profile.'
         }
         $checkConnection = $profilesType.GetMethod('CheckForConnection', $privateFlags)
-        $rejected = $false
-        try { $checkConnection.Invoke($form.Profiles, [object[]]@($profiles, $true)) | Out-Null }
-        catch { $rejected = $true }
-        if (!$rejected) { throw 'Changing screen axes while connected bypassed output calibration admission.' }
+        if ($checkConnection.Invoke($form.Profiles, [object[]]@($profiles, $true))) {
+            throw 'Changing screen axes while connected requested a router restart.'
+        }
         $editorType = $plugin.GetType('NOMAD.MissionPlanner.InputBindingEditorForm', $true)
         $editor = $editorType.GetConstructors([Reflection.BindingFlags]'Instance,NonPublic')[0].Invoke([object[]]@($form.Config, [int]0))
         try {

@@ -16,6 +16,7 @@ namespace NOMAD.MissionPlanner
     public partial class EmbeddedVideoPlayer
     {
         internal TableLayoutPanel Toolbar { get; private set; }
+        internal FlowLayoutPanel VisionOptions { get; private set; }
 
         private void InitializeUI()
         {
@@ -158,6 +159,24 @@ namespace NOMAD.MissionPlanner
             _fullscreenBox.Image = _displayFrame;
 
             _fullscreenForm.Controls.Add(_fullscreenBox);
+            if (_showControls)
+            {
+                _fullscreenForm.Controls.Add(_lblStatus);
+                _fullscreenForm.Controls.Add(Toolbar);
+                _fullscreenForm.Controls.Add(_lblVisionStatus);
+            }
+            _fullscreenForm.FormClosed += (sender, args) =>
+            {
+                _fullscreenBox.Image = null;
+                if (_showControls)
+                {
+                    Controls.Add(_lblStatus);
+                    Controls.Add(Toolbar);
+                    Controls.Add(_lblVisionStatus);
+                }
+                _fullscreenForm = null;
+                _fullscreenBox = null;
+            };
             _fullscreenForm.Show();
         }
 

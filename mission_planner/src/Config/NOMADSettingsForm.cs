@@ -207,10 +207,12 @@ namespace NOMAD.MissionPlanner
             {
                 ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false,
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, RowHeadersVisible = false,
+                AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells,
                 MultiSelect = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 BackgroundColor = NOMADTheme.INPUT_BG, EnableHeadersVisualStyles = false,
                 DefaultCellStyle = new DataGridViewCellStyle { BackColor = NOMADTheme.INPUT_BG,
-                    ForeColor = NOMADTheme.TEXT_PRIMARY, SelectionBackColor = NOMADTheme.ACCENT },
+                    ForeColor = NOMADTheme.TEXT_PRIMARY, SelectionBackColor = NOMADTheme.ACCENT,
+                    WrapMode = DataGridViewTriState.True },
                 ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle { BackColor = NOMADTheme.BUTTON_BG,
                     ForeColor = NOMADTheme.TEXT_PRIMARY },
             };

@@ -17,6 +17,7 @@ internal static partial class VideoLifetimeTests
             () => throw new InvalidOperationException("History must not activate video")))
         {
             form.Controls.Add(player); form.Show();
+            FindVideoButton(player, "Video options").PerformClick();
             var button = player.Toolbar.Controls.OfType<FlowLayoutPanel>().SelectMany(row => row.Controls.OfType<Button>())
                 .Single(item => item.Text == "History");
             var show = typeof(EmbeddedVideoPlayer).GetMethod("ShowTrackingHistory", BindingFlags.Instance | BindingFlags.NonPublic);

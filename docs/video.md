@@ -27,6 +27,13 @@ a restart. This receipt check cannot detect a camera that keeps sending frozen p
 
 ![Video controls and active input selector](images/video-page.png)
 
+The preview fills the page width, with payload controls below it. Choose an input,
+press Play, then click or drag on the video to select a target. **Start tracking**
+moves the gimbal after calibration and fresh aircraft telemetry are available.
+Failed prerequisites appear below the video and remain visible as frames arrive.
+**More** reveals detection model selection, **Manage models**, **Save observation**
+and **History**. The playback, tracking and status controls remain available in full screen.
+
 Network inputs accept RTSP codecs supported by the installed GStreamer decoder,
 or RTP/H.264 UDP such as `udp://@:5600`. RTSP offers TCP/UDP and a 0-5000 ms
 jitter buffer. Its settings do not affect UDP/local capture. The decoded queue
@@ -211,7 +218,7 @@ aircraft or camera data removes it.
 
 ### Save observations
 
-**Save observation** writes PNG + JSON to `NOMAD/observations` under the host plugin
+**More → Save observation** writes PNG + JSON to `NOMAD/observations` under the host plugin
 data directory. It pairs pixels with detections, input/model/frame provenance,
 tracking state/aim and separately labeled aircraft GPS and submitted mount requests.
 Detector-assisted selection retains the original model label through model changes.
@@ -221,7 +228,7 @@ measured object position or physical mount feedback.
 ### Replace the detection model
 
 The bundled YOLOX Nano detector uses CPU inference and COCO vehicle classes by
-default. Tracking is independent of detection. Open **Manage models** on Video or
+default. Tracking is independent of detection. Open **More → Manage models** on Video or
 **Manage** beside Detection model in Settings:
 
 1. Add trusted ONNX weights or Duplicate a definition, then name it.

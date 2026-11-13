@@ -59,8 +59,8 @@ namespace NOMAD.MissionPlanner
                 {
                     var layout = new TableLayoutPanel { Height = 42, ColumnCount = 4, RowCount = 1,
                         Width = Math.Max(420, rows.ClientSize.Width - 12 - SystemInformation.VerticalScrollBarWidth) };
-                    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
-                    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+                    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
                     layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
                     layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
                     layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));

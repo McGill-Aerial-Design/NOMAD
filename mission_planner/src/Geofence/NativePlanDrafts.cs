@@ -51,12 +51,12 @@ namespace NOMAD.MissionPlanner
             _stream = _port?.BaseStream;
             _system = _mav?.sysid ?? 0;
             _component = _mav?.compid ?? 0;
-            _generation = OutputController.Generation;
+            _generation = OutputController.PlanGeneration;
         }
 
         private bool SameContext => ReferenceEquals(MainV2.comPort, _port) && ReferenceEquals(_port?.MAV, _mav) &&
             ReferenceEquals(_port?.BaseStream, _stream) && (_mav?.sysid ?? 0) == _system &&
-            (_mav?.compid ?? 0) == _component && OutputController.Generation == _generation;
+            (_mav?.compid ?? 0) == _component && OutputController.PlanGeneration == _generation;
 
         private void Switch(object sender, EventArgs args)
         {
