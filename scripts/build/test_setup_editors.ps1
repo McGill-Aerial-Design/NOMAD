@@ -183,6 +183,19 @@ function Invoke-SetupEditorTests($Plugin, $ConfigType) {
         $form.Config.Inputs = $validInputs
         $formType.GetMethod('LoadSettings', $private).Invoke($form, @()) | Out-Null
         Require ((Field $form '_linkError').Text -eq '') 'Reload retained old link validation error.'
+        foreach ($name in @('_payloadList', '_inputList', '_linkList')) {
+            $list = Field $form $name
+            $buttons = @($list.Parent.Controls | Where-Object { $_ -is [Windows.Forms.FlowLayoutPanel] } |
+                ForEach-Object { $_.Controls } | Where-Object { $_.Text -in @('Edit', 'Remove') })
+            Require ($buttons.Count -eq 2) ('Setup action buttons unavailable: ' + $name)
+            $list.Rows.Clear()
+            Require (@($buttons | Where-Object { $_.Enabled }).Count -eq 0) ('Empty list offers Edit/Remove: ' + $name)
+            $row = $list.Rows.Add()
+            $list.CurrentCell = $list.Rows[$row].Cells[0]
+            Require (@($buttons | Where-Object { $_.Enabled }).Count -eq 2) ('Selected row cannot be edited: ' + $name)
+            Require ($list.DefaultCellStyle.WrapMode -eq [Windows.Forms.DataGridViewTriState]::True -and
+                $list.AutoSizeRowsMode -eq [Windows.Forms.DataGridViewAutoSizeRowsMode]::AllCells) 'Setup list hides full bindings/endpoints.'
+        }
     } finally { $form.Dispose() }
     Write-Host 'Payload/link/input editors passed current source choices, interlocks, unavailable bindings and independent drafts.'
 }

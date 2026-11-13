@@ -124,6 +124,7 @@ namespace NOMAD.MissionPlanner
                 if (disposing)
                 {
                     _shutdown.Dispose();
+                    _fullscreenForm?.Close();
                     try
                     {
                         ShutdownVideo();

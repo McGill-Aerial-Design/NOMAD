@@ -18,6 +18,9 @@ namespace NOMAD.MissionPlanner
             var add = ControlFactory.Button("Add", (sender, args) => EditPayload(-1));
             var edit = ControlFactory.Button("Edit", (sender, args) => EditPayload(SelectedRow(_payloadList)));
             var remove = ControlFactory.Button("Remove", (sender, args) => RemovePayload());
+            edit.Enabled = remove.Enabled = false;
+            _payloadList.CurrentCellChanged += (sender, args) =>
+                edit.Enabled = remove.Enabled = SelectedRow(_payloadList) >= 0;
             var buttons = ControlFactory.ButtonRow(add, edit, remove); buttons.Dock = DockStyle.None;
             buttons.Location = new Point(12, 290); tab.Controls.Add(buttons);
             _payloadList.CellDoubleClick += (sender, args) => { if (args.RowIndex >= 0) { EditPayload(args.RowIndex); } };

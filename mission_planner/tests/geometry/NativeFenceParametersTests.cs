@@ -354,6 +354,10 @@ internal static class NativeFenceParametersTests
                         Array.ConvertAll(names, name => planner.Commands.Rows[0].Cells[name].Value), values),
                     "Busy native request is refused even when Fence is already selected");
                 peer.Connection.giveComport = false;
+                long previousGeneration = (long)Output.GetProperty("Generation", Static).GetValue(null);
+                Output.GetMethod("UpdateSettings", Static).Invoke(null, new object[] { peer.Config.Clone() });
+                Check((long)Output.GetProperty("Generation", Static).GetValue(null) > previousGeneration,
+                    "Same-aircraft settings still retire custom control commands");
                 planner.cmb_missiontype.SelectedItem = MAVLink.MAV_MISSION_TYPE.MISSION;
                 Check(planner.Commands.Rows.Cast<DataGridViewRow>().Count(row => !row.IsNewRow) == 1 &&
                     Convert.ToDouble(planner.Commands.Rows[0].Cells[1].Value) == 7 && ReferenceEquals(planner.Commands.Rows[0].Tag, tag),

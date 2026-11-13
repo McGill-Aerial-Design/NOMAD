@@ -275,7 +275,7 @@ internal static partial class VideoLifetimeTests
                     player.Player.DisplayedVideoFrame.Detections.Count == 0 &&
                     config.SelectedVideoInput.DetectorModelProfilePath == current && pipeline.Starts == 1,
                     "Optional catalog failure stopped plain frames or replaced the saved model");
-                var row = (FlowLayoutPanel)player.Player.Toolbar.GetControlFromPosition(0, 1);
+                var row = player.Player.VisionOptions;
                 var manage = row.Controls.OfType<Button>().Single(button => button.AccessibleName == "Manage detection models");
                 typeof(Button).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic)
                     .Invoke(manage, new object[] { EventArgs.Empty });

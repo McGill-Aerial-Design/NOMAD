@@ -308,26 +308,33 @@ namespace NOMAD.MissionPlanner
                 if (!IsActiveSession(session)) { return; }
                 using (var form = new NOMADSettingsForm(_profiles))
                 {
+                    bool connectionChanged = false;
+                    form.FormClosing += (sender, args) =>
+                    {
+                        if (form.DialogResult != DialogResult.OK) { return; }
+                        if (!IsActiveSession(session)) { form.DialogResult = DialogResult.Cancel; return; }
+                        try
+                        {
+                            connectionChanged = form.Profiles.SaveForConnection(_profiles,
+                                MainV2.comPort?.BaseStream?.IsOpen == true);
+                        }
+                        catch (Exception ex)
+                        {
+                            args.Cancel = true;
+                            form.DialogResult = DialogResult.None;
+                            MessageBox.Show(form, ex.Message, "Aircraft profiles were not saved",
+                                MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
+                    };
                     if (form.ShowDialog() != DialogResult.OK || !IsActiveSession(session)) { return; }
-                    bool connectionChanged;
-                    try
-                    {
-                        form.Profiles.CheckForConnection(_profiles, MainV2.comPort?.BaseStream?.IsOpen == true);
-                        if (!IsActiveSession(session)) { return; }
-                        connectionChanged = form.Profiles.SaveForConnection(_profiles, MainV2.comPort?.BaseStream?.IsOpen == true);
-                    }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show(ex.Message, "Aircraft profiles were not saved", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return;
-                    }
                     StopHudVideo();
                     GimbalJoystickWindow.CloseSingleton();
                     _gimbalArrowKeyFilter?.Dispose();
                     _profiles = form.Profiles;
                     _config = _profiles.Selected.Config;
                     GimbalController.ApplyProfile(_config);
-                    OutputController.Initialize(_config);
+                    if (connectionChanged) { OutputController.Initialize(_config); }
+                    else { OutputController.UpdateSettings(_config); }
                     _termination?.Dispose();
                     _termination = new TerminationController(_config);
                     NOMADMainScreen.SetTerminationController(_termination);

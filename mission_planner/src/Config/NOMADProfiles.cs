@@ -165,10 +165,9 @@ namespace NOMAD.MissionPlanner
             { throw new InvalidOperationException("Wait for the payload command/repeat to finish, or send Safe, before saving settings."); }
             bool connectionChanged = !string.Equals(SelectedId, active.SelectedId, StringComparison.OrdinalIgnoreCase) ||
                 !Selected.Config.HasSameRouterSettings(active.Selected.Config);
-            bool outputChanged = !Selected.Config.HasSameOutputSettings(active.Selected.Config);
-            if ((connectionChanged || outputChanged) && connectionOpen)
+            if (connectionChanged && connectionOpen)
             {
-                throw new InvalidOperationException("Disconnect Mission Planner before changing aircraft, physical links or output/input calibration.");
+                throw new InvalidOperationException("Disconnect Mission Planner before changing aircraft or physical links.");
             }
             return connectionChanged;
         }

@@ -122,6 +122,52 @@ internal static partial class GroundRouterTests
         }
     }
 
+    private static async Task LearnedPhysicalPeer()
+    {
+        using (var fixture = new TimingRouter())
+        using (var aircraft = UdpSink.ConnectedTo(fixture.Links[0].Config.Port))
+        using (var foreign = UdpSink.ConnectedTo(fixture.Links[0].Config.Port))
+        using (var mp = UdpSink.ConnectedTo(32400))
+        {
+            var link = fixture.Links[0];
+            var socket = TimingField<UdpClient>(link, "_udp");
+            Func<UdpSink, byte[], Task> deliver = async (peer, bytes) =>
+            {
+                peer.Send(bytes);
+                Check(await WaitUntil(() => socket.Available > 0, 1000), "UDP fixture packet never arrived");
+                fixture.Poll();
+            };
+            var heartbeat = Frames.Heartbeat(1, 1, 0);
+            await deliver(foreign, heartbeat.Take(10).ToArray());
+            await deliver(aircraft, heartbeat.Skip(10).ToArray());
+            Check(link.Stats.LastRemote == null && link.Stats.FramesReceived == 0,
+                "Different UDP senders combined a frame or learned a partial frame");
+            await deliver(aircraft, heartbeat);
+            var learned = (IPEndPoint)aircraft.Client.Client.LocalEndPoint;
+            Check(learned.Equals(link.Stats.LastRemote), "Complete aircraft frame did not establish the return peer");
+            await deliver(foreign, new byte[] { 0x55 });
+            await deliver(foreign, heartbeat.Take(10).ToArray());
+            await deliver(foreign, Frames.Heartbeat(2, 1, 1));
+            Check(learned.Equals(link.Stats.LastRemote) && link.Stats.FramesReceived == 1,
+                "Foreign malformed or complete traffic replaced a live aircraft peer");
+            mp.Send(Frames.Marker(70001, 1, 255, 190));
+            var received = new List<uint>();
+            Check(await WaitUntil(() => { fixture.Poll(); DrainMarkers(aircraft, received);
+                return received.Contains(70001); }, 1000), "Command did not reach the learned aircraft peer");
+            await Task.Delay(80); DrainMarkers(aircraft, received);
+            Check(received.Count(id => id == 70001) == 1 && foreign.Drain().Count == 0,
+                "Command was duplicated or redirected to foreign UDP traffic");
+            fixture.Clock.Seconds = 3;
+            await deliver(foreign, Frames.Heartbeat(1, 1, 2));
+            Check(((IPEndPoint)foreign.Client.Client.LocalEndPoint).Equals(link.Stats.LastRemote),
+                "A replacement UDP source port could not recover at the packet timeout");
+            mp.Send(Frames.Marker(70002, 2, 255, 190)); received.Clear();
+            Check(await WaitUntil(() => { fixture.Poll(); DrainMarkers(foreign, received);
+                return received.Contains(70002); }, 1000), "Recovered peer did not receive the next command");
+            Check(aircraft.Drain().Count == 0, "Command also reached the retired aircraft endpoint");
+        }
+    }
+
     private static void StatsClockJumps()
     {
         foreach (var jump in new[] { 48.0, -96.0 })

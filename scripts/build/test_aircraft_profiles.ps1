@@ -100,12 +100,22 @@ function Invoke-AircraftProfileTests {
         } else {
             $outputDraft.Selected.Config.Inputs = [Newtonsoft.Json.Linq.JArray]::Parse('[{"Id":"edit","Name":"Edited control","Device":"test","Source":"Axis","Action":"gimbal:pitch","Deadzone":0.2}]')
         }
-        $rejected = $false
-        try { $saveForConnection.Invoke($outputDraft, [object[]]@($draft, $true)) | Out-Null } catch { $rejected = $true }
-        if (-not $rejected -or [IO.File]::ReadAllText($primary) -cne $beforeRefusedSave) {
-            throw 'Connected output/input calibration change persisted before disconnect.'
+        if ($saveForConnection.Invoke($outputDraft, [object[]]@($draft, $true))) {
+            throw 'Connected payload/input edit requested a router restart.'
+        }
+        $savedOutput = Load-Profiles
+        if ($setting -eq 'definition' -and $savedOutput.Selected.Config.ActuatorDefinitions[0]['channel'].ToObject([int]) -ne 2) {
+            throw 'Connected payload edit was not persisted.'
+        }
+        if ($setting -eq 'input' -and $savedOutput.Selected.Config.Inputs[0]['Id'].ToString() -ne 'edit') {
+            throw 'Connected input edit was not persisted.'
+        }
+        if ($draft.Selected.Config.ActuatorDefinitions[0]['channel'].ToObject([int]) -eq 2 -or
+            $draft.Selected.Config.Inputs.Count -ne 0) {
+            throw 'Saving a connected draft mutated the previous active profile.'
         }
     }
+    $beforeRefusedSave = [IO.File]::ReadAllText($primary)
     $payloadType = $Plugin.GetType('NOMAD.MissionPlanner.PayloadController', $true)
     $payloadType.GetMethod('ApplyProfile', [Reflection.BindingFlags]'Static,NonPublic').Invoke($null, [object[]]@($draft.Selected.Config)) | Out-Null
     $payload = $payloadType.GetProperty('Current', [Reflection.BindingFlags]'Static,NonPublic').GetValue($null)

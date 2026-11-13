@@ -37,6 +37,7 @@ namespace NOMAD.MissionPlanner
         private static bool _open;
         private static bool _writable;
         private static long _generation;
+        private static long _planGeneration;
         private static long _modeGeneration = -1;
         private static int _submittedMode = -1;
         private static long _servoTrackingGeneration = -1, _servoTrackingClaim = -1, _servoTrackingBinding = -1;
@@ -67,6 +68,15 @@ namespace NOMAD.MissionPlanner
             }
         }
         internal static void Initialize(NOMADConfig config)
+        {
+            lock (Gate) { _planGeneration++; }
+            UpdateSettings(config);
+        }
+        internal static long PlanGeneration
+        {
+            get { RefreshConnection(); lock (Gate) { return _planGeneration; } }
+        }
+        internal static void UpdateSettings(NOMADConfig config)
         {
             lock (Gate)
             {
@@ -102,6 +112,7 @@ namespace NOMAD.MissionPlanner
                 _open = open;
                 _writable = writable;
                 _generation++;
+                _planGeneration++;
                 if (_connection != null)
                 {
                     _connection.MavChanged += ConnectionChangedHandler;
@@ -117,6 +128,7 @@ namespace NOMAD.MissionPlanner
                 lock (Gate)
                 {
                     _generation++;
+                    _planGeneration++;
                 }
                 ConnectionChanged?.Invoke();
             }
@@ -139,6 +151,7 @@ namespace NOMAD.MissionPlanner
                 _connection = null;
                 _stream = null;
                 _generation++;
+                _planGeneration++;
             }
         }
         internal static async Task<GimbalRequestResult> SendGimbalTargetAsync(int mode, double? pitch, double? roll,

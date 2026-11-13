@@ -56,6 +56,9 @@ namespace NOMAD.MissionPlanner
             _selector.Name = "ActiveVideoInput";
             _selector.AccessibleName = "Active video input";
             _selector.Width = 180;
+            _selector.FontChanged += (sender, args) => _selector.Width = Math.Max(180, Math.Min(360,
+                config.VideoInputs.Select(input => TextRenderer.MeasureText(input.Name, _selector.Font).Width + 30)
+                    .DefaultIfEmpty(180).Max()));
             _selector.Enabled = selectInput != null && config.VideoInputs.Count > 1 &&
                 !shutdown.IsCancellationRequested;
             _toolTip.SetToolTip(_selector,
@@ -115,7 +118,7 @@ namespace NOMAD.MissionPlanner
             _models.Width = 220; _models.AccessibleName = "Detection model"; _models.Name = "DetectionModel";
             _models.Enabled = _selectModel != null && !shutdown.IsCancellationRequested;
             _toolTip.SetToolTip(_models, "Select the detection model for this camera. Video and generic region tracking continue.");
-            var row = (FlowLayoutPanel)Player.Toolbar.GetControlFromPosition(0, 1);
+            var row = Player.VisionOptions;
             row.Controls.Add(_models);
             var manage = ControlFactory.Button("Manage models", async (sender, args) =>
             {
@@ -125,7 +128,7 @@ namespace NOMAD.MissionPlanner
                     await Task.Run(() => new VisionModelCatalog().Choices(path));
                     if (IsDisposed || _shutdown.IsCancellationRequested) { return; }
                     using (var dialog = new VisionModelsForm(path))
-                    { dialog.ShowDialog(this); }
+                    { dialog.ShowDialog(Player.Toolbar.FindForm() ?? FindForm()); }
                 }
                 catch (Exception failure) when (failure is System.IO.IOException ||
                     failure is UnauthorizedAccessException || failure is Newtonsoft.Json.JsonException ||
@@ -136,7 +139,9 @@ namespace NOMAD.MissionPlanner
                 }
                 if (!IsDisposed) { _modelPath = null; RefreshModel(_config.SelectedVideoInput); }
             }, width: 115, height: 28);
-            manage.AccessibleName = "Manage detection models"; row.Controls.Add(manage);
+            manage.AccessibleName = "Manage detection models"; manage.AutoSize = true; row.Controls.Add(manage);
+            row.Controls.SetChildIndex(_models, 0);
+            row.Controls.SetChildIndex(manage, 1);
             _models.SelectedIndexChanged += async (sender, args) =>
             {
                 if (_loading || _savingModel || !(_models.SelectedItem is VisionModelChoice selected)) { return; }

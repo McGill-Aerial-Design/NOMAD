@@ -51,6 +51,7 @@ internal static partial class GroundRouterTests
     {
         await RunAsync("owner: native outbound and profile replacement", PluginOwnerLifecycle);
         await RunAsync("timing: learned consumer endpoint across UTC jumps", ConsumerEndpointClockJumps);
+        await RunAsync("router: learned UDP peer resists foreign traffic and recovers after timeout", LearnedPhysicalPeer);
         Run("timing: physical freshness, health and jitter across UTC jumps", PhysicalFreshnessClockJumps);
         Run("timing: periodic stats and rate windows across UTC jumps", StatsClockJumps);
         Run("timing: reconnect boundary across UTC jumps", ReconnectClockJumps);
