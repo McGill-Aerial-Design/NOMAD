@@ -49,14 +49,14 @@ namespace NOMAD.MissionPlanner
                         var dir = Path.Combine(NOMADStorage.PluginsDirectory, "NOMAD");
                         Directory.CreateDirectory(dir);
                         _logPath = Path.Combine(dir, "nomad.log");
-                        // Simple rollover: keep one previous generation.
-                        var info = new FileInfo(_logPath);
-                        if (info.Exists && info.Length > MaxLogBytes)
-                        {
-                            var old = _logPath + ".old";
-                            if (File.Exists(old)) File.Delete(old);
-                            File.Move(_logPath, old);
-                        }
+                    }
+                    // Check every write so a long-running session keeps only two bounded generations.
+                    var info = new FileInfo(_logPath);
+                    if (info.Exists && info.Length >= MaxLogBytes)
+                    {
+                        var old = _logPath + ".old";
+                        if (File.Exists(old)) File.Delete(old);
+                        File.Move(_logPath, old);
                     }
                     File.AppendAllText(_logPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {message}{Environment.NewLine}");
                 }

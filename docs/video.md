@@ -21,6 +21,9 @@ capture drivers. Busy/missing/unsupported devices report an error.
 HUD, Dashboard and Video share one stream per local device, with independent
 playback/selection state. The camera stays active while any player uses it.
 Local capture always uses a one-frame latest-image queue.
+After 500 ms without a fresh received frame, the video view labels the retained image
+as stale and the HUD clears its owned image. Fresh frames restore playback without
+a restart. This receipt check cannot detect a camera that keeps sending frozen pixels.
 
 ![Video controls and active input selector](images/video-page.png)
 

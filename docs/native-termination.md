@@ -102,6 +102,9 @@ by index, verifies a coherent selectable `TERMINATE` advertisement, then reads
 `AFS_ENABLE`, `AFS_TERM_ACTION` and `AFS_TERM_RATE`. A new connection, selected aircraft
 or detected controller reboot retires that result and starts discovery again.
 The Dashboard widget's **Check** button retries discovery explicitly if needed.
+Explicit Check and settings reads require a fresh selected-aircraft heartbeat and
+wait at most 30 seconds for background discovery. An unavailable result leaves
+background startup discovery running; retry after the connection is ready.
 A valid disabled extension can be configured while disarmed in Fence Setup;
 activation still requires a selectable mode and the configured AFS readbacks. Hover over the
 widget with the NOMAD window in the foreground, release both Shift keys, then

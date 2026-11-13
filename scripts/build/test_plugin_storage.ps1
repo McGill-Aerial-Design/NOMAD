@@ -82,4 +82,12 @@ $logPath = Join-Path $expected 'NOMAD/nomad.log'
 if (!(Test-Path -LiteralPath $logPath) -or !(Get-Content -LiteralPath $logPath -Raw).Contains('Owned native storage check')) {
     throw 'Logger escaped or failed to use native custom storage.'
 }
+[IO.File]::WriteAllText($logPath + '.old', 'Previous log generation')
+[IO.File]::WriteAllText($logPath, [string]::new([char]'x', 5 * 1024 * 1024 + 1))
+$log.GetMethod('Info').Invoke($null, [object[]]@('After in-session rollover')) | Out-Null
+if ((Get-Item -LiteralPath ($logPath + '.old')).Length -ne 5 * 1024 * 1024 + 1 -or
+    (Get-Item -LiteralPath $logPath).Length -gt 1024 -or
+    !(Get-Content -LiteralPath $logPath -Raw).Contains('After in-session rollover')) {
+    throw 'Logger did not rotate an oversized log during the same session.'
+}
 Write-Output 'PASS actual custom profile save/load/backup and native logger'

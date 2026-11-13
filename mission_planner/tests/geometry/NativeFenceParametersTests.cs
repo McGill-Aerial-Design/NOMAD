@@ -130,6 +130,7 @@ internal static class NativeFenceParametersTests
         using (var peer = new Peer())
         using (var shared = (IDisposable)Create("TerminationController", peer.Config))
         {
+            peer.Heartbeat(false); peer.Pump(30);
             peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
             peer.Finish((Task)Call(peer.Controller, "ReadAsync", shared));
             peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
@@ -200,6 +201,7 @@ internal static class NativeFenceParametersTests
         {
             peer.AddTermination(true);
             peer.Announce = false;
+            peer.Heartbeat(false); peer.Pump(30);
             peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
             peer.Finish((Task)Call(peer.Controller, "ReadAsync", shared));
             peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
@@ -211,6 +213,7 @@ internal static class NativeFenceParametersTests
         {
             peer.AddTermination(true);
             peer.Selectable = false;
+            peer.Heartbeat(false); peer.Pump(30);
             peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
             peer.Finish((Task)Call(peer.Controller, "ReadAsync", shared));
             peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));
@@ -231,6 +234,7 @@ internal static class NativeFenceParametersTests
         using (var shared = (IDisposable)Create("TerminationController", peer.Config))
         {
             peer.AddTermination(false);
+            peer.Heartbeat(false); peer.Pump(30);
             peer.Controller = (IDisposable)Create("FenceParameters", peer.Config);
             peer.Finish((Task)Call(peer.Controller, "ReadAsync", shared));
             peer.Finish((Task)Call(peer.Controller, "ReadTerminationAsync", shared));

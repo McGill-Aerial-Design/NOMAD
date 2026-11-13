@@ -51,4 +51,11 @@ $batteryExe = Join-Path $outDir 'BatteryHealthTests.exe'
 & $csc /nologo /target:exe /langversion:latest /r:Microsoft.CSharp.dll "/out:$batteryExe" @batterySources
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $batteryExe
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$audioExe = Join-Path $outDir 'AudioAlertsTests.exe'
+& $csc /nologo /target:exe /langversion:latest /nowarn:0436 "/out:$audioExe" `
+    (Join-Path $repoRoot 'mission_planner/src/Notifications/AudioAlerts.cs') `
+    (Join-Path $repoRoot 'mission_planner/tests/audio/AudioAlertsTests.cs')
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $audioExe
 exit $LASTEXITCODE

@@ -59,6 +59,11 @@ namespace NOMAD.MissionPlanner
                 _lblStatus.Text = $"Streaming {frame.Image.Width}x{frame.Image.Height}";
                 _lblStatus.ForeColor = Color.LimeGreen;
             }
+            if (_session.IsActive && _displayedVideoFrame?.Fresh == false)
+            {
+                _lblStatus.Text = "Video stale; waiting for frames";
+                _lblStatus.ForeColor = Color.Yellow;
+            }
             var sample = _session.TakeTrackingSample();
             if (sample != null) { UpdateVisionSample(sample); }
             UpdateVisionStatus();

@@ -67,6 +67,63 @@ internal static partial class VideoLifetimeTests
         }
     }
 
+    private static void StaleVideoDisplay()
+    {
+        var fake = new FakeVideoPipeline();
+        using (var player = new EmbeddedVideoPlayer(new VideoInputProfile { Name = "Stall", Url = "udp://@:5600" },
+            true, CancellationToken.None, () => fake))
+        {
+            player.StartStream(); Wait(fake.ReadEntered, "stalled player startup");
+            fake.Frames.Add(new Bitmap(2, 2));
+            WaitUi(() => { Tick(player); return player.DisplayedVideoFrame != null; }, "initial player image");
+            var image = player.DisplayedVideoFrame.Image;
+            var status = GetField<Label>(player, "_lblStatus");
+            Check(status.ForeColor == Color.LimeGreen, "Fresh player frame was not shown as streaming");
+            WaitUi(() => { Tick(player); return status.Text.Contains("stale"); }, "stale player warning");
+            Tick(player);
+            Check(status.ForeColor == Color.Yellow && ReferenceEquals(player.DisplayedVideoFrame.Image, image),
+                "Silent player stayed healthy or discarded its last frame context");
+            fake.Frames.Add(new Bitmap(3, 3));
+            WaitUi(() => { Tick(player); return player.DisplayedVideoFrame.Image.Width == 3; }, "fresh player recovery");
+            Check(status.ForeColor == Color.LimeGreen && fake.Starts == 1,
+                "Fresh player frame did not restore streaming without a restart");
+            CheckDisposed(image);
+        }
+        CheckClean(fake);
+
+        fake = new FakeVideoPipeline();
+        using (var hud = new PictureBox())
+        using (var foreign = new Bitmap(4, 4))
+        {
+            int clears = 0;
+            using (var video = new HudVideoPlayer(hud, frame =>
+                { if (frame == null) { clears++; } hud.Image = frame; }, () => hud.Image, () => fake))
+            {
+                video.Start("fake"); Wait(fake.ReadEntered, "stalled HUD startup");
+                fake.Frames.Add(new Bitmap(2, 2));
+                WaitUi(() => { Tick(video); return hud.Image != null; }, "initial HUD image");
+                var image = hud.Image;
+                WaitUi(() => { Tick(video); return hud.Image == null; }, "stale HUD clearing");
+                Tick(video);
+                Check(clears == 1 && video.IsActive, "Silent HUD repeatedly cleared or stopped capture");
+                CheckDisposed((Bitmap)image);
+                fake.Frames.Add(new Bitmap(3, 3));
+                WaitUi(() => { Tick(video); return hud.Image != null; }, "fresh HUD recovery");
+                Check(hud.Image.Width == 3 && fake.Starts == 1, "HUD did not recover without restarting capture");
+                image = hud.Image;
+                hud.Image = foreign;
+                WaitUi(() =>
+                {
+                    Tick(video);
+                    return GetField<VideoFrame>(video, "_displayedVideoFrame") == null;
+                }, "foreign HUD ownership after silence");
+                Check(ReferenceEquals(hud.Image, foreign) && clears == 1, "Stale HUD cleared another owner's image");
+                CheckDisposed((Bitmap)image);
+            }
+        }
+        CheckClean(fake);
+    }
+
     private static void SnapshotFilesAndFailure()
     {
         string directory = Path.Combine(Path.GetTempPath(), "NOMAD-Snapshot-" + Guid.NewGuid().ToString("N"));
@@ -285,6 +342,8 @@ internal static partial class VideoLifetimeTests
             Check(ReferenceEquals(hud.Image, frame), "HUD did not display owned frame");
             plugin.Exit();
             plugin.Exit();
+            Check(!AudioAlerts.Enabled && !AudioAlerts.SpeechEnabled && !AudioAlerts.AltitudeCalloutsEnabled,
+                "Plugin exit retained audio admission");
             Check(shutdown.IsCancellationRequested, "Plugin exit did not propagate shutdown");
             CheckClean(fake);
             Check(hud.Image == null, "Plugin exit retained HUD image");

@@ -88,6 +88,7 @@ namespace NOMAD.MissionPlanner
 
         private static int _inflight;
         private static long _modeRevision;
+        private static long _rateRevision = -1;
         private static long _manualRevision;
         private static long _bindingRevision;
         internal static long BindingRevision => Interlocked.Read(ref _bindingRevision);
@@ -201,7 +202,7 @@ namespace NOMAD.MissionPlanner
                     return;
                 }
             if (generation != OutputController.Generation || binding != BindingRevision) { return; }
-            long revision = RecordManualInput();
+            long revision = RecordManualInput(rate: true);
             GimbalCommand.IntegrateStick(TargetPitchDeg, TargetRollDeg, stickX, stickY,
                 GimbalCommand.ClampRate(rate), dt, out float pitch, out float roll);
             if (OutputController.GimbalAxes?.Count > 0)
@@ -225,18 +226,18 @@ namespace NOMAD.MissionPlanner
         internal static void ApplyScreenStick(float x, float y, float dt, bool send)
         {
             if (!Finite(dt) || dt <= 0 || dt > .5f) { return; }
-            MoveScreenTarget(x, y, _maxRateDegSec * dt, SelectedMode, send);
+            MoveScreenTarget(x, y, _maxRateDegSec * dt, SelectedMode, send, rate: true);
         }
         internal static void NudgeScreenTarget(float x, float y, float degrees) =>
             MoveScreenTarget(x, y, degrees, MountMode.MavlinkTargeting, true);
-        private static void MoveScreenTarget(float x, float y, float amount, MountMode mode, bool send)
+        private static void MoveScreenTarget(float x, float y, float amount, MountMode mode, bool send, bool rate = false)
         {
             if (!Finite(amount) || amount <= 0 || amount > MAX_MAX_RATE_DEG_SEC ||
                 !GimbalCommand.TryMapScreenAxes(ScreenHorizontalAxis, ScreenVerticalAxis,
                     ScreenHorizontalInverted, ScreenVerticalInverted, x, y, out float dp, out float dr, out float dy) ||
                 (dp == 0 && dr == 0 && dy == 0)) { return; }
             long generation = OutputController.Generation;
-            long revision = RecordManualInput();
+            long revision = RecordManualInput(rate);
             float pitch = ClampTarget("Pitch", TargetPitchDeg + dp * amount);
             float roll = ClampTarget("Roll", TargetRollDeg + dr * amount);
             float yaw = ClampTarget("Yaw", TargetYawDeg + dy * amount);
@@ -261,10 +262,16 @@ namespace NOMAD.MissionPlanner
             SendAsync(MountMode.MavlinkTargeting, pitch, 0, yaw, generation, Interlocked.Read(ref _modeRevision),
                 () => manualRevision == ManualRevision && inputStillCurrent?.Invoke() == true, videoInputName,
                 CurrentTrackingClaim);
-        private static long RecordManualInput()
+        private static long RecordManualInput(bool rate = false)
         {
             Interlocked.Increment(ref _manualRevision);
-            long revision = Interlocked.Increment(ref _modeRevision);
+            long revision = Interlocked.Read(ref _modeRevision);
+            // Continuous samples must let an admitted pose finish its remaining servo axes.
+            if (!rate || revision != Interlocked.Read(ref _rateRevision))
+            {
+                revision = Interlocked.Increment(ref _modeRevision);
+                if (rate) { Interlocked.Exchange(ref _rateRevision, revision); }
+            }
             ManualInput?.Invoke();
             return revision;
         }
@@ -295,6 +302,7 @@ namespace NOMAD.MissionPlanner
                     return new GimbalRequestResult(GimbalRequestOutcome.NotSent, "Angle targets require MAVLink targeting.");
                 }
                 var previousPose = LastSubmittedPose;
+                long manualRevision = ManualRevision;
                 var result = await OutputController.SendGimbalTargetAsync((int)mode, pitch, roll, yaw, generation,
                     Current, videoInputName, trackingClaim).ConfigureAwait(false);
                 if (result.Outcome != GimbalRequestOutcome.Busy)
@@ -319,7 +327,7 @@ namespace NOMAD.MissionPlanner
                 else if (generation == OutputController.Generation && Current())
                 {
                     SelectedMode = mode;
-                    if (pitch.HasValue)
+                    if (pitch.HasValue && manualRevision == ManualRevision)
                     {
                         SetTargetAnglesCore(pitch.Value, roll.Value, yaw);
                     }

@@ -53,11 +53,13 @@ namespace NOMAD.MissionPlanner
         {
             public string Text;
             public string Component; // null => no dedup
+            public long Revision;
         }
         private static readonly LinkedList<SpeechItem> _speechQueue = new LinkedList<SpeechItem>();
         private static readonly object _queueLock = new object();
         private static readonly AutoResetEvent _queueSignal = new AutoResetEvent(false);
         private static Thread _speechWorker;
+        private static long _speechRevision;
 
         /// <summary>Enable spoken (text-to-speech) descriptions of alerts.</summary>
         public static bool SpeechEnabled { get; set; } = true;
@@ -77,9 +79,34 @@ namespace NOMAD.MissionPlanner
         public static void ApplyConfig(NOMADConfig cfg)
         {
             if (cfg == null) return;
-            Enabled = cfg.AudioAlerts;
-            SpeechEnabled = cfg.AudioAlerts;
-            AltitudeCalloutsEnabled = cfg.AudioAlerts && cfg.AltitudeCallouts;
+            ApplyPreferences(cfg.AudioAlerts, cfg.AltitudeCallouts);
+        }
+
+        public static void Shutdown() => ApplyPreferences(false, false);
+
+        private static void ApplyPreferences(bool enabled, bool altitudeCallouts)
+        {
+            lock (_queueLock)
+            {
+                Enabled = SpeechEnabled = enabled;
+                AltitudeCalloutsEnabled = enabled && altitudeCallouts;
+                if (!enabled)
+                {
+                    _speechRevision++;
+                    _speechQueue.Clear();
+                }
+                else if (!altitudeCallouts)
+                {
+                    var node = _speechQueue.First;
+                    while (node != null)
+                    {
+                        var next = node.Next;
+                        if (node.Value.Component == "altitude") { _speechQueue.Remove(node); }
+                        node = next;
+                    }
+                }
+            }
+            _queueSignal.Set();
             if (Enabled) StartKeepWarm(); else StopKeepWarm();
         }
 
@@ -88,7 +115,12 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static void Play(AlertKind kind, bool ignoreRateLimit = false)
         {
-            if (!Enabled) return;
+            long revision;
+            lock (_queueLock)
+            {
+                if (!Enabled) { return; }
+                revision = _speechRevision;
+            }
 
             lock (_lock)
             {
@@ -103,7 +135,7 @@ namespace NOMAD.MissionPlanner
 
             Task.Run(() =>
             {
-                try { PlayPattern(kind); }
+                try { PlayPattern(kind, revision); }
                 catch (Exception ex) { Log.Error($"AudioAlerts error - {ex.Message}"); }
             });
         }
@@ -121,8 +153,14 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private static void PlayPattern(AlertKind kind)
+        private static bool AudioCurrent(long revision)
         {
+            lock (_queueLock) { return Enabled && revision == _speechRevision; }
+        }
+
+        private static void PlayPattern(AlertKind kind, long revision)
+        {
+            if (!AudioCurrent(revision)) { return; }
             // Wake the audio device with 300 ms of silence first — output
             // devices (especially Bluetooth/USB) power up with latency, which
             // clipped the start of beep sequences.
@@ -131,16 +169,17 @@ namespace NOMAD.MissionPlanner
             switch (kind)
             {
                 case AlertKind.BatteryWarning:
-                    Beep(900, 220); Sleep(80); Beep(600, 300);
+                    Beep(900, 220, revision); Sleep(80); Beep(600, 300, revision);
                     break;
                 case AlertKind.BatteryCritical:
-                    for (int i = 0; i < 5; i++) { Beep(1800, 130); Sleep(70); }
+                    for (int i = 0; i < 5; i++) { Beep(1800, 130, revision); Sleep(70); }
                     break;
             }
         }
 
-        private static void Beep(int hz, int ms)
+        private static void Beep(int hz, int ms, long revision)
         {
+            if (!AudioCurrent(revision)) { return; }
             try { Console.Beep(hz, ms); }
             catch
             {
@@ -238,16 +277,20 @@ namespace NOMAD.MissionPlanner
         {
             lock (_keepWarmLock)
             {
-                if (_keepWarm != null) return;
+                if (!Enabled || _keepWarm != null) return;
+                SoundPlayer player = null;
+                MemoryStream stream = null;
                 try
                 {
                     // 0.5 s silent buffer, looped seamlessly by the OS (SND_LOOP).
-                    var player = new SoundPlayer(BuildWav(0, 500));
+                    stream = BuildWav(0, 500);
+                    player = new SoundPlayer(stream);
                     player.PlayLooping();
                     _keepWarm = player; // holds the stream alive for the life of the loop
                 }
                 catch (Exception ex)
                 {
+                    player?.Dispose(); stream?.Dispose();
                     Log.Error($"keep-warm start failed - {ex.Message}");
                 }
             }
@@ -258,8 +301,14 @@ namespace NOMAD.MissionPlanner
         {
             lock (_keepWarmLock)
             {
-                try { _keepWarm?.Stop(); } catch { }
+                var player = _keepWarm;
                 _keepWarm = null;
+                if (player == null) { return; }
+                var stream = player.Stream;
+                try { player.Stop(); } catch { }
+                try { player.Dispose(); }
+                catch (Exception ex) { Log.Error($"keep-warm cleanup failed - {ex.Message}"); }
+                finally { stream?.Dispose(); }
             }
         }
 
@@ -296,7 +345,13 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static void Speak(string text, string component = null, bool ignoreRateLimit = false)
         {
-            if (!SpeechEnabled || string.IsNullOrWhiteSpace(text)) return;
+            if (string.IsNullOrWhiteSpace(text)) return;
+            long revision;
+            lock (_queueLock)
+            {
+                if (!Enabled || !SpeechEnabled) { return; }
+                revision = _speechRevision;
+            }
 
             lock (_lock)
             {
@@ -309,7 +364,7 @@ namespace NOMAD.MissionPlanner
                 _lastSpoken[text] = DateTime.UtcNow;
             }
 
-            EnqueueSpeech(new SpeechItem { Text = text, Component = component });
+            EnqueueSpeech(new SpeechItem { Text = text, Component = component, Revision = revision });
         }
 
         /// <summary>Convenience: play the beep pattern and speak a description.</summary>
@@ -323,6 +378,8 @@ namespace NOMAD.MissionPlanner
         {
             lock (_queueLock)
             {
+                if (!Enabled || !SpeechEnabled || item.Revision != _speechRevision ||
+                    (item.Component == "altitude" && !AltitudeCalloutsEnabled)) { return; }
                 if (!string.IsNullOrEmpty(item.Component))
                 {
                     // Drop any still-queued phrases from the same component — the new
@@ -355,37 +412,61 @@ namespace NOMAD.MissionPlanner
 
         private static void SpeechWorkerLoop()
         {
-            while (true)
+            try
             {
-                SpeechItem item = null;
-                lock (_queueLock)
+                while (true)
                 {
-                    if (_speechQueue.Count > 0)
+                    SpeechItem item = null;
+                    lock (_queueLock)
                     {
-                        item = _speechQueue.First.Value;
-                        _speechQueue.RemoveFirst();
+                        if (!Enabled || !SpeechEnabled) { return; }
+                        if (_speechQueue.Count > 0)
+                        {
+                            item = _speechQueue.First.Value;
+                            _speechQueue.RemoveFirst();
+                        }
+                    }
+
+                    if (item == null)
+                    {
+                        _queueSignal.WaitOne();
+                        continue;
+                    }
+
+                    try
+                    {
+                        var synth = GetSynth();
+                        if (synth == null) continue;
+                        lock (_queueLock)
+                        {
+                            if (!Enabled || !SpeechEnabled || item.Revision != _speechRevision ||
+                                (item.Component == "altitude" && !AltitudeCalloutsEnabled)) { continue; }
+                        }
+                        // Synchronous speech already dispatched may finish after mute or shutdown.
+                        synth.Speak(item.Text);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"TTS error - {ex.Message}");
                     }
                 }
-
-                if (item == null)
-                {
-                    _queueSignal.WaitOne();
-                    continue;
-                }
-
+            }
+            finally
+            {
                 try
                 {
-                    var synth = GetSynth();
-                    if (synth == null) continue;
-                    // No pre-roll: the device is held awake by the keep-warm loop
-                    // (StartKeepWarm), so the first syllable fires immediately.
-                    // Synchronous Speak — blocks the worker until the phrase finishes,
-                    // which is exactly what serializes everything.
-                    synth.Speak(item.Text);
+                    lock (_ttsLock)
+                    {
+                        var retiring = _tts;
+                        _tts = null;
+                        retiring?.Dispose();
+                    }
                 }
-                catch (Exception ex)
+                catch (Exception ex) { Log.Error($"TTS cleanup failed - {ex.Message}"); }
+                lock (_queueLock)
                 {
-                    Log.Error($"TTS error - {ex.Message}");
+                    _speechWorker = null;
+                    if (Enabled && SpeechEnabled && _speechQueue.Count > 0) { EnsureSpeechWorker(); }
                 }
             }
         }
@@ -396,19 +477,22 @@ namespace NOMAD.MissionPlanner
             lock (_ttsLock)
             {
                 if (_tts != null) return _tts;
+                SpeechSynthesizer preparing = null;
                 try
                 {
-                    var s = new SpeechSynthesizer();
-                    s.SetOutputToDefaultAudioDevice();
-                    s.Rate = 1;       // slightly fast — important info in noisy environments
-                    s.Volume = 100;
-                    _tts = s;
+                    preparing = new SpeechSynthesizer();
+                    preparing.SetOutputToDefaultAudioDevice();
+                    preparing.Rate = 1;       // slightly fast — important info in noisy environments
+                    preparing.Volume = 100;
+                    _tts = preparing;
+                    preparing = null;
                 }
                 catch (Exception ex)
                 {
                     Log.Error($"TTS init failed - {ex.Message}");
                     return null;
                 }
+                finally { preparing?.Dispose(); }
             }
             return _tts;
         }

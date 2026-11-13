@@ -69,6 +69,9 @@ Open settings from the NOMAD menu or sidebar. The persistent Editing label ident
 the draft aircraft; Save activates it. Profile actions contains reset, load and export.
 Links, Video, Payloads and Inputs belong to that draft; Preferences contains alerts
 and startup diagnostics.
+Muting alerts or unloading NOMAD discards pending speech and tones. Speech or a tone
+already dispatched to Windows may finish. Disabling altitude callouts preserves queued
+battery warnings.
 Payloads, Links and Inputs provide a list with Add, Edit and Remove. Their dialogs validate
 the complete draft before accepting changes; Cancel leaves it untouched. Friendly
 name changes preserve stable IDs and saved input bindings. Payload dialogs show

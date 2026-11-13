@@ -49,6 +49,7 @@ internal static class PluginUiTests
         Gesture();
         Menu();
         NotificationRows();
+        ToastAttachmentLifetime();
         QueuedUiUpdates();
         FlightDataMenuLifetime();
         SameScreen();
@@ -158,6 +159,39 @@ internal static class PluginUiTests
         Application.DoEvents();
         Check(list.Controls.Count == 0 && rows.All(row => row.IsDisposed),
             "A queued notification returned after Clear or removed rows were not disposed.");
+    }
+
+    private static void ToastAttachmentLifetime()
+    {
+        using var owner = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual,
+            Location = new Point(-20000, -20000) };
+        using var first = new NotificationService();
+        using var second = new NotificationService();
+        var handle = owner.Handle;
+        var open = (System.Collections.IList)typeof(NotificationToast)
+            .GetField("_open", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+        try
+        {
+            foreach (bool sameService in new[] { false, true })
+            {
+                NotificationToast.Attach(first, owner);
+                var worker = new Thread(() => first.AddNotification(NotificationSeverity.Warning,
+                    NotificationCategory.System, "Retired " + sameService, "Fixture")) { IsBackground = true };
+                worker.Start();
+                Check(worker.Join(2000), "Toast publisher blocked while queueing a callback");
+                var current = sameService ? first : second;
+                NotificationToast.Attach(current, owner);
+                Application.DoEvents();
+                Check(open.Count == 0, "A queued warning crossed notification attachments");
+                current.AddNotification(NotificationSeverity.Warning, NotificationCategory.System,
+                    "Current " + sameService, "Fixture");
+                Check(open.Count == 1, "Current attachment stopped displaying warnings");
+                var toast = (Form)open[0];
+                NotificationToast.Detach();
+                Check(open.Count == 0 && toast.IsDisposed, "Detaching retained its toast or form resources");
+            }
+        }
+        finally { NotificationToast.Detach(); }
     }
 
     private static void FlightDataMenuLifetime()
