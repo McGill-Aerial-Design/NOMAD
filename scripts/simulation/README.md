@@ -111,7 +111,21 @@ powershell -NoProfile -File scripts/simulation/run_headless.ps1 -Rendered
 powershell -NoProfile -File scripts/simulation/run_headless.ps1 -Rendered -Scene photo-board -VideoCase Detect
 powershell -NoProfile -File scripts/simulation/run_headless.ps1 -Rendered -Visible -Scene natural -VideoCase Object -ObjectMotion orbit -ObjectAltitude 5 -ObjectSpeed 5
 powershell -NoProfile -File scripts/simulation/run_headless.ps1 -Rendered -DurationSeconds 600
+powershell -NoProfile -File scripts/simulation/run_headless.ps1 -Rendered -Scene natural -VideoCase Object -CpuOnly -EncoderKbps 2000 -ObjectMotion approach -TargetCase Moving
 ```
+
+`-CpuOnly` forces the tracker to CPU, Gazebo to Mesa llvmpipe and H.264 to software
+encoding. Its declared camera is 1920×1080 at 10 simulation FPS to reserve CPU for
+physics and telemetry; this does not qualify a live 30 FPS camera. Software rendering
+can still run below real time. Inspect actual clocks, receipt age and rendering logs.
+`-TargetCase Static`, `Moving`, `Occlusion` and `Lookalike` combine the same aircraft
+trajectory with independent deer motion, a covering box, or a nearby matching deer.
+The oracle requires observed target motion and occlusion coverage; labels never reach
+the tracker. A failed motion case retains its failure while collecting the rest of
+the bounded trajectory for diagnosis, without rearming a disarmed tracking intent.
+The headless native cohort requests 50 Hz attitude and 10 Hz servo reports through
+Mission Planner's native API because it has no MainV2 stream-rate loop. These rates
+are per simulation second; product freshness checks remain unchanged.
 
 `-LinuxWorkspace` overrides the default `~/nomad-simulation`. Prepare natural assets
 below before `-Scene natural`. `-Visible` shows owned windows; `-Preview` adds an
@@ -170,7 +184,14 @@ python3 "$NOMAD_REPO/scripts/simulation/score_object_replay.py" --dataset /mnt/c
 Area's contract is its original fixed point; Object's is whole-object bounds/centre.
 Missing/ambiguous truth and wrong accepted points fail rather than disappearing
 from the denominator. Oracle poses/masks never enter NOMAD vision or steering.
+New rendered runs bind decoded images to capture IDs with a checked test-only
+timecode. The receiver erases the code before passing pixels into NOMAD; neither
+the code nor any labels/poses can guide tracking. Corrupt or missing IDs fail truth
+availability. Historical recordings retain their declared fingerprint correspondence.
 Keep each run's declared contract; a newer scorer does not reinterpret old evidence.
+Motion coverage uses the complete independent body-pose history. Scored video must
+also contain at least 40 distinct captures spanning 95% of the commanded motion
+window, so UI endpoint sampling does not hide travel or admit frozen/prefix-only video.
 
 ## Assets and Medicine Hat Task 1 world
 
@@ -179,6 +200,7 @@ Explicit acquisition runs in WSL; runtime world generation never downloads asset
 ```bash
 python3 "$NOMAD_REPO/scripts/simulation/prepare_assets.py" scene
 python3 "$NOMAD_REPO/scripts/simulation/prepare_assets.py" ground
+python3 "$NOMAD_REPO/scripts/simulation/prepare_assets.py" deer
 python3 "$NOMAD_REPO/scripts/simulation/prepare_assets.py" panorama
 # Optional public planar footage; keep footage/annotations local:
 python3 "$NOMAD_REPO/scripts/simulation/prepare_assets.py" video

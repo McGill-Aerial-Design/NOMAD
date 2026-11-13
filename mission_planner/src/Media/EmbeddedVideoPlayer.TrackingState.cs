@@ -26,7 +26,8 @@ namespace NOMAD.MissionPlanner
                 _regionReady = _regionReady && _latestTrackingSample?.Fresh == true &&
                     _session.IsRegionCurrent(_regionRevision);
                 if (!_regionReady) { _selectedAimPoint = null; }
-                _lastStepTicks = _lastRequestTicks = 0;
+                _lastStepTicks = _lastRequestTicks = _nextRequestTicks = 0;
+                _servoTrackingController = default;
                 _trackingStatus = reason + "; target retained, press Track when verified";
                 RecordTrackingEvent("tracking-disarmed");
             }
@@ -37,7 +38,8 @@ namespace NOMAD.MissionPlanner
             _regionReady = false; _selectedAimPoint = null;
             if (_tracking && !_trackingPaused)
             { ++_trackingRevision; _trackingPaused = true; RecordTrackingEvent("tracking-paused"); }
-            _trackingUnappliedYawChange = 0; _lastStepTicks = _lastRequestTicks = 0;
+            _trackingUnappliedYawChange = 0; _lastStepTicks = _lastRequestTicks = _nextRequestTicks = 0;
+            _servoTrackingController = default;
             _trackingStatus = reason;
         }
 
@@ -63,7 +65,7 @@ namespace NOMAD.MissionPlanner
                 if (!validHeading) { DisarmTracking("Aircraft attitude unavailable"); return true; }
                 _trackingAircraftHeading = heading; _trackingUnappliedYawChange = 0;
                 _trackingPitch = pitch; _trackingYaw = yaw;
-                _lastStepTicks = sample.ReceivedTicks; _lastRequestTicks = 0; _trackingPaused = false;
+                _lastStepTicks = sample.ReceivedTicks; _lastRequestTicks = _nextRequestTicks = 0; _trackingPaused = false;
                 _trackingStatus = "Target verified; tracking resumed"; RecordTrackingEvent("tracking-resumed");
             }
             return true;

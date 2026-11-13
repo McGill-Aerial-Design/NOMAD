@@ -28,6 +28,8 @@ internal static class VisionDetectorTests
         if (args.Length == 1 && args[0] == "--gdal-c-runtime") { return GdalCRuntimeFirst(); }
         try
         {
+            if (args.Length == 1 && args[0] == "--tracking-benchmark")
+            { VisualTrackerTests.BenchmarkCpu(); return 0; }
             VisualTrackerTests.Run();
             // The first factory call must work with only embedded ORT resources beside this executable.
             using (var detector = VisionDetectorFactory.Create("", CancellationToken.None))

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 param([string]$FixtureImage = (Join-Path $PSScriptRoot '../../mission_planner/tests/vision/vehicle.png'),
-    [string]$TrackingFrames = '', [string]$TrackingGroundTruth = '')
+    [string]$TrackingFrames = '', [string]$TrackingGroundTruth = '', [switch]$BenchmarkTracking)
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 & (Join-Path $PSScriptRoot 'prepare_vision.ps1')
@@ -32,9 +32,10 @@ try {
 }
 $exe = Join-Path $outDir 'VisionDetectorTests.exe'
 $sources = @('VideoDetection', 'VisionDetectorFactory', 'VisionModelProfile', 'VisionRuntime', 'YoloXVideoDetector',
-    'IVisualTracker', 'VisualTrackerFactory', 'CsrtVisualTracker', 'FrozenAppearance', 'VisualTrackingImage',
+    'IVisualTracker', 'VisualTrackerFactory', 'ObjectVisualTracker', 'FrozenAppearance', 'VisualTrackingImage',
     'AreaVisualTracker', 'AreaVisualTracker.Matching', 'ObjectRecoveryReference', 'ObjectForeground',
-    'CsrtVisualTracker.Object', 'EfficientTamVisualTracker', 'EfficientTamCore',
+    'ObjectVisualTracker.Appearance', 'ObjectVisualTracker.Motion', 'CpuTemplateTracker', 'VisualFeatureMatching',
+    'EfficientTamVisualTracker', 'EfficientTamCore',
     'GpuAdapter') |
     ForEach-Object { Join-Path $repoRoot "mission_planner\src\Vision\$_.cs" }
 $sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisionDetectorTests.cs'
@@ -43,6 +44,8 @@ $sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests
 $sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.Panorama.cs'
 $sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.ObjectMotion.cs'
 $sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.Gpu.cs'
+$sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.Performance.cs'
+$sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.CpuTemplate.cs'
 $resources = @(Get-ChildItem -LiteralPath $runtime -File | ForEach-Object {
     "/resource:$($_.FullName),NOMAD.Vision.$($_.Name)"
 })
@@ -75,10 +78,11 @@ try {
     $env:NOMAD_VISION_TEST_DATA = $testData
     $env:NOMAD_VISION_TRACKING_FRAMES = $TrackingFrames
     $env:NOMAD_VISION_TRACKING_GT = $TrackingGroundTruth
-    if ($FixtureImage) { & $exe ([IO.Path]::GetFullPath($FixtureImage)) } else { & $exe }
+    if ($BenchmarkTracking) { & $exe '--tracking-benchmark' }
+    elseif ($FixtureImage) { & $exe ([IO.Path]::GetFullPath($FixtureImage)) } else { & $exe }
     $result = $LASTEXITCODE
     # Native modules are process-wide, so Mission Planner's GDAL C runtime case runs in its own process.
-    if ($result -eq 0) { & $exe '--gdal-c-runtime'; $result = $LASTEXITCODE }
+    if ($result -eq 0 -and -not $BenchmarkTracking) { & $exe '--gdal-c-runtime'; $result = $LASTEXITCODE }
 } finally {
     $env:NOMAD_VISION_TEST_DATA = $previousData
     $env:NOMAD_VISION_TRACKING_FRAMES = $previousFrames

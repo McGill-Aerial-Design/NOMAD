@@ -35,12 +35,13 @@ namespace NOMAD.MissionPlanner
         private string _trackingStatus = "Click or drag to select a target";
         private long _trackingRevision, _trackingManualRevision, _latestSequence, _latestReceivedTicks;
         private VideoTrackingSample _latestTrackingSample;
-        private long _lastStepTicks, _lastRequestTicks, _trackingVideoGeneration;
+        private long _lastStepTicks, _lastRequestTicks, _nextRequestTicks, _trackingVideoGeneration;
         private long _commandGeneration = -1, _commandVideoGeneration = -1;
         private int _trackingInFlight, _submittedTrackingCommands;
         private float _trackingPitch, _trackingYaw, _commandedPitch, _commandedYaw;
         private float _trackingAircraftHeading;
         private float _trackingUnappliedYawChange;
+        private ServoTrackingController _servoTrackingController;
         private OutputController.NativeTarget _trackingTarget;
         private MAVState _trackingMav;
         internal VideoFrame DisplayedVideoFrame => _displayedVideoFrame;
@@ -231,7 +232,8 @@ namespace NOMAD.MissionPlanner
                 _trackingPitch = currentPitch; _trackingYaw = currentYaw;
                 _trackingAircraftHeading = heading;
                 _trackingUnappliedYawChange = 0;
-                _lastStepTicks = sample.ReceivedTicks; _lastRequestTicks = 0;
+                _servoTrackingController = default;
+                _lastStepTicks = sample.ReceivedTicks; _lastRequestTicks = _nextRequestTicks = 0;
                 _trackingStatus = "Tracking selected region";
                 RecordTrackingEvent("tracking-started");
             }
@@ -255,6 +257,7 @@ namespace NOMAD.MissionPlanner
                 _selectionDetectorIdentity = null; _selectedAimPoint = null;
                 _selectionTarget = null; _selectionMav = null;
                 _selectionInitialized = false; _trackingPaused = false; _trackingUnappliedYawChange = 0;
+                _servoTrackingController = default;
                 _trackingTarget = null; _trackingMav = null;
                 _trackingStatus = reason;
                 if (changed) { RecordTrackingEvent("tracking-retired"); }
@@ -341,6 +344,10 @@ namespace NOMAD.MissionPlanner
                 attitude.pitchspeed, attitude.yawspeed, age, out heading);
         }
 
+        private bool FreshTrackingVideo() => _displayedVideoFrame?.Fresh == true &&
+            _displayedVideoFrame.Generation == _session.Generation && _session.State == VideoState.Streaming &&
+            _session.HasRegion(_regionRevision);
+
         private void UpdateVisionSample(VideoTrackingSample sample)
         {
             lock (_visionGate)
@@ -352,12 +359,16 @@ namespace NOMAD.MissionPlanner
                 if (!sample.Fresh && sample.Region.Found && WaitingForRegionInitialization) { return; }
                 if (!sample.Fresh)
                 {
-                    DisarmTracking("Video stale");
+                    if (_tracking && FreshTrackingVideo()) { PauseTracking("Tracking delayed; waiting for verified image"); }
+                    else { DisarmTracking("Video stale"); }
                     return;
                 }
                 if (_tracking && (sample.ReceivedTicks - _latestReceivedTicks) /
                     (double)Stopwatch.Frequency >= .5)
-                { DisarmTracking("Video receipt gap"); }
+                {
+                    if (FreshTrackingVideo()) { PauseTracking("Tracking delayed; waiting for verified image"); }
+                    else { DisarmTracking("Video receipt gap"); }
+                }
                 _selectionInitialized = true;
                 _latestTrackingSample = sample;
                 if (sample.Region.State == VisualTrackingState.Searching || sample.Region.State == VisualTrackingState.Outside)
@@ -379,8 +390,9 @@ namespace NOMAD.MissionPlanner
 
         private async Task DriveTrackingAsync(VideoTrackingSample sample)
         {
-            long revision, manual, generation;
+            long revision, manual, generation, stepTicks;
             float pitch, yaw, headingChange, compensation;
+            ServoTrackingController servoController;
             OutputController.NativeTarget target;
             MAVState mav;
             lock (_visionGate) { target = _trackingTarget; mav = _trackingMav; }
@@ -394,10 +406,18 @@ namespace NOMAD.MissionPlanner
                 float step = _input.TrackingMaxRateDegSec * (float)Math.Min(dt, .2);
                 compensation = GimbalCommand.Clamp(headingChange, -step, step);
                 if (!_tracking || _trackingPaused || !_selectedAimPoint.HasValue || !_regionReady ||
-                    (now - _lastRequestTicks) / (double)Stopwatch.Frequency < .05) { return; }
-                if (!VideoTrackingAngles.TryStep(_input, sample.ImageSize, _selectedAimPoint.Value,
+                    now + Stopwatch.Frequency / 100 < _nextRequestTicks) { return; }
+                // Propose a value copy: busy/retired requests must not advance PID state.
+                servoController = _servoTrackingController;
+                stepTicks = _lastStepTicks;
+                bool stepped = _input.ServoGimbalAxes.Count > 0
+                    ? servoController.TryStep(_input, sample.ImageSize, _selectedAimPoint.Value,
                         _trackingPitch, _trackingYaw, dt, out pitch, out yaw,
-                        compensation, _trackingMode == VisualTrackingMode.Object))
+                        compensation, _trackingMode == VisualTrackingMode.Object)
+                    : VideoTrackingAngles.TryStep(_input, sample.ImageSize, _selectedAimPoint.Value,
+                        _trackingPitch, _trackingYaw, dt, out pitch, out yaw,
+                        compensation, _trackingMode == VisualTrackingMode.Object);
+                if (!stepped)
                 {
                     if (_trackingMode == VisualTrackingMode.Object)
                     { _trackingAircraftHeading = heading; _trackingUnappliedYawChange = 0; }
@@ -409,7 +429,13 @@ namespace NOMAD.MissionPlanner
             { return; }
             try
             {
-                lock (_visionGate) { _lastRequestTicks = Stopwatch.GetTimestamp(); }
+                lock (_visionGate)
+                {
+                    if (stepTicks != _lastStepTicks) { return; }
+                    _lastRequestTicks = Stopwatch.GetTimestamp();
+                    // Keep a 30 Hz schedule with 10 ms jitter allowance; never accumulate overdue sends.
+                    _nextRequestTicks = Math.Max(_lastRequestTicks, _nextRequestTicks) + Stopwatch.Frequency / 30;
+                }
                 var result = await GimbalController.RequestTrackingTargetAsync(pitch, yaw, generation, manual,
                     () => TrackingInputCurrent(revision, sample.Sequence,
                         _input.ServoGimbalAxes.Count > 0 ? sample.ReceivedTicks : (long?)null), _input.Name).ConfigureAwait(false);
@@ -423,6 +449,7 @@ namespace NOMAD.MissionPlanner
                         if (_tracking && revision == _trackingRevision)
                         {
                             _trackingPitch = pitch; _trackingYaw = yaw; _trackingAircraftHeading = heading;
+                            _servoTrackingController = servoController;
                             _lastStepTicks = sample.ReceivedTicks;
                             // Carry rate clipping; TryStep's deliberate Object attenuation is already excluded.
                             _trackingUnappliedYawChange = (_input.ServoGimbalAxes.Count > 0 &&
@@ -450,12 +477,16 @@ namespace NOMAD.MissionPlanner
             if (SelectedRegion.HasValue && _selectionTarget != null && (!_selectionTarget.IsCurrent ||
                 !ReferenceEquals(_selectionTarget.Connection.MAV, _selectionMav)))
             { RetireTracking("Aircraft or connection changed; select again"); }
-            if (IsTracking && (_latestTrackingSample?.Fresh != true ||
-                _session.Generation != _trackingVideoGeneration ||
+            if (IsTracking && (_session.Generation != _trackingVideoGeneration ||
                 _trackingClaim != GimbalController.CurrentTrackingClaim ||
                 _trackingManualRevision != GimbalController.ManualRevision ||
                 !TryAircraftHeading(_trackingTarget, _trackingMav, out _)))
             { DisarmTracking("Video, aircraft telemetry or control ownership changed"); }
+            if (IsTracking && _latestTrackingSample?.Fresh != true)
+            {
+                if (FreshTrackingVideo()) { PauseTracking("Tracking delayed; waiting for verified image"); }
+                else { DisarmTracking("Video stale"); }
+            }
             if (RegionReady && !_session.IsRegionCurrent(_regionRevision))
             {
                 lock (_visionGate)

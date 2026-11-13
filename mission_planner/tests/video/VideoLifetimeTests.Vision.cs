@@ -217,7 +217,7 @@ internal static partial class VideoLifetimeTests
             Check(path != null && File.Exists(path) && File.Exists(Path.ChangeExtension(path, ".json")), "Observation pair was not saved");
             var metadata = JObject.Parse(File.ReadAllText(Path.ChangeExtension(path, ".json")));
             Check((long)metadata["Sequence"] == savedSequence && (int)metadata["Width"] == 100 &&
-                (string)metadata["SelectedTarget"]["Tracker"] == "OpenCV CSRT" &&
+                (string)metadata["SelectedTarget"]["Tracker"] == "CPU foreground / ViTTrack" &&
                 (float)metadata["SelectedTarget"]["Box"]["X"] == 20 &&
                 !(bool)metadata["TargetPosition"]["Available"] && !(bool)metadata["AircraftPosition"]["Available"] &&
                 !metadata.ToString().Contains("secret.invalid"), "Observation mismatched frame, target location or secret URL");

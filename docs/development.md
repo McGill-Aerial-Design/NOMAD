@@ -31,6 +31,8 @@ The DLL embeds a hash-verified worker executable, configuration and existing pri
 managed dependencies. The worker embeds ONNX Runtime 1.24.4 (DirectML build), DirectML 1.15.4,
 OpenCvSharp, YOLOX Nano, the EfficientTAM Ti512 export and license notices.
 Detection uses the CPU provider; GPU Object tracking is explicit per camera.
+The worker also embeds the pinned 0.7 MB ViTTrack CPU template model and Apache license
+for small or poorly separated selections; this requires no GPU or additional runtime.
 The installed plugin extracts verified assets and performs no downloads.
 `VisionRuntime` retains native C-runtime isolation inside the child (GStreamer can
 also load a conflicting C runtime);
@@ -83,6 +85,28 @@ NVIDIA/GPU cohort; otherwise that cohort explicitly skips. Optional
 `-TrackingFrames` / `-TrackingGroundTruth` arguments accept an external 120-frame
 replay with aligned truth. Keep private media/provenance in ignored storage.
 Synthetic controller checks and positive replay coverage do not establish real-scene accuracy.
+
+For an explicit CPU performance check on the target computer:
+
+```powershell
+powershell -NoProfile -File scripts/build/test_plugin_vision.ps1 -BenchmarkTracking
+```
+
+This runs the production CPU trackers against moving/scaling Object, thin HD Object,
+perspective Area and rendered/decode deer fixtures. Each cohort warms up for eight updates, then requires
+120/120 independently correct aims and p95 update time at or below 33.3 ms. Reports
+include median, p95, maximum and CPU time; initialization and fixture rendering are
+outside the update measurement. It is separate from the ordinary CI gate because
+timing depends on the target CPU and contention. The video gate also reports actual
+CPU tracker latency across the private worker IPC on HD frames. Neither check measures
+camera exposure, network latency, native ACK rate or physical mount response.
+
+The video gate also exercises the position-servo feedback controller against an
+independent PWM plant with moving targets, aircraft turns, camera delay, mechanical
+lag, deadband, reversed outputs and angle-calibration error. A loopback peer using
+the reviewed MP helpers delays the initial servo ACKs, omits later ACKs and measures
+fresh-frame command cadence. Busy, target-loss, recovery and Stop cases check state
+reset and prevent replay. These checks do not qualify a physical servo's tuning.
 
 The video gate's optional `-CaptureProbeRuntime <existing-gstreamer-prefix>` parses
 the pipeline in NULL state and enumerates device metadata. It never starts a camera.

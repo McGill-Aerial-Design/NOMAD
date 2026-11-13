@@ -29,7 +29,7 @@ namespace NOMAD.MissionPlanner
         private int _consecutive, _keyframeMatches;
         private bool _disposed;
         private bool _preferPrior;
-        private bool _verifiedView;
+        private bool _localContinuity;
         internal int LastHomographyFits { get; private set; }
         internal int LearnedViews { get; private set; }
         internal string LastCandidateSource { get; private set; }
@@ -65,6 +65,7 @@ namespace NOMAD.MissionPlanner
                 if (_original.Descriptors.Rows < 24 || !DistributedSupport(_original, _original.Points))
                 { throw new ArgumentException("Area lacks distinctive local texture; select a marked surface."); }
                 _original.Appearance = Rectify(gray, _original.Corners);
+                _localContinuity = true;
                 _imageSize = frame.Size;
             }
             catch { Clear(); throw; }
@@ -80,7 +81,8 @@ namespace NOMAD.MissionPlanner
             token.ThrowIfCancellationRequested(); VisualTrackingImage.ValidateFrame(frame);
             if (_original == null) { return Lost("Select a distinctive surface area"); }
             if (frame.Size != _imageSize) { Clear(); return Lost("Image size changed; select the area again"); }
-            if (context.Discontinuous) { _consecutive = 0; _keyframeMatches = 0; _lastPoint = null; }
+            if (context.Discontinuous)
+            { _consecutive = 0; _keyframeMatches = 0; _lastPoint = null; _localContinuity = false; }
             long started = Stopwatch.GetTimestamp();
             double featuresMs = 0, flowMs = 0, matchingMs = 0, ambiguityMs = 0, acceptanceMs = 0;
             int currentFeatures = 0;
@@ -88,18 +90,20 @@ namespace NOMAD.MissionPlanner
             {
                 using (var current = VisualTrackingImage.Gray(frame))
                 using (var descriptors = new Mat())
-                using (var orb = CreateOrb())
                 {
-                    orb.DetectAndCompute(current, null, out KeyPoint[] points, descriptors);
-                    BoundFeatures(descriptors, ref points);
-                    currentFeatures = points.Length; featuresMs = ElapsedMs(started);
-                    token.ThrowIfCancellationRequested();
                     long stage = Stopwatch.GetTimestamp();
-                    // Register the frozen verified view; loss still requires three new accepted matches.
-                    var candidate = _verifiedView
-                        ? FollowVisibleSurface(_active, current, token) : null;
+                    // The operator's frozen reference can bootstrap checked flow; admission still needs three matches.
+                    var candidate = _localContinuity ? FollowVisibleSurface(_active, current, token) : null;
                     flowMs = ElapsedMs(stage); stage = Stopwatch.GetTimestamp();
                     if (candidate != null) { LastCandidateSource = "flow"; }
+                    // Retain the full recovery budget whenever checked local motion cannot locate the surface.
+                    int featureBudget = _consecutive >= 3 && candidate != null ? 400 : MaximumFeatures;
+                    KeyPoint[] points;
+                    using (var orb = CreateOrb(featureBudget))
+                    { orb.DetectAndCompute(current, null, out points, descriptors); }
+                    BoundFeatures(descriptors, ref points, featureBudget);
+                    currentFeatures = points.Length; featuresMs = ElapsedMs(stage);
+                    token.ThrowIfCancellationRequested(); stage = Stopwatch.GetTimestamp();
                     candidate = candidate ?? (_active == _original && _preferPrior && context.SearchHint.HasValue
                         ? FindNearPrior(_active, current, points, descriptors, context.SearchHint.Value, token)
                         : null);
@@ -125,6 +129,7 @@ namespace NOMAD.MissionPlanner
                     if (ambiguous)
                     {
                         _consecutive = 0; _keyframeMatches = 0; _lastPoint = null; _preferPrior = false;
+                        _localContinuity = false;
                         return new VisualTrackingResult(VisualTrackingState.Searching,
                             "Ambiguous repeated area; choose a distinctive surface feature");
                     }
@@ -160,7 +165,8 @@ namespace NOMAD.MissionPlanner
             else { _motionHint = point; }
             _lastPoint = point;
             if (!new RectangleF(0, 0, frameSize.Width, frameSize.Height).Contains(point))
-            { _consecutive = 0; _keyframeMatches = 0; return new VisualTrackingResult(VisualTrackingState.Outside,
+            { _consecutive = 0; _keyframeMatches = 0; _localContinuity = false;
+                return new VisualTrackingResult(VisualTrackingState.Outside,
                 "Selected area point is outside the image", motionSearchHint: point); }
             double viewChange = Math.Max(2, Math.Min(candidate.Reference.Selection.Width,
                 candidate.Reference.Selection.Height) * .08);
@@ -170,7 +176,7 @@ namespace NOMAD.MissionPlanner
             if (++_consecutive < 3)
             { return new VisualTrackingResult(VisualTrackingState.Searching,
                 "Confirming original area (" + _consecutive + "/3)", motionSearchHint: point); }
-            _verifiedView = true;
+            _localContinuity = true;
             if (_keyframeMatches >= 3)
             {
                 if (candidate.Reference != _original && LastHomographyFits < 5)
@@ -180,7 +186,7 @@ namespace NOMAD.MissionPlanner
                         new Point2f(candidate.Point.X, candidate.Point.Y)) > 6)
                     { return Search(default, "Working view disagrees with original area; learning paused"); }
                 }
-                Promote(current, candidate, token);
+                Promote(current, candidate, points, descriptors, token);
             }
             LastMatchDiagnostic = "Verified geometry and selected-surface appearance";
             var bounds = candidate.Bounds;
@@ -193,7 +199,7 @@ namespace NOMAD.MissionPlanner
 
         private VisualTrackingResult Search(VisualFrameContext context, string status)
         {
-            _consecutive = 0; _keyframeMatches = 0; _lastPoint = null;
+            _consecutive = 0; _keyframeMatches = 0; _lastPoint = null; _localContinuity = false;
             var hint = context.SearchHint ?? _motionHint;
             if (hint.HasValue && (!VideoDetection.Finite(hint.Value.X) || !VideoDetection.Finite(hint.Value.Y)))
             { hint = null; }
@@ -214,7 +220,7 @@ namespace NOMAD.MissionPlanner
             if (_active != _original) { _active?.Dispose(); }
             _original?.Dispose(); _original = null; _active = null;
             _lastPoint = null; _motionHint = null; _consecutive = 0; _keyframeMatches = 0;
-            _preferPrior = false; _verifiedView = false; LearnedViews = 0;
+            _preferPrior = false; _localContinuity = false; LearnedViews = 0;
         }
 
         public void Dispose()

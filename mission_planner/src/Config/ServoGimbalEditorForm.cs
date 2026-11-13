@@ -25,7 +25,7 @@ namespace NOMAD.MissionPlanner
             _enabled = ControlFactory.CheckBox("Use flight-controller servo outputs", current?.Count > 0);
             _enabled.Dock = DockStyle.Top; _enabled.Height = 34;
             var help = new Label { Dock = DockStyle.Top, Height = 55, Padding = new Padding(8),
-                Text = "Select one to three axes. Configure each output for servo commands in Mission Planner.\n" +
+                Text = "Select one to three axes for position servos. Configure outputs in Mission Planner.\n" +
                     "Angle zero is the calibrated level/forward target. Tracking uses pitch and yaw with level roll." };
             _axes = new DataGridView { Dock = DockStyle.Fill, AllowUserToAddRows = false, AllowUserToDeleteRows = false,
                 RowHeadersVisible = false, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,

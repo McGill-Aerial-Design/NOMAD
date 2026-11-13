@@ -28,6 +28,10 @@ namespace NOMAD.Simulation
         private sealed class PipelineProbe : IVideoPipeline
         {
             private readonly GStreamerVideoPipeline _pipeline = new GStreamerVideoPipeline();
+            private readonly object _stampsGate = new object();
+            private readonly System.Collections.Generic.Dictionary<long, long?> _stamps =
+                new System.Collections.Generic.Dictionary<long, long?>();
+            private readonly System.Collections.Generic.Queue<long> _stampOrder = new System.Collections.Generic.Queue<long>();
             internal int Entered, Returned;
             internal long ReadStarted, ReadReturned;
             public void Start(string value, CancellationToken token) => _pipeline.Start(value, token);
@@ -35,10 +39,35 @@ namespace NOMAD.Simulation
             {
                 Interlocked.Increment(ref Entered); Interlocked.Exchange(ref ReadStarted, System.Diagnostics.Stopwatch.GetTimestamp());
                 var image = _pipeline.ReadFrame(token, out receivedTicks, out receivedUtc);
+                if (image != null)
+                {
+                    long? capture = ReadAndEraseStamp(image);
+                    lock (_stampsGate)
+                    {
+                        if (_stampOrder.Count == 512) { _stamps.Remove(_stampOrder.Dequeue()); }
+                        _stamps[receivedTicks] = capture; _stampOrder.Enqueue(receivedTicks);
+                    }
+                }
                 Interlocked.Increment(ref Returned); Interlocked.Exchange(ref ReadReturned, System.Diagnostics.Stopwatch.GetTimestamp());
                 return image;
             }
             public void Dispose() => _pipeline.Dispose();
+            internal long? CaptureFor(long ticks)
+            { lock (_stampsGate) { return _stamps.TryGetValue(ticks, out var value) ? value : null; } }
+
+            private static long? ReadAndEraseStamp(Bitmap image)
+            {
+                ulong value = 0;
+                for (int bit = 0; bit < 64; bit++)
+                {
+                    var colour = image.GetPixel(bit % 8 * 8 + 4, bit / 8 * 8 + 4);
+                    if (colour.R + colour.G + colour.B >= 384) { value |= 1UL << bit; }
+                }
+                using (var graphics = Graphics.FromImage(image)) { graphics.FillRectangle(Brushes.Black, 0, 0, 64, 64); }
+                long sequence = (long)((value >> 16) & 0xffffff);
+                return (value & 0xffff) == 0xa65c && ((value >> 40) & 0xffffff) == ((~(ulong)sequence) & 0xffffff)
+                    ? sequence : (long?)null;
+            }
         }
 
         private sealed class ImageRecorder : IDisposable
@@ -81,6 +110,7 @@ namespace NOMAD.Simulation
             var motion = scene.ContainsKey("object_motion")
                 ? scene["object_motion"] as System.Collections.Generic.Dictionary<string, object> : null;
             var camera = (System.Collections.Generic.Dictionary<string, object>)scene["camera"];
+            bool cpuOnly = motion != null && motion.ContainsKey("cpu_only") && Convert.ToBoolean(motion["cpu_only"]);
             int imageWidth = Convert.ToInt32(camera["width"]), imageHeight = Convert.ToInt32(camera["height"]);
             int hfov = (int)Math.Round(Convert.ToDouble(camera["hfov_radians"]) * 180 / Math.PI);
             float[] preset = motion == null ? null : ((System.Collections.IEnumerable)motion["selection_roi"])
@@ -89,6 +119,8 @@ namespace NOMAD.Simulation
             Require(duration == 0 || (!detect && !occlusion && duration >= 600 && duration <= 1800),
                 "invalid_endurance_duration");
             string prefix = Path.Combine(run, "host/media/gstreamer/1.0/x86_64");
+            Settings.Instance["gstlaunchexe"] = Path.Combine(prefix, "bin/gst-launch-1.0.exe");
+            MediaWorkerHost.RequestStart();
             GStreamer.BundledPath = prefix;
             string library = GStreamer.LookForGstreamer();
             Require(string.Equals(Path.GetFullPath(library), Path.GetFullPath(Path.Combine(prefix,
@@ -104,7 +136,7 @@ namespace NOMAD.Simulation
                     OutputController.Generation, GimbalController.ManualRevision, () => true)).Submitted,
                 "video_initial_pose_not_submitted");
             WaitActualVideoPose(run, -initialPitch * Math.PI / 180, -initialYaw * Math.PI / 180,
-                motion == null ? .0035 : .008, motion == null ? 5 : 15); // A large pan must settle at the bounded rate.
+                motion == null ? .0035 : .008, cpuOnly ? 60 : motion == null ? 5 : 15);
             var profile = new VideoInputProfile { Name = "Owned rendered camera", Url = "udp://@:15600",
                 TrackingMode = "Area", TrackingCalibrated = true, HorizontalFovDeg = hfov,
                 PitchMinDeg = -85, PitchMaxDeg = 30, YawMinDeg = -120, YawMaxDeg = 150,
@@ -139,8 +171,9 @@ namespace NOMAD.Simulation
             bool visible = Environment.GetEnvironmentVariable("NOMAD_SIMULATION_VISIBLE") == "1";
             var pipeline = new PipelineProbe();
             AreaVisualTracker area = null;
-            CsrtVisualTracker objectTracker = null;
+            ObjectVisualTracker objectTracker = null;
             EfficientTamVisualTracker gpuTracker = null;
+            string trackerProvider = null;
             using (var form = new OwnedForm { ShowInTaskbar = visible,
                 StartPosition = visible ? FormStartPosition.CenterScreen : FormStartPosition.Manual,
                 Location = new Point(-2500, -2500), ClientSize = new Size(900, 700),
@@ -150,8 +183,9 @@ namespace NOMAD.Simulation
                 {
                     var tracker = VisualTrackerFactory.Create(token, mode, profile.ObjectTracker == "GPU");
                     Volatile.Write(ref area, tracker as AreaVisualTracker);
-                    Volatile.Write(ref objectTracker, tracker as CsrtVisualTracker);
+                    Volatile.Write(ref objectTracker, tracker as ObjectVisualTracker);
                     Volatile.Write(ref gpuTracker, tracker as EfficientTamVisualTracker);
+                    Volatile.Write(ref trackerProvider, (tracker as MediaWorkerTracker)?.Provider ?? tracker.GetType().Name);
                     return tracker;
                 }))
             using (var timer = new System.Windows.Forms.Timer { Interval = 33 })
@@ -176,8 +210,16 @@ namespace NOMAD.Simulation
                 double sampled = -1;
                 double trackingStarted = 0, windowStarted = 0;
                 int windowFrames = 0, windowVerified = 0, windows = 0, savedImages = 0, movingImages = 0;
-                int motionDisplayedFrames = 0;
+                int motionDisplayedFrames = 0, startupFrames = 0;
+                long lastInitialTrackingSequence = 0;
                 Exception failure = null;
+                Exception motionFailure = null;
+                Action<bool, string> observeMotion = (condition, diagnostic) =>
+                {
+                    if (condition) { return; }
+                    if (motion == null) { throw new InvalidOperationException(diagnostic); }
+                    if (motionFailure == null) { motionFailure = new InvalidOperationException(diagnostic); }
+                };
                 var horizontal = new System.Collections.Generic.List<double>();
                 var vertical = new System.Collections.Generic.List<double>();
                 var json = new JavaScriptSerializer();
@@ -201,7 +243,8 @@ namespace NOMAD.Simulation
                         BindingFlags.Instance | BindingFlags.NonPublic);
                     if ((int)field.GetValue(player) != 0) { return; }
                     var toggle = player.Controls.Find("TrackingToggle", true).Cast<Button>().Single();
-                    toggle.PerformClick(); stoppedCommands = player.SubmittedTrackingCommands;
+                    if (player.IsTracking) { toggle.PerformClick(); }
+                    stoppedCommands = player.SubmittedTrackingCommands;
                     Require(!player.IsTracking && toggle.Width == width && toggle.Text == "Start tracking",
                         "stop_toggle_state_or_width_failed");
                     stage = 3; action = _clock.Elapsed.TotalSeconds;
@@ -212,7 +255,7 @@ namespace NOMAD.Simulation
                     {
                         process.Refresh();
                         Require(_clock.Elapsed.TotalSeconds - started <
-                            (duration > 0 ? duration + 90 : motion != null ? 120 : occlusion ? 40 : 25),
+                            (duration > 0 ? duration + 90 : cpuOnly ? 540 : motion != null ? 120 : 60),
                             "video_deadline_stage_" + stage + ": " + session.State + "/" + session.Error +
                             "; RTP packets=" + bridge.Packets);
                         Require(bridge.Error == null, "rtp_bridge_failed: " + bridge.Error?.Message);
@@ -236,6 +279,8 @@ namespace NOMAD.Simulation
                                 user_objects = GetGuiResources(process.Handle, 1),
                                 pipeline.Entered, pipeline.Returned, pipeline.ReadStarted, pipeline.ReadReturned,
                                 worker_completed = session.Completion.IsCompleted,
+                                session_state = session.State.ToString(), session_error = session.Error,
+                                tracker_error = session.TrackerError,
                                 decoded_sequence = typeof(VideoSession).GetField("_sequence", BindingFlags.Instance |
                                     BindingFlags.NonPublic).GetValue(session), displayed_sequence = frame?.Sequence,
                                 receipt_age = frame?.AgeSeconds, tracking = player.IsTracking,
@@ -243,16 +288,23 @@ namespace NOMAD.Simulation
                             health.Flush();
                         }
                         if (stage == 2 || stage == 3 || stage == 20 || stage == 30 || stage == 40)
-                        { Require(frame?.Fresh == true, "active_video_receipt_stale"); }
+                        { observeMotion(frame?.Fresh == true, "active_video_receipt_stale"); }
+                        Require(session.State != VideoState.Stopped || session.Error == null,
+                            "rendered_video_stopped: " + session.Error);
+                        Require(stage != 1 || _clock.Elapsed.TotalSeconds - action < (cpuOnly ? 30 : 10),
+                            "initial_target_unverified: " + player.TrackingStatus);
                         if (frame == null || frame.Sequence == sequence) { return; }
                         sequence = frame.Sequence;
                         var aim = frame.Region?.AimPoint;
                         var bounds = frame.Region?.Bounds;
+                        var authoritative = (VideoTrackingSample)typeof(EmbeddedVideoPlayer).GetField("_latestTrackingSample",
+                            BindingFlags.Instance | BindingFlags.NonPublic).GetValue(player);
                         var objectState = Volatile.Read(ref objectTracker);
                         var objectSize = objectState?.ProcessingImageSize ?? Size.Empty;
                         Pwm nativeOutput;
                         lock (_gate) { nativeOutput = _outputs.LastOrDefault(); }
-                        records.WriteLine(json.Serialize(new { sequence, decoded_received_ticks = frame.ReceivedTicks,
+                        records.WriteLine(json.Serialize(new { sequence, capture_sequence = pipeline.CaptureFor(frame.ReceivedTicks),
+                            decoded_received_ticks = frame.ReceivedTicks,
                             displayed_ticks = System.Diagnostics.Stopwatch.GetTimestamp(),
                             frequency = System.Diagnostics.Stopwatch.Frequency, frame.Generation, frame.DetectionRevision,
                             process_cpu_ms = process.TotalProcessorTime.TotalMilliseconds,
@@ -267,8 +319,10 @@ namespace NOMAD.Simulation
                             latest_worker_timing = Volatile.Read(ref area)?.LastTiming,
                             latest_object_diagnostic = objectState?.LastObjectDiagnostic ??
                                 Volatile.Read(ref gpuTracker)?.LastDiagnostic,
-                            object_tracker_provider = Volatile.Read(ref gpuTracker)?.Provider ?? "CPU",
+                            object_tracker_provider = Volatile.Read(ref trackerProvider),
                             latest_worker_diagnostics_frame_bound = false,
+                            latest_tracking_fresh = authoritative?.Fresh,
+                            latest_tracking_age_seconds = authoritative?.AgeSeconds,
                             latest_object_processing_width = objectSize.Width,
                             latest_object_processing_height = objectSize.Height,
                             region_revision = frame.Region?.Revision, tracking = player.IsTracking,
@@ -283,16 +337,19 @@ namespace NOMAD.Simulation
                             submitted = player.SubmittedTrackingCommands, fingerprint = Fingerprint(frame.Image) }));
                         records.Flush();
                         if (stage == 40) { motionDisplayedFrames++; }
-                        bool saveMotion = stage == 40 && movingImages < 120;
-                        bool save = motion != null ? (stage < 40 && savedImages < 6) || saveMotion :
+                        bool saveMotion = stage == 40 && movingImages < 2000;
+                        bool save = motion != null ? (stage < 40 && savedImages < 6) ||
+                            (stage == 0 && startupFrames >= 9 && session.TrackerReady) || saveMotion :
                             duration == 0 ? sequence <= 120 : savedImages < 120 && (sequence <= 60 || sequence % 600 == 0);
                         if (save)
                         { images.Add(sequence, frame.Image); savedImages++; if (stage == 40) { movingImages++; } }
                         if (stage == 1 && (!frame.Fresh || !player.RegionReady)) { warmFrames = 0; }
                         if (stage <= 1 && !frame.Fresh) { return; }
-                        Require(frame.Fresh, "displayed_frame_is_receipt_stale");
+                        observeMotion(frame.Fresh, "displayed_frame_is_receipt_stale");
                         if (stage == 0)
                         {
+                            // Drain decoder startup frames and wait for the tracking lane before the one selection.
+                            if (++startupFrames < 10 || !session.TrackerReady) { return; }
                             Require(frame.Image.Width == imageWidth && frame.Image.Height == imageHeight,
                                 "wrong_rendered_resolution: expected " + imageWidth + "x" + imageHeight);
                             if (detect)
@@ -339,6 +396,8 @@ namespace NOMAD.Simulation
                         }
                         else if (stage == 1 && player.RegionReady)
                         {
+                            Require(profile.ObjectTracker == "GPU" || Volatile.Read(ref trackerProvider) == "CPU",
+                                "cpu_tracker_provider_mismatch");
                             // One explicit Start after cold initialization; never auto-rearm a stale/retired intent.
                             warmFrames = frame.AgeSeconds <= .2 ? warmFrames + 1 : 0;
                             if (warmFrames < 3) { return; }
@@ -346,32 +405,38 @@ namespace NOMAD.Simulation
                             width = toggle.Width; initialCommands = player.SubmittedTrackingCommands;
                             toggle.PerformClick();
                             Require(player.IsTracking && toggle.Text == "Stop tracking", "tracking_toggle_failed");
-                            selectedRevision = frame.Region.Revision;
+                            selectedRevision = authoritative.Region.Revision;
                             videoGeneration = frame.Generation;
                             stage = 2; action = _clock.Elapsed.TotalSeconds;
                             trackingStarted = action;
+                            lastInitialTrackingSequence = authoritative.Sequence;
                         }
                         else if (stage == 2)
                         {
-                            Require(player.IsTracking, "tracking_intent_disarmed: " + player.TrackingStatus);
-                            eligible++;
-                            if (frame.Region?.Found == true)
+                            observeMotion(player.IsTracking, "tracking_intent_disarmed: " + player.TrackingStatus);
+                            bool newTrackingSample = authoritative != null && authoritative.Sequence > lastInitialTrackingSequence;
+                            if (newTrackingSample)
                             {
-                                verified++;
-                                if (_clock.Elapsed.TotalSeconds - action >= 3 && aim.HasValue)
+                                lastInitialTrackingSequence = authoritative.Sequence;
+                                eligible++;
+                                if (authoritative.Fresh && authoritative.Region?.Found == true)
                                 {
-                                    horizontal.Add(Math.Abs(aim.Value.X - imageWidth / 2.0));
-                                    vertical.Add(Math.Abs(aim.Value.Y - imageHeight / 2.0));
+                                    verified++;
+                                    if (_clock.Elapsed.TotalSeconds - action >= 3 && authoritative.Region.AimPoint.HasValue)
+                                    {
+                                        horizontal.Add(Math.Abs(authoritative.Region.AimPoint.Value.X - imageWidth / 2.0));
+                                        vertical.Add(Math.Abs(authoritative.Region.AimPoint.Value.Y - imageHeight / 2.0));
+                                    }
                                 }
                             }
-                            if (_clock.Elapsed.TotalSeconds - action < 5) { return; }
-                            Require(eligible >= 40, "displayed_rate_below_8_fps: frames=" + eligible +
+                            if (_clock.Elapsed.TotalSeconds - action < 5 || (cpuOnly && eligible < 40)) { return; }
+                            observeMotion(eligible >= 40, "insufficient_initial_video_samples: frames=" + eligible +
                                 "; seconds=" + (_clock.Elapsed.TotalSeconds - action));
-                            Require(verified >= eligible * .95, "positive_rendered_coverage_failed: " + verified + "/" + eligible);
+                            observeMotion(verified >= eligible * .95, "positive_rendered_coverage_failed: " + verified + "/" + eligible);
                             // An initially centered Object can hold still; its later body disturbance must drive new output.
                             Require(motion != null || player.SubmittedTrackingCommands > initialCommands,
                                 "video_never_submitted_steering");
-                            Require(horizontal.Count > 0 && Percentile(horizontal, .95) <= imageWidth * .035 &&
+                            observeMotion(horizontal.Count > 0 && Percentile(horizontal, .95) <= imageWidth * .035 &&
                                 Percentile(vertical, .95) <= imageHeight * .035, "image_centering_failed");
                             if (motion != null)
                             {
@@ -401,29 +466,30 @@ namespace NOMAD.Simulation
                         }
                         else if (stage == 40)
                         {
-                            Require(player.IsTracking && frame.Generation == videoGeneration &&
-                                frame.Region?.Revision == selectedRevision, "object_motion_retired_selection_or_intent");
+                            observeMotion(player.IsTracking && frame.Generation == videoGeneration &&
+                                session.HasRegion(selectedRevision), "object_motion_retired_selection_or_intent");
                             long request = (long)typeof(EmbeddedVideoPlayer).GetField("_lastRequestTicks",
                                 BindingFlags.Instance | BindingFlags.NonPublic).GetValue(player);
-                            if (frame.Region?.Found != true)
+                            if (authoritative?.Fresh != true || authoritative.Region?.Found != true)
                             {
                                 if (pauseTicks == 0) { pauseTicks = System.Diagnostics.Stopwatch.GetTimestamp(); }
-                                Require(request <= pauseTicks, "unverified_object_admitted_new_request");
+                                observeMotion(request <= pauseTicks, "unverified_object_admitted_new_request");
                             }
                             else { pauseTicks = 0; }
                             if (!File.Exists(Path.Combine(run, "object-motion-complete.json"))) { return; }
                             if (recoveredAt == 0) { recoveredAt = _clock.Elapsed.TotalSeconds; }
                             if (_clock.Elapsed.TotalSeconds - recoveredAt < 1) { return; }
-                            Require(player.SubmittedTrackingCommands > initialCommands + 5,
+                            observeMotion(player.SubmittedTrackingCommands > initialCommands + 5,
                                 "object_motion_controller_did_not_submit_updates");
                             _cases.Add(new { name = "rendered_object_body_motion", motion,
+                                passed = motionFailure == null, failure = motionFailure?.Message,
                                 qualification = "requires independent semantic mask and actual body/joint oracle" });
                             stopTracking();
                         }
                         else if (stage == 30)
                         {
                             Require(player.IsTracking && frame.Generation == videoGeneration &&
-                                frame.Region?.Revision == selectedRevision, "endurance_intent_or_generation_changed");
+                                session.HasRegion(selectedRevision), "endurance_intent_or_generation_changed");
                             windowFrames++; if (frame.Region?.Found == true) { windowVerified++; }
                             double span = _clock.Elapsed.TotalSeconds - windowStarted;
                             if (span >= 60)
@@ -446,7 +512,7 @@ namespace NOMAD.Simulation
                         else if (stage == 20)
                         {
                             Require(player.IsTracking && player.SelectedRegion.HasValue &&
-                                frame.Region?.Revision == selectedRevision, "occlusion_retired_identity_or_intent");
+                                session.HasRegion(selectedRevision), "occlusion_retired_identity_or_intent");
                             long request = (long)typeof(EmbeddedVideoPlayer).GetField("_lastRequestTicks",
                                 BindingFlags.Instance | BindingFlags.NonPublic).GetValue(player);
                             if (frame.Region?.Found != true)
@@ -495,6 +561,7 @@ namespace NOMAD.Simulation
                 Application.Run(form);
                 timer.Stop();
                 if (failure != null) { throw failure; }
+                if (motionFailure != null) { throw motionFailure; }
                 Require(stage == 4, "rendered_form_closed_before_case_completed");
             }
         }

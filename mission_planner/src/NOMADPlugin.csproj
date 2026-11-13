@@ -122,7 +122,7 @@
       AssemblyAttributes and prior build output are never compiled.
     -->
     <Compile Include="..\..\infra\transport\ground_router\*.cs" />
-        <Compile Include="**\*.cs" Exclude="obj\**\*.cs;bin\**\*.cs;Plugin\ReleaseIdentity.cs;Vision\YoloXVideoDetector.cs;Vision\CsrtVisualTracker*.cs;Vision\AreaVisualTracker*.cs;Vision\EfficientTam*.cs;Vision\FrozenAppearance.cs;Vision\ObjectRecoveryReference.cs;Vision\ObjectForeground.cs;Vision\VisualTrackingImage.cs;Vision\GpuAdapter.cs" />
+        <Compile Include="**\*.cs" Exclude="obj\**\*.cs;bin\**\*.cs;Plugin\ReleaseIdentity.cs;Vision\YoloXVideoDetector.cs;Vision\ObjectVisualTracker*.cs;Vision\AreaVisualTracker*.cs;Vision\EfficientTam*.cs;Vision\FrozenAppearance.cs;Vision\ObjectRecoveryReference.cs;Vision\ObjectForeground.cs;Vision\VisualTrackingImage.cs;Vision\VisualFeatureMatching.cs;Vision\CpuTemplateTracker.cs;Vision\GpuAdapter.cs" />
     <Compile Include="..\..\build\release\ReleaseIdentity.cs" Condition="Exists('..\..\build\release\ReleaseIdentity.cs')" />
     <Compile Include="Plugin\ReleaseIdentity.cs" Condition="!Exists('..\..\build\release\ReleaseIdentity.cs')" />
   </ItemGroup>

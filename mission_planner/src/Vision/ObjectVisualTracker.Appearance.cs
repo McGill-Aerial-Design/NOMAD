@@ -2,18 +2,18 @@
 using System;
 using System.Drawing;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using OpenCvSharp;
-using OpenCvSharp.Tracking;
 
 namespace NOMAD.MissionPlanner
 {
-    internal sealed partial class CsrtVisualTracker
+    internal sealed partial class ObjectVisualTracker
     {
         private ObjectForeground _originalView, _workingView, _previousView;
         private FrozenAppearance _workingAppearance;
         private ObjectRecoveryReference _workingReference;
-        private Rectangle _lastObjectBounds, _nativeObjectBounds;
+        private Rectangle _lastObjectBounds;
         private int _lastObjectArea, _acceptedViews, _heldFrames, _heldConfirmations, _frames, _previousFrame, _rememberedFrame;
         // ponytail: frame-count bounds (~0.5 s / ~1.5 s at 10-20 fps); time bounds if frame rates vary widely.
         private const int MaximumHeldFrames = 10;
@@ -29,12 +29,34 @@ namespace NOMAD.MissionPlanner
 
         private void InitializeObject(Mat image, OpenCvSharp.Rect selection, bool smallSelection, CancellationToken token)
         {
+            LearnedViews = 0;
             var region = new Rectangle(selection.X, selection.Y, selection.Width, selection.Height);
             var point = new PointF(region.X + region.Width / 2f, region.Y + region.Height / 2f);
+            bool selectedThin = Math.Max(selection.Width, selection.Height) >= 2 * Math.Min(selection.Width, selection.Height);
+            if (!selectedThin && Math.Max(selection.Width, selection.Height) <= 48)
+            {
+                string model = VisionRuntime.EnsureCpuTemplateModel(token);
+                _templateTracker = CreateTemplate(model, image, selection, token);
+                return;
+            }
             _originalView = ObjectForeground.TryExtract(image, region, point, null, token,
                 smallSelection ? 3.5 : 1.8, restrictToSelection: !smallSelection);
+            bool tiny = Math.Max(selection.Width, selection.Height) <= 48 &&
+                !(_originalView != null && selectedThin && ThinShape(_originalView));
+            var outline = region;
+            outline.Inflate(Math.Max(1, region.Width / 10), Math.Max(1, region.Height / 10));
+            bool useTemplate = _originalView == null || (!(selectedThin && ThinShape(_originalView)) &&
+                (_originalView.Bounds.Width * _originalView.Bounds.Height < selection.Width * selection.Height * .25 ||
+                !outline.Contains(_originalView.Bounds) || tiny));
+            if (useTemplate)
+            {
+                string model = VisionRuntime.EnsureCpuTemplateModel(token);
+                _templateTracker = CreateTemplate(model, image, selection, token);
+                if (tiny || _originalView == null)
+                { _originalView?.Dispose(); _originalView = null; return; }
+            }
             if (_originalView == null)
-            { throw new ArgumentException("Cannot separate the selected object; drag a tight outline around it."); }
+            { return; }
             using (var mapping = Cv2.GetPerspectiveTransform(_originalView.Quad, PatchCorners()))
             {
                 var aim = Cv2.PerspectiveTransform(new[] { new Point2f(point.X, point.Y) }, mapping)[0];
@@ -43,27 +65,38 @@ namespace NOMAD.MissionPlanner
             var objectBounds = NativeBox(_originalView.Bounds);
             _appearance = new FrozenAppearance(image, objectBounds, _originalView.Mask);
             _reference = new ObjectRecoveryReference(image, objectBounds, _appearance, _originalView.Mask);
-            Remember(_originalView); StartNative(image, _originalView);
-            LearnedViews = 0;
+            if (_reference.CanLocate && _templateTracker != null && Math.Max(selection.Width, selection.Height) > 48)
+            {
+                // Distinctive foreground geometry is stronger evidence than a generic model proposal.
+                _templateTracker.Dispose(); _templateTracker = null;
+            }
+            Remember(_originalView); RememberFlow(image, _originalView); _following = true;
         }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static CpuTemplateTracker CreateTemplate(string model, Mat image, Rect selection, CancellationToken token) =>
+            new CpuTemplateTracker(model, image, selection, token);
 
         private VisualTrackingResult FollowObject(Mat image, CancellationToken token)
         {
             _frames++;
-            if (_tracker == null) { return RecoverObject(image, token); }
-            var proposal = new OpenCvSharp.Rect();
-            bool nativeFound = _tracker.Update(image, ref proposal);
-            token.ThrowIfCancellationRequested();
+            if (!_following) { return RecoverObject(image, token); }
             var previous = _workingView ?? _originalView;
             bool thin = ThinShape(previous);
             var predicted = new PointF(_objectCentre.X + _objectMotion.X, _objectCentre.Y + _objectMotion.Y);
             var search = new Rectangle((int)Math.Round(predicted.X - _lastObjectBounds.Width / 2f),
                 (int)Math.Round(predicted.Y - _lastObjectBounds.Height / 2f), _lastObjectBounds.Width, _lastObjectBounds.Height);
-            if (!thin && nativeFound && proposal.Width > 1 && proposal.Height > 1) { search = ManagedBox(proposal); }
+            if (!thin) { search = FlowProposal(image, token) ?? search; }
             var seed = ForegroundSeed(image, search);
             // Pad the prior so a turning object's outline can regrow instead of ratcheting to the last tight box.
             var fresh = ObjectForeground.TryExtract(image, Padded(search), seed, _objectAngle, token,
-                expectedColour: thin ? _lastColour : null, restrictToSelection: !thin);
+                expectedColour: thin ? _lastColour : null, restrictToSelection: !thin, fast: true);
+            if (fresh == null || !Continuous(fresh) || !Recognizes(fresh, .55, true))
+            {
+                fresh?.Dispose();
+                fresh = ObjectForeground.TryExtract(image, Padded(search), seed, _objectAngle, token,
+                    expectedColour: thin ? _lastColour : null, restrictToSelection: !thin);
+            }
             var fallback = new Rectangle((int)Math.Round(predicted.X - _lastObjectBounds.Width / 2f),
                 (int)Math.Round(predicted.Y - _lastObjectBounds.Height / 2f), _lastObjectBounds.Width, _lastObjectBounds.Height);
             if (fresh == null && !thin)
@@ -83,7 +116,7 @@ namespace NOMAD.MissionPlanner
                 bool continuous = freshContinuous, recognized = freshAccepted;
                 if (!thin && !freshAccepted)
                 {
-                    projected = nativeFound ? ObjectForeground.ProjectPrevious(image, previous, ManagedBox(proposal), token) : null;
+                    projected = ObjectForeground.ProjectPrevious(image, previous, search, token);
                     continuous = projected != null && Continuous(projected);
                     recognized = continuous && Recognizes(projected, .55, true);
                     if (!recognized)
@@ -114,7 +147,7 @@ namespace NOMAD.MissionPlanner
                         _heldConfirmations = 0; _acceptedViews = 0;
                         return Searching("Object appearance unconfirmed; holding local track");
                     }
-                    ResetNative(); return Searching("Object obscured; searching retained appearances");
+                    ResetLocalTrack(); return Searching("Object obscured; searching retained appearances");
                 }
                 if (_heldFrames > 0 && ++_heldConfirmations < 3)
                 {
@@ -125,12 +158,9 @@ namespace NOMAD.MissionPlanner
                 // Whole-object contract: measured foreground bounds, not an extrapolated reference projection.
                 var visible = GeometryResult(NativeBox(observed.Bounds));
                 _acceptedViews = freshSupport ? _acceptedViews + 1 : 0;
-                double aspect = observed.Bounds.Width / (double)observed.Bounds.Height;
-                double nativeAspect = _nativeObjectBounds.Width / (double)_nativeObjectBounds.Height;
-                if (!nativeFound || aspect / nativeAspect < .85 || aspect / nativeAspect > 1.15 ||
-                    Math.Abs(observed.AngleDegrees - _objectAngle) > 5) { StartNative(image, observed); }
                 if (_acceptedViews >= 3) { PromoteObject(image, observed, visible, token); _acceptedViews = 0; }
                 Remember(observed);
+                RememberFlow(image, observed);
                 if (freshSupport) { _previousView?.Dispose(); _previousView = observed.Clone(); _previousFrame = _frames; }
                 return visible;
             }
@@ -159,14 +189,15 @@ namespace NOMAD.MissionPlanner
             using (var observed = ObjectForeground.TryExtract(image, region,
                 new PointF(region.X + region.Width / 2f, region.Y + region.Height / 2f), _objectAngle, token))
             {
-                if (observed != null && Recognizes(observed, .65)) { StartNative(image, observed); Remember(observed); }
+                if (observed != null && Recognizes(observed, .65))
+                { Remember(observed); RememberFlow(image, observed); }
                 else
                 {
-                    _tracker = TrackerCSRT.Create(); _tracker.Init(image, candidate.Value);
-                    _nativeObjectBounds = region; _lastObjectBounds = region;
+                    _lastObjectBounds = region;
                     _objectCentre = new PointF(region.X + region.Width / 2f, region.Y + region.Height / 2f);
                 }
             }
+            _following = true;
             _objectMotion = PointF.Empty;
             _recoveryMatches = 0; _recoveryBounds = null;
             return GeometryResult(candidate.Value);
@@ -308,6 +339,7 @@ namespace NOMAD.MissionPlanner
             {
                 token.ThrowIfCancellationRequested();
                 if (!visible.Found) { return; }
+                if (MatchesView(_workingView ?? _originalView, candidate, .9)) { return; }
                 view = candidate.Clone();
                 var box = visible.Bounds.HasValue ? Rectangle.Round(visible.Bounds.Value) : candidate.Bounds;
                 appearance = new FrozenAppearance(image, NativeBox(box), candidate.Mask);
@@ -318,24 +350,6 @@ namespace NOMAD.MissionPlanner
                 _workingView = view; view = null; LearnedViews++;
             }
             finally { reference?.Dispose(); appearance?.Dispose(); view?.Dispose(); }
-        }
-
-        private void StartNative(Mat image, ObjectForeground target)
-        {
-            _tracker?.Dispose(); _tracker = null;
-            var box = target.Bounds;
-            if (box.Width < 8 || box.Height < 8)
-            {
-                box.Inflate(Math.Max(0, (8 - box.Width + 1) / 2), Math.Max(0, (8 - box.Height + 1) / 2));
-                box.Intersect(new Rectangle(0, 0, image.Width, image.Height));
-            }
-            using (var mask = target.CreateNativeMask(box))
-            {
-                _tracker = TrackerCSRT.Create();
-                _tracker.SetInitialMask(mask);
-                _tracker.Init(image, NativeBox(box));
-                _nativeObjectBounds = box;
-            }
         }
 
         private void Remember(ObjectForeground target)

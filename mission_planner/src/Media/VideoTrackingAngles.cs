@@ -34,33 +34,19 @@ namespace NOMAD.MissionPlanner
             float aircraftYawChange = 0, bool movingObject = false)
         {
             pitch = currentPitch; yaw = currentYaw;
-            if (!calibration.TrackingCalibrated || image.Width <= 0 || image.Height <= 0 ||
-                double.IsNaN(dt) || double.IsInfinity(dt) || dt <= 0 ||
-                !VideoDetection.Finite(target.X) || !VideoDetection.Finite(target.Y) ||
-                !VideoDetection.Finite(currentPitch) || !VideoDetection.Finite(currentYaw) ||
+            if (!TryErrors(calibration, image, target, currentPitch, .02, out double pitchError, out double yawError) ||
+                double.IsNaN(dt) || double.IsInfinity(dt) || dt <= 0 || !VideoDetection.Finite(currentYaw) ||
                 !VideoDetection.Finite(aircraftYawChange) || Math.Abs(aircraftYawChange) > 180 ||
-                currentPitch < calibration.PitchMinDeg || currentPitch > calibration.PitchMaxDeg ||
                 currentYaw < calibration.YawMinDeg || currentYaw > calibration.YawMaxDeg) { return false; }
-            double x = (target.X - image.Width / 2.0) / image.Width;
-            double y = (target.Y - image.Height / 2.0) / image.Height;
-            double focal = image.Width / (2 * Math.Tan(calibration.HorizontalFovDeg * Math.PI / 360));
-            double right = Math.Abs(x) < .02 ? 0 : x * image.Width / focal * calibration.YawSign;
-            double down = Math.Abs(y) < .02 ? 0 : y * image.Height / focal * calibration.PitchSign;
-            double cameraPitch = currentPitch * Math.PI / 180;
-            // Rotate the camera ray into mount axes; image X is not azimuth at a downward pitch.
-            double forward = Math.Cos(cameraPitch) + Math.Sin(cameraPitch) * down;
-            double vertical = -Math.Sin(cameraPitch) + Math.Cos(cameraPitch) * down;
-            double yawError = Math.Atan2(right, forward) * 180 / Math.PI;
-            double pitchError = Math.Atan2(-vertical, Math.Sqrt(forward * forward + right * right)) *
-                180 / Math.PI - currentPitch;
             double elapsed = Math.Min(dt, .2);
             double step = calibration.TrackingMaxRateDegSec * elapsed;
+            double pitchGain = movingObject ? 2 : 1;
             // An Object's bearing can move with the aircraft; do not counter yaw against verified image motion.
             if (movingObject && yawError * aircraftYawChange > 0)
             { aircraftYawChange *= (float)Math.Max(0, 1 - Math.Abs(yawError) / 5); }
             // Native mount yaw is body-relative; counter aircraft rotation without amplifying delayed image error.
             pitch = GimbalCommand.Clamp(currentPitch + (float)Math.Max(-step, Math.Min(step,
-                pitchError * elapsed)), calibration.PitchMinDeg, calibration.PitchMaxDeg);
+                pitchError * pitchGain * elapsed)), calibration.PitchMinDeg, calibration.PitchMaxDeg);
             yaw = GimbalCommand.Clamp(currentYaw + (float)Math.Max(-step, Math.Min(step,
                 yawError * elapsed - aircraftYawChange)), calibration.YawMinDeg, calibration.YawMaxDeg);
             if (calibration.ServoGimbalAxes.Count > 0)
@@ -69,6 +55,30 @@ namespace NOMAD.MissionPlanner
                 if (!calibration.ServoGimbalAxes.Any(axis => axis.Axis == "Yaw")) { yaw = currentYaw; }
             }
             return Math.Abs(pitch - currentPitch) >= .01 || Math.Abs(yaw - currentYaw) >= .01;
+        }
+
+        internal static bool TryErrors(VideoInputProfile calibration, Size image, PointF target,
+            float currentPitch, double deadband, out double pitchError, out double yawError)
+        {
+            pitchError = yawError = 0;
+            if (calibration == null || !calibration.TrackingCalibrated || image.Width <= 0 || image.Height <= 0 ||
+                !VideoDetection.Finite(target.X) || !VideoDetection.Finite(target.Y) ||
+                !VideoDetection.Finite(currentPitch) || currentPitch < calibration.PitchMinDeg ||
+                currentPitch > calibration.PitchMaxDeg || calibration.HorizontalFovDeg <= 0 ||
+                calibration.HorizontalFovDeg >= 180) { return false; }
+            double x = (target.X - image.Width / 2.0) / image.Width;
+            double y = (target.Y - image.Height / 2.0) / image.Height;
+            double focal = image.Width / (2 * Math.Tan(calibration.HorizontalFovDeg * Math.PI / 360));
+            double right = Math.Abs(x) < deadband ? 0 : x * image.Width / focal * calibration.YawSign;
+            double down = Math.Abs(y) < deadband ? 0 : y * image.Height / focal * calibration.PitchSign;
+            double cameraPitch = currentPitch * Math.PI / 180;
+            // Rotate the camera ray into mount axes; image X is not azimuth at a downward pitch.
+            double forward = Math.Cos(cameraPitch) + Math.Sin(cameraPitch) * down;
+            double vertical = -Math.Sin(cameraPitch) + Math.Cos(cameraPitch) * down;
+            yawError = Math.Atan2(right, forward) * 180 / Math.PI;
+            pitchError = Math.Atan2(-vertical, Math.Sqrt(forward * forward + right * right)) *
+                180 / Math.PI - currentPitch;
+            return true;
         }
     }
 }

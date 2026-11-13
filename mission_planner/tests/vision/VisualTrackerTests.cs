@@ -15,11 +15,16 @@ internal static partial class VisualTrackerTests
 
     internal static void Run()
     {
+        VisionRuntime.EnsureOpenCvLoaded(CancellationToken.None);
+        TrackingImagePixels();
+        FeatureMatchingParity();
         ObjectBackgroundAndTurning();
         using (var tile = Texture())
         using (var tracker = VisualTrackerFactory.Create(CancellationToken.None))
         {
-            Check(VisionRuntime.BuiltinModelPath == null, "Visual tracking must load without the detector runtime.");
+            Check(!Process.GetCurrentProcess().Modules.Cast<ProcessModule>().Any(module =>
+                module.ModuleName.Equals("DirectML.dll", StringComparison.OrdinalIgnoreCase)),
+                "CPU Object tracking must not load a GPU execution provider.");
             using (var first = Frame(tile, 0))
             {
                 Check(!tracker.Update(first, CancellationToken.None).Found, "Uninitialized tracker has no target.");
@@ -41,11 +46,11 @@ internal static partial class VisualTrackerTests
                     var elapsed = Stopwatch.StartNew();
                     var result = tracker.Update(frame, CancellationToken.None);
                     Check(result.Found,
-                        "CSRT must follow the moving textured region without detections: frame " + index + ", " + result.Status);
+                        "Object tracker must follow the moving textured region without detections: frame " + index + ", " + result.Status);
                     long milliseconds = elapsed.ElapsedMilliseconds;
                     maximum = Math.Max(maximum, milliseconds); total += milliseconds;
                     Check(Overlap(result.Bounds.Value, Truth(index)) > .45,
-                        "CSRT region must overlap the independently rendered moving/scaling target.");
+                        "Object tracker region must overlap the independently rendered moving/scaling target.");
                 }
             }
             using (var blank = Frame(null, 0))
@@ -53,7 +58,7 @@ internal static partial class VisualTrackerTests
             {
                 var lost = tracker.Update(blank, CancellationToken.None);
                 Check(!lost.Found && !lost.Bounds.HasValue && !lost.AimPoint.HasValue,
-                    "Native CSRT confidence loss must return no target.");
+                    "Object appearance loss must return no target.");
                 for (int index = 1; index <= 3; index++)
                 {
                     var recovered = tracker.Update(targetReturns, CancellationToken.None);
@@ -75,8 +80,8 @@ internal static partial class VisualTrackerTests
                         "Cancellation must retire the visual target.");
                 }
             }
-            Console.WriteLine("CSRT texture/scale: 10 updates, mean " + total / 10.0 + " ms, max " + maximum +
-                " ms; native target loss confirmed.");
+            Console.WriteLine("Object tracker texture/scale: 10 updates, mean " + total / 10.0 + " ms, max " + maximum +
+                " ms; target loss confirmed.");
         }
         using (var disposed = VisualTrackerFactory.Create(CancellationToken.None))
         {
@@ -93,6 +98,7 @@ internal static partial class VisualTrackerTests
         RejectFlatAppearanceReference();
         AreaTracking();
         PanoramaReturn();
+        CpuRenderedDeer();
         BenchmarkPerson();
         GpuObjectTracker(); // Last: it loads the ONNX runtime the checks above must run without.
         Console.WriteLine("PASS: " + _checks + " visual tracker checks.");
@@ -226,7 +232,7 @@ internal static partial class VisualTrackerTests
                     if (!result.Found)
                     {
                         Console.WriteLine("Person benchmark loss at " + index + ": " + result.Status + "; " +
-                            ((CsrtVisualTracker)tracker).LastObjectDiagnostic);
+                            ((ObjectVisualTracker)tracker).LastObjectDiagnostic);
                         break;
                     }
                     maximum = Math.Max(maximum, elapsed.ElapsedMilliseconds);
@@ -237,7 +243,7 @@ internal static partial class VisualTrackerTests
             Console.WriteLine("Person benchmark coverage " + tracked + "/" + (files.Length - 1));
             Check(tracked == files.Length - 1 && sum / Math.Max(1, tracked) > .4,
                 "Person tracking must complete every frame and overlap the independent ground truth.");
-            Console.WriteLine("CSRT person benchmark, no reseeding: " + tracked + "/" + (files.Length - 1) +
+            Console.WriteLine("Object tracker person benchmark, no reseeding: " + tracked + "/" + (files.Length - 1) +
                 " updates; mean IoU " + (sum / tracked).ToString("F3", CultureInfo.InvariantCulture) +
                 ", min IoU " + minimum.ToString("F3", CultureInfo.InvariantCulture) + ", max " + maximum + " ms.");
         }

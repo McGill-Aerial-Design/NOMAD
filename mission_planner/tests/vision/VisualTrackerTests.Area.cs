@@ -78,11 +78,13 @@ internal static partial class VisualTrackerTests
         }
         RejectDuplicateAreas();
         RejectRepeatingTexture();
-        RenderedAreaFeatureCoverage("area-ground.json");
-        RenderedAreaFeatureCoverage("area-natural.json");
+        RenderedAreaFeatureCoverage("area-ground.json", shouldLearn: true);
+        RenderedAreaFeatureCoverage("area-natural.json", shouldLearn: false);
         AdaptiveAreaViews();
         RequireSustainedChangedView();
         RejectFlatCenterOccluder();
+        RenderedAreaFeatureCoverage("area-bootstrap.json", shouldLearn: false);
+        RequireDistinctiveAreaRecovery();
         Console.WriteLine("Area reference, perspective point, occlusion, outside/return, ambiguity and parallax: " +
             elapsed.ElapsedMilliseconds + " ms.");
     }
@@ -183,28 +185,64 @@ internal static partial class VisualTrackerTests
         }
     }
 
-    private static void RenderedAreaFeatureCoverage(string manifest)
+    private static Newtonsoft.Json.Linq.JObject AreaFixture(string manifest)
     {
         var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-        Newtonsoft.Json.Linq.JObject metadata;
         using (var stream = assembly.GetManifestResourceStream("NOMAD.Tests." + manifest))
         using (var reader = new System.IO.StreamReader(stream))
-        { metadata = Newtonsoft.Json.Linq.JObject.Parse(reader.ReadToEnd()); }
+        { return Newtonsoft.Json.Linq.JObject.Parse(reader.ReadToEnd()); }
+    }
+
+    private static void RequireDistinctiveAreaRecovery()
+    {
+        var metadata = AreaFixture("area-bootstrap.json");
+        var selection = metadata["selection"];
         using (var reference = RenderedAreaImage((string)metadata["reference"]))
         using (var tracker = VisualTrackerFactory.Create(CancellationToken.None, VisualTrackingMode.Area))
         {
-            tracker.Initialize(reference, new RectangleF(360, 180, 144, 144), CancellationToken.None);
+            tracker.Initialize(reference, new RectangleF((float)selection[0], (float)selection[1],
+                (float)selection[2], (float)selection[3]), CancellationToken.None);
             for (int index = 0; index < 3; index++)
             { Check(tracker.Update(reference, CancellationToken.None).Found == (index == 2),
-                "Rendered reference must establish three matches before motion"); }
+                "The fresh weak-area selection did not establish local continuity"); }
+            for (int index = 0; index < 6; index++)
+            {
+                var result = tracker.Update(reference, CancellationToken.None, new VisualFrameContext(null, index == 0));
+                Check(!result.Found && !result.AimPoint.HasValue,
+                    "A receipt gap restored weak-area identity using only old optical flow");
+            }
+        }
+    }
+
+    private static void RenderedAreaFeatureCoverage(string manifest, bool shouldLearn)
+    {
+        var metadata = AreaFixture(manifest);
+        using (var reference = RenderedAreaImage((string)metadata["reference"]))
+        using (var tracker = VisualTrackerFactory.Create(CancellationToken.None, VisualTrackingMode.Area))
+        {
+            var selection = metadata["selection"];
+            tracker.Initialize(reference, new RectangleF((float)selection[0], (float)selection[1],
+                (float)selection[2], (float)selection[3]), CancellationToken.None);
+            for (int index = 0; index < 3; index++)
+            { Check(tracker.Update(reference, CancellationToken.None).Found == (index == 2),
+                "Rendered reference must establish three matches before motion: " + manifest + "; " +
+                ((AreaVisualTracker)tracker).LastMatchDiagnostic); }
             foreach (var frame in metadata["frames"])
             using (var image = RenderedAreaImage((string)frame["file"]))
             {
-                var result = tracker.Update(image, CancellationToken.None);
-                Check(result.Found, "The same rendered ground point lost distributed support at capture " + frame["capture"]);
-                var expected = new PointF((float)frame["aim"][0], (float)frame["aim"][1]);
-                Check(PointDistance(result.AimPoint.Value, expected) < 3,
-                    "Rendered Area drifted from the independently projected canonical world point");
+                for (int match = 0; match < 3; match++)
+                {
+                    var result = tracker.Update(image, CancellationToken.None);
+                    Check(result.Found, "The same rendered ground point lost distributed support at capture " + frame["capture"]);
+                    var expected = new PointF((float)frame["aim"][0], (float)frame["aim"][1]);
+                    Check(PointDistance(result.AimPoint.Value, expected) < 3,
+                        "Rendered Area drifted from the independently projected canonical world point");
+                }
+            }
+            if (shouldLearn)
+            {
+                Check(((AreaVisualTracker)tracker).LearnedViews > 0,
+                    "A confirmed rendered pan never learned a supported working view: " + manifest);
             }
         }
     }
@@ -400,11 +438,14 @@ internal static partial class VisualTrackerTests
         {
             Cv2.WarpPerspective(input, projected, homography, new OpenCvSharp.Size(640, 480));
             var result = new Bitmap(640, 480, PixelFormat.Format24bppRgb);
-            for (int y = 0; y < 480; y++)
+            var bits = result.LockBits(new Rectangle(0, 0, result.Width, result.Height), ImageLockMode.WriteOnly,
+                PixelFormat.Format24bppRgb);
+            try
             {
-                for (int x = 0; x < 640; x++)
-                { int pixel = projected.At<byte>(y, x); result.SetPixel(x, y, Color.FromArgb(pixel, pixel, pixel)); }
+                using (var color = Mat.FromPixelData(result.Height, result.Width, MatType.CV_8UC3, bits.Scan0, bits.Stride))
+                { Cv2.CvtColor(projected, color, ColorConversionCodes.GRAY2BGR); }
             }
+            finally { result.UnlockBits(bits); }
             return result;
         }
     }

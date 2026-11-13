@@ -74,6 +74,10 @@ internal static partial class VideoLifetimeTests
         foreach (int attitudePeriod in new[] { 10, 25 })
         foreach (bool movingObject in new[] { false, true })
         { CheckDelayedTracking(startPitch, direction, period, translationDirection, delayTicks, attitudePeriod, movingObject); }
+        foreach (float startPitch in new[] { -32f, -60f })
+        foreach (int delayTicks in new[] { 14, 80 })
+        foreach (bool movingObject in new[] { false, true })
+        { CheckDelayedTracking(startPitch, 1, 5, 1, delayTicks, 10, movingObject, pitchMotion: true); }
     }
 
     private static void ObjectOrbitResponse()
@@ -117,12 +121,13 @@ internal static partial class VideoLifetimeTests
     }
 
     private static void CheckDelayedTracking(float startPitch, int direction, int period, int translationDirection,
-        int delayTicks, int attitudePeriod, bool movingObject)
+        int delayTicks, int attitudePeriod, bool movingObject, bool pitchMotion = false)
     {
         var profile = new VideoInputProfile { TrackingCalibrated = true, TrackingMaxRateDegSec = 60 };
         var history = new List<PointF>();
         float commandedPitch = startPitch, commandedYaw = direction * 10;
         double actualPitch = startPitch, actualYaw = commandedYaw, heading = 0, bearing = commandedYaw, previousHeading = 0;
+        double targetPitch = startPitch;
         double reportedHeading = 0;
         double reportedRate = 0;
         int attitudeTick = 0;
@@ -135,10 +140,11 @@ internal static partial class VideoLifetimeTests
             heading += motion * 30 * .01;
             if (tick % attitudePeriod == 0)
             { reportedHeading = heading; reportedRate = motion * 30; attitudeTick = tick; }
-            bearing += motion * translationDirection * 2 * .01;
+            if (pitchMotion) { targetPitch += motion * translationDirection * 2 * .01; }
+            else { bearing += motion * translationDirection * 2 * .01; }
             actualPitch += (commandedPitch - actualPitch) * (.01 / .08);
             actualYaw += (commandedYaw - actualYaw) * (.01 / .08);
-            PointF image = ProjectTrackingRay(actualPitch, actualYaw + heading, bearing, startPitch);
+            PointF image = ProjectTrackingRay(actualPitch, actualYaw + heading, bearing, targetPitch);
             history.Add(image);
             double error = Math.Max(Math.Abs(image.X), Math.Abs(image.Y));
             if (time >= 1 && time < 7) { maximum = Math.Max(maximum, error); }
@@ -166,7 +172,7 @@ internal static partial class VideoLifetimeTests
                 Math.Abs(commandedYaw - previousYaw) <= 60 * period * .01 + .0001,
                 "Delayed control bypassed the calibrated target rate");
         }
-        string diagnostic = $"object={movingObject}, pitch={startPitch}, yaw={direction}, period={period}, translation={translationDirection}, " +
+        string diagnostic = $"object={movingObject}, pitchMotion={pitchMotion}, pitch={startPitch}, yaw={direction}, period={period}, translation={translationDirection}, " +
             $"delay={delayTicks}, attitude={attitudePeriod}: " +
             $"peak={maximum:F3}, steady={steady:F3}, settled={settled:F3}";
         Check(maximum < .12 && steady < .08 && settled < .035,

@@ -22,7 +22,7 @@ namespace NOMAD.MissionPlanner
 
         internal static ObjectForeground TryExtract(Mat image, System.Drawing.Rectangle selection,
             System.Drawing.PointF seed, double? previousAngle, CancellationToken token, double searchExpansion = 1.8,
-            double[] expectedColour = null, bool restrictToSelection = false)
+            double[] expectedColour = null, bool restrictToSelection = false, bool fast = false)
         {
             token.ThrowIfCancellationRequested();
             if (image.Empty() || image.Type() != MatType.CV_8UC3 || selection.Width < 2 || selection.Height < 2 ||
@@ -56,16 +56,20 @@ namespace NOMAD.MissionPlanner
                     Cv2.Rectangle(classes, prior, Scalar.All(3), -1);
                     if (expectedColour != null)
                     {
-                        binary.Create(crop.Size(), MatType.CV_8UC1); binary.SetTo(Scalar.All(0));
+                        binary.Create(crop.Size(), MatType.CV_8UC1);
+                        crop.GetArray(out Vec3b[] pixels);
+                        int width = crop.Width, height = crop.Height;
+                        var coverage = new byte[pixels.Length];
                         // Uniform shafts have too little interior texture for a rectangle-trained colour mixture.
-                        for (int y = 2; y < crop.Height - 2; y++)
-                        for (int x = 2; x < crop.Width - 2; x++)
+                        for (int y = 2; y < height - 2; y++)
+                        for (int x = 2; x < width - 2; x++)
                         {
-                            var pixel = crop.At<Vec3b>(y, x);
+                            var pixel = pixels[y * width + x];
                             double distance = 0;
                             for (int c = 0; c < 3; c++) { distance += Math.Pow(pixel[c] - expectedColour[c], 2); }
-                            if (distance < 3 * 35 * 35) { binary.Set(y, x, (byte)255); }
+                            if (distance < 3 * 35 * 35) { coverage[y * width + x] = 255; }
                         }
+                        binary.SetArray(coverage);
                         using (var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(3, 3)))
                         { Cv2.MorphologyEx(binary, binary, MorphTypes.Close, kernel); }
                     }
@@ -77,7 +81,25 @@ namespace NOMAD.MissionPlanner
                         // GrabCut initializes colour clusters randomly; fix its declared seed rather than test-order state.
                         ulong randomState = Cv2.GetTheRNG().State;
                         Cv2.SetTheRNG(173);
-                        try { Cv2.GrabCut(crop, classes, default, background, foreground, 3, GrabCutModes.InitWithMask); }
+                        try
+                        {
+                            double scale = fast ? Math.Min(1, 128.0 / Math.Max(crop.Width, crop.Height)) : 1;
+                            if (scale < 1 && Math.Min(selection.Width, selection.Height) * scale >= 16)
+                            {
+                                using (var small = new Mat())
+                                using (var smallClasses = new Mat())
+                                {
+                                    Cv2.Resize(crop, small, default, scale, scale, InterpolationFlags.Area);
+                                    Cv2.Resize(classes, smallClasses, small.Size(), interpolation: InterpolationFlags.Nearest);
+                                    Cv2.Circle(smallClasses, new Point((int)(point.X * scale), (int)(point.Y * scale)),
+                                        1, Scalar.All(1), -1);
+                                    Cv2.GrabCut(small, smallClasses, default, background, foreground, 1, GrabCutModes.InitWithMask);
+                                    Cv2.Resize(smallClasses, classes, crop.Size(), interpolation: InterpolationFlags.Nearest);
+                                }
+                            }
+                            else { Cv2.GrabCut(crop, classes, default, background, foreground,
+                                fast ? 1 : 3, GrabCutModes.InitWithMask); }
+                        }
                         finally { Cv2.SetTheRNG(randomState); }
                         Cv2.InRange(classes, Scalar.All(1), Scalar.All(1), binary);
                         Cv2.InRange(classes, Scalar.All(3), Scalar.All(3), probable);
@@ -142,18 +164,6 @@ namespace NOMAD.MissionPlanner
             Point2f Corner(int horizontal, int vertical) => new Point2f(
                 (float)(centre.X + horizontal * y * minor / 2 + vertical * x * major / 2),
                 (float)(centre.Y - horizontal * x * minor / 2 + vertical * y * major / 2));
-        }
-
-        internal Mat CreateNativeMask(System.Drawing.Rectangle bounds)
-        {
-            var result = new Mat();
-            try
-            {
-                using (var crop = new Mat(Mask, new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height)))
-                { crop.ConvertTo(result, MatType.CV_32FC1, 1.0 / 255); }
-                return result;
-            }
-            catch { result.Dispose(); throw; }
         }
 
         internal static ObjectForeground ProjectPrevious(Mat image, ObjectForeground previous,

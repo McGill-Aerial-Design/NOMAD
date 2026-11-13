@@ -71,7 +71,7 @@ namespace NOMAD.MissionPlanner
         private Placement FindPlacement(Reference view, Mat current, KeyPoint[] points, Mat descriptors, CancellationToken token)
         {
             if (descriptors.Rows < MinimumInliers) { LastMatchDiagnostic = "Insufficient current descriptors"; return null; }
-            var matches = MutualMatches(view, descriptors);
+            var matches = VisualFeatureMatching.Mutual(view.Descriptors, descriptors);
             if (matches.Length < MinimumInliers) { LastMatchDiagnostic = "Insufficient mutual matches: " + matches.Length; return null; }
             var source = matches.Select(match => view.Points[match.QueryIdx].Pt).ToArray();
             var destination = matches.Select(match => points[match.TrainIdx].Pt).ToArray();
@@ -80,7 +80,9 @@ namespace NOMAD.MissionPlanner
 
         private Placement FollowVisibleSurface(Reference view, Mat current, CancellationToken token)
         {
-            var source = view.FlowPoints ?? view.Points.Select(value => value.Pt).ToArray();
+            var available = view.FlowPoints ?? view.Points.Select(value => value.Pt).ToArray();
+            int count = Math.Min(160, available.Length);
+            var source = Enumerable.Range(0, count).Select(index => available[index * available.Length / count]).ToArray();
             using (var previous = Mat.FromArray(source))
             using (var next = new Mat())
             using (var back = new Mat())
@@ -89,7 +91,7 @@ namespace NOMAD.MissionPlanner
             using (var error = new Mat())
             {
                 Cv2.CalcOpticalFlowPyrLK(view.Image, current, previous, next, forwardStatus, error,
-                    new OpenCvSharp.Size(21, 21), 3);
+                    new OpenCvSharp.Size(21, 21), 3, new TermCriteria(CriteriaTypes.Count | CriteriaTypes.Eps, 10, .03));
                 token.ThrowIfCancellationRequested();
                 next.GetArray(out Point2f[] destination); forwardStatus.GetArray(out byte[] forward);
                 var measured = Enumerable.Range(0, source.Length).Where(index => forward[index] != 0 &&
@@ -99,7 +101,7 @@ namespace NOMAD.MissionPlanner
                 using (var measuredPoints = Mat.FromArray(measured.Select(index => destination[index]).ToArray()))
                 {
                     Cv2.CalcOpticalFlowPyrLK(current, view.Image, measuredPoints, back, backwardStatus, error,
-                        new OpenCvSharp.Size(21, 21), 3);
+                        new OpenCvSharp.Size(21, 21), 3, new TermCriteria(CriteriaTypes.Count | CriteriaTypes.Eps, 10, .03));
                     token.ThrowIfCancellationRequested();
                     back.GetArray(out Point2f[] returned); backwardStatus.GetArray(out byte[] backward);
                     var reliable = Enumerable.Range(0, measured.Length).Where(index => backward[index] != 0 &&
@@ -140,20 +142,6 @@ namespace NOMAD.MissionPlanner
                 return new Placement { Point = new PointF(aim.X, aim.Y), Bounds = Bounds(corners),
                     Corners = corners, Context = context, Reference = view,
                     InlierPoints = accepted.Select(index => destination[index]).ToArray() };
-            }
-        }
-
-        private DMatch[] MutualMatches(Reference view, Mat current)
-        {
-            using (var matcher = new BFMatcher(NormTypes.Hamming))
-            {
-                var forward = matcher.KnnMatch(view.Descriptors, current, 2);
-                var reverse = matcher.KnnMatch(current, view.Descriptors, 2);
-                return forward.Where(pair => pair.Length == 2 && pair[0].Distance < 64 &&
-                    pair[0].Distance < pair[1].Distance * .72 && reverse[pair[0].TrainIdx].Length == 2 &&
-                    reverse[pair[0].TrainIdx][0].TrainIdx == pair[0].QueryIdx &&
-                    reverse[pair[0].TrainIdx][0].Distance < reverse[pair[0].TrainIdx][1].Distance * .72)
-                    .Select(pair => pair[0]).ToArray();
             }
         }
 
@@ -274,7 +262,6 @@ namespace NOMAD.MissionPlanner
                 for (int index = 0; index < points.Length && added < ReferenceFeatures / 2; index++)
                 {
                     if (Contains(view.Corners, points[index].Pt) != local) { continue; }
-                    // Learn only near observed plane inliers, so a passing foreground cannot donate new features.
                     if (support != null && !support.Any(point => Distance(point, points[index].Pt) <= 2.5)) { continue; }
                     using (var row = descriptors.Row(index)) { view.Descriptors.PushBack(row); }
                     retained.Add(points[index]); added++;
@@ -283,7 +270,7 @@ namespace NOMAD.MissionPlanner
             view.Points = retained.ToArray();
         }
 
-        private void Promote(Mat current, Placement candidate, CancellationToken token)
+        private void Promote(Mat current, Placement candidate, KeyPoint[] points, Mat descriptors, CancellationToken token)
         {
             // Keep measured plane tracks; re-detecting ORB corners alone can erode their spatial support.
             var view = new Reference { Image = current.Clone(),
@@ -291,8 +278,29 @@ namespace NOMAD.MissionPlanner
                 FlowPoints = candidate.InlierPoints };
             try
             {
-                DetectReferenceFeatures(view, token, candidate.InlierPoints);
-                if (view.Descriptors.Rows < 24 || !DistributedSupport(view, view.Points)) { return; }
+                view.Descriptors = new Mat();
+                var retained = new List<KeyPoint>();
+                foreach (bool local in new[] { true, false })
+                {
+                    int added = 0;
+                    for (int index = 0; index < points.Length && added < ReferenceFeatures / 2; index++)
+                    {
+                        if (Contains(view.Corners, points[index].Pt) != local ||
+                            !Contains(view.Context, points[index].Pt)) { continue; }
+                        // Reuse this frame's descriptors only near measured plane inliers.
+                        if (!candidate.InlierPoints.Any(point => Distance(point, points[index].Pt) <= 2.5)) { continue; }
+                        using (var row = descriptors.Row(index)) { view.Descriptors.PushBack(row); }
+                        retained.Add(points[index]); added++;
+                    }
+                }
+                token.ThrowIfCancellationRequested(); view.Points = retained.ToArray();
+                if (view.Descriptors.Rows < 24 || !DistributedSupport(view, view.Points))
+                {
+                    // A sparse global budget may omit local corners needed to retain this verified view.
+                    view.Descriptors.Dispose();
+                    DetectReferenceFeatures(view, token, candidate.InlierPoints);
+                    if (view.Descriptors.Rows < 24 || !DistributedSupport(view, view.Points)) { return; }
+                }
                 view.Appearance = Rectify(current, view.Corners);
                 if (_active != _original) { _active.Dispose(); }
                 _active = view; view = null; _keyframeMatches = 0; LearnedViews++;

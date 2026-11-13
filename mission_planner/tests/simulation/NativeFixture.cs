@@ -106,9 +106,13 @@ namespace NOMAD.Simulation
                 AltitudeCallouts = false, AutoStartHudVideo = false };
             OutputController.Initialize(_config);
             GimbalController.ApplyProfile(_config);
-            var request = _connection.doCommandAsync(201, 1, MAVLink.MAV_CMD.SET_MESSAGE_INTERVAL,
-                36, 100000, 0, 0, 0, 0, 0, true);
-            Require(request.Wait(5000) && request.GetAwaiter().GetResult(), "servo_stream_request_rejected");
+            // This headless cohort has no MainV2 stream-rate loop; request fresh control inputs explicitly.
+            foreach (var stream in new[] { new[] { 36, 100000 }, new[] { 30, 20000 } })
+            {
+                var request = _connection.doCommandAsync(201, 1, MAVLink.MAV_CMD.SET_MESSAGE_INTERVAL,
+                    stream[0], stream[1], 0, 0, 0, 0, 0, true);
+                Require(request.Wait(5000) && request.GetAwaiter().GetResult(), "control_stream_request_rejected: " + stream[0]);
+            }
             WaitOutput(0, value => value.Roll > 0 && value.Pitch > 0 && value.Yaw > 0);
         }
 

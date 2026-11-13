@@ -57,7 +57,7 @@ namespace NOMAD.MissionPlanner
                         ? new { OptionalDetectorLabel = label, SelectionDetectorIdentity = selectionDetector,
                             Mode = frame.Region.Mode.ToString(), State = frame.Region.State.ToString(),
                             Tracker = frame.Region.Mode == VisualTrackingMode.Area ? "OpenCV ORB planar reference" :
-                                _input.ObjectTracker == "GPU" ? "EfficientTAM Ti512 / DirectML" : "OpenCV CSRT",
+                                _input.ObjectTracker == "GPU" ? "EfficientTAM Ti512 / DirectML" : "CPU foreground / ViTTrack",
                             Found = frame.Region.Found, ReferenceRetained = _session.HasRegion(regionRevision),
                             Box = frame.Region.Found ? frame.Region.Bounds : null,
                             CanonicalAimPoint = frame.Region.Found ? frame.Region.AimPoint : null,

@@ -95,9 +95,26 @@ namespace NOMAD.Simulation
                 return File.Exists(path) ? Assembly.LoadFrom(path) : null;
             };
             Prepare(run);
-            if (mode == "--replay") { ReplayFixture.Run(run); }
-            else if (mode != "--probe")
-            { NativeFixture.Run(run, mode != "--native", mode == "--detect", mode == "--occlusion"); }
+            if (mode == "--probe") { return; }
+            RunWithWorker(run, mode);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void RunWithWorker(string run, string mode)
+        {
+            // Keep the private bundle below MAX_PATH even when the checkout/run path is long.
+            NOMAD.MissionPlanner.MediaWorkerHost.FixtureDirectory = Path.Combine(run, "worker");
+            try
+            {
+                if (mode == "--replay") { ReplayFixture.Run(run); }
+                else { NativeFixture.Run(run, mode != "--native", mode == "--detect", mode == "--occlusion"); }
+            }
+            finally
+            {
+                NOMAD.MissionPlanner.MediaWorkerHost.Shutdown();
+                if (!NOMAD.MissionPlanner.MediaWorkerHost.ShutdownCompletion.Wait(5000))
+                { throw new TimeoutException("Owned media worker cleanup deadline"); }
+            }
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]

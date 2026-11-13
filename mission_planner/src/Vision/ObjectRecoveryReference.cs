@@ -108,43 +108,35 @@ namespace NOMAD.MissionPlanner
         private Match FindPlacement(Mat image, KeyPoint[] points, Mat descriptors, CancellationToken token)
         {
             if (descriptors.Rows < 12) { return null; }
-            using (var matcher = new BFMatcher(NormTypes.Hamming))
+
+            var matches = VisualFeatureMatching.Mutual(_descriptors, descriptors);
+            if (matches.Length < 12) { return null; }
+            var source = matches.Select(match => _points[match.QueryIdx].Pt).ToArray();
+            var destination = matches.Select(match => points[match.TrainIdx].Pt).ToArray();
+            using (var inliers = new Mat())
+            using (var mapping = Cv2.FindHomography(source.Select(p => new Point2d(p.X, p.Y)),
+                destination.Select(p => new Point2d(p.X, p.Y)), HomographyMethods.Ransac, 2.5, inliers, 750, .995))
             {
-                var forward = matcher.KnnMatch(_descriptors, descriptors, 2);
-                var reverse = matcher.KnnMatch(descriptors, _descriptors, 2);
-                var matches = forward.Where(pair => pair.Length == 2 && pair[0].Distance < 64 &&
-                    pair[0].Distance < pair[1].Distance * .72 && reverse[pair[0].TrainIdx].Length == 2 &&
-                    reverse[pair[0].TrainIdx][0].TrainIdx == pair[0].QueryIdx &&
-                    reverse[pair[0].TrainIdx][0].Distance < reverse[pair[0].TrainIdx][1].Distance * .72)
-                    .Select(pair => pair[0]).ToArray();
-                if (matches.Length < 12) { return null; }
-                var source = matches.Select(match => _points[match.QueryIdx].Pt).ToArray();
-                var destination = matches.Select(match => points[match.TrainIdx].Pt).ToArray();
-                using (var inliers = new Mat())
-                using (var mapping = Cv2.FindHomography(source.Select(p => new Point2d(p.X, p.Y)),
-                    destination.Select(p => new Point2d(p.X, p.Y)), HomographyMethods.Ransac, 2.5, inliers, 750, .995))
-                {
-                    token.ThrowIfCancellationRequested();
-                    if (mapping.Empty() || inliers.Empty()) { return null; }
-                    var accepted = Enumerable.Range(0, source.Length).Where(i => inliers.At<byte>(i) != 0).ToArray();
-                    var foreground = accepted.Where(i => _foregroundPoints[matches[i].QueryIdx]).ToArray();
-                    if (accepted.Length < 12 || accepted.Length < source.Length * .55 || foreground.Length < 8 ||
-                        !Distributed(foreground.Select(i => source[i]).ToArray())) { return null; }
-                    var projected = Cv2.PerspectiveTransform(source, mapping);
-                    if (accepted.Average(i => Distance(projected[i], destination[i])) > 1.5) { return null; }
-                    var corners = Cv2.PerspectiveTransform(new[] { new Point2f(_bounds.Left, _bounds.Top),
-                        new Point2f(_bounds.Right, _bounds.Top), new Point2f(_bounds.Right, _bounds.Bottom),
-                        new Point2f(_bounds.Left, _bounds.Bottom) }, mapping);
-                    if (corners.Any(p => !VideoDetection.Finite(p.X) || !VideoDetection.Finite(p.Y) || p.X < 0 || p.Y < 0 ||
-                        p.X >= image.Width || p.Y >= image.Height) || !Cv2.IsContourConvex(corners)) { return null; }
-                    double scale = Cv2.ContourArea(corners, true) / (_bounds.Width * _bounds.Height);
-                    if (scale < .16 || scale > 6.25 || !_appearance.MatchesProjection(image, corners)) { return null; }
-                    int left = (int)Math.Floor(corners.Min(p => p.X)), top = (int)Math.Floor(corners.Min(p => p.Y));
-                    var result = new Rect(left, top, (int)Math.Ceiling(corners.Max(p => p.X)) - left,
-                        (int)Math.Ceiling(corners.Max(p => p.Y)) - top);
-                    return result.Width >= 8 && result.Height >= 8 ? new Match { Bounds =
-                        new System.Drawing.Rectangle(result.X, result.Y, result.Width, result.Height), Corners = corners } : null;
-                }
+                token.ThrowIfCancellationRequested();
+                if (mapping.Empty() || inliers.Empty()) { return null; }
+                var accepted = Enumerable.Range(0, source.Length).Where(i => inliers.At<byte>(i) != 0).ToArray();
+                var foreground = accepted.Where(i => _foregroundPoints[matches[i].QueryIdx]).ToArray();
+                if (accepted.Length < 12 || accepted.Length < source.Length * .55 || foreground.Length < 8 ||
+                    !Distributed(foreground.Select(i => source[i]).ToArray())) { return null; }
+                var projected = Cv2.PerspectiveTransform(source, mapping);
+                if (accepted.Average(i => Distance(projected[i], destination[i])) > 1.5) { return null; }
+                var corners = Cv2.PerspectiveTransform(new[] { new Point2f(_bounds.Left, _bounds.Top),
+                    new Point2f(_bounds.Right, _bounds.Top), new Point2f(_bounds.Right, _bounds.Bottom),
+                    new Point2f(_bounds.Left, _bounds.Bottom) }, mapping);
+                if (corners.Any(p => !VideoDetection.Finite(p.X) || !VideoDetection.Finite(p.Y) || p.X < 0 || p.Y < 0 ||
+                    p.X >= image.Width || p.Y >= image.Height) || !Cv2.IsContourConvex(corners)) { return null; }
+                double scale = Cv2.ContourArea(corners, true) / (_bounds.Width * _bounds.Height);
+                if (scale < .16 || scale > 6.25 || !_appearance.MatchesProjection(image, corners)) { return null; }
+                int left = (int)Math.Floor(corners.Min(p => p.X)), top = (int)Math.Floor(corners.Min(p => p.Y));
+                var result = new Rect(left, top, (int)Math.Ceiling(corners.Max(p => p.X)) - left,
+                    (int)Math.Ceiling(corners.Max(p => p.Y)) - top);
+                return result.Width >= 8 && result.Height >= 8 ? new Match { Bounds =
+                    new System.Drawing.Rectangle(result.X, result.Y, result.Width, result.Height), Corners = corners } : null;
             }
         }
 

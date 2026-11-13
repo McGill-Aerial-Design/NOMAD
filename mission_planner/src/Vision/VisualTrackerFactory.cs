@@ -40,7 +40,7 @@ namespace NOMAD.MissionPlanner
 
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static IVisualTracker CreateLoaded(VisualTrackingMode mode) =>
-            mode == VisualTrackingMode.Area ? (IVisualTracker)new AreaVisualTracker() : new CsrtVisualTracker();
+            mode == VisualTrackingMode.Area ? (IVisualTracker)new AreaVisualTracker() : new ObjectVisualTracker();
     }
 }
 

@@ -8,35 +8,47 @@ namespace NOMAD.MissionPlanner
 {
     internal static class VisualTrackingImage
     {
-        internal static Bitmap Scale(Bitmap frame, int maximumDimension = 640)
+        internal static Mat Color(Bitmap frame, int maximumDimension = 640)
         {
+            ValidateFrame(frame);
             if (maximumDimension < 1 || maximumDimension > 1280)
             { throw new ArgumentOutOfRangeException(nameof(maximumDimension)); }
             double scale = Math.Min(1, maximumDimension / (double)Math.Max(frame.Width, frame.Height));
-            var result = new Bitmap(Math.Max(1, (int)(frame.Width * scale)), Math.Max(1, (int)(frame.Height * scale)),
-                PixelFormat.Format24bppRgb);
-            using (var graphics = Graphics.FromImage(result))
-            { graphics.DrawImage(frame, new Rectangle(0, 0, result.Width, result.Height)); }
-            return result;
+            var size = new OpenCvSharp.Size(Math.Max(1, (int)(frame.Width * scale)),
+                Math.Max(1, (int)(frame.Height * scale)));
+            var result = new Mat();
+            BitmapData bits = null;
+            try
+            {
+                bool bgra = frame.PixelFormat == PixelFormat.Format32bppArgb || frame.PixelFormat == PixelFormat.Format32bppRgb;
+                bits = frame.LockBits(new Rectangle(0, 0, frame.Width, frame.Height), ImageLockMode.ReadOnly,
+                    bgra ? frame.PixelFormat : PixelFormat.Format24bppRgb);
+                bool inverted = bits.Stride < 0;
+                var start = inverted ? IntPtr.Add(bits.Scan0, bits.Stride * (frame.Height - 1)) : bits.Scan0;
+                using (var source = Mat.FromPixelData(frame.Height, frame.Width, bgra ? MatType.CV_8UC4 : MatType.CV_8UC3,
+                    start, Math.Abs(bits.Stride)))
+                {
+                    Cv2.Resize(source, result, size, interpolation: InterpolationFlags.Linear);
+                    if (inverted) { Cv2.Flip(result, result, FlipMode.X); }
+                    if (bgra) { Cv2.CvtColor(result, result, ColorConversionCodes.BGRA2BGR); }
+                }
+                return result;
+            }
+            catch { result.Dispose(); throw; }
+            finally { if (bits != null) { frame.UnlockBits(bits); } }
         }
 
         internal static Mat Gray(Bitmap frame)
         {
-            using (var image = Scale(frame))
+            using (var color = Color(frame))
             {
-                var bits = image.LockBits(new Rectangle(0, 0, image.Width, image.Height), ImageLockMode.ReadOnly,
-                    PixelFormat.Format24bppRgb);
+                var gray = new Mat();
                 try
                 {
-                    using (var color = Mat.FromPixelData(image.Height, image.Width, MatType.CV_8UC3,
-                        bits.Scan0, bits.Stride))
-                    {
-                        var gray = new Mat();
-                        Cv2.CvtColor(color, gray, ColorConversionCodes.BGR2GRAY);
-                        return gray;
-                    }
+                    Cv2.CvtColor(color, gray, ColorConversionCodes.BGR2GRAY);
+                    return gray;
                 }
-                finally { image.UnlockBits(bits); }
+                catch { gray.Dispose(); throw; }
             }
         }
 

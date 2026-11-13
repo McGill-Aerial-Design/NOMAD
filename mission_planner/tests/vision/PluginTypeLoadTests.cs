@@ -23,7 +23,7 @@ internal static class PluginTypeLoadTests
             };
             var types = Assembly.LoadFrom(args[0]).GetTypes();
             if (!types.Any(type => type.Name == "NOMADPlugin") ||
-                !types.Any(type => type.Name == "MediaWorkerTracker") || types.Any(type => type.Name == "CsrtVisualTracker"))
+                !types.Any(type => type.Name == "MediaWorkerTracker") || types.Any(type => type.Name == "ObjectVisualTracker"))
             { throw new Exception("Expected plugin/worker proxy missing or native tracker leaked into the parent."); }
             if (types.Any(type => type.Name == "VideoFlightController" || type.Name == "VideoFlightInput" ||
                 type.Name == "VideoFlightKeys" || type.Name == "VideoFlightVelocity"))

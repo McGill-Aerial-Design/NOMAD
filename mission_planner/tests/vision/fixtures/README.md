@@ -1,5 +1,20 @@
 # Vision regression fixtures
 
+`area-bootstrap.png` is the exact CPU-preprocessed 640×360 image from the natural
+Gazebo scene. Its grass selection has distributed reference corners that the global
+current-frame feature budget misses. `area-bootstrap.json` checks initial three-match
+admission and the unchanged pixel point; it uses the same CC0 scene assets credited below.
+
+`cpu-deer.json` and six `cpu-deer-*.png` crops cover a distant textured deer against
+similar-coloured grass after software-rendered Gazebo video and H.264 decoding.
+The fixed operator selection precedes tracking; independent semantic labels supply
+the bounds used only by assertions. Crops preserve camera pixels, with no upscaling.
+They test CPU template admission, incorrect bounds, opaque replacement, recovery,
+receipt discontinuity and cancellation. They are not flight or capture-latency qualification.
+The deer is [Innerscene's CC0 stag](https://www.innerscene.com/tools/library/3d-parts/red-deer-stag-9f27e209),
+with its fixture export pinned in `scripts/simulation/assets.json`; the ground is Rob Tuytel's
+[CC0 Aerial Grass Rock](https://polyhaven.com/a/aerial_grass_rock).
+
 `panorama.json` and the thirty `panorama-*.jpg` views add photographed full-360-degree
 camera rotation and return tests for both Object and Area. Source: Greg Zaal's
 [Courtyard](https://polyhaven.com/a/courtyard), photographed 2015-12-09, published

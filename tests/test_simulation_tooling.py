@@ -130,6 +130,14 @@ def test_renderer_health_rejects_late_capture_failure(tooling, tmp_path):
         process.wait(timeout=2)
 
 
+def test_capture_identity_is_exact_and_never_guessed_after_corruption(tooling):
+    match = tooling("analyze_rendered").match
+    captures = [{"sequence": 17}, {"sequence": 18}]
+    assert match({"capture_sequence": 18}, captures) == [captures[1]]
+    assert match({"capture_sequence": None}, captures) == []
+    assert match({"capture_sequence": 19}, captures) == []
+
+
 @pytest.mark.parametrize("home_workspace", [False, True])
 def test_visible_readiness_failure_still_cleans_owned_processes(tooling, monkeypatch, tmp_path, home_workspace):
     supervisor = tooling("supervise")

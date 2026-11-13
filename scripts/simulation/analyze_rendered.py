@@ -36,6 +36,12 @@ def project(camera, world):
 
 
 def match(row, captures):
+    if "capture_sequence" in row:
+        return (
+            [c for c in captures if c.get("sequence") == row["capture_sequence"]]
+            if row["capture_sequence"] is not None
+            else []
+        )
     fingerprint = bytes.fromhex(row["fingerprint"])
     if len(fingerprint) != 3072:
         raise ValueError("Decoded fingerprint size mismatch")
@@ -216,7 +222,7 @@ def analyze(run, output=None):
     if scene.get("object_motion"):
         from object_motion import analyze as analyze_object
 
-        return analyze_object(run, output, scene, captures, rows)
+        return analyze_object(run, output, scene, captures, rows, match)
     reference = match(rows[0], captures)
     if not reference:
         raise ValueError("Reference capture correspondence unavailable")

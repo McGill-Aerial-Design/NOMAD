@@ -42,6 +42,7 @@ internal static partial class VideoLifetimeTests
             Run("native RTSP discovery preserves normal OPTIONS", () => NativeRtspDiscovery(false));
             Run("native RTSP discovery tolerates receivers that reset OPTIONS", () => NativeRtspDiscovery(true));
             Run("native media transport and opt-in isolated GPU pipeline", NativeMediaTransport);
+            Run("native CPU tracking latency includes the media worker handoff", NativeCpuTrackingLatency);
             Run("local capture inputs share playback and exact device ownership", LocalCaptureInputs);
             Run("local capture profile validation and configuration round trip", LocalCaptureProfiles);
             Run("passive capture picker, missing device and draft isolation", LocalCaptureSettings);
@@ -56,14 +57,19 @@ internal static partial class VideoLifetimeTests
             Run("video toggles fit enabled labels at enlarged fonts", VideoToggleButtonSizing);
             Run("disabled buttons remain readable and inactive in the dark theme", DisabledButtonsKeepContrast);
             Run("tracking ray geometry and calibrated image directions", TrackingRayGeometry);
+            Run("servo visual feedback centers a delayed PWM plant through motion and turns", ServoTrackingResponse);
+            Run("servo position feedback settles faster than the previous angular-rate integrator", ServoTrackingStepResponse);
+            Run("servo feedback bounds acceleration, travel, windup and reset", ServoTrackingLimitsAndReset);
             Run("ground anchor geometry, dateline, mirrored rays and invalidation", GroundProjectionGeometry);
             Run("heading ring cardinal directions and native yaw frames", HeadingReportedFrames);
             Run("native motion history, actual delayed samples and submitted pose steps", NativeMotionHistory);
             Run("native primary mount, held target, cached HOME and reboot references", NativeMotionReferences);
             Run("delayed tracking stays centered through aircraft yaw and reversal", DelayedTrackingResponse);
             Run("busy native requests retain elapsed visual steering time", TrackingBusyVisualTime);
+            Run("fresh 30 Hz tracking samples reach bounded native requests", TrackingRequestCadence);
             Run("Object orbit bounds sustained centering and delayed transients", ObjectOrbitResponse);
             Run("tracking heading wrap, busy recovery and stale/wrong/invalid attitude", TrackingHeadingFences);
+            Run("processing delay pauses steering while fresh inputs preserve tracking intent", TrackingProcessingDelay);
             Run("Area memory, canonical point, paused yaw and explicit recovery fencing", AreaRuntimeRecovery);
             Run("Object memory, paused steering, Stop/manual/stale disarm and guarded return", ObjectRuntimeRecovery);
             Run("persistent wrong coarse prior preserves native Area verification and new commands", PersistentWrongPriorStillCommands);
@@ -116,6 +122,7 @@ internal static partial class VideoLifetimeTests
             Run("continuous payload sliders send calibrated PWM and preserve Safe", ContinuousPayloadSlider);
             Run("servo gimbal calibration and video profiles stay isolated", ServoGimbalConfiguration);
             Run("video servo gimbal tracking yields to a shared payload slider", ServoGimbalTracking);
+            Run("servo tracking streams fresh native positions without ACK stalls and resets after loss", ServoGimbalStreaming);
             Run("zoom selection, manual override and observation ownership", VisionSelectionAndObservation);
             Run("natural EOF retires selection and calibration validates", VisionEndAndCalibration);
             return 0;
