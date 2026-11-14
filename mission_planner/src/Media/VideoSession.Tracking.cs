@@ -199,7 +199,7 @@ namespace NOMAD.MissionPlanner
                     if (found && _mode == VisualTrackingMode.Area && _owner._trackingProfile.GroundPredictionEnabled &&
                         !_groundPriorDisabled && _groundAnchor == null && motion?.IsCurrent == true)
                     { GroundProjection.TryCreateAnchor(_owner._trackingProfile, image.Size, result.AimPoint.Value,
-                        motion.Ground, _owner._trackingProfile.GroundPlaneHeightMeters, out _groundAnchor); }
+                        motion.Ground, motion.Ground.GroundHeightAboveHomeMeters, out _groundAnchor); }
                     return _lastResult = new VideoRegionResult(_revision, _mode, result, hint);
                 }
                 catch (OperationCanceledException) { Clear(); _token.ThrowIfCancellationRequested(); return null; }

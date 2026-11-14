@@ -36,7 +36,8 @@ namespace NOMAD.MissionPlanner
         private Button _btnVisionModelBrowse;
         private ComboBox _cmbTrackingMode, _cmbObjectTracker;
         private CheckBox _chkGroundPrediction;
-        private NumericUpDown _numGroundPlaneHeight, _numCameraDelay;
+        private Label _lblCameraDelay;
+        private int _cameraDelayMs;
 
         private TabPage CreateVideoTab()
         {
@@ -187,16 +188,13 @@ namespace NOMAD.MissionPlanner
                 "If that GPU or model is unavailable, tracking reports it; it never switches tracker silently.";
             y += 32;
             _chkGroundPrediction = AddCheckBox(tab, "Use estimated ground-plane search hint", 20, y); y += 32;
-            AddLabel(tab, "Plane above HOME (m):", 20, y);
-            _numGroundPlaneHeight = AddNumericUpDown(tab, 180, y, 100, -10000, 10000, 0);
-            _numGroundPlaneHeight.DecimalPlaces = 1; y += 32;
-            AddLabel(tab, "Camera delay (ms):", 20, y);
-            _numCameraDelay = AddNumericUpDown(tab, 180, y, 100, 0, 2000, 0); y += 32;
-            _chkGroundPrediction.ToolTip = "Area search only: assumes a horizontal ground plane at the entered height relative to HOME. " +
-                "Leave off for walls, uneven terrain or unknown height. GPS/pose estimates never authorize steering.";
-            _numGroundPlaneHeight.ToolTip = "Explicit horizontal surface height relative to aircraft HOME, not height above the camera.";
-            _numCameraDelay.ToolTip = "Estimated camera/encoder delay, in addition to receiver jitter buffering. " +
-                "Servo tracking reduces feedback gain as this delay increases.";
+            _chkGroundPrediction.ToolTip = "Area search only: projects the remembered area onto the ground, whose height " +
+                "comes from the flight controller's downward rangefinder or terrain data (HOME level otherwise). " +
+                "Leave off for walls. GPS/pose estimates never authorize steering.";
+            AddLabel(tab, "Camera delay:", 20, y);
+            _lblCameraDelay = AddLabel(tab, "", 180, y); y += 32;
+            _lblCameraDelay.ToolTip = "Measured on the Video page: More → Measure delay. Servo tracking and the " +
+                "ground hint use it to match frames with aircraft motion.";
         }
 
         private void LoadVideoSettings(VideoInputProfile editing = null)
@@ -232,8 +230,9 @@ namespace NOMAD.MissionPlanner
             _cmbTrackingMode.SelectedItem = input?.TrackingMode ?? "Object";
             _cmbObjectTracker.SelectedIndex = input?.ObjectTracker == "GPU" ? 1 : 0;
             _chkGroundPrediction.IsChecked = input?.GroundPredictionEnabled ?? false;
-            _numGroundPlaneHeight.Value = (decimal)(input?.GroundPlaneHeightMeters ?? 0);
-            _numCameraDelay.Value = input?.CameraDelayEstimateMs ?? 0;
+            _cameraDelayMs = input?.CameraDelayEstimateMs ?? 0;
+            _lblCameraDelay.Text = _cameraDelayMs == 0 ? "Not measured · Video page → More → Measure delay"
+                : _cameraDelayMs + " ms (measured on the Video page)";
             _numVisionFov.Value = input?.HorizontalFovDeg ?? 90;
             _numVisionPitchMin.Value = input?.PitchMinDeg ?? -90;
             _numVisionPitchMax.Value = input?.PitchMaxDeg ?? 90;
@@ -246,7 +245,7 @@ namespace NOMAD.MissionPlanner
                 _numVideoLatency, _numVideoQueue, _chkVideoDrop, _chkRtspSkipOptions, _btnRemoveVideo, _cmbVisionModel,
                 _chkTrackingCalibrated, _numVisionFov, _numVisionPitchMin, _numVisionPitchMax,
                 _numVisionYawMin, _numVisionYawMax, _numVisionRate, _cmbVisionPitchSign, _cmbVisionYawSign,
-                _btnVisionModelBrowse, _cmbTrackingMode, _cmbObjectTracker, _chkGroundPrediction, _numGroundPlaneHeight, _numCameraDelay })
+                _btnVisionModelBrowse, _cmbTrackingMode, _cmbObjectTracker, _chkGroundPrediction })
             { control.IsEnabled = input != null; }
             _cmbVideoSourceType.IsEnabled = input != null;
             UpdateVideoSourceFields();
@@ -344,8 +343,7 @@ namespace NOMAD.MissionPlanner
                 TrackingMode = (string)_cmbTrackingMode.SelectedItem,
                 ObjectTracker = _cmbObjectTracker.SelectedIndex == 1 ? "GPU" : "CPU",
                 GroundPredictionEnabled = _chkGroundPrediction.IsChecked == true,
-                GroundPlaneHeightMeters = (double)_numGroundPlaneHeight.Value,
-                CameraDelayEstimateMs = (int)_numCameraDelay.Value,
+                CameraDelayEstimateMs = _cameraDelayMs,
                 HorizontalFovDeg = (int)_numVisionFov.Value,
                 PitchMinDeg = (int)_numVisionPitchMin.Value, PitchMaxDeg = (int)_numVisionPitchMax.Value,
                 YawMinDeg = (int)_numVisionYawMin.Value, YawMaxDeg = (int)_numVisionYawMax.Value,

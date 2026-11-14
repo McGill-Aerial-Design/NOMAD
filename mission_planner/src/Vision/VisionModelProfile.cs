@@ -38,7 +38,7 @@ namespace NOMAD.MissionPlanner
         {
             return new VisionModelProfile
             {
-                SchemaVersion = 1, Name = "YOLOX Nano COCO vehicles", Model = "yolox_nano.onnx",
+                SchemaVersion = 1, Name = "YOLOX Nano COCO", Model = "yolox_nano.onnx",
                 Sha256 = BuiltinHash, InputSize = 416, Layout = "NCHW", ColorOrder = "BGR", Scale = 1,
                 Padding = 114, Letterbox = "top-left", Output = "yolox-grid", Strides = new[] { 8, 16, 32 },
                 AllowedClasses = new[] { 1, 2, 3, 5, 7 }, ScoreThreshold = .35f, NmsThreshold = .45f,

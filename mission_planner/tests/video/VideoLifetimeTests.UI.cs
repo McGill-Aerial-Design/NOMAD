@@ -67,7 +67,8 @@ internal static partial class VideoLifetimeTests
             Check(FindVideoButton(player, "Fly with keyboard and mouse") == null &&
                 typeof(EmbeddedVideoPlayer).GetField("_flyButton", BindingFlags.Instance | BindingFlags.NonPublic) == null,
                 "Removed flight control is present in the player");
-            foreach (var label in new[] { "Play", "Stop", "Full screen", "Take snapshot" })
+            Check(FindVideoButton(player, "Stop") == null, "Stopped player shows a separate Stop control");
+            foreach (var label in new[] { "Play", "Full screen", "Take snapshot" })
             {
                 var button = FindVideoButton(player, label);
                 Check(button != null && button.Parent != null && button.Visibility == System.Windows.Visibility.Visible,

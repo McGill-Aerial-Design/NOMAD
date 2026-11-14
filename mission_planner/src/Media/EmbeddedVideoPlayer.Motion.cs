@@ -18,8 +18,9 @@ namespace NOMAD.MissionPlanner
                 "° (estimated); " + heading.Source;
             if (current && _trackingMode == VisualTrackingMode.Area && frame.Region?.Revision == _regionRevision &&
                 SelectedRegion.HasValue && frame.Region.GroundSearchHint.HasValue)
-            { detail += " | Estimated area search hint; horizontal plane " + _input.GroundPlaneHeightMeters +
-                " m above HOME, camera delay " + _input.CameraDelayEstimateMs + " ms; no steering authority"; }
+            { detail += " | Estimated area search hint; ground " +
+                (frame.Motion.Ground?.GroundHeightAboveHomeMeters ?? 0).ToString("0.0") + " m above HOME, camera delay " +
+                _input.CameraDelayEstimateMs + " ms; no steering authority"; }
             _videoBox.AccessibleDescription = detail;
             if (_fullscreenBox != null) { _fullscreenBox.AccessibleDescription = detail; }
             return detail;

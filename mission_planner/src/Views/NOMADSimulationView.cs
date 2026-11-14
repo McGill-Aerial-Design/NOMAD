@@ -97,27 +97,36 @@ namespace NOMAD.MissionPlanner
             base.OnHandleCreated(e);
             if (!_detectOnOpen || _detectionStarted || _session == null) { return; }
             _detectionStarted = true;
-            BeginInvoke((Action)(async () => await DetectSetup()));
+            UiAsync.Run(this, DetectSetup, "Simulation setup detection");
         }
 
         private async Task DetectSetup()
         {
             if (_detecting || IsDisposed || _session?.Status.Active == true || _shutdown.IsCancellationRequested) { return; }
             _detecting = true; _actionError = null; UpdateData();
-            try
+            string distributionText = _distribution.Text.Trim(), workspaceText = _workspace.Text.Trim();
+            SimulationSetup found = null; string error = null;
+            try { found = await SimulationSetup.DetectAsync(distributionText, workspaceText); }
+            catch (Exception detectError) { error = "Setup detection: " + detectError.Message; }
+            // The continuation can resume off the UI thread; WPF controls must only be touched on it.
+            UiAsync.RunSync(this, () => ApplyDetection(found, error), "Simulation setup result");
+        }
+
+        private void ApplyDetection(SimulationSetup found, string error)
+        {
+            _detecting = false;
+            if (found != null && !_shutdown.IsCancellationRequested)
             {
-                var found = await SimulationSetup.DetectAsync(_distribution.Text.Trim(), _workspace.Text.Trim());
-                if (IsDisposed || _shutdown.IsCancellationRequested) { return; }
                 _distribution.Items.Clear();
                 foreach (var distribution in found.Distributions) { _distribution.Items.Add(distribution); }
                 _distribution.Text = found.Distribution; _workspace.Text = found.Workspace;
                 if (string.IsNullOrWhiteSpace(_python.Text) || _python.Text == "python3")
                 { _python.Text = string.IsNullOrEmpty(found.Python) ? "python3" : found.Python; }
-                _actionError = "Using " + found.Distribution + ". " + (found.Prepared ? "Simulator folder found." :
+                error = "Using " + found.Distribution + ". " + (found.Prepared ? "Simulator folder found." :
                     "Default folder selected; prepare the simulator workspace before Start.");
             }
-            catch (Exception error) { if (!IsDisposed) { _actionError = "Setup detection: " + error.Message; } }
-            finally { _detecting = false; if (!IsDisposed) { UpdateData(); } }
+            _actionError = error;
+            UpdateData();
         }
 
         private static TextBox Input(string name) => new TextBox { Name = name };
@@ -141,13 +150,14 @@ namespace NOMAD.MissionPlanner
         private Button AsyncButton(string text, Func<Task> action)
         {
             var button = Button(text, () => { });
-            button.Click += async (sender, args) =>
+            button.Click += (sender, args) => UiAsync.Run(this, async () =>
             {
                 _actionError = null;
+                string failure = null;
                 try { await action(); }
-                catch (Exception error) { _actionError = error.Message; }
-                if (!IsDisposed) { UpdateData(); }
-            };
+                catch (Exception error) { failure = error.Message; }
+                UiAsync.RunSync(this, () => { if (failure != null) { _actionError = failure; } UpdateData(); }, text);
+            }, text);
             return button;
         }
         private async Task Start()

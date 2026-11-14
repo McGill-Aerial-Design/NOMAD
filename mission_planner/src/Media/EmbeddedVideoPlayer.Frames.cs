@@ -68,11 +68,12 @@ namespace NOMAD.MissionPlanner
             var sample = _session.TakeTrackingSample();
             if (sample != null) { UpdateVisionSample(sample); }
             UpdateVisionStatus();
+            UpdateDetectionFollow();
             _videoBox.Invalidate();
             _fullscreenBox?.Invalidate();
             if (_session.State == VideoState.Stopped)
             {
-                _playbackRequested = false;
+                _playbackRequested = false; ShowPlaybackButton();
                 RetireTracking("Video ended; select again after restarting");
                 ClearVideoDisplayAndDisposeBuffers();
                 _frameTimer.Stop();

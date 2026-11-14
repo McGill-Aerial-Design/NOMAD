@@ -16,7 +16,8 @@ namespace NOMAD.MissionPlanner
                 var profile = string.IsNullOrWhiteSpace(modelProfilePath)
                     ? VisionModelProfile.Builtin() : VisionModelProfile.Load(modelProfilePath);
                 VisionRuntime.EnsureLoaded(cancellationToken);
-                if (string.IsNullOrWhiteSpace(modelProfilePath))
+                // Built-in weights always load from the verified embedded copy, whatever path a profile recorded.
+                if (profile.Sha256 == VisionModelProfile.BuiltinHash)
                 { profile.Model = VisionRuntime.BuiltinModelPath; }
                 return CreateLoaded(profile, cancellationToken);
             }

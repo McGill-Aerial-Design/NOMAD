@@ -15,7 +15,7 @@ namespace NOMAD.MissionPlanner
     {
         private readonly NOMADConfig _config;
         private readonly Func<NOMADConfig, string, bool> _selectInput;
-        private readonly Func<NOMADConfig, string, string, Task<bool>> _selectModel;
+        private readonly Func<NOMADConfig, string, Action<VideoInputProfile>, Task<bool>> _updateInput;
         private ComboBox _models;
         private string _modelPath;
         private readonly ComboBox _selector;
@@ -30,12 +30,12 @@ namespace NOMAD.MissionPlanner
 
         internal VideoInputPlayer(NOMADConfig config, bool showControls, CancellationToken shutdown,
             Func<IVideoPipeline> createPipeline, Func<NOMADConfig, string, bool> selectInput,
-            Func<NOMADConfig, string, string, Task<bool>> selectModel = null,
+            Func<NOMADConfig, string, Action<VideoInputProfile>, Task<bool>> updateInput = null,
             Func<CancellationToken, VisualTrackingMode, IVisualTracker> createTracker = null)
         {
             _config = config;
             _selectInput = selectInput;
-            _selectModel = selectModel;
+            _updateInput = updateInput;
             _shutdown = shutdown;
             Dock = DockStyle.Fill;
             BackColor = Color.Black;
@@ -71,6 +71,8 @@ namespace NOMAD.MissionPlanner
             if (showControls && Player != null)
             {
                 AddModelSelection(shutdown);
+                Player.VideoControls.MeasureDelayButton.Click += (sender, args) =>
+                    UiAsync.Run(this, MeasureCameraDelayAsync, "Camera delay check");
             }
             else
             {
@@ -131,7 +133,7 @@ namespace NOMAD.MissionPlanner
         private void AddModelSelection(CancellationToken shutdown)
         {
             _models = Player.VideoControls.ModelSelector;
-            _models.IsEnabled = _selectModel != null && !shutdown.IsCancellationRequested;
+            _models.IsEnabled = _updateInput != null && !shutdown.IsCancellationRequested;
             Player.VideoControls.ManageModelsButton.Click += async (sender, args) =>
             {
                 try
@@ -158,7 +160,8 @@ namespace NOMAD.MissionPlanner
                 _savingModel = true; _models.IsEnabled = false;
                 try
                 {
-                    if (_selectModel == null || !await _selectModel(_config, input.Name, selected.Path))
+                    if (_updateInput == null || !await _updateInput(_config, input.Name,
+                        value => value.DetectorModelProfilePath = selected.Path))
                     {
                         if (!IsDisposed) { _models.ToolTip =
                             "Model selection was not saved. Review the active aircraft and try again."; }
@@ -170,11 +173,33 @@ namespace NOMAD.MissionPlanner
                     _savingModel = false;
                     if (!IsDisposed)
                     {
-                        _models.IsEnabled = _selectModel != null && !_shutdown.IsCancellationRequested;
+                        _models.IsEnabled = _updateInput != null && !_shutdown.IsCancellationRequested;
                         RefreshModel(_config.SelectedVideoInput);
                     }
                 }
             };
+        }
+
+        // Physical gimbal motion: the operator confirms, then the measured delay is saved to this camera.
+        private async Task MeasureCameraDelayAsync()
+        {
+            var input = _config.SelectedVideoInput;
+            if (input == null || Player.MeasuringDelay || _updateInput == null) { return; }
+            if (MessageBox.Show(FindForm(), "Point the camera at a still, well-lit scene with nothing moving.\n\n" +
+                "NOMAD will tilt the gimbal 10° four times, time how long the picture takes to change, and " +
+                "return the gimbal to its current angle.", "Measure camera delay", MessageBoxButtons.OKCancel,
+                MessageBoxIcon.Information) != DialogResult.OK) { return; }
+            var button = Player.VideoControls.MeasureDelayButton;
+            button.IsEnabled = false;
+            try
+            {
+                int? delay = await Player.MeasureCameraDelayAsync();
+                if (!delay.HasValue || IsDisposed) { return; }
+                if (await _updateInput(_config, input.Name, value => value.CameraDelayEstimateMs = delay.Value))
+                { Player.ApplyCameraDelay(delay.Value); }
+                else { Player.SetTrackingStatus("Camera delay measured but not saved; try again"); }
+            }
+            finally { if (!IsDisposed) { button.IsEnabled = true; } }
         }
 
         private void RefreshModel(VideoInputProfile input)
@@ -224,7 +249,7 @@ namespace NOMAD.MissionPlanner
             finally
             {
                 _loading = false;
-                _models.IsEnabled = _selectModel != null && !_savingModel && !_shutdown.IsCancellationRequested;
+                _models.IsEnabled = _updateInput != null && !_savingModel && !_shutdown.IsCancellationRequested;
             }
         }
 

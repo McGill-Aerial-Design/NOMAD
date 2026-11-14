@@ -91,6 +91,7 @@ internal static partial class VideoLifetimeTests
         var config = VideoConfig();
         config.AircraftName = "Alpha";
         config.SelectedVideoInput.TrackingCalibrated = true;
+        config.SelectedVideoInput.CameraDelayEstimateMs = 180;
         config.VideoInputs.Add(new VideoInputProfile { Name = "Second", Url = "rtsp://second.invalid/live" });
         var profiles = new NOMADProfiles(config);
         string firstId = profiles.SelectedId;
@@ -112,13 +113,8 @@ internal static partial class VideoLifetimeTests
             catch (TargetInvocationException error) when (error.InnerException is FormatException) { rejected = true; }
             Check(rejected && form.Config.AircraftName == "Alpha", "Invalid numeric input published part of the settings draft.");
             latency.Value = 100;
-            var height = GetField<WpfNumberBox>(form, "_numGroundPlaneHeight");
-            height.Value = 12.55m;
-            Check(height.Value == 12.55m, "Loading a valid ground height silently lost precision.");
-            height.Text = "12.56"; rejected = false;
-            try { _ = height.Value; } catch (FormatException) { rejected = true; }
-            Check(rejected, "Typed ground height bypassed its decimal precision limit.");
-            height.Value = 0;
+            Check(GetField<System.Windows.Controls.TextBlock>(form, "_lblCameraDelay").Text.StartsWith("180 ms"),
+                "Settings did not show the measured camera delay.");
             GetField<System.Windows.Controls.TextBox>(form, "_txtAircraftName").Text = "Renamed Alpha";
             Check(GetField<System.Windows.Controls.TextBlock>(form, "_profileContext").Text == "Editing: Renamed Alpha",
                 "The persistent Settings context did not track an aircraft rename.");
@@ -142,8 +138,6 @@ internal static partial class VideoLifetimeTests
             GetField<System.Windows.Controls.ComboBox>(form, "_cmbTrackingMode").SelectedItem = "Area";
             GetField<System.Windows.Controls.ComboBox>(form, "_cmbObjectTracker").SelectedIndex = 1;
             GetField<System.Windows.Controls.CheckBox>(form, "_chkGroundPrediction").IsChecked = true;
-            GetField<NOMAD.MissionPlanner.WpfNumberBox>(form, "_numGroundPlaneHeight").Value = 12.5m;
-            GetField<NOMAD.MissionPlanner.WpfNumberBox>(form, "_numCameraDelay").Value = 180;
             selector.SelectedIndex = 1;
             Check(GetField<System.Windows.Controls.TextBox>(form, "_txtVideoUrl").Text == "rtsp://second.invalid/live",
                 "Switching named video input did not load its independent fields.");
@@ -180,7 +174,7 @@ internal static partial class VideoLifetimeTests
                 saved.SelectedVideoInput.TrackingMaxRateDegSec == 60 &&
                 saved.SelectedVideoInput.TrackingMode == "Area" && saved.SelectedVideoInput.ObjectTracker == "GPU" &&
                 saved.SelectedVideoInput.GroundPredictionEnabled &&
-                saved.SelectedVideoInput.GroundPlaneHeightMeters == 12.5 && saved.SelectedVideoInput.CameraDelayEstimateMs == 180 &&
+                saved.SelectedVideoInput.CameraDelayEstimateMs == 180 &&
                 saved.SelectedVideoInput.YawMinDeg == -170 && saved.SelectedVideoInput.YawMaxDeg == 170,
                 "Saved/clone video input selection or settings were lost.");
             typeof(NOMADSettingsForm).GetMethod("RemoveVideoInput", flags).Invoke(form, null);
