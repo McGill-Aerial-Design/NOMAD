@@ -35,7 +35,9 @@ $references = @(
     "/r:$mpDir\Interfaces.dll"
     ('/r:' + (Join-Path ${env:ProgramFiles(x86)} 'Reference Assemblies/Microsoft/Framework/.NETFramework/v4.8/Facades/netstandard.dll'))
 )
-& $csc /nologo /target:exe /langversion:latest "/out:$exe" @references @sources
+$references += Get-WpfTestReferences
+& $csc /nologo /target:exe /langversion:latest "/out:$exe" `
+    ("/win32manifest:" + (Join-Path $repoRoot 'mission_planner/tests/ui/host.manifest')) @references @sources
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Copy-Item -LiteralPath $plugin -Destination $outDir -Force
 # The harness resolves dependencies using the supplied reference directory.

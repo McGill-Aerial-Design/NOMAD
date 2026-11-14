@@ -4,8 +4,9 @@
 // NOMAD Links View
 // ============================================================
 
-using System.Drawing;
 using System.Windows.Forms;
+using System.Windows;
+using System.Windows.Controls;
 
 namespace NOMAD.MissionPlanner
 {
@@ -42,36 +43,11 @@ namespace NOMAD.MissionPlanner
             }
 
             // Show guidance when the router status panel is unavailable.
-            var layout = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                FlowDirection = FlowDirection.TopDown,
-                BackColor = NOMADTheme.BG_DARK,
-                Padding = new Padding(24),
-                AutoScroll = true,
-                WrapContents = false,
-            };
-
-            layout.Controls.Add(new Label
-            {
-                Text = "Links",
-                Font = new Font("Segoe UI", 14, FontStyle.Bold),
-                ForeColor = NOMADTheme.ACCENT,
-                AutoSize = true,
-                Margin = new Padding(0, 0, 0, 12),
-            });
-
-            layout.Controls.Add(new Label
-            {
-                Text = disabled ? "Router disabled. Enable it in Settings → Links." :
-                    "Router unavailable. Check Settings → Links.",
-                Font = new Font("Segoe UI", 10),
-                ForeColor = disabled ? NOMADTheme.TEXT_SECONDARY : NOMADTheme.WARNING,
-                AutoSize = true,
-                MaximumSize = new Size(720, 0),
-            });
-
-            Controls.Add(layout);
+            var layout = new StackPanel { Margin = new Thickness(24) };
+            layout.Children.Add(WpfUi.Section("Links"));
+            layout.Children.Add(WpfUi.Text(disabled ? "Router disabled. Enable it in Settings → Links." :
+                "Router unavailable. Check Settings → Links."));
+            Controls.Add(WpfUi.Host(new ScrollViewer { Content = layout }));
         }
 
         public void UpdateData() { /* panel refreshes itself */ }

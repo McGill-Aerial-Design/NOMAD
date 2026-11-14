@@ -1,149 +1,104 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
-
 using System;
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Windows.Forms;
+using System.Globalization;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
 
 namespace NOMAD.MissionPlanner
 {
-    internal class JoystickPad : Control
+    internal class JoystickPad : FrameworkElement
     {
         public event Action<float, float> StickChanged;
         internal string HorizontalLabel { get; set; } = "YAW";
         internal string VerticalLabel { get; set; } = "PITCH";
         internal bool HorizontalInverted { get; set; }
         internal bool VerticalInverted { get; set; }
-
         private bool _dragging;
-        private PointF _stickNorm; // [-1,1] each axis
+        private Point _stickNorm;
         private readonly float _drawDeadzone;
-
-        // Gutters reserved between the ring and the control edge so the axis
-        // labels sit OUTSIDE the circle yet stay within the pad; the X gutter is
-        // wider because axis names are wider than they are tall. The radius is
-        // also capped so the joystick stays a sensible size on a large pad. Both
-        // OnPaint and the hit-test use Radius() so visual + interaction agree.
-        private const int LABEL_MARGIN_X = 38;
-        private const int LABEL_MARGIN_Y = 18;
-        private const int MAX_RADIUS = 120;
-        private const int PUCK = 16;
-
-        public JoystickPad(float drawDeadzone)
+        private readonly Func<MouseEventArgs, Point> _position;
+        private readonly Func<bool> _capture;
+        private readonly Action _release;
+        public JoystickPad(float drawDeadzone) : this(drawDeadzone, null, null, null) { }
+        internal JoystickPad(float drawDeadzone, Func<MouseEventArgs, Point> position, Func<bool> capture, Action release)
         {
             _drawDeadzone = drawDeadzone;
-            DoubleBuffered = true;
-            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint
-                     | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            _position = position ?? (args => args.GetPosition(this));
+            _capture = capture ?? CaptureMouse;
+            _release = release ?? ReleaseMouseCapture;
+            Focusable = true;
+            IsEnabledChanged += (sender, args) => { if (!IsEnabled) { ResetStick(); _release(); } };
+            Unloaded += (sender, args) => { ResetStick(); _release(); };
         }
-
-        private int Radius()
+        private double Radius() => Math.Min(Math.Min(ActualWidth / 2 - 38, ActualHeight / 2 - 18), 120);
+        protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
         {
-            int r = Math.Min(Width / 2 - LABEL_MARGIN_X, Height / 2 - LABEL_MARGIN_Y);
-            return Math.Min(r, MAX_RADIUS);
-        }
-
-        protected override void OnMouseDown(MouseEventArgs e)
-        {
-            if (e.Button != MouseButtons.Left) return;
+            base.OnMouseLeftButtonDown(e);
+            if (!_capture()) return;
             _dragging = true;
-            UpdateFromMouse(e.Location);
-            base.OnMouseDown(e);
+            UpdateFromMouse(_position(e));
         }
-
         protected override void OnMouseMove(MouseEventArgs e)
         {
-            if (_dragging) UpdateFromMouse(e.Location);
             base.OnMouseMove(e);
+            if (_dragging) UpdateFromMouse(_position(e));
         }
-
-        protected override void OnMouseUp(MouseEventArgs e)
+        protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
         {
-            _dragging = false;
-            _stickNorm = PointF.Empty;
-            StickChanged?.Invoke(0, 0);
-            Invalidate();
-            base.OnMouseUp(e);
+            base.OnMouseLeftButtonUp(e);
+            ResetStick();
+            _release();
         }
-
-        protected override void OnMouseLeave(EventArgs e)
+        protected override void OnMouseLeave(MouseEventArgs e)
         {
-            if (_dragging)
-            {
-                _dragging = false;
-                _stickNorm = PointF.Empty;
-                StickChanged?.Invoke(0, 0);
-                Invalidate();
-            }
             base.OnMouseLeave(e);
+            if (_dragging) { ResetStick(); _release(); }
         }
-
-        private void UpdateFromMouse(Point p)
+        protected override void OnLostMouseCapture(MouseEventArgs e) { base.OnLostMouseCapture(e); ResetStick(); }
+        private void ResetStick()
         {
-            int cx = Width / 2, cy = Height / 2;
-            int r = Radius();
-            if (r <= 0) return;
-            float dx = (p.X - cx) / (float)r;
-            float dy = (p.Y - cy) / (float)r;
-            float mag = (float)Math.Sqrt(dx * dx + dy * dy);
-            if (mag > 1f) { dx /= mag; dy /= mag; }
-            _stickNorm = new PointF(dx, dy);
-            // Up-in-pixels means -Y, but operator expects "stick forward = look down" or
-            // "stick up = look up". Convention: stick UP (negative pixel-y) → pitch UP (+).
-            StickChanged?.Invoke(dx, -dy);
-            Invalidate();
+            if (!_dragging) return;
+            _dragging = false; _stickNorm = new Point();
+            StickChanged?.Invoke(0, 0); InvalidateVisual();
         }
-
-        protected override void OnPaint(PaintEventArgs e)
+        private void UpdateFromMouse(Point point)
         {
-            var g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(BackColor);
-
-            int cx = Width / 2, cy = Height / 2;
-            int r = Radius();
+            double r = Radius();
             if (r <= 0) return;
-
-            // Outer ring
-            using (var ringPen = new Pen(NOMADTheme.TEXT_SECONDARY, 2))
-                g.DrawEllipse(ringPen, cx - r, cy - r, r * 2, r * 2);
-
-            // Inner cross + deadzone
-            using (var p2 = new Pen(Color.FromArgb(60, 60, 70), 1))
-            {
-                g.DrawLine(p2, cx - r, cy, cx + r, cy);
-                g.DrawLine(p2, cx, cy - r, cx, cy + r);
-                int dz = (int)(r * _drawDeadzone);
-                g.DrawEllipse(p2, cx - dz, cy - dz, dz * 2, dz * 2);
-            }
-
-            // Stick puck
-            int px = cx + (int)(_stickNorm.X * r);
-            int py = cy + (int)(_stickNorm.Y * r);
-            using (var brush = new SolidBrush(NOMADTheme.ACCENT))
-                g.FillEllipse(brush, px - PUCK, py - PUCK, PUCK * 2, PUCK * 2);
-            using (var pen = new Pen(Color.White, 2))
-                g.DrawEllipse(pen, px - PUCK, py - PUCK, PUCK * 2, PUCK * 2);
-
-            // Axis labels — drawn just OUTSIDE the ring, in the reserved gutter,
-            // so they sit clear of the circle without spilling past the pad edge.
-            using (var brush = new SolidBrush(NOMADTheme.TEXT_SECONDARY))
-            using (var f = new Font(NOMADTheme.FONT_FAMILY, NOMADTheme.SIZE_SMALL))
-            {
-                string top = AxisLabel(VerticalLabel, !VerticalInverted);
-                string bottom = AxisLabel(VerticalLabel, VerticalInverted);
-                string left = AxisLabel(HorizontalLabel, HorizontalInverted);
-                string right = AxisLabel(HorizontalLabel, !HorizontalInverted);
-                var topSize = g.MeasureString(top, f); var bottomSize = g.MeasureString(bottom, f);
-                var leftSize = g.MeasureString(left, f); var rightSize = g.MeasureString(right, f);
-                g.DrawString(top, f, brush, cx - topSize.Width / 2, cy - r - topSize.Height + 1);
-                g.DrawString(bottom, f, brush, cx - bottomSize.Width / 2, cy + r + 1);
-                g.DrawString(left, f, brush, cx - r - leftSize.Width - 1, cy - leftSize.Height / 2);
-                g.DrawString(right, f, brush, cx + r + 1, cy - rightSize.Height / 2);
-            }
+            double x = (point.X - ActualWidth / 2) / r, y = (point.Y - ActualHeight / 2) / r;
+            double magnitude = Math.Sqrt(x * x + y * y);
+            if (magnitude > 1) { x /= magnitude; y /= magnitude; }
+            _stickNorm = new Point(x, y);
+            StickChanged?.Invoke((float)x, (float)-y); InvalidateVisual();
         }
-
+        protected override void OnRender(DrawingContext dc)
+        {
+            base.OnRender(dc);
+            dc.DrawRectangle(WpfTheme.Card, null, new Rect(RenderSize));
+            double r = Radius(); if (r <= 0) return;
+            var center = new Point(ActualWidth / 2, ActualHeight / 2);
+            var ring = new Pen(WpfTheme.SecondaryText, 2);
+            var cross = new Pen(WpfTheme.Outline, 1);
+            dc.DrawEllipse(null, ring, center, r, r);
+            dc.DrawLine(cross, new Point(center.X - r, center.Y), new Point(center.X + r, center.Y));
+            dc.DrawLine(cross, new Point(center.X, center.Y - r), new Point(center.X, center.Y + r));
+            dc.DrawEllipse(null, cross, center, r * _drawDeadzone, r * _drawDeadzone);
+            dc.DrawEllipse(WpfTheme.Accent, new Pen(Brushes.White, 2),
+                new Point(center.X + _stickNorm.X * r, center.Y + _stickNorm.Y * r), 16, 16);
+            DrawLabel(dc, AxisLabel(VerticalLabel, !VerticalInverted), center.X, center.Y - r, 0, -1);
+            DrawLabel(dc, AxisLabel(VerticalLabel, VerticalInverted), center.X, center.Y + r, 0, 1);
+            DrawLabel(dc, AxisLabel(HorizontalLabel, HorizontalInverted), center.X - r, center.Y, -1, 0);
+            DrawLabel(dc, AxisLabel(HorizontalLabel, !HorizontalInverted), center.X + r, center.Y, 1, 0);
+        }
+        private void DrawLabel(DrawingContext dc, string label, double x, double y, int horizontal, int vertical)
+        {
+            var text = new FormattedText(label, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                new Typeface("Segoe UI"), 10, WpfTheme.SecondaryText, VisualTreeHelper.GetDpi(this).PixelsPerDip);
+            dc.DrawText(text, new Point(x - (horizontal < 0 ? text.Width + 1 : horizontal == 0 ? text.Width / 2 : -1),
+                y - (vertical < 0 ? text.Height : vertical == 0 ? text.Height / 2 : -1)));
+        }
         private static string AxisLabel(string name, bool positive) =>
             name == "None" ? "OFF" : name.ToUpperInvariant() + (positive ? "+" : "−");
     }

@@ -21,7 +21,7 @@ pixi run test-plugin-installer
 
 The first command produces `mission_planner/src/bin/Release/NOMADPlugin.dll` and
 `build/release/plugin-build.json`, binding its hash to the base commit, product
-source hashes, reviewed host and every embedded media bundle file. The release version lives in
+source hashes (including compiled XAML), reviewed host and every embedded media bundle file. The release version lives in
 `scripts/build/build_plugin_windows.ps1`. Host references are non-copy-local.
 The installer build verifies that proof against the current source before
 embedding the DLL and notices into `build/installer/NOMAD-version-Setup.exe`.
@@ -78,7 +78,11 @@ and 128 MiB idle; frame dimensions retain the existing 16,384/64M-pixel ceilings
 The private worker checks heartbeat/frame progress at 2 s, selection initialization
 at 5 s, cold media runtime/model preparation at 120 s and cleanup at 2 s. Parent Stop never waits
 on these deadlines; background completion confirms resource retirement or owned
-process exit. Missing upstream samples keep the capture polling and do not trigger
+process exit and closes its process handle. Startup, heartbeat and control/handshake
+deadlines do not require an available parent thread-pool worker. The video gate
+exhausts a two-thread pool during startup, heartbeat and a stalled resource handshake,
+then checks the existing one-recovery path and final handle retirement.
+Missing upstream samples keep the capture polling and do not trigger
 a restart loop. Cleanup and extraction preserve operator files.
 
 The vision gate checks the pinned CPU detector and native runtime load order.

@@ -546,6 +546,7 @@ function Test-BuildProof {
     $null = Get-CurrentPluginBuild -RepoRoot $Fixture.Repo -PluginPath $Fixture.Artifact
     $project = Join-Path $Fixture.Project 'NOMADPlugin.csproj'
     $added = Join-Path $Fixture.Project 'Unexpected.cs'
+    $addedXaml = Join-Path $Fixture.Project 'Unexpected.xaml'
     $proof = Join-Path $Fixture.Repo 'build/release/plugin-build.json'
     $target = Join-Path $Fixture.Repo 'scripts/release/mission-planner-target.json'
     $preparation = Join-Path (Split-Path $Fixture.Script) 'prepare_vision.ps1'
@@ -553,11 +554,12 @@ function Test-BuildProof {
     foreach ($path in @($project, $proof, $target, $preparation, $Fixture.Artifact)) {
         $originals[$path] = [IO.File]::ReadAllBytes($path)
     }
-    foreach ($mutation in @('change', 'add', 'payload', 'target', 'preparation', 'proof', 'media')) {
+    foreach ($mutation in @('change', 'add', 'xaml', 'payload', 'target', 'preparation', 'proof', 'media')) {
         try {
             switch ($mutation) {
                 'change' { [IO.File]::AppendAllText($project, '<!-- changed after build -->') }
                 'add' { [IO.File]::WriteAllText($added, '// added after build') }
+                'xaml' { [IO.File]::WriteAllText($addedXaml, '<Grid />') }
                 'payload' { [IO.File]::AppendAllText($Fixture.Artifact, 'changed payload') }
                 'target' { [IO.File]::WriteAllText($target, '{"version":"9.9.9"}') }
                 'preparation' { [IO.File]::AppendAllText($preparation, '# changed asset preparation') }
@@ -581,6 +583,7 @@ function Test-BuildProof {
         } finally {
             foreach ($path in $originals.Keys) { [IO.File]::WriteAllBytes($path, $originals[$path]) }
             if (Test-Path -LiteralPath $added) { Remove-Item -LiteralPath $added }
+            if (Test-Path -LiteralPath $addedXaml) { Remove-Item -LiteralPath $addedXaml }
         }
     }
     $null = Get-CurrentPluginBuild -RepoRoot $Fixture.Repo -PluginPath $Fixture.Artifact

@@ -109,8 +109,8 @@ internal static partial class VideoLifetimeTests
             CancellationToken.None, () => { created++; return new FakeVideoPipeline(); }))
         {
             player.StartStream();
-            var status = GetField<Label>(player, "_lblStatus");
-            Check(created == 0 && status.ForeColor == Color.Red && status.Text.Contains("UDP listening port"),
+            var status = GetField<System.Windows.Controls.TextBlock>(player, "_lblStatus");
+            Check(created == 0 && status.Foreground == System.Windows.Media.Brushes.Red && status.Text.Contains("UDP listening port"),
                 "Invalid video source started native resources or escaped its UI error state.");
         }
     }

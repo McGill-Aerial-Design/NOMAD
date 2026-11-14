@@ -29,6 +29,7 @@ namespace NOMAD.MissionPlanner
         private static int _failures, _shutdown;
         private static long _nextEpoch;
         internal static bool FixtureMode;
+        internal static bool FixtureHoldResourceHello;
         internal static string FixtureDirectory;
         internal static long WorkerEpoch => _current?.Epoch ?? 0;
         internal static Task ShutdownCompletion => Volatile.Read(ref _shutdownCompletion);
@@ -118,16 +119,30 @@ namespace NOMAD.MissionPlanner
                 epoch.ToString(), data, gst, FixtureMode ? "fixture" : "production" }.Select(Quote));
             var job = new NOMAD.Simulation.OwnedProcessJob();
             Process process = null;
+            Worker worker = null;
             try
             {
                 process = Process.Start(start); job.Attach(process);
                 process.PriorityClass = ProcessPriorityClass.BelowNormal;
-                var worker = new Worker(process, job, pipe, secret, epoch);
+                worker = new Worker(process, job, pipe, secret, epoch);
                 worker.Control = new MediaChannel(worker, true, CancellationToken.None);
-                Task.Run(() => worker.Supervise());
+                // Native calls must not occupy the pool needed to keep their worker alive.
+                Task.Factory.StartNew(worker.Supervise, CancellationToken.None,
+                    TaskCreationOptions.LongRunning, TaskScheduler.Default);
                 return worker;
             }
-            catch { job.Dispose(); process?.Dispose(); throw; }
+            catch (Exception error)
+            {
+                if (worker == null) { job.Dispose(); process?.Dispose(); }
+                else
+                {
+                    worker.Stop();
+                    bool exited = worker.WaitForExit(2000);
+                    worker.Dispose();
+                    if (!exited) { throw new IOException("Media worker startup cleanup did not complete.", error); }
+                }
+                throw;
+            }
         }
 
         private static string Quote(string value)
@@ -153,6 +168,8 @@ namespace NOMAD.MissionPlanner
                         if (current == null) { return; }
                         current.Stop();
                         if (!current.WaitForExit(2000)) { throw new InvalidOperationException("Owned media worker did not exit."); }
+                        current.Dispose();
+                        _current = null;
                     }
                     finally { MediaPixels.ReleasePool(); Launch.Release(); }
                 });
@@ -176,8 +193,11 @@ namespace NOMAD.MissionPlanner
             internal readonly string Pipe, Secret, Prefix;
             internal readonly long Epoch;
             internal readonly ConcurrentDictionary<long, MediaChannel> Channels = new ConcurrentDictionary<long, MediaChannel>();
+            internal readonly ConcurrentDictionary<MediaChannel, long> Handshakes =
+                new ConcurrentDictionary<MediaChannel, long>();
             internal readonly ConcurrentQueue<long> Cancellations = new ConcurrentQueue<long>();
             internal MediaChannel Control;
+            internal long ControlStarted;
             private readonly NOMAD.Simulation.OwnedProcessJob _job;
             private int _failed, _disposed, _jobClosed;
             internal bool IsFailed => Volatile.Read(ref _failed) == 2;
@@ -185,28 +205,39 @@ namespace NOMAD.MissionPlanner
             {
                 Process = process; Id = process.Id; _job = job; Pipe = pipe; Secret = secret; Epoch = epoch;
                 Prefix = "Local\\NOMAD.Media." + secret + ".";
-                _exited = Task.Factory.StartNew(() => process.WaitForExit(), CancellationToken.None,
+                _exited = Task.Factory.StartNew(MonitorExit, CancellationToken.None,
                     TaskCreationOptions.LongRunning, TaskScheduler.Default);
             }
             internal bool WaitForExit(int milliseconds) => _exited.Wait(milliseconds);
             private void CloseJob() { if (Interlocked.Exchange(ref _jobClosed, 1) == 0) { _job.Dispose(); } }
 
-            internal async Task Supervise()
+            private void MonitorExit()
+            {
+                while (!Process.WaitForExit(50))
+                {
+                    long started = Interlocked.Read(ref ControlStarted);
+                    long now = Stopwatch.GetTimestamp();
+                    if (started != 0 && (now - started) / (double)Stopwatch.Frequency > 2 &&
+                        Interlocked.Read(ref ControlStarted) == started)
+                    { Fail(); }
+                    foreach (var hello in Handshakes)
+                    {
+                        if ((now - hello.Value) / (double)Stopwatch.Frequency > 2 && Handshakes.TryRemove(hello.Key, out _))
+                        { Fail(); hello.Key.CloseTransport(); }
+                    }
+                }
+            }
+
+            internal void Supervise()
             {
                 try
                 {
                     while (!IsFailed && Volatile.Read(ref _shutdown) == 0)
                     {
-                        var ping = Task.Run(() =>
-                        {
-                            while (Cancellations.TryDequeue(out long resource))
-                            { Control.Call(new MediaMessage { Operation = "cancel", Ticks = resource }, CancellationToken.None); }
-                            Control.Call(new MediaMessage { Operation = "ping" }, CancellationToken.None);
-                        });
-                        if (await Task.WhenAny(ping, Task.Delay(2000)).ConfigureAwait(false) != ping)
-                        { Fail(); return; }
-                        await ping.ConfigureAwait(false);
-                        await Task.Delay(250).ConfigureAwait(false);
+                        while (Cancellations.TryDequeue(out long resource))
+                        { Control.Call(new MediaMessage { Operation = "cancel", Ticks = resource }, CancellationToken.None); }
+                        Control.Call(new MediaMessage { Operation = "ping" }, CancellationToken.None);
+                        Thread.Sleep(250);
                     }
                 }
                 catch { if (Volatile.Read(ref _shutdown) == 0) { Fail(); } }
@@ -230,13 +261,21 @@ namespace NOMAD.MissionPlanner
                 Volatile.Write(ref _failed, 2); _retired.TrySetResult(true);
                 CloseJob();
                 foreach (var channel in Channels.Values) { channel.CloseTransport(); }
+                foreach (var channel in Handshakes.Keys) { channel.CloseTransport(); }
                 Control?.CloseTransport();
             }
 
             internal void Stop() { Interlocked.Exchange(ref _failed, 2); _retired.TrySetResult(true); CloseJob();
-                foreach (var channel in Channels.Values) { channel.CloseTransport(); } Control?.CloseTransport(); }
+                foreach (var channel in Channels.Values) { channel.CloseTransport(); }
+                foreach (var channel in Handshakes.Keys) { channel.CloseTransport(); }
+                Control?.CloseTransport(); }
             public void Dispose()
-            { if (Interlocked.Exchange(ref _disposed, 1) == 0) { Stop(); _exited.ContinueWith(_ => Process.Dispose(), TaskScheduler.Default); } }
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) != 0) { return; }
+                Stop();
+                _exited.ContinueWith(_ => Process.Dispose(), CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            }
         }
 
         private static string ExtractBundle()
@@ -308,6 +347,7 @@ namespace NOMAD.MissionPlanner
         private readonly object _bufferGate = new object();
         private readonly MediaWorkerHost.Worker _owner;
         private readonly NamedPipeClientStream _pipe;
+        private readonly bool _control;
         private System.IO.MemoryMappedFiles.MemoryMappedFile _buffer;
         private string _mapping;
         private int _capacity, _disposed;
@@ -319,23 +359,42 @@ namespace NOMAD.MissionPlanner
         internal MediaChannel(MediaWorkerHost.Worker owner, bool control, CancellationToken token)
         {
             _owner = owner;
+            _control = control;
             _pipe = new NamedPipeClientStream(".", owner.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous);
             try
             {
-                _pipe.ConnectAsync(2000, token).GetAwaiter().GetResult();
+                var connecting = Stopwatch.StartNew();
+                // Framework ConnectAsync queues pool work even when its caller already owns a dedicated thread.
+                while (true)
+                {
+                    token.ThrowIfCancellationRequested();
+                    try
+                    {
+                        _pipe.Connect(Math.Max(1, Math.Min(50, 2000 - (int)connecting.ElapsedMilliseconds)));
+                        break;
+                    }
+                    catch (TimeoutException) when (connecting.ElapsedMilliseconds < 2000) { }
+                }
                 if (!GetNamedPipeServerProcessId(_pipe.SafePipeHandle, out uint server) || server != owner.Id)
                 { throw new IOException("Unexpected media process."); }
-                using (var deadline = new Timer(_ => owner.Fail(), null, 2000, Timeout.Infinite))
+                owner.Handshakes.TryAdd(this, Stopwatch.GetTimestamp());
+                try
                 {
                     var hello = Call(new MediaMessage { Operation = "hello", Secret = owner.Secret,
-                        Text = control ? "control" : "resource" }, token);
+                        Text = control ? "control" : MediaWorkerHost.FixtureMode && MediaWorkerHost.FixtureHoldResourceHello
+                            ? "fixture:held-hello" : "resource" }, token);
                     if (hello.Text != NomadRelease.SourceSha || (control ? hello.Resource != 0 : hello.Resource <= 0))
                     { throw new IOException("Media worker version mismatch."); }
                     _resource = hello.Resource;
+                    if (!control && !owner.Channels.TryAdd(_resource, this))
+                    { throw new IOException("Duplicate media resource."); }
+                    token.ThrowIfCancellationRequested();
+                    if (owner.IsFailed || Volatile.Read(ref _disposed) != 0) { throw new MediaWorkerException(); }
                 }
-                if (!control && !owner.Channels.TryAdd(_resource, this)) { throw new IOException("Duplicate media resource."); }
+                finally { owner.Handshakes.TryRemove(this, out _); }
             }
-            catch { _pipe.Dispose(); throw; }
+            catch (TimeoutException) { CloseTransport(); owner.Fail(); throw new MediaWorkerException(); }
+            catch { CloseTransport(); throw; }
         }
 
         internal MediaMessage Call(MediaMessage request, CancellationToken token)
@@ -349,6 +408,7 @@ namespace NOMAD.MissionPlanner
                 {
                     try
                     {
+                        if (_control) { Interlocked.Exchange(ref _owner.ControlStarted, Stopwatch.GetTimestamp()); }
                         using (var deadline = new Timer(_ => _owner.Fail(), null, 2000, Timeout.Infinite))
                         { MediaWire.Write(_pipe, request); deadline.Change(Timeout.Infinite, Timeout.Infinite); }
                         var reply = MediaWire.Read(_pipe);
@@ -369,6 +429,7 @@ namespace NOMAD.MissionPlanner
                     }
                     catch (ObjectDisposedException)
                     { token.ThrowIfCancellationRequested(); throw new MediaWorkerException(); }
+                    finally { if (_control) { Interlocked.Exchange(ref _owner.ControlStarted, 0); } }
                 }
             }
         }
@@ -442,7 +503,8 @@ namespace NOMAD.MissionPlanner
             if (Interlocked.Exchange(ref _disposed, 1) != 0) { return; }
             try { _pipe.Dispose(); } catch { }
             lock (_bufferGate) { _buffer?.Dispose(); _buffer = null; }
-            _owner.Channels.TryRemove(_resource, out _);
+            var registration = new KeyValuePair<long, MediaChannel>(_resource, this);
+            ((ICollection<KeyValuePair<long, MediaChannel>>)_owner.Channels).Remove(registration);
         }
         public void Dispose()
         {

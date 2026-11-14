@@ -1,70 +1,36 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
-// ============================================================
-// NOMAD Settings Form
-// ============================================================
-// Comprehensive configuration dialog for NOMAD plugin settings.
-// Includes all settings from NOMADConfig organized in tab pages.
-// ============================================================
-
 using System;
-using System.Drawing;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Windows.Forms;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using Form = System.Windows.Forms.Form;
+using MessageBox = System.Windows.Forms.MessageBox;
+using DialogResult = System.Windows.Forms.DialogResult;
+using FormStartPosition = System.Windows.Forms.FormStartPosition;
+using MessageBoxButtons = System.Windows.Forms.MessageBoxButtons;
+using MessageBoxIcon = System.Windows.Forms.MessageBoxIcon;
+using TabPage = System.Windows.Controls.TabItem;
+using TextBox = System.Windows.Controls.TextBox;
+using CheckBox = System.Windows.Controls.CheckBox;
+using ComboBox = System.Windows.Controls.ComboBox;
+using Label = System.Windows.Controls.TextBlock;
+using Button = System.Windows.Controls.Button;
+using NumericUpDown = NOMAD.MissionPlanner.WpfNumberBox;
 
 namespace NOMAD.MissionPlanner
 {
     [global::MissionPlanner.Utilities.PreventTheming]
     public partial class NOMADSettingsForm : Form
     {
-        // ============================================================
-        // Fields
-        // ============================================================
-
         private TabControl _tabControl;
-
-        // Connection Tab
-
-        // Video Tab
         private TextBox _txtVideoUrl;
-        private CheckBox _chkAutoStartHudVideo;
-
-        // Multi-Link Tab
-        private CheckBox _chkRouterClientEnabled;
-        private NumericUpDown _numRouterLocalPort;
-
-        // UI Tab
-        private CheckBox _chkDebugMode;
-
-        // Alerts Tab
-        private CheckBox _chkAudioAlerts;
-        private CheckBox _chkAltitudeCallouts;
-
-        // Log Analysis Tab
-
-
-        private NumericUpDown _numJoyGimbalMaxRate;
-
-        // Buttons
-        private Button _btnOK;
-        private Button _btnCancel;
+        private CheckBox _chkAutoStartHudVideo, _chkRouterClientEnabled, _chkDebugMode, _chkAudioAlerts, _chkAltitudeCallouts;
+        private NumericUpDown _numRouterLocalPort, _numJoyGimbalMaxRate;
         private Label _profileContext;
-        private readonly ToolTip _toolTips = new ToolTip { AutoPopDelay = 15000 };
-        private readonly ContextMenuStrip _profileActions = new ContextMenuStrip();
-
 
         public NOMADProfiles Profiles { get; private set; }
-        public NOMADConfig Config
-        {
-            get => Profiles.Selected.Config;
-            private set => Profiles.Selected.Config = value;
-        }
-
-        // ============================================================
-        // Constructor
-        // ============================================================
+        public NOMADConfig Config { get => Profiles.Selected.Config; private set => Profiles.Selected.Config = value; }
 
         public NOMADSettingsForm(NOMADProfiles profiles)
         {
@@ -73,68 +39,30 @@ namespace NOMAD.MissionPlanner
             LoadSettings();
         }
 
-        // ============================================================
-        // UI Initialization
-        // ============================================================
-
         private void InitializeComponents()
         {
-            Text = "NOMAD Settings";
-            ClientSize = new Size(780, 670);
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = false;
-            MinimizeBox = false;
+            Text = "NOMAD Settings"; ClientSize = new System.Drawing.Size(780, 670);
+            BackColor = NOMADTheme.BG_DARK; ForeColor = NOMADTheme.TEXT_PRIMARY; Font = NOMADTheme.Font();
+            MinimumSize = new System.Drawing.Size(760, 600);
             StartPosition = FormStartPosition.CenterParent;
-            BackColor = NOMADTheme.BG_DARK;
-            ForeColor = NOMADTheme.TEXT_PRIMARY;
-            Font = NOMADTheme.Font();
-
-            _tabControl = new TabControl
-            {
-                Location = new Point(12, 58), Size = new Size(756, 540), BackColor = NOMADTheme.CARD_BG,
-            };
-            Controls.Add(_tabControl);
-            _tabControl.TabPages.Add(CreateAircraftTab());
-            _tabControl.TabPages.Add(CreateMultiLinkTab());
-            _tabControl.TabPages.Add(CreateVideoTab());
-            _tabControl.TabPages.Add(CreateActuatorsTab());
-            _tabControl.TabPages.Add(CreateJoystickTab());
-            _tabControl.TabPages.Add(CreatePreferencesTab());
-
-            int clientWidth = CalculateSettingsClientWidth();
-            ClientSize = new Size(clientWidth, 670);
-            _tabControl.Width = clientWidth - 24;
-            var context = new TableLayoutPanel
-            {
-                Location = new Point(12, 12), Size = new Size(clientWidth - 24, 32), ColumnCount = 2, RowCount = 1,
-            };
-            context.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            context.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            _profileContext = new Label
-            {
-                Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft,
-                Font = NOMADTheme.Font(NOMADTheme.SIZE_BODY, FontStyle.Bold),
-            };
-            context.Controls.Add(_profileContext, 0, 0);
-            context.Controls.Add(new Label
-            {
-                Text = "· Save activates this profile", AutoSize = true, Anchor = AnchorStyles.Right,
-                ForeColor = NOMADTheme.TEXT_SECONDARY,
-            }, 1, 0);
-            Controls.Add(context);
-
-            var actions = ControlFactory.Button("Profile actions ▾", width: 150, height: 34);
-            actions.Location = new Point(12, 616);
-            _profileActions.Items.Add(new ToolStripMenuItem("Reset profile…", null, BtnReset_Click));
-            _profileActions.Items.Add(new ToolStripSeparator());
-            _profileActions.Items.Add(new ToolStripMenuItem("Load configuration…", null, BtnLoadConfig_Click));
-            _profileActions.Items.Add(new ToolStripMenuItem("Export configuration…", null, BtnExportConfig_Click));
-            actions.Click += (sender, args) => _profileActions.Show(actions, new Point(0, actions.Height));
-            Controls.Add(actions);
-
-            _btnOK = ControlFactory.Button("Save", backColor: NOMADTheme.BTN_PRIMARY, width: 90, height: 34);
-            _btnOK.Location = new Point(clientWidth - 204, 616);
-            _btnOK.Click += (sender, args) =>
+            var root = new DockPanel { Margin = new Thickness(12) };
+            var context = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+            DockPanel.SetDock(context, System.Windows.Controls.Dock.Top);
+            var hint = WpfUi.Text("· Save activates this profile");
+            DockPanel.SetDock(hint, System.Windows.Controls.Dock.Right); context.Children.Add(hint);
+            _profileContext = WpfUi.Section(""); _profileContext.Margin = new Thickness(0); context.Children.Add(_profileContext);
+            root.Children.Add(context);
+            var footer = new DockPanel(); DockPanel.SetDock(footer, System.Windows.Controls.Dock.Bottom);
+            var actions = WpfUi.Action("Profile actions ▾", () => { });
+            var menu = new ContextMenu();
+            var reset = new MenuItem { Header = "Reset profile…" }; reset.Click += BtnReset_Click; menu.Items.Add(reset);
+            menu.Items.Add(new Separator());
+            var load = new MenuItem { Header = "Load configuration…" }; load.Click += BtnLoadConfig_Click; menu.Items.Add(load);
+            var export = new MenuItem { Header = "Export configuration…" }; export.Click += BtnExportConfig_Click; menu.Items.Add(export);
+            actions.ContextMenu = menu; actions.Click += (sender, args) => { menu.PlacementTarget = actions; menu.IsOpen = true; };
+            DockPanel.SetDock(actions, System.Windows.Controls.Dock.Left); footer.Children.Add(actions);
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            var save = WpfUi.Action("Save", () =>
             {
                 try { SaveSettings(); DialogResult = DialogResult.OK; }
                 catch (Exception error)
@@ -142,197 +70,93 @@ namespace NOMAD.MissionPlanner
                     DialogResult = DialogResult.None;
                     MessageBox.Show(this, error.Message, "Configuration requires review", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
-            };
-            Controls.Add(_btnOK);
-            _btnCancel = ControlFactory.Button("Cancel", width: 90, height: 34);
-            _btnCancel.Location = new Point(clientWidth - 102, 616);
-            _btnCancel.DialogResult = DialogResult.Cancel;
-            Controls.Add(_btnCancel);
-            AcceptButton = _btnOK;
-            CancelButton = _btnCancel;
+            });
+            save.IsDefault = true; buttons.Children.Add(save);
+            var cancel = WpfUi.Action("Cancel", () => { DialogResult = DialogResult.Cancel; Close(); });
+            cancel.IsCancel = true; buttons.Children.Add(cancel);
+            footer.Children.Add(buttons); root.Children.Add(footer);
+            _tabControl = new TabControl(); root.Children.Add(_tabControl);
+            _tabControl.Items.Add(CreateAircraftTab()); _tabControl.Items.Add(CreateMultiLinkTab());
+            _tabControl.Items.Add(CreateVideoTab()); _tabControl.Items.Add(CreateActuatorsTab());
+            _tabControl.Items.Add(CreateJoystickTab()); _tabControl.Items.Add(CreatePreferencesTab());
+            root.PreviewKeyDown += (sender, args) => { if (args.Key == System.Windows.Input.Key.Escape)
+                { DialogResult = DialogResult.Cancel; Close(); args.Handled = true; } };
+            Controls.Add(WpfUi.Host(root));
         }
 
         private void UpdateProfileContext()
         {
             string name = string.IsNullOrWhiteSpace(_txtAircraftName.Text) ? "(unnamed aircraft)" : _txtAircraftName.Text.Trim();
-            _profileContext.Text = "Editing: " + name;
-            _toolTips.SetToolTip(_profileContext, _profileContext.Text);
+            _profileContext.Text = "Editing: " + name; _profileContext.ToolTip = _profileContext.Text;
         }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing)
-            {
-                _toolTips.Dispose();
-                _profileActions.Dispose();
-            }
-            base.Dispose(disposing);
-        }
-        private int CalculateSettingsClientWidth()
-        {
-            int widestContent = _tabControl.TabPages
-                .Cast<TabPage>()
-                .SelectMany(tab => tab.Controls.Cast<Control>())
-                .Select(control => control.Right)
-                .DefaultIfEmpty(700)
-                .Max();
-
-            int tabHeadersWidth = _tabControl.TabPages
-                .Cast<TabPage>()
-                .Sum(tab => TextRenderer.MeasureText(tab.Text, _tabControl.Font).Width + 24);
-
-            return Math.Max(760, Math.Max(widestContent + 45, tabHeadersWidth + 35));
-        }
-
-        // ============================================================
-        // Helper Methods
-        // ============================================================
 
         private TabPage CreateTabPage(string text)
         {
-            var tab = new TabPage(text)
-            {
-                BackColor = NOMADTheme.CARD_BG,
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                AutoScroll = true,
-                Padding = new Padding(5)
-            };
-            return tab;
+            var canvas = new Canvas { MinWidth = 720, MinHeight = 480 };
+            return new TabPage { Header = text, Content = new ScrollViewer { Content = canvas,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto } };
         }
 
-        private static int SelectedRow(DataGridView list) => list.CurrentRow?.Index ?? -1;
-        private static DataGridView CreateDefinitionList(params string[] columns)
+        private static void AddAt(TabPage tab, FrameworkElement control, double x, double y,
+            double width = double.NaN, double height = double.NaN)
         {
-            var list = new DataGridView
-            {
-                ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false,
-                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, RowHeadersVisible = false,
-                AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells,
-                MultiSelect = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-                BackgroundColor = NOMADTheme.INPUT_BG, EnableHeadersVisualStyles = false,
-                DefaultCellStyle = new DataGridViewCellStyle { BackColor = NOMADTheme.INPUT_BG,
-                    ForeColor = NOMADTheme.TEXT_PRIMARY, SelectionBackColor = NOMADTheme.ACCENT,
-                    WrapMode = DataGridViewTriState.True },
-                ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle { BackColor = NOMADTheme.BUTTON_BG,
-                    ForeColor = NOMADTheme.TEXT_PRIMARY },
-            };
-            foreach (string column in columns)
-            {
-                list.Columns.Add(column, column);
-                list.Columns[column].SortMode = DataGridViewColumnSortMode.NotSortable;
-            }
+            var canvas = (Canvas)((ScrollViewer)tab.Content).Content;
+            Canvas.SetLeft(control, x); Canvas.SetTop(control, y);
+            control.Margin = new Thickness(0);
+            if (!double.IsNaN(width)) { control.Width = width; }
+            if (!double.IsNaN(height)) { control.Height = height; }
+            canvas.MinWidth = Math.Max(canvas.MinWidth, x + (double.IsNaN(width) ? 150 : width) + 15);
+            canvas.MinHeight = Math.Max(canvas.MinHeight, y + (double.IsNaN(height) ? 36 : height) + 15);
+            canvas.Children.Add(control);
+        }
+
+        private static int SelectedRow(DataGrid list) => list.SelectedIndex;
+        private static DataGrid CreateDefinitionList(params string[] columns)
+        {
+            var list = new DataGrid { IsReadOnly = true, AutoGenerateColumns = false, CanUserAddRows = false,
+                CanUserDeleteRows = false, CanUserSortColumns = false, SelectionMode = DataGridSelectionMode.Single,
+                SelectionUnit = DataGridSelectionUnit.FullRow, HeadersVisibility = DataGridHeadersVisibility.Column };
+            var cellStyle = new Style(typeof(TextBlock));
+            cellStyle.Setters.Add(new Setter(TextBlock.TextWrappingProperty, TextWrapping.Wrap));
+            for (int i = 0; i < columns.Length; i++)
+            { list.Columns.Add(new DataGridTextColumn { Header = columns[i], Binding = new Binding("[" + i + "]"),
+                ElementStyle = cellStyle, Width = new DataGridLength(1, DataGridLengthUnitType.Star) }); }
             return list;
         }
+        private static void AddDefinitionRow(DataGrid list, params object[] values) => list.Items.Add(values);
 
         private void AddSectionLabel(TabPage tab, string text, ref int y)
-        {
-            var label = new Label
-            {
-                Text = text,
-                Location = new Point(10, y),
-                AutoSize = true,
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Font = NOMADTheme.Font(NOMADTheme.SIZE_BODY, FontStyle.Bold)
-            };
-            tab.Controls.Add(label);
-            y += 25;
-        }
-
-        private Label AddLabel(TabPage tab, string text, int x, int y, Color? color = null)
-        {
-            var label = new Label
-            {
-                Text = text,
-                Location = new Point(x, y + 3),
-                AutoSize = true,
-                ForeColor = color ?? NOMADTheme.TEXT_SECONDARY
-            };
-            tab.Controls.Add(label);
-            return label;
-        }
-
+        { var label = WpfUi.Section(text); label.Margin = new Thickness(0); AddAt(tab, label, 10, y, 650); y += 25; }
+        private Label AddLabel(TabPage tab, string text, int x, int y, System.Drawing.Color? color = null)
+        { var label = WpfUi.Text(text); if (color.HasValue) { label.Foreground = ColorBrush(color.Value); }
+            AddAt(tab, label, x, y + 3); return label; }
         private TextBox AddTextBox(TabPage tab, int x, int y, int width)
+        { var field = new TextBox(); AddAt(tab, field, x, y, width, 26); return field; }
+        private NumericUpDown AddNumericUpDown(TabPage tab, int x, int y, int width, decimal min, decimal max,
+            decimal value, int decimals = 0)
         {
-            var textBox = new TextBox
-            {
-                Location = new Point(x, y),
-                Size = new Size(width, 23),
-                BackColor = NOMADTheme.INPUT_BG,
-                ForeColor = NOMADTheme.TEXT_PRIMARY
-            };
-            tab.Controls.Add(textBox);
-            return textBox;
+            var field = new NumericUpDown { Minimum = min, Maximum = max, DecimalPlaces = decimals,
+                Value = Math.Max(min, Math.Min(max, value)) };
+            AddAt(tab, field, x, y, width, 26); return field;
         }
-
-        private NumericUpDown AddNumericUpDown(
-            TabPage tab, int x, int y, int width, decimal min, decimal max, decimal value, int decimals = 0)
-        {
-            var num = new NumericUpDown
-            {
-                Location = new Point(x, y),
-                Size = new Size(width, 23),
-                Minimum = min,
-                Maximum = max,
-                Value = Math.Max(min, Math.Min(max, value)),
-                DecimalPlaces = decimals,
-                BackColor = NOMADTheme.INPUT_BG,
-                ForeColor = NOMADTheme.TEXT_PRIMARY
-            };
-            tab.Controls.Add(num);
-            return num;
-        }
-
-        private CheckBox AddCheckBox(TabPage tab, string text, int x, int y, Color? color = null)
-        {
-            var checkBox = new CheckBox
-            {
-                Text = text,
-                Location = new Point(x, y),
-                AutoSize = true,
-                ForeColor = color ?? NOMADTheme.TEXT_PRIMARY
-            };
-            tab.Controls.Add(checkBox);
-            return checkBox;
-        }
-
+        private CheckBox AddCheckBox(TabPage tab, string text, int x, int y, System.Drawing.Color? color = null)
+        { var field = new CheckBox { Content = text }; if (color.HasValue) { field.Foreground = ColorBrush(color.Value); }
+            AddAt(tab, field, x, y); return field; }
+        private static System.Windows.Media.Brush ColorBrush(System.Drawing.Color color) =>
+            new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(color.A, color.R, color.G, color.B));
         private ComboBox AddComboBox(TabPage tab, int x, int y, int width, string[] items)
         {
-            var combo = new ComboBox
-            {
-                Location = new Point(x, y),
-                Size = new Size(width, 23),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = NOMADTheme.INPUT_BG,
-                ForeColor = NOMADTheme.TEXT_PRIMARY
-            };
-            combo.Items.AddRange(items);
-            if (combo.Items.Count > 0)
-                combo.SelectedIndex = 0;
-            tab.Controls.Add(combo);
-            return combo;
+            var field = new ComboBox(); foreach (string item in items) { field.Items.Add(item); }
+            if (field.Items.Count > 0) { field.SelectedIndex = 0; }
+            AddAt(tab, field, x, y, width); return field;
         }
-
-        // LoadSettings/SaveSettings live in NOMADSettingsForm.Settings.cs.
 
         private void BtnReset_Click(object sender, EventArgs e)
         {
-            var result = MessageBox.Show(
-                "Reset the selected aircraft's settings? Other profiles will stay available.",
-                "Reset Settings",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning
-            );
-
-            if (result == DialogResult.Yes)
-            {
-                Config = new NOMADConfig
-                {
-                    AircraftName = Config.AircraftName,
-                    ActuatorDefinitions = new Newtonsoft.Json.Linq.JArray(),
-                };
-                LoadSettings();
-            }
+            if (MessageBox.Show("Reset the selected aircraft's settings? Other profiles will stay available.",
+                "Reset Settings", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) { return; }
+            Config = new NOMADConfig { AircraftName = Config.AircraftName, ActuatorDefinitions = new Newtonsoft.Json.Linq.JArray() };
+            LoadSettings();
         }
-
     }
 }

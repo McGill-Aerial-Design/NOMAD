@@ -22,6 +22,8 @@ using System.Windows.Forms;
 using MissionPlanner;
 using MissionPlanner.Controls;
 using MissionPlanner.Plugin;
+using Button = System.Windows.Controls.Button;
+using Label = System.Windows.Controls.TextBlock;
 
 namespace NOMAD.MissionPlanner
 {
@@ -268,8 +270,8 @@ namespace NOMAD.MissionPlanner
             {
                 if (btn != null)
                 {
-                    btn.BackColor = SIDEBAR_BG;  // Match sidebar background
-                    btn.ForeColor = TEXT_SECONDARY;
+                    btn.Background = WpfTheme.Background;
+                    btn.Foreground = WpfTheme.SecondaryText;
                 }
             }
 
@@ -286,8 +288,8 @@ namespace NOMAD.MissionPlanner
 
             if (activeBtn != null)
             {
-                activeBtn.BackColor = ACCENT_COLOR;
-                activeBtn.ForeColor = TEXT_PRIMARY;
+                activeBtn.Background = WpfTheme.Accent;
+                activeBtn.Foreground = WpfTheme.Text;
             }
         }
 

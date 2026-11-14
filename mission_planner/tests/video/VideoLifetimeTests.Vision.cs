@@ -212,6 +212,11 @@ internal static partial class VideoLifetimeTests
             { PlayerVisionFrame(player, pipeline, Color.Red); Thread.Sleep(5); }
             Check(player.RegionReady && session.VisionError != null && player.SelectedRegion == selected,
                 "Optional detector failure retired visual tracking");
+            var observationDeadline = Stopwatch.StartNew();
+            while (player.DisplayedVideoFrame.Region?.Found != true && observationDeadline.Elapsed < TimeSpan.FromSeconds(5))
+            { PlayerVisionFrame(player, pipeline, Color.Red); }
+            Check(player.DisplayedVideoFrame.Region?.Found == true,
+                "Observation fixture did not establish a frame-matched verified target after detector failure");
             long savedSequence = player.DisplayedVideoFrame.Sequence;
             string path = WaitUi(player.SaveObservationAsync(), "observation write");
             Check(path != null && File.Exists(path) && File.Exists(Path.ChangeExtension(path, ".json")), "Observation pair was not saved");

@@ -21,7 +21,9 @@ $references = @(
     "/r:$mpDir/MissionPlanner.Controls.dll",
     "/r:$mpDir/Interfaces.dll"
 )
-& $csc /nologo /target:exe /langversion:latest "/out:$exe" @references `
+$references += Get-WpfTestReferences
+& $csc /nologo /target:exe /langversion:latest "/out:$exe" `
+    ("/win32manifest:" + (Join-Path $repoRoot 'mission_planner/tests/ui/host.manifest')) @references `
     (Join-Path $repoRoot 'mission_planner/tests/router/RouterStatusUiTests.cs')
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Copy-Item -LiteralPath $plugin -Destination $outDir -Force

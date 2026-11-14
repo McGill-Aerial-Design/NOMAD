@@ -124,8 +124,8 @@ function Invoke-HealthObservationTests {
                 [object[]]@([Activator]::CreateInstance($configType), $null, [Threading.CancellationToken]::None))
         $dashboardType.GetMethod('UpdateBatteryCard', $private).Invoke($view, [object[]]@($null)) | Out-Null
         $label = $dashboardType.GetField('_lblBattery', $private).GetValue($view)
-        $neutral = $Plugin.GetType('NOMAD.MissionPlanner.NOMADTheme').GetField('TEXT_SECONDARY').GetValue($null)
-        if ($label.Text -ne 'Battery unavailable' -or $label.ForeColor -ne $neutral) {
+        $neutral = $Plugin.GetType('NOMAD.MissionPlanner.WpfTheme').GetProperty('SecondaryText').GetValue($null)
+        if ($label.Text -ne 'Battery unavailable' -or -not [object]::ReferenceEquals($label.Foreground, $neutral)) {
             throw 'Unavailable battery telemetry displayed a healthy numeric reading or green verdict.'
         }
         $batteryType = $Plugin.GetType('NOMAD.MissionPlanner.BatteryStatus', $true)
@@ -134,16 +134,24 @@ function Invoke-HealthObservationTests {
         $battery.CapacityMah = 1000
         $battery.UsedMah = [double]::NaN
         $dashboardType.GetMethod('UpdateBatteryCard', $private).Invoke($view, [object[]]@($battery)) | Out-Null
-        if ($label.Text -match 'mAh' -or $label.ForeColor -ne $neutral) {
+        if ($label.Text -match 'mAh' -or -not [object]::ReferenceEquals($label.Foreground, $neutral)) {
             throw 'Unknown capacity or unconfigured thresholds produced a numeric capacity or green verdict.'
         }
         $battery.UsedMah = 100
         $battery.RemainingMah = 900
         $battery.ThresholdsFromVehicle = $true
         $dashboardType.GetMethod('UpdateBatteryCard', $private).Invoke($view, [object[]]@($battery)) | Out-Null
-        $healthy = $Plugin.GetType('NOMAD.MissionPlanner.NOMADTheme').GetField('SUCCESS').GetValue($null)
-        if ($label.Text -notmatch '900 mAh' -or $label.ForeColor -ne $healthy) {
+        if ($label.Text -notmatch '900 mAh' -or
+            -not [object]::ReferenceEquals($label.Foreground, [Windows.Media.Brushes]::LimeGreen)) {
             throw 'Available capacity or configured healthy battery state was lost.'
+        }
+        foreach ($severity in @(1, 2)) {
+            $battery.Severity = $severity
+            $dashboardType.GetMethod('UpdateBatteryCard', $private).Invoke($view, [object[]]@($battery)) | Out-Null
+            $expected = if ($severity -eq 1) { [Windows.Media.Brushes]::Orange } else { [Windows.Media.Brushes]::OrangeRed }
+            if ($label.Text -notmatch '900 mAh' -or -not [object]::ReferenceEquals($label.Foreground, $expected)) {
+                throw "Battery severity $severity lost its displayed reading or warning color."
+            }
         }
     } finally { if ($null -ne $view) { $view.Dispose() }; $shared.SetValue($null, $previousShared); $service.Dispose() }
     Write-Host 'Native health validity, context/cooldown isolation, meter units and unavailable battery checks passed.'

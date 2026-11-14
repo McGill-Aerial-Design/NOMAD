@@ -1,30 +1,36 @@
 // SPDX-License-Identifier: Apache-2.0
 using System;
 using System.Collections.Generic;
-using System.Drawing;
 using System.Linq;
-using System.Windows.Forms;
+using System.Windows.Controls;
+using ComboBox = System.Windows.Controls.ComboBox;
+using CheckBox = System.Windows.Controls.CheckBox;
+using Label = System.Windows.Controls.TextBlock;
+using TabPage = System.Windows.Controls.TabItem;
+using DialogResult = System.Windows.Forms.DialogResult;
 using Newtonsoft.Json.Linq;
 namespace NOMAD.MissionPlanner
 {
     public partial class NOMADSettingsForm
     {
-        private DataGridView _inputList;
+        private DataGrid _inputList;
         private ComboBox _cmbGimbalHorizontal, _cmbGimbalVertical;
         private CheckBox _chkGimbalHorizontalInverted, _chkGimbalVerticalInverted;
         private TabPage CreateJoystickTab()
         {
             var tab = CreateTabPage("Inputs");
             _inputList = CreateDefinitionList("Control", "Input", "Action", "Enabled");
-            _inputList.Location = new Point(12, 15); _inputList.Size = new Size(700, 260); tab.Controls.Add(_inputList);
-            var add = ControlFactory.Button("Add control", (sender, args) => EditInput(-1), width: 120);
-            var edit = ControlFactory.Button("Edit", (sender, args) => EditInput(SelectedRow(_inputList)));
-            var remove = ControlFactory.Button("Remove", (sender, args) => RemoveInput());
-            edit.Enabled = remove.Enabled = false;
-            _inputList.CurrentCellChanged += (sender, args) =>
-                edit.Enabled = remove.Enabled = SelectedRow(_inputList) >= 0;
-            var buttons = ControlFactory.ButtonRow(add, edit, remove); buttons.Dock = DockStyle.None;
-            buttons.Location = new Point(12, 290); tab.Controls.Add(buttons);
+            _inputList.CanUserSortColumns = false;
+            AddAt(tab, _inputList, 12, 15, 700, 260);
+            var add = WpfUi.Action("Add control", () => EditInput(-1));
+            var edit = WpfUi.Action("Edit", () => EditInput(SelectedRow(_inputList)));
+            var remove = WpfUi.Action("Remove", () => RemoveInput());
+            edit.IsEnabled = remove.IsEnabled = false;
+            _inputList.SelectionChanged += (sender, args) =>
+                edit.IsEnabled = remove.IsEnabled = SelectedRow(_inputList) >= 0;
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+            buttons.Children.Add(add); buttons.Children.Add(edit); buttons.Children.Add(remove);
+            AddAt(tab, buttons, 12, 290);
             AddLabel(tab, "Gimbal maximum rate (deg/s):", 12, 340);
             _numJoyGimbalMaxRate = AddNumericUpDown(tab, 235, 337, 85, 5, 200, 60);
             AddLabel(tab, "Gimbal screen horizontal axis:", 12, 380);
@@ -34,12 +40,16 @@ namespace NOMAD.MissionPlanner
             _cmbGimbalVertical = AddComboBox(tab, 235, 412, 120, GimbalCommand.ScreenAxes);
             _chkGimbalVerticalInverted = AddCheckBox(tab, "Reverse", 375, 414);
             AddLabel(tab, "The screen stick and arrow keys use these axes. Physical controls keep their bindings.", 12, 455);
-            _inputList.CellDoubleClick += (sender, args) => { if (args.RowIndex >= 0) { EditInput(args.RowIndex); } };
+            _inputList.MouseDoubleClick += (sender, args) =>
+            {
+                if (ItemsControl.ContainerFromElement(_inputList, args.OriginalSource as System.Windows.DependencyObject) is DataGridRow row)
+                { int index = _inputList.ItemContainerGenerator.IndexFromContainer(row); if (index >= 0) { EditInput(index); } }
+            };
             return tab;
         }
         private void LoadInputList()
         {
-            _inputList.Rows.Clear();
+            _inputList.Items.Clear();
             var available = NomadJoystickService.EnumerateDevices();
             foreach (var binding in InputBinding.Parse(Config.Inputs))
             {
@@ -47,7 +57,7 @@ namespace NOMAD.MissionPlanner
                     (binding.Source == "ButtonPair" ? " / " + InputListenState.ButtonLabel(binding.OtherButton) : "") : binding.Axis + " · " + InputBindingEditorForm.SourceLabel(binding.Source);
                 string device = NomadJoystickService.ResolveDeviceName(binding.Device, available) == null ?
                     "Unavailable: " + binding.Device : binding.Device;
-                _inputList.Rows.Add(binding.Name, device + " · " + source,
+                AddDefinitionRow(_inputList, binding.Name, device + " · " + source,
                     InputBindingEditorForm.ActionLabel(Config, binding.Action) + (binding.Paired ? " / " + InputBindingEditorForm.ActionLabel(Config, binding.OtherAction) : ""),
                     binding.Enabled ? "Yes" : "No");
             }
@@ -69,7 +79,7 @@ namespace NOMAD.MissionPlanner
         {
             var options = choices.ToList(); selected = selected ?? "";
             if (!options.Any(option => option.Key == selected)) { options.Add(new KeyValuePair<string, string>(selected, "Unavailable: " + selected)); }
-            combo.DisplayMember = "Value"; combo.ValueMember = "Key"; combo.DropDownWidth = 900;
+            combo.DisplayMemberPath = "Value";
             combo.Items.Clear(); foreach (var option in options) { combo.Items.Add(option); }
             combo.SelectedItem = options.First(option => option.Key == selected);
         }

@@ -10,13 +10,17 @@ using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using System.Windows.Forms.Integration;
+using Brushes = System.Windows.Media.Brushes;
 
 namespace NOMAD.MissionPlanner
 {
     public partial class EmbeddedVideoPlayer
     {
-        internal TableLayoutPanel Toolbar { get; private set; }
-        internal FlowLayoutPanel VisionOptions { get; private set; }
+        internal ElementHost Toolbar { get; private set; }
+        internal VideoToolbarView VideoControls { get; private set; }
+        internal System.Windows.Controls.WrapPanel VisionOptions => VideoControls.OptionsRow;
+        private ElementHost _statusPanel;
 
         private void InitializeUI()
         {
@@ -32,55 +36,29 @@ namespace NOMAD.MissionPlanner
             _videoBox.DoubleClick += (s, e) => ToggleFullscreen();
             _videoBox.Paint += OnVideoPaint;
 
-            _lblStatus = new Label
+            var status = new VideoStatusView();
+            _lblStatus = status.PlaybackStatus;
+            _lblVisionStatus = status.TrackingStatus;
+            _statusPanel = new ElementHost
             {
-                Text = "Ready - Click Play",
-                Dock = DockStyle.Bottom,
-                Height = 22,
-                ForeColor = NOMADTheme.TEXT_SECONDARY,
-                BackColor = NOMADTheme.CARD_BG,
-                TextAlign = ContentAlignment.MiddleCenter,
-                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL),
+                Name = "VideoStatus", Dock = DockStyle.Bottom, AutoSize = true, Child = status,
+                BackColor = NOMADTheme.CARD_BG, Font = NOMADTheme.Font(),
             };
-
-            var ctrlPanel = new FlowLayoutPanel
+            VideoControls = new VideoToolbarView();
+            VideoControls.PlayButton.Click += (sender, args) => StartStream();
+            VideoControls.StopButton.Click += (sender, args) => StopStream();
+            VideoControls.FullscreenButton.Click += (sender, args) => ToggleFullscreen();
+            VideoControls.SnapshotButton.Click += (sender, args) => TakeSnapshot();
+            Toolbar = new ElementHost
             {
-                Dock = DockStyle.Fill, AutoSize = true, Margin = Padding.Empty,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true,
-                BackColor = NOMADTheme.CARD_BG, Padding = new Padding(5),
+                Name = "VideoToolbar", Dock = DockStyle.Top, AutoSize = true, Child = VideoControls,
+                BackColor = NOMADTheme.CARD_BG, Font = NOMADTheme.Font(),
             };
-            ctrlPanel.Controls.AddRange(new Control[]
-            {
-                CreateVideoButton("\uE768", "Play", (sender, args) => StartStream()),
-                CreateVideoButton("\uE71A", "Stop", (sender, args) => StopStream()),
-                CreateVideoButton("\uE740", "Full screen", (sender, args) => ToggleFullscreen()),
-                CreateVideoButton("\uE722", "Take snapshot", (sender, args) => TakeSnapshot()),
-            });
-
-            Toolbar = new TableLayoutPanel
-            {
-                Name = "VideoToolbar", Dock = DockStyle.Top, AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 1,
-                BackColor = NOMADTheme.CARD_BG, Margin = Padding.Empty,
-            };
-            Toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            Toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            Toolbar.Controls.Add(ctrlPanel, 0, 0);
             Controls.Add(_videoBox);
-            Controls.Add(_lblStatus);
+            Controls.Add(_statusPanel);
             Controls.Add(Toolbar);
-            _lblStatus.Visible = _showControls;
+            _statusPanel.Visible = _showControls;
             Toolbar.Visible = _showControls;
-        }
-
-        private Button CreateVideoButton(string symbol, string name, EventHandler onClick)
-        {
-            var button = ControlFactory.Button(symbol, onClick, width: 36, height: 30);
-            button.AccessibleName = name;
-            button.Font = new Font("Segoe MDL2 Assets", NOMADTheme.SIZE_HEADING);
-            button.Margin = new Padding(0, 0, 4, 4);
-            _videoToolTips.SetToolTip(button, name);
-            return button;
         }
 
         private void OnVideoPaint(object sender, PaintEventArgs e)
@@ -145,6 +123,7 @@ namespace NOMAD.MissionPlanner
                     ToggleFullscreen();
                 }
             };
+            VideoControls.PreviewKeyDown += OnFullscreenKey;
 
             _fullscreenBox = new PictureBox
             {
@@ -161,23 +140,28 @@ namespace NOMAD.MissionPlanner
             _fullscreenForm.Controls.Add(_fullscreenBox);
             if (_showControls)
             {
-                _fullscreenForm.Controls.Add(_lblStatus);
+                _fullscreenForm.Controls.Add(_statusPanel);
                 _fullscreenForm.Controls.Add(Toolbar);
-                _fullscreenForm.Controls.Add(_lblVisionStatus);
             }
             _fullscreenForm.FormClosed += (sender, args) =>
             {
                 _fullscreenBox.Image = null;
+                VideoControls.PreviewKeyDown -= OnFullscreenKey;
                 if (_showControls)
                 {
-                    Controls.Add(_lblStatus);
+                    Controls.Add(_statusPanel);
                     Controls.Add(Toolbar);
-                    Controls.Add(_lblVisionStatus);
                 }
                 _fullscreenForm = null;
                 _fullscreenBox = null;
             };
             _fullscreenForm.Show();
+        }
+
+        private void OnFullscreenKey(object sender, System.Windows.Input.KeyEventArgs args)
+        {
+            if (args.Key == System.Windows.Input.Key.Escape)
+            { args.Handled = true; ToggleFullscreen(); }
         }
 
         public void TakeSnapshot() => TakeSnapshot(Environment.GetFolderPath(Environment.SpecialFolder.Desktop));
@@ -199,14 +183,14 @@ namespace NOMAD.MissionPlanner
                 string path = Path.Combine(directory, $"NOMAD_{DateTime.Now:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}.png");
                 WriteSnapshot(source, path);
                 _lblStatus.Text = $"Saved: {Path.GetFileName(path)}";
-                _lblStatus.ForeColor = Color.LimeGreen;
+                _lblStatus.Foreground = Brushes.LimeGreen;
                 return path;
             }
             catch (Exception error) when (error is IOException || error is UnauthorizedAccessException ||
                 error is ExternalException || error is ArgumentException || error is NotSupportedException)
             {
                 _lblStatus.Text = "Snapshot could not be saved; check the output folder";
-                _lblStatus.ForeColor = Color.Red;
+                _lblStatus.Foreground = Brushes.Red;
                 return null;
             }
         }

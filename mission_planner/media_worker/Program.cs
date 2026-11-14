@@ -91,10 +91,13 @@ namespace NOMAD.MissionPlanner
                 var hello = MediaWire.Read(stream);
                 if (hello.Operation != "hello" || hello.Secret != _secret || hello.Epoch != _epoch) { return; }
                 bool control = hello.Text == "control";
+                if (control) { Interlocked.Exchange(ref _heartbeat, Stopwatch.GetTimestamp()); }
                 if (!control)
                 {
                     resource = new Resource(Interlocked.Increment(ref _next));
                     if (!Resources.TryAdd(resource.Id, resource)) { return; }
+                    if (_fixture && hello.Text == "fixture:held-hello")
+                    { resource.LastOperation = "held hello"; Thread.Sleep(Timeout.Infinite); }
                 }
                 MediaWire.Write(stream, new MediaMessage
                 { Request = hello.Request, Resource = resource?.Id ?? 0, Epoch = _epoch, Text = NomadRelease.SourceSha });

@@ -1,37 +1,46 @@
 // SPDX-License-Identifier: Apache-2.0
 using System;
-using System.Drawing;
 using System.Linq;
-using System.Windows.Forms;
+using System.Windows.Controls;
+using ComboBox = System.Windows.Controls.ComboBox;
+using CheckBox = System.Windows.Controls.CheckBox;
+using Label = System.Windows.Controls.TextBlock;
+using TabPage = System.Windows.Controls.TabItem;
+using DialogResult = System.Windows.Forms.DialogResult;
 using Newtonsoft.Json.Linq;
 namespace NOMAD.MissionPlanner
 {
     public partial class NOMADSettingsForm
     {
-        private DataGridView _payloadList;
+        private DataGrid _payloadList;
         private TabPage CreateActuatorsTab()
         {
             var tab = CreateTabPage("Payloads");
             _payloadList = CreateDefinitionList("Name", "Type", "Output", "Interlocks");
-            _payloadList.Location = new Point(12, 15); _payloadList.Size = new Size(700, 260);
-            tab.Controls.Add(_payloadList);
-            var add = ControlFactory.Button("Add", (sender, args) => EditPayload(-1));
-            var edit = ControlFactory.Button("Edit", (sender, args) => EditPayload(SelectedRow(_payloadList)));
-            var remove = ControlFactory.Button("Remove", (sender, args) => RemovePayload());
-            edit.Enabled = remove.Enabled = false;
-            _payloadList.CurrentCellChanged += (sender, args) =>
-                edit.Enabled = remove.Enabled = SelectedRow(_payloadList) >= 0;
-            var buttons = ControlFactory.ButtonRow(add, edit, remove); buttons.Dock = DockStyle.None;
-            buttons.Location = new Point(12, 290); tab.Controls.Add(buttons);
-            _payloadList.CellDoubleClick += (sender, args) => { if (args.RowIndex >= 0) { EditPayload(args.RowIndex); } };
+            _payloadList.CanUserSortColumns = false;
+            AddAt(tab, _payloadList, 12, 15, 700, 260);
+            var add = WpfUi.Action("Add", () => EditPayload(-1));
+            var edit = WpfUi.Action("Edit", () => EditPayload(SelectedRow(_payloadList)));
+            var remove = WpfUi.Action("Remove", () => RemovePayload());
+            edit.IsEnabled = remove.IsEnabled = false;
+            _payloadList.SelectionChanged += (sender, args) =>
+                edit.IsEnabled = remove.IsEnabled = SelectedRow(_payloadList) >= 0;
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+            buttons.Children.Add(add); buttons.Children.Add(edit); buttons.Children.Add(remove);
+            AddAt(tab, buttons, 12, 290);
+            _payloadList.MouseDoubleClick += (sender, args) =>
+            {
+                if (ItemsControl.ContainerFromElement(_payloadList, args.OriginalSource as System.Windows.DependencyObject) is DataGridRow row)
+                { int index = _payloadList.ItemContainerGenerator.IndexFromContainer(row); if (index >= 0) { EditPayload(index); } }
+            };
             return tab;
         }
         private void LoadPayloadList()
         {
-            _payloadList.Rows.Clear();
+            _payloadList.Items.Clear();
             foreach (var definition in PayloadDefinition.Parse(Config.ActuatorDefinitions))
             {
-                _payloadList.Rows.Add(definition.Name, PayloadEditorForm.BehaviorChoices.First(type => type.Key == definition.Behavior).Value,
+                AddDefinitionRow(_payloadList, definition.Name, PayloadEditorForm.BehaviorChoices.First(type => type.Key == definition.Behavior).Value,
                     (definition.Relay ? "Relay " : "Servo ") + definition.Channel,
                     (definition.Hazardous ? "Hazardous · " : "") + definition.Confirmations + " confirmations");
             }

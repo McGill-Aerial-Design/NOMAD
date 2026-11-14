@@ -128,31 +128,31 @@ internal static partial class VideoLifetimeTests
                 manager.ShowInTaskbar = false; manager.StartPosition = FormStartPosition.Manual;
                 manager.Location = new Point(-2000, -2000);
                 manager.Show();
-                var models = GetField<ListBox>(manager, "_models");
+                var models = GetField<System.Windows.Controls.ListBox>(manager, "_models");
                 WaitUi(() => models.SelectedItem != null && !GetField<bool>(manager, "_preparing"),
                     "asynchronous model manager catalog");
                 Check(((VisionModelChoice)models.SelectedItem).Path == path &&
-                    GetField<Button>(manager, "_edit").Enabled && GetField<Button>(manager, "_remove").Enabled,
+                    GetField<System.Windows.Controls.Button>(manager, "_edit").IsEnabled && GetField<System.Windows.Controls.Button>(manager, "_remove").IsEnabled,
                     "Model manager lost the current managed selection or disabled its actions");
                 WaitUi((System.Threading.Tasks.Task)typeof(VisionModelsForm)
                     .GetMethod("RefreshModels", BindingFlags.Instance | BindingFlags.NonPublic)
                     .Invoke(manager, new object[] { null }), "model manager refresh");
                 Check(((VisionModelChoice)models.SelectedItem).Path == path, "Catalog refresh reset the selection");
                 models.SelectedIndex = 0;
-                Check(!GetField<Button>(manager, "_edit").Enabled && !GetField<Button>(manager, "_export").Enabled &&
-                    !GetField<Button>(manager, "_remove").Enabled && GetField<Button>(manager, "_duplicate").Enabled,
+                Check(!GetField<System.Windows.Controls.Button>(manager, "_edit").IsEnabled && !GetField<System.Windows.Controls.Button>(manager, "_export").IsEnabled &&
+                    !GetField<System.Windows.Controls.Button>(manager, "_remove").IsEnabled && GetField<System.Windows.Controls.Button>(manager, "_duplicate").IsEnabled,
                     "Built-in model allowed an invalid management action or could not be duplicated");
             }
             string before = File.ReadAllText(path);
             using (var editor = new VisionModelEditorForm(VisionModelProfile.Load(path)))
             {
-                GetField<TextBox>(editor, "_name").Text = "Unsaved draft";
+                GetField<System.Windows.Controls.TextBox>(editor, "_name").Text = "Unsaved draft";
                 editor.Close();
                 Check(editor.Draft == null && File.ReadAllText(path) == before, "Canceled editor changed a saved model");
             }
             using (var editor = new VisionModelEditorForm(VisionModelProfile.Load(path)))
             {
-                GetField<TextBox>(editor, "_name").Text = "Accepted draft";
+                GetField<System.Windows.Controls.TextBox>(editor, "_name").Text = "Accepted draft";
                 typeof(VisionModelEditorForm).GetMethod("AcceptDraft", BindingFlags.Instance | BindingFlags.NonPublic)
                     .Invoke(editor, null);
                 Check(editor.Draft?.Name == "Accepted draft" && File.ReadAllText(path) == before,
@@ -194,6 +194,18 @@ internal static partial class VideoLifetimeTests
             copy.Labels.SequenceEqual(source.Labels) && copy.AllowedClasses.SequenceEqual(source.AllowedClasses) &&
             File.ReadAllText(original) == before && !Directory.EnumerateFiles(catalog.DirectoryPath, "*.onnx").Any(),
             "Duplicating a managed model changed its definition, overwrote its source or copied weights");
+    }
+
+    private static void NativeBuiltinModelDuplication()
+    {
+        string directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "builtin-model-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try { CheckBuiltinModelDuplication(new VisionModelCatalog(directory)); }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    private static void CheckBuiltinModelDuplication(VisionModelCatalog catalog)
+    {
         var builtin = new VisionModelChoice("", "Built-in");
         using (var canceled = new CancellationTokenSource())
         {
@@ -207,9 +219,10 @@ internal static partial class VideoLifetimeTests
             people.Sha256 == VisionModelProfile.BuiltinHash, "Built-in duplicate did not reuse verified cached weights");
         using (var editor = new VisionModelEditorForm(people))
         {
-            GetField<TextBox>(editor, "_name").Text = "People";
-            var classes = GetField<DataGridView>(editor, "_classes");
-            foreach (DataGridViewRow row in classes.Rows) { row.Cells[2].Value = row.Index == 0; }
+            GetField<System.Windows.Controls.TextBox>(editor, "_name").Text = "People";
+            var classes = GetField<System.Windows.Controls.DataGrid>(editor, "_classes");
+            for (int index = 0; index < classes.Items.Count; index++)
+            { classes.Items[index].GetType().GetProperty("Detect").SetValue(classes.Items[index], index == 0); }
             typeof(VisionModelEditorForm).GetMethod("AcceptDraft", BindingFlags.Instance | BindingFlags.NonPublic)
                 .Invoke(editor, null);
             people = editor.Draft;
@@ -264,9 +277,10 @@ internal static partial class VideoLifetimeTests
                 "Unavailable catalog silently substituted a different current model");
             var config = VideoConfig(); config.SelectedVideoInput.DetectorModelProfilePath = current;
             var pipeline = new FakeVideoPipeline();
-            using (var player = new VideoInputPlayer(config, true, CancellationToken.None, () => pipeline, null))
+            using (var player = new VideoInputPlayer(config, true, CancellationToken.None, () => pipeline, null,
+                createTracker: (token, mode) => new FakeVisualTracker()))
             {
-                var models = GetField<ComboBox>(player, "_models");
+                var models = GetField<System.Windows.Controls.ComboBox>(player, "_models");
                 WaitUi(() => models.SelectedItem != null, "unavailable optional model catalog");
                 Check(((VisionModelChoice)models.SelectedItem).Path == current,
                     "Oversized catalog tore down the Video selector or changed its default");
@@ -276,15 +290,12 @@ internal static partial class VideoLifetimeTests
                     player.Player.DisplayedVideoFrame.Detections.Count == 0 &&
                     config.SelectedVideoInput.DetectorModelProfilePath == current && pipeline.Starts == 1,
                     "Optional catalog failure stopped plain frames or replaced the saved model");
-                var row = player.Player.VisionOptions;
-                var manage = row.Controls.OfType<Button>().Single(button => button.AccessibleName == "Manage detection models");
-                typeof(Button).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic)
-                    .Invoke(manage, new object[] { EventArgs.Empty });
+                ClickVideoButton(player.Player.VideoControls.ManageModelsButton);
                 Check(pipeline.Starts == 1 && config.SelectedVideoInput.DetectorModelProfilePath == current,
                     "Unavailable Manage dialog escaped its optional-feature boundary");
             }
             using (var settings = new NOMADSettingsForm(new NOMADProfiles(config)))
-            { Check(((VisionModelChoice)GetField<ComboBox>(settings, "_cmbVisionModel").SelectedItem).Path == current,
+            { Check(((VisionModelChoice)GetField<System.Windows.Controls.ComboBox>(settings, "_cmbVisionModel").SelectedItem).Path == current,
                 "Unavailable catalog tore down Settings or replaced its current model path"); }
         }
         finally { foreach (string path in created) { File.Delete(path); } }
@@ -337,38 +348,56 @@ internal static partial class VideoLifetimeTests
     {
         using (var editor = new VisionModelEditorForm(profile))
         {
-            var classes = GetField<DataGridView>(editor, "_classes");
-            Check(classes.Columns[0].ReadOnly && classes.Columns.Cast<DataGridViewColumn>().All(
-                column => column.SortMode == DataGridViewColumnSortMode.NotSortable),
+            var classes = GetField<System.Windows.Controls.DataGrid>(editor, "_classes");
+            Check(classes.Columns[0].IsReadOnly && !classes.CanUserSortColumns,
                 "Class IDs were editable or tensor class order could be sorted");
             var read = typeof(VisionModelEditorForm).GetMethod("ReadDraft", BindingFlags.Instance | BindingFlags.NonPublic);
             var unchanged = (VisionModelProfile)read.Invoke(editor, null);
             Check(unchanged.Labels.SequenceEqual(profile.Labels) &&
                 unchanged.AllowedClasses.SequenceEqual(profile.AllowedClasses), "Class table lost profile labels or filters");
-            classes.Rows.Clear();
-            classes.Rows.Add(0, "first", true); classes.Rows.Add(1, "middle", false); classes.Rows.Add(2, "last", true);
-            classes.CurrentCell = classes.Rows[1].Cells[1];
+            string labels = Path.GetTempFileName();
+            try { File.WriteAllText(labels, "first\nmiddle\nlast\n"); editor.ImportLabels(labels); }
+            finally { File.Delete(labels); }
+            classes.Items[1].GetType().GetProperty("Detect").SetValue(classes.Items[1], false);
+            classes.SelectedIndex = 1;
             typeof(VisionModelEditorForm).GetMethod("RemoveClass", BindingFlags.Instance | BindingFlags.NonPublic)
                 .Invoke(editor, null);
-            classes.CurrentCell = classes.Rows[1].Cells[1];
-            editor.CreateControl(); classes.CreateControl();
-            Check(classes.BeginEdit(false), "Could not begin a pending class label edit");
-            ((TextBox)classes.EditingControl).Text = "renamed";
+            editor.ShowInTaskbar = false; editor.StartPosition = FormStartPosition.Manual;
+            editor.Location = new Point(-2000, -2000); editor.Show(); Application.DoEvents();
+            classes.ScrollIntoView(classes.Items[1]); classes.UpdateLayout(); classes.Focus();
+            classes.CurrentCell = new System.Windows.Controls.DataGridCellInfo(classes.Items[1], classes.Columns[1]);
+            Check(classes.BeginEdit(), "Could not begin a pending class label edit");
+            Application.DoEvents();
+            var editing = FindVisual<System.Windows.Controls.TextBox>(classes);
+            Check(editing != null, "Class label editor was not created"); editing.Text = "renamed";
             var edited = (VisionModelProfile)read.Invoke(editor, null);
             Check(edited.Labels.SequenceEqual(new[] { "first", "renamed" }) &&
-                edited.AllowedClasses.SequenceEqual(new[] { 0, 1 }) && (int)classes.Rows[1].Cells[0].Value == 1,
+                edited.AllowedClasses.SequenceEqual(new[] { 0, 1 }) &&
+                (int)classes.Items[1].GetType().GetProperty("Id").GetValue(classes.Items[1]) == 1,
                 "Class removal or pending label edit changed the tensor class mapping");
-            classes.CurrentCell = classes.Rows[1].Cells[2];
-            Check(classes.BeginEdit(false), "Could not begin a pending Detect edit");
-            ((DataGridViewCheckBoxCell)classes.CurrentCell).EditingCellFormattedValue = false;
-            classes.NotifyCurrentCellDirty(true);
+            classes.CurrentCell = new System.Windows.Controls.DataGridCellInfo(classes.Items[1], classes.Columns[2]);
+            Check(classes.BeginEdit(), "Could not begin a pending Detect edit");
+            Application.DoEvents();
+            var detect = FindVisual<System.Windows.Controls.CheckBox>(classes);
+            Check(detect != null, "Class Detect editor was not created"); detect.IsChecked = false;
             var filtered = (VisionModelProfile)read.Invoke(editor, null);
             Check(filtered.AllowedClasses.SequenceEqual(new[] { 0 }) && filtered.Labels.Length == 2,
                 "Pending Detect edit was lost or removed an unchecked output label");
-            var footer = GetField<Button>(editor, "_save").Parent;
-            Check(footer.Parent == editor && footer.Dock == DockStyle.Bottom && editor.MinimumSize.Width > 0,
+            var footer = GetField<System.Windows.Controls.Button>(editor, "_save").Parent as System.Windows.Controls.WrapPanel;
+            Check(footer != null && System.Windows.Controls.DockPanel.GetDock(footer) == System.Windows.Controls.Dock.Bottom && editor.MinimumSize.Width > 0,
                 "Model actions scroll with fields or the editor has no minimum size");
         }
+    }
+
+    private static T FindVisual<T>(System.Windows.DependencyObject parent) where T : System.Windows.DependencyObject
+    {
+        for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
+            if (child is T match && child is System.Windows.FrameworkElement element && element.IsKeyboardFocusWithin) { return match; }
+            var nested = FindVisual<T>(child); if (nested != null) { return nested; }
+        }
+        return null;
     }
 
     private static void ReparseModelCatalog(string directory, VisionModelProfile profile)
@@ -426,7 +455,7 @@ internal static partial class VideoLifetimeTests
             }))
         {
             host.Player.StartStream(); Wait(pipeline.ReadEntered, "model dropdown source");
-            var selector = GetField<ComboBox>(host, "_models");
+            var selector = GetField<System.Windows.Controls.ComboBox>(host, "_models");
             WaitUi(() => selector.SelectedItem != null, "initial model dropdown catalog");
             var choice = new VisionModelChoice(model, "External model"); selector.Items.Add(choice);
             selector.SelectedItem = choice;
@@ -450,15 +479,15 @@ internal static partial class VideoLifetimeTests
         var config = TwoInputs();
         using var host = new VideoInputPlayer(config, true, CancellationToken.None, () => new FakeVideoPipeline(),
             null, (owner, name, path) => Task.FromResult(true));
-        var selector = GetField<ComboBox>(host, "_models");
+        var selector = GetField<System.Windows.Controls.ComboBox>(host, "_models");
         WaitUi(() => selector.SelectedItem != null, "initial shared model catalog");
         config.SelectedVideoInputName = "Alternate";
         host.RefreshInput();
-        selector.Items.Clear(); selector.Enabled = false;
+        selector.Items.Clear(); selector.IsEnabled = false;
         var load = typeof(VideoInputPlayer).GetMethod("LoadModelChoicesAsync", BindingFlags.Instance | BindingFlags.NonPublic);
         var completion = (Task)load.Invoke(host, new object[] { "", GetField<long>(host, "_modelRevision") });
         WaitUi(completion, "shared-path catalog publication after camera switch");
-        Check(selector.Enabled && selector.SelectedItem is VisionModelChoice choice && choice.Path == "",
+        Check(selector.IsEnabled && selector.SelectedItem is VisionModelChoice choice && choice.Path == "",
             "Switching cameras with the same model path stranded the pending catalog or disabled its selector.");
     }
 

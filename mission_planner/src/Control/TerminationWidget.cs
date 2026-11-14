@@ -17,9 +17,9 @@ namespace NOMAD.MissionPlanner
         private readonly TerminationGesture _gesture = new TerminationGesture();
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private readonly System.Windows.Forms.Timer _timer = new System.Windows.Forms.Timer { Interval = 50 };
-        private readonly ToolTip _toolTip = new ToolTip { AutoPopDelay = 15000 };
-        private readonly Label _status;
-        private readonly Button _check;
+        private readonly System.Windows.Controls.TextBlock _status;
+        private readonly System.Windows.Controls.Button _check;
+        internal System.Windows.FrameworkElement WpfRoot { get; }
         private readonly Func<bool> _canInteract;
         private readonly Func<IWin32Window, string, DialogResult> _confirm;
         internal Task PendingReview { get; private set; } = Task.CompletedTask;
@@ -40,25 +40,28 @@ namespace NOMAD.MissionPlanner
             _confirm = confirm ?? Confirm;
             _controller = controller;
             _shutdown = shutdown;
-            BackColor = NOMADTheme.CARD_BG;
-            Padding = new Padding(10, 6, 10, 6);
-            var header = new Panel { Dock = DockStyle.Top, Height = 24 };
-            header.Controls.Add(new Label
+            var root = new System.Windows.Controls.DockPanel
             {
-                Text = "TERMINATE", Dock = DockStyle.Fill, ForeColor = NOMADTheme.ERROR,
-                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft,
-            });
-            _check = ControlFactory.Button("Check", width: 55, height: 24);
-            _check.Dock = DockStyle.Right;
-            _check.Click += async (sender, args) => await CheckSupportAsync();
-            header.Controls.Add(_check);
-            _status = new Label
-            {
-                Dock = DockStyle.Fill, ForeColor = NOMADTheme.TEXT_SECONDARY,
-                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL), TextAlign = ContentAlignment.MiddleLeft,
+                Background = WpfTheme.Card, LastChildFill = true,
+                Margin = new System.Windows.Thickness(10, 6, 10, 6),
             };
-            Controls.Add(_status);
-            Controls.Add(header);
+            WpfRoot = root;
+            var header = new System.Windows.Controls.DockPanel();
+            System.Windows.Controls.DockPanel.SetDock(header, System.Windows.Controls.Dock.Top);
+            _check = WpfUi.Action("Check", async () => await CheckSupportAsync());
+            System.Windows.Controls.DockPanel.SetDock(_check, System.Windows.Controls.Dock.Right);
+            header.Children.Add(_check);
+            header.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = "TERMINATE", Foreground = System.Windows.Media.Brushes.IndianRed,
+                FontWeight = System.Windows.FontWeights.Bold,
+                VerticalAlignment = System.Windows.VerticalAlignment.Center,
+            });
+            root.Children.Add(header);
+            _status = WpfUi.Text("");
+            _status.Foreground = WpfTheme.SecondaryText;
+            root.Children.Add(_status);
+            Controls.Add(WpfUi.Host(root));
             _timer.Tick += Sample;
             RefreshStatus();
         }
@@ -178,7 +181,7 @@ namespace NOMAD.MissionPlanner
         internal void RefreshStatus()
         {
             if (IsDisposed) { return; }
-            _check.Enabled = !_busy && _controller != null && !_shutdown.IsCancellationRequested;
+            _check.IsEnabled = !_busy && _controller != null && !_shutdown.IsCancellationRequested;
             string detail = _error ?? _controller?.Status ?? "Termination unavailable.";
             string summary = "Unavailable · check support";
             if (_waitingForRelease) { summary = "Release both Shift keys to review."; }
@@ -187,9 +190,9 @@ namespace NOMAD.MissionPlanner
             else if (_controller?.Supported == true && !_controller.Armed) { summary = "Supported · disarmed"; }
             else if (_controller?.CanRequest == true) { summary = "Hover · press/release both Shifts to review"; }
             _status.Text = summary;
-            _toolTip.SetToolTip(this, detail);
-            _toolTip.SetToolTip(_status, detail);
-            _toolTip.SetToolTip(_check, detail);
+            WpfRoot.ToolTip = detail;
+            _status.ToolTip = detail;
+            _check.ToolTip = detail;
         }
 
         protected override void Dispose(bool disposing)
@@ -199,7 +202,6 @@ namespace NOMAD.MissionPlanner
                 _reviewCancelled = true;
                 _gesture.Reset();
                 _timer.Dispose();
-                _toolTip.Dispose();
             }
             base.Dispose(disposing);
         }

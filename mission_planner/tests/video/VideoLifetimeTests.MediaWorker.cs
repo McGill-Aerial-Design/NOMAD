@@ -44,6 +44,115 @@ internal static partial class VideoLifetimeTests
         CheckClean(pipeline);
     }
 
+    private static void MediaWorkerPoolStarvation()
+    {
+        ThreadPool.GetMinThreads(out int minimum, out int minimumIo);
+        ThreadPool.GetMaxThreads(out int maximum, out int maximumIo);
+        string directory = Path.Combine(Path.GetTempPath(), "NOMAD-media-pool-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        MediaWorkerHost.FixtureMode = true; MediaWorkerHost.FixtureDirectory = directory;
+        using (var occupied = new CountdownEvent(2))
+        using (var release = new ManualResetEventSlim())
+        {
+            Task first = null, second = null;
+            Task<MediaWorkerDetector> startup = null;
+            Task<MediaWorkerDetector> handshake = null;
+            try
+            {
+                Check(ThreadPool.SetMinThreads(2, minimumIo) && ThreadPool.SetMaxThreads(2, maximumIo),
+                    "Could not establish the two-worker heartbeat fixture");
+                first = Task.Run(() => { occupied.Signal(); release.Wait(); });
+                second = Task.Run(() => { occupied.Signal(); release.Wait(); });
+                Check(occupied.Wait(5000), "Both fixture pool workers were not occupied");
+                MediaWorkerHost.RequestStart();
+                startup = Task.Factory.StartNew(() => new MediaWorkerDetector("fixture:ok", CancellationToken.None),
+                    CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+                WaitUi(() => startup.IsCompleted, "native startup without an available pool worker");
+                var detector = startup.GetAwaiter().GetResult();
+                long epoch = MediaWorkerHost.WorkerEpoch;
+                var worker = CurrentMediaWorker();
+                Thread.Sleep(2500);
+                Check(!worker.Process.HasExited && MediaWorkerHost.WorkerEpoch == epoch,
+                    "An exhausted parent pool killed the native worker heartbeat");
+                using (var image = new Bitmap(64, 48))
+                { Check(detector.Detect(image, CancellationToken.None).Count == 0,
+                    "Native operations failed while the parent pool remained occupied"); }
+                MediaWorkerHost.FixtureHoldResourceHello = true;
+                handshake = Task.Factory.StartNew(() => new MediaWorkerDetector("fixture:ok", CancellationToken.None),
+                    CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+                WaitUi(() => handshake.IsCompleted, "stalled resource handshake retirement without a pool worker");
+                Check(handshake.IsFaulted && handshake.Exception.GetBaseException() is MediaWorkerException &&
+                    MediaWorkerHost.CanRecover, "A stalled handshake did not enter the one-recovery failure path");
+                MediaWorkerHost.FixtureHoldResourceHello = false;
+                var recovery = Task.Factory.StartNew(() => new MediaWorkerDetector("fixture:ok", CancellationToken.None),
+                    CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+                WaitUi(() => recovery.IsCompleted, "native handshake recovery without a pool worker");
+                using (var recovered = recovery.GetAwaiter().GetResult())
+                { Check(MediaWorkerHost.WorkerEpoch > epoch, "Handshake recovery reused the failed child"); }
+            }
+            finally
+            {
+                release.Set();
+                MediaWorkerHost.FixtureHoldResourceHello = false;
+                ThreadPool.SetMaxThreads(maximum, maximumIo); ThreadPool.SetMinThreads(minimum, minimumIo);
+                if (first != null) { Wait(first, "first occupied pool worker release"); }
+                if (second != null) { Wait(second, "second occupied pool worker release"); }
+                if (startup != null)
+                {
+                    WaitUi(() => startup.IsCompleted, "starved native startup retirement");
+                    if (startup.Status == TaskStatus.RanToCompletion) { startup.Result.Dispose(); }
+                }
+                if (handshake != null)
+                {
+                    WaitUi(() => handshake.IsCompleted, "stalled resource handshake cleanup");
+                    if (handshake.Status == TaskStatus.RanToCompletion) { handshake.Result.Dispose(); }
+                }
+                try { MediaWorkerHost.Shutdown(); Wait(MediaWorkerHost.ShutdownCompletion, "pool fixture worker exit"); }
+                finally { MediaWorkerHost.FixtureMode = false; MediaWorkerHost.FixtureDirectory = null; }
+                MediaWorkerHost.RequestStart();
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    private static MediaWorkerHost.Worker CurrentMediaWorker() => (MediaWorkerHost.Worker)
+        typeof(MediaWorkerHost).GetField("_current", System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.NonPublic).GetValue(null);
+
+    private static void MediaWorkerShutdownHandles()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "NOMAD-media-handles-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        MediaWorkerHost.FixtureMode = true; MediaWorkerHost.FixtureDirectory = directory;
+        MediaWorkerHost.Worker worker = null;
+        try
+        {
+            MediaWorkerHost.RequestStart();
+            using (var detector = new MediaWorkerDetector("fixture:ok", CancellationToken.None)) { }
+            worker = CurrentMediaWorker();
+            var handle = worker.Process.SafeHandle;
+            using (var observer = Process.GetProcessById(worker.Id))
+            {
+                MediaWorkerHost.Shutdown();
+                Wait(MediaWorkerHost.ShutdownCompletion, "shutdown with no subsequent Open");
+                Check(observer.WaitForExit(2000), "Shutdown completed before the owned child exited");
+                Check(handle.IsClosed && MediaWorkerHost.WorkerEpoch == 0,
+                    "Shutdown retained the retired process handle or current-worker reference");
+            }
+        }
+        finally
+        {
+            try { MediaWorkerHost.Shutdown(); Wait(MediaWorkerHost.ShutdownCompletion, "handle fixture worker exit"); }
+            finally
+            {
+                worker?.Dispose();
+                MediaWorkerHost.FixtureMode = false; MediaWorkerHost.FixtureDirectory = null;
+            }
+            MediaWorkerHost.RequestStart();
+            Directory.Delete(directory, true);
+        }
+    }
+
     private static void MediaWorkerIsolation()
     {
         VideoTrackingSample lastTracking = null;

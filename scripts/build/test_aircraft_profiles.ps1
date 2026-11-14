@@ -273,22 +273,22 @@ function Invoke-AircraftProfileUiTests {
         if ($form.Profiles.SelectedId -ne $betaId -or
             (Profile-Control '_txtFlightController').Text -ne 'Beta controller' -or
             (Profile-Control '_txtReceiver').Text -ne 'Beta receiver' -or
-            (Profile-Control '_numRouterLocalPort').Value -ne 14653 -or
+            [decimal](Profile-Control '_numRouterLocalPort').Text -ne 14653 -or
             (Profile-Control '_txtVideoUrl').Text -ne 'rtsp://beta-ui.invalid/stream') {
             throw 'Aircraft selection did not restore the selected notes and connection controls.'
         }
         if ((Profile-Control '_cmbGimbalMountMode').SelectedIndex -ne 3 -or
-            (Profile-Control '_numJoyGimbalMaxRate').Value -ne 80 -or
-            (Profile-Control '_inputList').Rows.Count -ne 1 -or
+            [decimal](Profile-Control '_numJoyGimbalMaxRate').Text -ne 80 -or
+            (Profile-Control '_inputList').Items.Count -ne 1 -or
             $form.Config.Inputs[0]['Axis'].Value -ne 'Rz' -or
             $form.Config.ActuatorDefinitions[0]['id'].ToString() -ne 'beta' -or
-            (Profile-Control '_payloadList').Rows.Count -ne 1) {
+            (Profile-Control '_payloadList').Items.Count -ne 1) {
             throw 'Aircraft selection lost gimbal, actuator or unavailable-backend input settings.'
         }
-        (Profile-Control '_numJoyGimbalMaxRate').Value = 90
+        (Profile-Control '_numJoyGimbalMaxRate').Text = '90'
         $selector.SelectedItem = $form.Profiles.Aircraft[0]
         if ((Profile-Control '_txtFlightController').Text -ne 'Alpha draft controller' -or
-            (Profile-Control '_numJoyGimbalMaxRate').Value -ne 30) {
+            [decimal](Profile-Control '_numJoyGimbalMaxRate').Text -ne 30) {
             throw 'Returning to an aircraft did not restore its independent draft.'
         }
         $formType.GetMethod('AddAircraft', $instance).Invoke($form, [object[]]@($true)) | Out-Null

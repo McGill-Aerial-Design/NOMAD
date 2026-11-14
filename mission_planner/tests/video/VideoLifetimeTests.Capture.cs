@@ -87,12 +87,12 @@ internal static partial class VideoLifetimeTests
             var devices = new[] { new VideoCaptureDevice("USB camera", first), new VideoCaptureDevice("USB camera", second) };
             typeof(NOMADSettingsForm).GetField("_getVideoDevices", flags).SetValue(form,
                 new Func<VideoCaptureDevice[]>(() => { queries++; return devices; }));
-            var source = GetField<ComboBox>(form, "_cmbVideoSourceType");
-            var picker = GetField<ComboBox>(form, "_cmbVideoDevice");
-            var calibrated = GetField<CheckBox>(form, "_chkTrackingCalibrated");
-            calibrated.Checked = true;
+            var source = GetField<System.Windows.Controls.ComboBox>(form, "_cmbVideoSourceType");
+            var picker = GetField<System.Windows.Controls.ComboBox>(form, "_cmbVideoDevice");
+            var calibrated = GetField<System.Windows.Controls.CheckBox>(form, "_chkTrackingCalibrated");
+            calibrated.IsChecked = true;
             source.SelectedIndex = 1;
-            Check(queries == 0 && picker.Enabled && !GetField<TextBox>(form, "_txtVideoUrl").Enabled && !calibrated.Checked,
+            Check(queries == 0 && picker.IsEnabled && !GetField<System.Windows.Controls.TextBox>(form, "_txtVideoUrl").IsEnabled && calibrated.IsChecked != true,
                 "Changing source type queried a camera, enabled URL input or retained old calibration");
             Action refresh = () => typeof(NOMADSettingsForm).GetMethod("RefreshVideoDevices", flags).Invoke(form, null);
             refresh();
@@ -100,11 +100,11 @@ internal static partial class VideoLifetimeTests
                 picker.Items.Cast<VideoCaptureDevice>().Select(device => device.Name).Distinct().Count() == 3,
                 "Refreshing auto-selected a device or left duplicate names indistinguishable");
             picker.SelectedItem = picker.Items.Cast<VideoCaptureDevice>().Single(device => device.Path == second);
-            calibrated.Checked = true;
+            calibrated.IsChecked = true;
             devices = new[] { new VideoCaptureDevice("USB camera", first), new VideoCaptureDevice("USB camera", second.ToUpperInvariant()) };
             refresh();
             Check(string.Equals(((VideoCaptureDevice)picker.SelectedItem).Path, second, StringComparison.OrdinalIgnoreCase) &&
-                calibrated.Checked, "A case-only device path change lost the selected camera or its calibration");
+                calibrated.IsChecked == true, "A case-only device path change lost the selected camera or its calibration");
             typeof(NOMADSettingsForm).GetMethod("SaveSettings", flags).Invoke(form, null);
             Check(form.Config.Clone().SelectedVideoInput.SourceType == "Camera" &&
                 string.Equals(form.Config.SelectedVideoInput.CaptureDevicePath, second, StringComparison.OrdinalIgnoreCase),
@@ -118,8 +118,8 @@ internal static partial class VideoLifetimeTests
                 new Func<VideoCaptureDevice[]>(() => { throw new System.ComponentModel.Win32Exception(5); }));
             refresh();
             Check(((VideoCaptureDevice)picker.SelectedItem).Path == second.ToUpperInvariant() &&
-                GetField<Label>(form, "_lblVideoDevices").Enabled &&
-                GetField<Label>(form, "_lblVideoDevices").Text.Contains("unavailable"),
+                GetField<System.Windows.Controls.TextBlock>(form, "_lblVideoDevices").IsEnabled &&
+                GetField<System.Windows.Controls.TextBlock>(form, "_lblVideoDevices").Text.Contains("unavailable"),
                 "A device enumeration error discarded the saved camera or failed silently");
         }
         Check(profiles.Selected.Config.SelectedVideoInput.SourceType == "Network" &&

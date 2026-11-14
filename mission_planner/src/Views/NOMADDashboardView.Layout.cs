@@ -6,6 +6,9 @@
 
 using System.Drawing;
 using System.Windows.Forms;
+using System.Windows;
+using Wpf = System.Windows.Controls;
+using Media = System.Windows.Media;
 
 namespace NOMAD.MissionPlanner
 {
@@ -61,31 +64,18 @@ namespace NOMAD.MissionPlanner
             Controls.Add(mainLayout);
         }
 
-        private Panel CreateStatusCard(string title, string initialValue, out Label valueLabel, Color statusColor, float fontSize = 12f)
+        private Control CreateStatusCard(string title, string initialValue, out Wpf.TextBlock valueLabel, Color statusColor, float fontSize = 12f)
         {
-            var card = ControlFactory.CardPanelWithBorder();
+            var content = new Wpf.StackPanel { Margin = new Thickness(10) };
+            content.Children.Add(new Wpf.TextBlock { Text = title.ToUpperInvariant(), FontSize = 11,
+                FontWeight = FontWeights.Bold, Foreground = WpfTheme.SecondaryText });
+            valueLabel = new Wpf.TextBlock { Text = initialValue, FontSize = fontSize * 4 / 3,
+                FontWeight = FontWeights.Bold, TextWrapping = TextWrapping.Wrap,
+                Foreground = new Media.SolidColorBrush(Media.Color.FromArgb(statusColor.A, statusColor.R, statusColor.G, statusColor.B)) };
+            content.Children.Add(valueLabel);
+            var card = WpfUi.Host(new Wpf.Border { Background = WpfTheme.Card, BorderBrush = WpfTheme.Outline,
+                BorderThickness = new Thickness(1), Child = content });
             card.Margin = new Padding(4);
-
-            valueLabel = new Label
-            {
-                Text = initialValue,
-                Font = new Font("Segoe UI", fontSize, FontStyle.Bold),
-                ForeColor = statusColor,
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleLeft,
-            };
-            card.Controls.Add(valueLabel);
-
-            var titleLabel = new Label
-            {
-                Text = title.ToUpper(),
-                Font = new Font("Segoe UI", 8, FontStyle.Bold),
-                ForeColor = NOMADTheme.TEXT_SECONDARY,
-                Dock = DockStyle.Top,
-                Height = 20,
-                TextAlign = ContentAlignment.BottomLeft,
-            };
-            card.Controls.Add(titleLabel);
             return card;
         }
 
@@ -98,12 +88,6 @@ namespace NOMAD.MissionPlanner
                 Dock = DockStyle.Fill,
                 Padding = new Padding(1),
             };
-            panel.Paint += (s, e) =>
-            {
-                using (var pen = new Pen(NOMADTheme.CARD_BORDER))
-                    e.Graphics.DrawRectangle(pen, 0, 0, panel.Width - 1, panel.Height - 1);
-            };
-
             _videoHost = new VideoInputPlayer(_config, false, _videoShutdown, _createPipeline,
                 NOMADMainScreen.SelectVideoInput);
             panel.Controls.Add(_videoHost);

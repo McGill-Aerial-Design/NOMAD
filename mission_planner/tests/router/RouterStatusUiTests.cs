@@ -8,6 +8,8 @@ using System.IO;
 using System.Reflection;
 using System.Windows.Forms;
 using NOMAD.MissionPlanner;
+using Wpf = System.Windows.Controls;
+using System.Windows.Forms.Integration;
 
 internal static class RouterStatusUiTests
 {
@@ -106,7 +108,7 @@ internal static class RouterStatusUiTests
         using (var panel = new LinkHealthPanel(manager, new NOMADConfig()))
         {
             var handle = panel.Handle;
-            var log = (ListBox)typeof(LinkHealthPanel).GetField("_lstLog", PrivateInstance).GetValue(panel);
+            var log = (Wpf.ListBox)typeof(LinkHealthPanel).GetField("_log", PrivateInstance).GetValue(panel);
             var handler = (EventHandler<string>)typeof(MAVLinkConnectionManager)
                 .GetField("LogMessage", PrivateInstance).GetValue(manager);
             for (int index = 0; index < 205; ++index) { handler(manager, "event " + index); }
@@ -131,7 +133,7 @@ internal static class RouterStatusUiTests
         using (var view = new NOMADDashboardView(new NOMADConfig(), manager, System.Threading.CancellationToken.None))
         {
             typeof(NOMADDashboardView).GetMethod("UpdateLinksCard", PrivateInstance).Invoke(view, null);
-            var label = (Label)typeof(NOMADDashboardView).GetField("_lblLinks", PrivateInstance).GetValue(view);
+            var label = (Wpf.TextBlock)typeof(NOMADDashboardView).GetField("_lblLinks", PrivateInstance).GetValue(view);
             Check(label.Text.Contains("stopped"), "dashboard reports an unconfigured router as stopped");
         }
     }
@@ -161,8 +163,43 @@ internal static class RouterStatusUiTests
     private static string ReadControlText(Control parent)
     {
         var text = new List<string> { parent.Text };
+        if (parent is ElementHost host) { text.Add(ReadWpfText(host.Child)); }
         foreach (Control child in parent.Controls) { text.Add(ReadControlText(child)); }
         return string.Join("\n", text);
+    }
+
+    private static string ReadWpfText(System.Windows.DependencyObject element)
+    {
+        if (element == null) return "";
+        var text = new List<string>();
+        if (element is Wpf.TextBlock label) text.Add(label.Text);
+        foreach (object child in System.Windows.LogicalTreeHelper.GetChildren(element))
+            if (child is System.Windows.DependencyObject dependency) text.Add(ReadWpfText(dependency));
+        return string.Join("\n", text);
+    }
+
+    private static T WpfNamed<T>(Control parent, string name) where T : System.Windows.FrameworkElement
+    {
+        foreach (Control child in parent.Controls)
+        {
+            if (child is ElementHost host)
+            {
+                var found = FindWpf<T>(host.Child, name);
+                if (found != null) return found;
+            }
+            var nested = WpfNamed<T>(child, name);
+            if (nested != null) return nested;
+        }
+        return null;
+    }
+
+    private static T FindWpf<T>(System.Windows.DependencyObject parent, string name) where T : System.Windows.FrameworkElement
+    {
+        if (parent is T match && match.Name == name) return match;
+        foreach (object child in System.Windows.LogicalTreeHelper.GetChildren(parent))
+            if (child is System.Windows.DependencyObject dependency)
+            { var found = FindWpf<T>(dependency, name); if (found != null) return found; }
+        return null;
     }
 
     private static void AircraftProfileRetiresCachedViews()
@@ -192,9 +229,9 @@ internal static class RouterStatusUiTests
             type.GetMethod("RefreshConfiguration", PrivateInstance).Invoke(screen, null);
             Check(oldVideo.IsDisposed && oldLinks.IsDisposed,
                 "changing aircraft disposes cached video and router controls");
-            var label = screen.Controls.Find("ActiveAircraft", true);
+            var label = WpfNamed<Wpf.TextBlock>(screen, "ActiveAircraft");
             var dashboard = type.GetField("_dashboardView", PrivateInstance).GetValue(screen);
-            Check(label.Length == 1 && label[0].Text == "Aircraft: Beta UI" &&
+            Check(label != null && label.Text == "Aircraft: Beta UI" &&
                 ReferenceEquals(typeof(NOMADDashboardView).GetField("_config", PrivateInstance)
                     .GetValue(dashboard), beta),
                 "the active aircraft label and recreated dashboard use the newly saved configuration");
@@ -226,23 +263,23 @@ internal static class RouterStatusUiTests
             var handle = screen.Handle;
             global::MissionPlanner.Utilities.ThemeManager.ApplyThemeTo(screen);
             Application.DoEvents();
-            var selected = (Button)type.GetField("_btnLinks", PrivateInstance).GetValue(screen);
-            var dashboard = (Button)type.GetField("_btnDashboard", PrivateInstance).GetValue(screen);
-            Check(selected.BackColor == NOMADTheme.ACCENT && selected.ForeColor == NOMADTheme.TEXT_PRIMARY &&
-                dashboard.BackColor != NOMADTheme.ACCENT,
+            var selected = (Wpf.Button)type.GetField("_btnLinks", PrivateInstance).GetValue(screen);
+            var dashboard = (Wpf.Button)type.GetField("_btnDashboard", PrivateInstance).GetValue(screen);
+            Check(ReferenceEquals(selected.Background, WpfTheme.Accent) && ReferenceEquals(selected.Foreground, WpfTheme.Text) &&
+                !ReferenceEquals(dashboard.Background, WpfTheme.Accent),
                 "host theme opt-out preserves the selected sidebar button");
-            var settings = (Button)screen.Controls.Find("OpenSettings", true)[0];
-            settings.PerformClick();
+            var settings = WpfNamed<Wpf.Button>(screen, "OpenSettings");
+            settings.RaiseEvent(new System.Windows.RoutedEventArgs(Wpf.Button.ClickEvent));
             Check(opened == 1, "sidebar Settings uses the current plugin callback");
             session.Cancel();
-            settings.PerformClick();
+            settings.RaiseEvent(new System.Windows.RoutedEventArgs(Wpf.Button.ClickEvent));
             Check(opened == 1, "a retired plugin session cannot reopen Settings");
             var plugin = new NOMADPlugin();
             // reflection does not fill optional parameters: final=false is the ordinary (non-unload) shutdown
             typeof(NOMADPlugin).GetMethod("ShutdownVideo", PrivateInstance).Invoke(plugin, new object[] { false });
             Check(type.GetField("_showSettings", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null) == null,
                 "plugin shutdown releases the Settings callback");
-            settings.PerformClick();
+            settings.RaiseEvent(new System.Windows.RoutedEventArgs(Wpf.Button.ClickEvent));
             Check(opened == 1, "a cached sidebar cannot reopen Settings after plugin shutdown");
         }
         finally
@@ -272,15 +309,15 @@ internal static class RouterStatusUiTests
             {
                 show.Invoke(first, new object[] { "Boundaries" });
                 var view = (Control)screenType.GetField("_boundaryView", PrivateInstance).GetValue(first);
-                view.Controls.Find("FenceCoordinates", true)[0].Text = coordinates;
-                ((ComboBox)view.GetType().GetField("_order", PrivateInstance).GetValue(view)).SelectedIndex = 1;
+                WpfNamed<Wpf.TextBox>(view, "FenceCoordinates").Text = coordinates;
+                ((Wpf.ComboBox)view.GetType().GetField("_order", PrivateInstance).GetValue(view)).SelectedIndex = 1;
             }
             using (var second = new NOMADMainScreen(config))
             {
                 show.Invoke(second, new object[] { "Boundaries" });
                 var view = (Control)screenType.GetField("_boundaryView", PrivateInstance).GetValue(second);
-                Check(view.Controls.Find("FenceCoordinates", true)[0].Text == coordinates &&
-                    ((ComboBox)view.GetType().GetField("_order", PrivateInstance).GetValue(view)).SelectedIndex == 1,
+                Check(WpfNamed<Wpf.TextBox>(view, "FenceCoordinates").Text == coordinates &&
+                    ((Wpf.ComboBox)view.GetType().GetField("_order", PrivateInstance).GetValue(view)).SelectedIndex == 1,
                     "disposing and recreating the NOMAD screen preserves session-owned coordinates/order");
             }
         }

@@ -3,6 +3,7 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using Brushes = System.Windows.Media.Brushes;
 
 namespace NOMAD.MissionPlanner
 {
@@ -22,7 +23,7 @@ namespace NOMAD.MissionPlanner
                     _session.Stop();
                     ClearVideoDisplayAndDisposeBuffers();
                     _lblStatus.Text = "Video unavailable; restart video";
-                    _lblStatus.ForeColor = Color.Red;
+                    _lblStatus.Foreground = Brushes.Red;
                 }
                 catch (Exception cleanup) { Log.Error("Video view cleanup failed: " + cleanup); }
             }
@@ -57,12 +58,12 @@ namespace NOMAD.MissionPlanner
                 }
                 old?.Dispose();
                 _lblStatus.Text = $"Streaming {frame.Image.Width}x{frame.Image.Height}";
-                _lblStatus.ForeColor = Color.LimeGreen;
+                _lblStatus.Foreground = Brushes.LimeGreen;
             }
             if (_session.IsActive && _displayedVideoFrame?.Fresh == false)
             {
                 _lblStatus.Text = "Video stale; waiting for frames";
-                _lblStatus.ForeColor = Color.Yellow;
+                _lblStatus.Foreground = Brushes.Yellow;
             }
             var sample = _session.TakeTrackingSample();
             if (sample != null) { UpdateVisionSample(sample); }
@@ -76,7 +77,7 @@ namespace NOMAD.MissionPlanner
                 ClearVideoDisplayAndDisposeBuffers();
                 _frameTimer.Stop();
                 _lblStatus.Text = _session.Error == null ? "Stopped" : $"Error: {_session.Error}";
-                _lblStatus.ForeColor = _session.Error == null ? Color.Gray : Color.Red;
+                _lblStatus.Foreground = _session.Error == null ? Brushes.Gray : Brushes.Red;
             }
         }
 

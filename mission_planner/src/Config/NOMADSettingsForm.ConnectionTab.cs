@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 using System;
 using System.Collections.Generic;
-using System.Drawing;
 using System.Linq;
-using System.Windows.Forms;
+using System.Windows.Controls;
+using ComboBox = System.Windows.Controls.ComboBox;
+using CheckBox = System.Windows.Controls.CheckBox;
+using Label = System.Windows.Controls.TextBlock;
+using TabPage = System.Windows.Controls.TabItem;
+using DialogResult = System.Windows.Forms.DialogResult;
 namespace NOMAD.MissionPlanner
 {
     public partial class NOMADSettingsForm
     {
-        private DataGridView _linkList;
+        private DataGrid _linkList;
         private ComboBox _cmbRouterPreferred;
         private Label _linkError;
         private TabPage CreateMultiLinkTab()
@@ -20,33 +24,36 @@ namespace NOMAD.MissionPlanner
             AddLabel(tab, "Preferred enabled link:", 20, y);
             _cmbRouterPreferred = AddComboBox(tab, 235, y, 400, Array.Empty<string>()); y += 40;
             _linkList = CreateDefinitionList("Name", "Transport", "Endpoint", "Priority", "Enabled");
-            _linkList.Columns["Endpoint"].FillWeight = 220;
-            _linkList.Columns["Transport"].FillWeight = 70;
-            _linkList.Columns["Priority"].FillWeight = 60;
-            _linkList.Columns["Enabled"].FillWeight = 60;
-            _linkList.Location = new Point(20, y); _linkList.Size = new Size(690, 210); tab.Controls.Add(_linkList); y += 225;
-            var add = ControlFactory.Button("Add", (sender, args) => EditRouterLink(-1));
-            var edit = ControlFactory.Button("Edit", (sender, args) => EditRouterLink(SelectedRow(_linkList)));
-            var remove = ControlFactory.Button("Remove", (sender, args) => RemoveRouterLink());
-            edit.Enabled = remove.Enabled = false;
-            _linkList.CurrentCellChanged += (sender, args) =>
-                edit.Enabled = remove.Enabled = SelectedRow(_linkList) >= 0;
-            var buttons = ControlFactory.ButtonRow(add, edit, remove); buttons.Dock = DockStyle.None;
-            buttons.Location = new Point(20, y); tab.Controls.Add(buttons); y += 42;
-            _linkError = new Label { Location = new Point(20, y), Size = new Size(690, 45), ForeColor = NOMADTheme.WARNING };
-            tab.Controls.Add(_linkError);
-            _linkList.CellDoubleClick += (sender, args) => { if (args.RowIndex >= 0) { EditRouterLink(args.RowIndex); } };
+            _linkList.CanUserSortColumns = false;
+            _linkList.Columns[2].Width = new DataGridLength(2, DataGridLengthUnitType.Star);
+            AddAt(tab, _linkList, 20, y, 690, 210); y += 225;
+            var add = WpfUi.Action("Add", () => EditRouterLink(-1));
+            var edit = WpfUi.Action("Edit", () => EditRouterLink(SelectedRow(_linkList)));
+            var remove = WpfUi.Action("Remove", () => RemoveRouterLink());
+            edit.IsEnabled = remove.IsEnabled = false;
+            _linkList.SelectionChanged += (sender, args) =>
+                edit.IsEnabled = remove.IsEnabled = SelectedRow(_linkList) >= 0;
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+            buttons.Children.Add(add); buttons.Children.Add(edit); buttons.Children.Add(remove);
+            AddAt(tab, buttons, 20, y); y += 42;
+            _linkError = new Label { Foreground = System.Windows.Media.Brushes.Orange, TextWrapping = System.Windows.TextWrapping.Wrap };
+            AddAt(tab, _linkError, 20, y, 690, 45);
+            _linkList.MouseDoubleClick += (sender, args) =>
+            {
+                if (ItemsControl.ContainerFromElement(_linkList, args.OriginalSource as System.Windows.DependencyObject) is DataGridRow row)
+                { int index = _linkList.ItemContainerGenerator.IndexFromContainer(row); if (index >= 0) { EditRouterLink(index); } }
+            };
             return tab;
         }
         private void LoadRouterLinks()
         {
             _linkError.Text = "";
-            _linkList.Rows.Clear();
+            _linkList.Items.Clear();
             foreach (var link in Config.RouterLinks)
             {
                 string endpoint = link.Transport == "COM" ? link.Device + " @ " + link.BaudRate :
                     link.Transport == "TCP" ? link.RemoteHost + ":" + link.Port : link.BindAddress + ":" + link.Port;
-                _linkList.Rows.Add(link.Name, link.Transport, endpoint, link.Priority, link.Enabled);
+                AddDefinitionRow(_linkList, link.Name, link.Transport, endpoint, link.Priority, link.Enabled);
             }
             var options = new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>("", "Automatic priority") };
             options.AddRange(Config.RouterLinks.Where(link => link.Enabled).Select(link =>

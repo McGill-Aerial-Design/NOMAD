@@ -17,6 +17,7 @@ using MissionPlanner.Comms;
 using MissionPlanner.GCSViews;
 using MissionPlanner.Utilities;
 using NOMAD.MissionPlanner;
+using Wpf = System.Windows.Controls;
 
 internal static class NativeFenceParametersTests
 {
@@ -30,6 +31,13 @@ internal static class NativeFenceParametersTests
     private static T Field<T>(object owner, string name) => (T)owner.GetType().GetField(name, Hidden).GetValue(owner);
     private static object Create(string name, params object[] args) => Activator.CreateInstance(
         Plugin.GetType("NOMAD.MissionPlanner." + name, true), Hidden, null, args, null);
+    private static T Editor<T>(object view, string name) where T : System.Windows.FrameworkElement
+    {
+        var editors = (IDictionary)Field<object>(view, "_editors");
+        foreach (DictionaryEntry entry in editors)
+            if (Field<string>(entry.Key, "Name") == name) return (T)entry.Value;
+        throw new Exception("Missing fence editor: " + name);
+    }
 
     [STAThread]
     private static int Main(string[] args)
@@ -257,14 +265,14 @@ internal static class NativeFenceParametersTests
             foreach (object parameter in parameters) { Call(view, "AddParameter", parameter); }
             Check(((Dictionary<string, float>)Call(view, "ReadEdits")).Count == 0,
                 "Unconfigured current action/rate/timeout are shown without manufacturing proposed changes");
-            var action = (ComboBox)view.Controls.Find("AFS_TERM_ACTION", true)[0];
-            var rate = (TextBox)view.Controls.Find("AFS_TERM_RATE", true)[0];
-            var timeout = (TextBox)view.Controls.Find("AFS_RC_FAIL_TIME", true)[0];
-            Check(action.Enabled && action.Items.Count == 1 && action.SelectedIndex == -1 && rate.Enabled &&
-                rate.Text == "1.9" && timeout.Enabled && timeout.Text == "0",
+            var action = Editor<Wpf.ComboBox>(view, "AFS_TERM_ACTION");
+            var rate = Editor<Wpf.TextBox>(view, "AFS_TERM_RATE");
+            var timeout = Editor<Wpf.TextBox>(view, "AFS_RC_FAIL_TIME");
+            Check(action.IsEnabled && action.Items.Count == 1 && action.SelectedIndex == -1 && rate.IsEnabled &&
+                rate.Text == "1.9" && timeout.IsEnabled && timeout.Text == "0",
                 "Actual view allows explicit correction from disabled AFS/action0/rate1.9/timeout0");
             action.SelectedValue = 44; rate.Text = "2.5"; timeout.Text = "4.5";
-            ((ComboBox)view.Controls.Find("AFS_ENABLE", true)[0]).SelectedValue = 1;
+            Editor<Wpf.ComboBox>(view, "AFS_ENABLE").SelectedValue = 1;
             var changes = (Dictionary<string, float>)Call(view, "ReadEdits");
             Check(changes.Count == 4 && changes["AFS_TERM_ACTION"] == 44 && changes["AFS_TERM_RATE"] == 2.5f &&
                 changes["AFS_RC_FAIL_TIME"] == 4.5f && changes["AFS_ENABLE"] == 1,
@@ -284,16 +292,23 @@ internal static class NativeFenceParametersTests
             foreach (object parameter in parameters) { Call(view, "AddParameter", parameter); }
             view.Scale(new System.Drawing.SizeF(scale, scale));
             form.Show(); form.PerformLayout(); Application.DoEvents();
-            var margin = (NumericUpDown)view.Controls.Find("FENCE_MARGIN", true)[0];
-            var type = (CheckedListBox)view.Controls.Find("FENCE_TYPE", true)[0];
-            var enabled = (ComboBox)view.Controls.Find("FENCE_ENABLE", true)[0];
-            Check(margin.Minimum == 0 && margin.Maximum == 100 && margin.Value == 2 &&
-                type.CheckedItems.Count == 1 && (int)enabled.SelectedValue == 0,
+            var margin = Editor<Wpf.TextBox>(view, "FENCE_MARGIN");
+            var type = Editor<Wpf.StackPanel>(view, "FENCE_TYPE");
+            var enabled = Editor<Wpf.ComboBox>(view, "FENCE_ENABLE");
+            Check(margin.Text == "2" && type.Children.OfType<Wpf.CheckBox>().Count(bit => bit.IsChecked == true) == 1 &&
+                (int)enabled.SelectedValue == 0,
                 "Real populated controls show fresh numeric, bitmask and enum settings at " + scale);
+            foreach (string invalid in new[] { "-1", "101" })
+            {
+                margin.Text = invalid;
+                try { Call(view, "ReadEdits"); throw new Exception("Out-of-range value was accepted: " + invalid); }
+                catch (TargetInvocationException error) when (error.InnerException is ArgumentException) { }
+            }
+            margin.Text = "2";
             foreach (object parameter in parameters)
             {
                 if (Field<IList>(parameter, "Options").Count == 0) { continue; }
-                var combo = (ComboBox)view.Controls.Find(Field<string>(parameter, "Name"), true)[0];
+                var combo = Editor<Wpf.ComboBox>(view, Field<string>(parameter, "Name"));
                 Check(combo.SelectedValue is int selected && selected == Field<float>(parameter, "Value"),
                     "Populated enum retains the actual readback through parent/handle creation: " + combo.Name);
             }

@@ -7,6 +7,9 @@ using System.Windows.Forms;
 using MissionPlanner;
 using Newtonsoft.Json.Linq;
 using JoystickBase = MissionPlanner.Joystick.JoystickBase;
+using Wpf = System.Windows.Controls;
+using Thickness = System.Windows.Thickness;
+using Visibility = System.Windows.Visibility;
 namespace NOMAD.MissionPlanner
 {
     [global::MissionPlanner.Utilities.PreventTheming]
@@ -15,14 +18,13 @@ namespace NOMAD.MissionPlanner
         private readonly NOMADConfig _config;
         private readonly int _index;
         private readonly string _id;
-        private readonly TextBox _name;
-        private readonly CheckBox _enabled, _invert;
-        private readonly ComboBox _device, _source, _axis, _button, _otherButton, _action, _otherAction;
-        private readonly NumericUpDown _deadzone;
-        private readonly Control _axisRow, _buttonRow, _otherButtonRow, _otherActionRow, _deadzoneRow, _invertRow;
-        private readonly Label _status;
-        private readonly ToolTip _tips = new ToolTip();
-        private readonly Button _listenButton, _listenOther, _stopListen;
+        private readonly float _originalDeadzone;
+        private readonly Wpf.TextBox _name, _deadzone;
+        private readonly Wpf.CheckBox _enabled, _invert;
+        private readonly Wpf.ComboBox _device, _source, _axis, _button, _otherButton, _action, _otherAction;
+        private readonly Wpf.StackPanel _axisRow, _buttonRow, _otherButtonRow, _otherActionRow, _deadzoneRow, _invertRow;
+        private readonly Wpf.TextBlock _status;
+        private readonly Wpf.Button _listenButton, _listenOther, _stopListen;
         private IList<string> _available = new List<string>();
         internal static readonly KeyValuePair<string, string>[] SourceChoices =
         {
@@ -43,59 +45,74 @@ namespace NOMAD.MissionPlanner
         {
             _config = config; _index = index;
             var original = index < 0 ? new InputBinding { Id = "input_" + Guid.NewGuid().ToString("N") } : InputBinding.Parse(config.Inputs)[index];
-            _id = original.Id;
+            _id = original.Id; _originalDeadzone = original.Deadzone;
             Text = index < 0 ? "Add control" : "Edit control";
             Font = NOMADTheme.Font(); BackColor = NOMADTheme.BG_DARK; ForeColor = NOMADTheme.TEXT_PRIMARY;
             ClientSize = new Size(680, 640); MinimumSize = new Size(620, 560); StartPosition = FormStartPosition.CenterParent;
-            var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(12) };
-            var body = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
-            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); scroll.Controls.Add(body); Controls.Add(scroll);
-            Control Add(string label, Control control) { var row = ControlFactory.LabeledRow(label, control); body.Controls.Add(row); return row; }
-            body.Controls.Add(ControlFactory.Label("Control", foreColor: NOMADTheme.ACCENT));
-            _name = new TextBox { Text = original.Name, BackColor = NOMADTheme.INPUT_BG, ForeColor = NOMADTheme.TEXT_PRIMARY }; Add("Control name", _name);
-            _enabled = ControlFactory.CheckBox("Enabled", original.Enabled); Add("Use control", _enabled);
-            body.Controls.Add(ControlFactory.Label("Input", foreColor: NOMADTheme.ACCENT));
+            var root = new Wpf.DockPanel { Margin = new Thickness(12) };
+            var body = new Wpf.StackPanel();
+            var scroll = new Wpf.ScrollViewer { Content = body, VerticalScrollBarVisibility = Wpf.ScrollBarVisibility.Auto };
+            Wpf.StackPanel Add(string label, System.Windows.FrameworkElement control)
+            {
+                var row = new Wpf.StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+                row.Children.Add(WpfUi.Text(label)); row.Children.Add(control); body.Children.Add(row);
+                System.Windows.Automation.AutomationProperties.SetName(control, label); return row;
+            }
+            body.Children.Add(WpfUi.Section("Control"));
+            _name = new Wpf.TextBox { Text = original.Name }; Add("Control name", _name);
+            _enabled = new Wpf.CheckBox { Content = "Enabled", IsChecked = original.Enabled }; Add("Use control", _enabled);
+            body.Children.Add(WpfUi.Section("Input"));
             _device = Combo(); Add("Device", _device);
-            var refresh = ControlFactory.Button("Refresh devices", (sender, args) => RefreshDevices(), width: 160); body.Controls.Add(refresh);
-            NOMADSettingsForm.SetBindingChoices(_device, Array.Empty<KeyValuePair<string, string>>(), original.Device); RefreshDevices();
-            _source = Combo(); NOMADSettingsForm.SetBindingChoices(_source, SourceChoices, original.Source);
+            var refresh = WpfUi.Action("Refresh devices", RefreshDevices); body.Children.Add(refresh);
+            SetChoices(_device, Array.Empty<KeyValuePair<string, string>>(), original.Device); RefreshDevices();
+            _source = Combo(); SetChoices(_source, SourceChoices, original.Source);
             Add("Input type", _source);
-            _axis = Combo(); _axis.Items.AddRange(InputBinding.Axes); _axis.SelectedItem = original.Axis; _axisRow = Add("Axis", _axis);
+            _axis = Combo(); foreach (string axis in InputBinding.Axes) { _axis.Items.Add(axis); } _axis.SelectedItem = original.Axis; _axisRow = Add("Axis", _axis);
             _button = Combo(); _otherButton = Combo();
             for (int i = 0; i < 128; i++) { _button.Items.Add(InputListenState.ButtonLabel(i)); _otherButton.Items.Add(InputListenState.ButtonLabel(i)); }
             _button.SelectedIndex = original.Button; _otherButton.SelectedIndex = original.OtherButton;
             _buttonRow = Add("Button / positive endpoint", _button); _otherButtonRow = Add("Negative endpoint button", _otherButton);
-            _invert = ControlFactory.CheckBox("Invert", original.Invert); _invertRow = Add("Axis direction", _invert);
-            _deadzone = ControlFactory.Numeric(0, 0.5m, (decimal)original.Deadzone); _deadzone.DecimalPlaces = 2; _deadzone.Increment = 0.01m;
+            _invert = new Wpf.CheckBox { Content = "Invert", IsChecked = original.Invert }; _invertRow = Add("Axis direction", _invert);
+            _deadzone = new Wpf.TextBox { Text = original.Deadzone.ToString(System.Globalization.CultureInfo.CurrentCulture) };
             _deadzoneRow = Add("Continuous axis deadzone", _deadzone);
-            body.Controls.Add(ControlFactory.Label("Action", foreColor: NOMADTheme.ACCENT));
+            body.Children.Add(WpfUi.Section("Action"));
             _action = Combo(); _otherAction = Combo(); Add("Action / positive endpoint", _action); _otherActionRow = Add("Negative endpoint action", _otherAction);
-            _listenButton = ControlFactory.Button("Listen for input", (sender, args) => BeginListen(false), width: 160);
-            _listenOther = ControlFactory.Button("Listen negative button", (sender, args) => BeginListen(true), width: 190);
-            _stopListen = ControlFactory.Button("Stop listening", (sender, args) => StopListen("Listen canceled."), width: 130);
-            _stopListen.Enabled = false;
-            body.Controls.Add(ControlFactory.ButtonRow(_listenButton, _listenOther, _stopListen));
-            _status = ControlFactory.Label("", foreColor: NOMADTheme.WARNING); _status.MaximumSize = new Size(610, 0); body.Controls.Add(_status);
-            var error = ControlFactory.Label("", foreColor: NOMADTheme.WARNING); error.MaximumSize = new Size(610, 0); body.Controls.Add(error);
-            var use = ControlFactory.Button("Use control", width: 130);
-            use.Click += (sender, args) =>
+            _listenButton = WpfUi.Action("Listen for input", () => BeginListen(false));
+            _listenOther = WpfUi.Action("Listen negative button", () => BeginListen(true));
+            _stopListen = WpfUi.Action("Stop listening", () => StopListen("Listen canceled."));
+            _stopListen.IsEnabled = false;
+            var listenActions = new Wpf.WrapPanel(); listenActions.Children.Add(_listenButton); listenActions.Children.Add(_listenOther); listenActions.Children.Add(_stopListen);
+            body.Children.Add(listenActions);
+            _status = WpfUi.Text(""); body.Children.Add(_status);
+            var error = WpfUi.Text(""); body.Children.Add(error);
+            var use = WpfUi.Action("Use control", () =>
             {
                 StopListen("");
                 try { Inputs = BuildCandidate(); DialogResult = DialogResult.OK; }
                 catch (Exception exception) { error.Text = exception.Message; }
-            };
-            var cancel = ControlFactory.Button("Cancel"); cancel.DialogResult = DialogResult.Cancel;
-            var footer = ControlFactory.ButtonRow(use, cancel); footer.Dock = DockStyle.Bottom; Controls.Add(footer);
-            AcceptButton = use; CancelButton = cancel;
+            });
+            var cancel = WpfUi.Action("Cancel", () => { DialogResult = DialogResult.Cancel; Close(); });
+            use.IsDefault = true; cancel.IsCancel = true;
+            var footer = new Wpf.WrapPanel(); footer.Children.Add(use); footer.Children.Add(cancel);
+            Wpf.DockPanel.SetDock(footer, Wpf.Dock.Bottom); root.Children.Add(footer); root.Children.Add(scroll);
+            root.PreviewKeyDown += (sender, args) => { if (args.Key == System.Windows.Input.Key.Escape)
+                { DialogResult = DialogResult.Cancel; Close(); args.Handled = true; } };
+            Controls.Add(WpfUi.Host(root));
             UpdateSource(original.Action, original.OtherAction);
-            _source.SelectedIndexChanged += (sender, args) => { StopListen("Input type changed. " + ReadyStatus()); UpdateSource(Value(_action), Value(_otherAction)); };
-            _device.SelectedIndexChanged += (sender, args) => StopListen("Device changed. " + ReadyStatus());
+            _source.SelectionChanged += (sender, args) => { StopListen("Input type changed. " + ReadyStatus()); UpdateSource(Value(_action), Value(_otherAction)); };
+            _device.SelectionChanged += (sender, args) => StopListen("Device changed. " + ReadyStatus());
             _timer = new Timer { Interval = 50 }; _timer.Tick += PollListen; _timer.Start();
             UpdateListenAvailability(); _status.Text = ReadyStatus();
         }
-        private static ComboBox Combo() => new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList,
-            BackColor = NOMADTheme.INPUT_BG, ForeColor = NOMADTheme.TEXT_PRIMARY, DropDownWidth = 750 };
-        private static string Value(ComboBox combo) => combo.SelectedItem is KeyValuePair<string, string> item ? item.Key : "";
+        private static Wpf.ComboBox Combo() => new Wpf.ComboBox();
+        private static string Value(Wpf.ComboBox combo) => combo.SelectedItem is KeyValuePair<string, string> item ? item.Key : "";
+        private static void SetChoices(Wpf.ComboBox combo, IEnumerable<KeyValuePair<string, string>> choices, string selected)
+        {
+            selected = selected ?? ""; combo.Items.Clear(); combo.DisplayMemberPath = "Value";
+            foreach (var choice in choices) { combo.Items.Add(choice); if (choice.Key == selected) { combo.SelectedItem = choice; } }
+            if (combo.SelectedItem == null)
+            { var missing = new KeyValuePair<string, string>(selected, "Unavailable: " + selected); combo.Items.Add(missing); combo.SelectedItem = missing; }
+        }
         private void RefreshDevices()
         {
             StopListen(""); string selected = Value(_device);
@@ -104,22 +121,24 @@ namespace NOMAD.MissionPlanner
                 .Select(group => new KeyValuePair<string, string>(group.Key,
                     group.Count() == 1 ? group.Key : "Unavailable (ambiguous): " + group.Key)).ToList();
             choices.Insert(0, new KeyValuePair<string, string>("", "Select a device"));
-            NOMADSettingsForm.SetBindingChoices(_device, choices, selected);
+            SetChoices(_device, choices, selected);
             StopListen("");
         }
         private void UpdateSource(string action, string other)
         {
             string source = Value(_source); bool axis = source != "Button" && source != "ButtonPair";
             bool paired = source == "ButtonPair" || source == "AxisSwitch3";
-            _axisRow.Visible = axis; _buttonRow.Visible = !axis; _otherButtonRow.Visible = source == "ButtonPair";
-            _deadzoneRow.Visible = source == "Axis"; _invertRow.Visible = axis; _otherActionRow.Visible = paired;
-            _listenOther.Visible = source == "ButtonPair";
+            _axisRow.Visibility = axis ? Visibility.Visible : Visibility.Collapsed; _buttonRow.Visibility = !axis ? Visibility.Visible : Visibility.Collapsed;
+            _otherButtonRow.Visibility = source == "ButtonPair" ? Visibility.Visible : Visibility.Collapsed;
+            _deadzoneRow.Visibility = source == "Axis" ? Visibility.Visible : Visibility.Collapsed; _invertRow.Visibility = axis ? Visibility.Visible : Visibility.Collapsed;
+            _otherActionRow.Visibility = paired ? Visibility.Visible : Visibility.Collapsed;
+            _listenOther.Visibility = source == "ButtonPair" ? Visibility.Visible : Visibility.Collapsed;
             var choices = ActionChoices(_config, source == "Axis");
-            NOMADSettingsForm.SetBindingChoices(_action, choices, action);
-            NOMADSettingsForm.SetBindingChoices(_otherAction, choices, other);
-            _tips.SetToolTip(_source, source == "Axis" ? "Continuous axes support gimbal pitch/roll or nonhazardous position payloads without confirmations. Center before use." :
+            SetChoices(_action, choices, action);
+            SetChoices(_otherAction, choices, other);
+            _source.ToolTip = source == "Axis" ? "Continuous axes support gimbal pitch/roll or nonhazardous position payloads without confirmations. Center before use." :
                 source == "AxisSwitch2" ? "2-position axis: inactive endpoint establishes neutral; active endpoint fires once. Returning inactive does not switch a latched payload off. Bind Safe separately if needed." :
-                "Release / center before activation. A held input never counts as repeated confirmation. Opposing buttons request Safe.");
+                "Release / center before activation. A held input never counts as repeated confirmation. Opposing buttons request Safe.";
         }
         internal static List<KeyValuePair<string, string>> ActionChoices(NOMADConfig config, bool continuous)
         {
@@ -147,10 +166,16 @@ namespace NOMAD.MissionPlanner
             ActionChoices(config, true).Concat(ActionChoices(config, false)).FirstOrDefault(value => value.Key == action).Value ?? "Unavailable: " + action;
         private JArray BuildCandidate()
         {
-            var binding = new InputBinding { Id = _id, Name = _name.Text.Trim(), Enabled = _enabled.Checked,
-                Device = Value(_device), Source = Value(_source),
+            string source = Value(_source);
+            float deadzone = _originalDeadzone;
+            if (source == "Axis" &&
+                (!float.TryParse(_deadzone.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out deadzone) ||
+                float.IsNaN(deadzone) || float.IsInfinity(deadzone) || deadzone < 0 || deadzone > 0.5f))
+            { throw new ArgumentException("Enter a deadzone from 0 to 0.5."); }
+            var binding = new InputBinding { Id = _id, Name = _name.Text.Trim(), Enabled = _enabled.IsChecked == true,
+                Device = Value(_device), Source = source,
                 Axis = _axis.SelectedItem?.ToString(), Button = _button.SelectedIndex, OtherButton = _otherButton.SelectedIndex,
-                Invert = _invert.Checked, Deadzone = (float)_deadzone.Value, Action = Value(_action), OtherAction = Value(_otherAction) };
+                Invert = _invert.IsChecked == true, Deadzone = deadzone, Action = Value(_action), OtherAction = Value(_otherAction) };
             var candidate = (JArray)_config.Inputs.DeepClone();
             if (_index < 0) { candidate.Add(JObject.FromObject(binding)); } else { candidate[_index] = JObject.FromObject(binding); }
             InputBinding.Parse(candidate); return candidate;
@@ -172,8 +197,8 @@ namespace NOMAD.MissionPlanner
         private void UpdateListenAvailability()
         {
             bool canListen = !Connected && NomadJoystickService.ResolveDeviceName(Value(_device), _available) != null;
-            _listenButton.Enabled = _listenOther.Enabled = canListen && _listen == null;
-            _stopListen.Enabled = _listen != null;
+            _listenButton.IsEnabled = _listenOther.IsEnabled = canListen && _listen == null;
+            _stopListen.IsEnabled = _listen != null;
             if (_listen == null && (Connected || _status.Text == "Disconnect the aircraft before listening."))
             { _status.Text = ReadyStatus(); }
         }
@@ -211,12 +236,12 @@ namespace NOMAD.MissionPlanner
         private void StopListen(string status)
         {
             _listen?.Stop(status); _listen = null; NomadJoystickService.ReleaseJoy(ref _capture);
-            if (_stopListen != null) { _stopListen.Enabled = false; }
+            if (_stopListen != null) { _stopListen.IsEnabled = false; }
             if (_status != null) { _status.Text = status == "" ? ReadyStatus() : status; }
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { _timer?.Stop(); _timer?.Dispose(); _tips.Dispose(); StopListen(""); }
+            if (disposing) { _timer?.Stop(); _timer?.Dispose(); StopListen(""); }
             base.Dispose(disposing);
         }
     }

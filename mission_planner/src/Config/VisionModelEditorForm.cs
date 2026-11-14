@@ -7,17 +7,20 @@ using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Collections.ObjectModel;
+using System.Globalization;
+using Wpf = System.Windows.Controls;
+using Thickness = System.Windows.Thickness;
 
 namespace NOMAD.MissionPlanner
 {
     internal sealed class VisionModelEditorForm : NOMADForm
     {
-        private readonly TextBox _name, _model, _hash;
-        private readonly DataGridView _classes;
-        private readonly FlowLayoutPanel _classActions;
-        private readonly ToolTip _tips = new ToolTip { AutoPopDelay = 15000 };
-        private readonly NumericUpDown _size, _score, _nms;
-        private readonly Button _save, _browse, _test;
+        private readonly Wpf.TextBox _name, _model, _hash, _size, _score, _nms;
+        private readonly Wpf.DataGrid _classes;
+        private readonly ObservableCollection<ClassRow> _rows = new ObservableCollection<ClassRow>();
+        private readonly Wpf.WrapPanel _classActions;
+        private readonly Wpf.Button _save, _browse, _test;
         private readonly CancellationTokenSource _shutdown = new CancellationTokenSource();
         private bool _hashing;
         internal VisionModelProfile Draft { get; private set; }
@@ -27,70 +30,72 @@ namespace NOMAD.MissionPlanner
             Text = "Detection model"; ClientSize = new Size(650, 570);
             MinimumSize = new Size(570, 430);
             StartPosition = FormStartPosition.CenterParent;
-            var fields = new TableLayoutPanel
-            { Dock = DockStyle.Fill, AutoScroll = true, ColumnCount = 2, Padding = new Padding(12) };
-            fields.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 155));
-            fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            Controls.Add(fields);
+            var root = new Wpf.DockPanel { Margin = new Thickness(12) };
+            var fields = new Wpf.StackPanel();
+            var scroll = new Wpf.ScrollViewer { Content = fields, VerticalScrollBarVisibility = Wpf.ScrollBarVisibility.Auto };
             _name = TextField(fields, "Name", profile.Name);
-            _model = TextField(fields, "ONNX weights", profile.Model); _model.ReadOnly = true;
-            _browse = ControlFactory.Button("Browse…", async (sender, args) => await BrowseModel());
-            _tips.SetToolTip(_browse, "Choose a trusted local ONNX file, up to 256 MiB.");
+            _model = TextField(fields, "ONNX weights", profile.Model); _model.IsReadOnly = true;
+            _browse = WpfUi.Action("Browse…", async () => await BrowseModel());
+            _browse.ToolTip = "Choose a trusted local ONNX file, up to 256 MiB.";
             AddField(fields, "Weights", _browse);
-            _hash = TextField(fields, "SHA256", profile.Sha256); _hash.ReadOnly = true;
-            _size = NumberField(fields, "Input size", 160, 1280, profile.InputSize, 0); _size.Increment = 32;
+            _hash = TextField(fields, "SHA256", profile.Sha256); _hash.IsReadOnly = true;
+            _size = TextField(fields, "Input size", profile.InputSize.ToString(CultureInfo.InvariantCulture));
             _classes = CreateClassTable(profile);
             AddField(fields, "Classes", _classes);
-            _tips.SetToolTip(_classes, "Rows must match the model's output class order. Detect selects which classes to show.");
-            _classActions = new FlowLayoutPanel { AutoSize = true };
-            _classActions.Controls.Add(ControlFactory.Button("Add class", (sender, args) =>
-            { if (_classes.Rows.Count < 256) { _classes.Rows.Add(_classes.Rows.Count, "", false); } }));
-            _classActions.Controls.Add(ControlFactory.Button("Remove class", (sender, args) => RemoveClass()));
-            var import = ControlFactory.Button("Import labels", (sender, args) => BrowseLabels());
-            _tips.SetToolTip(import, "Replace classes with a text file, one label per line in model output order. All imported classes start selected.");
-            _classActions.Controls.Add(import);
+            _classes.ToolTip = "Rows must match the model's output class order. Detect selects which classes to show.";
+            _classActions = new Wpf.WrapPanel();
+            _classActions.Children.Add(WpfUi.Action("Add class", () =>
+            { if (_rows.Count < 256) { _rows.Add(new ClassRow { Id = _rows.Count, Label = "" }); } }));
+            _classActions.Children.Add(WpfUi.Action("Remove class", RemoveClass));
+            var import = WpfUi.Action("Import labels", BrowseLabels);
+            import.ToolTip = "Replace classes with a text file, one label per line in model output order. All imported classes start selected.";
+            _classActions.Children.Add(import);
             AddField(fields, "", _classActions);
-            _score = NumberField(fields, "Minimum score", .01m, 1, (decimal)profile.ScoreThreshold, 3);
-            _nms = NumberField(fields, "NMS overlap", .001m, .999m, (decimal)profile.NmsThreshold, 3);
-            var format = new Label { AutoSize = true, Text = "YOLOX grid (ONNX)" };
+            _score = TextField(fields, "Minimum score", profile.ScoreThreshold.ToString("R", CultureInfo.CurrentCulture));
+            _nms = TextField(fields, "NMS overlap", profile.NmsThreshold.ToString("R", CultureInfo.CurrentCulture));
+            var format = WpfUi.Text("YOLOX grid (ONNX)");
             AddField(fields, "Format", format);
-            _tips.SetToolTip(format, "One float input/output. BGR NCHW 0–255, top-left letterbox, padding 114, " +
-                "strides 8/16/32. Other ONNX architectures are unsupported.");
-            var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Bottom, Padding = new Padding(12, 6, 12, 8) };
-            _save = ControlFactory.Button("Save", (sender, args) => AcceptDraft());
-            _test = ControlFactory.Button("Test model", async (sender, args) => await TestModel());
-            var cancel = ControlFactory.Button("Cancel", (sender, args) => Close());
-            cancel.DialogResult = DialogResult.Cancel;
-            actions.Controls.AddRange(new Control[] { _test, _save, cancel });
-            Controls.Add(actions); AcceptButton = _save; CancelButton = cancel;
+            format.ToolTip = "One float input/output. BGR NCHW 0–255, top-left letterbox, padding 114, " +
+                "strides 8/16/32. Other ONNX architectures are unsupported.";
+            var actions = new Wpf.WrapPanel();
+            _save = WpfUi.Action("Save", AcceptDraft);
+            _test = WpfUi.Action("Test model", async () => await TestModel());
+            var cancel = WpfUi.Action("Cancel", Close);
+            _save.IsDefault = true; cancel.IsCancel = true;
+            actions.Children.Add(_test); actions.Children.Add(_save); actions.Children.Add(cancel);
+            Wpf.DockPanel.SetDock(actions, Wpf.Dock.Bottom); root.Children.Add(actions); root.Children.Add(scroll);
+            root.PreviewKeyDown += (sender, args) => { if (args.Key == System.Windows.Input.Key.Escape)
+                { Close(); args.Handled = true; } };
+            Controls.Add(WpfUi.Host(root));
         }
 
-        private static DataGridView CreateClassTable(VisionModelProfile profile)
+        private sealed class ClassRow
         {
-            var table = new DataGridView
-            {
-                Height = 170, AllowUserToAddRows = false, AllowUserToDeleteRows = false,
-                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, RowHeadersVisible = false,
-                MultiSelect = false, BackgroundColor = NOMADTheme.INPUT_BG, EnableHeadersVisualStyles = false,
-                DefaultCellStyle = new DataGridViewCellStyle { BackColor = NOMADTheme.INPUT_BG,
-                    ForeColor = NOMADTheme.TEXT_PRIMARY, SelectionBackColor = NOMADTheme.ACCENT },
-                ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle { BackColor = NOMADTheme.BUTTON_BG,
-                    ForeColor = NOMADTheme.TEXT_PRIMARY },
-            };
-            table.Columns.Add(new DataGridViewTextBoxColumn { Name = "Id", HeaderText = "ID", ReadOnly = true, FillWeight = 20 });
-            table.Columns.Add(new DataGridViewTextBoxColumn { Name = "Label", HeaderText = "Class", MaxInputLength = 80 });
-            table.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Detect", HeaderText = "Detect", FillWeight = 30 });
-            foreach (DataGridViewColumn column in table.Columns) { column.SortMode = DataGridViewColumnSortMode.NotSortable; }
+            public int Id { get; set; }
+            public string Label { get; set; }
+            public bool Detect { get; set; }
+        }
+
+        private Wpf.DataGrid CreateClassTable(VisionModelProfile profile)
+        {
+            var table = new Wpf.DataGrid { Height = 170, AutoGenerateColumns = false, CanUserAddRows = false,
+                CanUserDeleteRows = false, CanUserSortColumns = false, SelectionMode = Wpf.DataGridSelectionMode.Single,
+                HeadersVisibility = Wpf.DataGridHeadersVisibility.Column, ItemsSource = _rows };
+            table.Columns.Add(new Wpf.DataGridTextColumn { Header = "ID", IsReadOnly = true, Binding = new System.Windows.Data.Binding("Id") });
+            table.Columns.Add(new Wpf.DataGridTextColumn { Header = "Class", Width = new Wpf.DataGridLength(1, Wpf.DataGridLengthUnitType.Star), Binding = new System.Windows.Data.Binding("Label") });
+            table.Columns.Add(new Wpf.DataGridCheckBoxColumn { Header = "Detect", Binding = new System.Windows.Data.Binding("Detect") });
             for (int index = 0; index < profile.Labels.Length; index++)
-            { table.Rows.Add(index, profile.Labels[index], profile.AllowedClasses.Contains(index)); }
+            { _rows.Add(new ClassRow { Id = index, Label = profile.Labels[index], Detect = profile.AllowedClasses.Contains(index) }); }
             return table;
         }
 
         private void RemoveClass()
         {
-            if (_classes.CurrentRow == null) { return; }
-            _classes.Rows.RemoveAt(_classes.CurrentRow.Index);
-            foreach (DataGridViewRow row in _classes.Rows) { row.Cells[0].Value = row.Index; }
+            int index = _classes.SelectedIndex; if (index < 0) { return; }
+            _classes.CancelEdit(Wpf.DataGridEditingUnit.Cell); _classes.CancelEdit(Wpf.DataGridEditingUnit.Row);
+            _rows.RemoveAt(index);
+            for (int i = 0; i < _rows.Count; i++) { _rows[i].Id = i; }
+            _classes.Items.Refresh();
         }
 
         private void BrowseLabels()
@@ -125,33 +130,19 @@ namespace NOMAD.MissionPlanner
                 if (lines.Count == 0) { throw new FormatException("Class label list is empty."); }
                 labels = lines.ToArray();
             }
-            _classes.CancelEdit();
-            _classes.Rows.Clear();
-            for (int index = 0; index < labels.Length; index++) { _classes.Rows.Add(index, labels[index], true); }
+            _classes.CancelEdit(Wpf.DataGridEditingUnit.Cell); _classes.CancelEdit(Wpf.DataGridEditingUnit.Row); _rows.Clear();
+            for (int index = 0; index < labels.Length; index++) { _rows.Add(new ClassRow { Id = index, Label = labels[index], Detect = true }); }
         }
 
-        private static void AddField(TableLayoutPanel panel, string label, Control control)
+        private static void AddField(Wpf.StackPanel panel, string label, System.Windows.FrameworkElement control)
         {
-            int row = panel.RowCount++;
-            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            panel.Controls.Add(new Label { Text = label, AutoSize = true, Margin = new Padding(0, 7, 8, 7) }, 0, row);
-            control.Dock = DockStyle.Fill; control.Margin = new Padding(0, 3, 0, 5);
-            control.AccessibleName = label;
-            panel.Controls.Add(control, 1, row);
+            panel.Children.Add(WpfUi.Text(label)); control.Margin = new Thickness(0, 0, 0, 8);
+            System.Windows.Automation.AutomationProperties.SetName(control, label); panel.Children.Add(control);
         }
 
-        private static TextBox TextField(TableLayoutPanel panel, string label, string text)
+        private static Wpf.TextBox TextField(Wpf.StackPanel panel, string label, string text)
         {
-            var field = new TextBox { Text = text, BackColor = NOMADTheme.INPUT_BG, ForeColor = NOMADTheme.TEXT_PRIMARY };
-            AddField(panel, label, field); return field;
-        }
-
-        private static NumericUpDown NumberField(TableLayoutPanel panel, string label, decimal min, decimal max,
-            decimal value, int decimals)
-        {
-            var field = new NumericUpDown { Minimum = min, Maximum = max, DecimalPlaces = decimals, Value = value,
-                BackColor = NOMADTheme.INPUT_BG, ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Increment = decimals == 0 ? 1 : .01m };
+            var field = new Wpf.TextBox { Text = text };
             AddField(panel, label, field); return field;
         }
 
@@ -199,22 +190,34 @@ namespace NOMAD.MissionPlanner
         {
             var profile = VisionModelProfile.Builtin();
             profile.Name = _name.Text.Trim(); profile.Model = _model.Text; profile.Sha256 = _hash.Text;
-            profile.InputSize = (int)_size.Value;
-            _classes.EndEdit();
-            var rows = _classes.Rows.Cast<DataGridViewRow>().ToArray();
-            profile.Labels = rows.Select(row => Convert.ToString(row.Cells[1].Value).Trim()).ToArray();
-            profile.AllowedClasses = rows.Where(row => Equals(row.Cells[2].Value, true)).Select(row => row.Index).ToArray();
-            profile.ScoreThreshold = (float)_score.Value; profile.NmsThreshold = (float)_nms.Value;
+            if (!int.TryParse(_size.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int size) || size < 160 || size > 1280)
+            { throw new FormatException("Enter an input size from 160 to 1280."); }
+            profile.InputSize = size;
+            if (!_classes.CommitEdit(Wpf.DataGridEditingUnit.Cell, true) || !_classes.CommitEdit(Wpf.DataGridEditingUnit.Row, true))
+            { throw new FormatException("Finish editing the class table."); }
+            profile.Labels = _rows.Select(row => (row.Label ?? "").Trim()).ToArray();
+            profile.AllowedClasses = _rows.Select((row, index) => new { row, index }).Where(item => item.row.Detect)
+                .Select(item => item.index).ToArray();
+            profile.ScoreThreshold = Number(_score, "minimum score", .01f, 1f);
+            profile.NmsThreshold = Number(_nms, "NMS overlap", .001f, .999f);
             profile.Validate();
             if (!Path.IsPathRooted(profile.Model)) { throw new FormatException("Choose the model weights."); }
             return profile;
         }
 
+        private static float Number(Wpf.TextBox field, string name, float min, float max)
+        {
+            if (!float.TryParse(field.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out float value) ||
+                float.IsNaN(value) || float.IsInfinity(value) || value < min || value > max)
+            { throw new FormatException("Enter a valid " + name + "."); }
+            return value;
+        }
+
         private void SetBusy(bool busy)
         {
             _hashing = busy;
-            foreach (Control control in new Control[] { _save, _browse, _test, _name, _model, _hash,
-                _size, _classes, _classActions, _score, _nms }) { control.Enabled = !busy; }
+            foreach (System.Windows.UIElement control in new System.Windows.UIElement[] { _save, _browse, _test, _name, _model, _hash,
+                _size, _classes, _classActions, _score, _nms }) { control.IsEnabled = !busy; }
         }
 
         private async Task TestModel()
@@ -254,7 +257,7 @@ namespace NOMAD.MissionPlanner
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { _shutdown.Cancel(); _tips.Dispose(); }
+            if (disposing) { _shutdown.Cancel(); }
             base.Dispose(disposing);
         }
     }

@@ -39,6 +39,13 @@ function Find-RoslynCompiler {
     return $compiler
 }
 
+function Get-WpfTestReferences {
+    foreach ($name in @('WindowsBase', 'PresentationCore', 'PresentationFramework', 'WindowsFormsIntegration',
+        'System.Xaml', 'UIAutomationProvider', 'UIAutomationTypes')) {
+        '/r:' + (Join-Path ${env:ProgramFiles(x86)} "Reference Assemblies/Microsoft/Framework/.NETFramework/v4.8/$name.dll")
+    }
+}
+
 function Get-PluginSourceHashes {
     param([Parameter(Mandatory=$true)][string]$RepoRoot)
     $root = [IO.Path]::GetFullPath($RepoRoot)
@@ -48,7 +55,7 @@ function Get-PluginSourceHashes {
         if (!(Test-Path -LiteralPath $path)) { continue }
         foreach ($file in Get-ChildItem -LiteralPath $path -File -Recurse) {
             if ($file.FullName -match '[\\/](bin|obj)[\\/]' -or
-                $file.Extension -notin '.cs','.csproj','.resx') { continue }
+                $file.Extension -notin '.cs','.csproj','.resx','.xaml') { continue }
             $hashes[$file.FullName.Substring($root.Length + 1)] = (Get-FileHash -LiteralPath $file.FullName).Hash
         }
     }

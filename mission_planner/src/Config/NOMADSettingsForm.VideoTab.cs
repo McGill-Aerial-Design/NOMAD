@@ -2,9 +2,17 @@
 // Copyright 2026 The NOMAD Authors
 
 using System;
-using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
+using System.Windows;
+using ComboBox = System.Windows.Controls.ComboBox;
+using TextBox = System.Windows.Controls.TextBox;
+using CheckBox = System.Windows.Controls.CheckBox;
+using Label = System.Windows.Controls.TextBlock;
+using Button = System.Windows.Controls.Button;
+using TabPage = System.Windows.Controls.TabItem;
+using NumericUpDown = NOMAD.MissionPlanner.WpfNumberBox;
+using MessageBox = System.Windows.Forms.MessageBox;
 
 namespace NOMAD.MissionPlanner
 {
@@ -37,16 +45,12 @@ namespace NOMAD.MissionPlanner
 
             AddSectionLabel(tab, "Named video inputs", ref y);
             _cmbVideoInputs = AddComboBox(tab, 20, y, 330, Array.Empty<string>());
-            _cmbVideoInputs.DisplayMember = nameof(VideoInputProfile.Name);
-            _cmbVideoInputs.SelectedIndexChanged += VideoInputSelectionChanged;
-            var add = ControlFactory.Button("Add", width: 85, height: 27);
-            add.Location = new Point(365, y);
-            add.Click += (sender, args) => AddVideoInput();
-            tab.Controls.Add(add);
-            _btnRemoveVideo = ControlFactory.Button("Remove", width: 85, height: 27);
-            _btnRemoveVideo.Location = new Point(460, y);
-            _btnRemoveVideo.Click += (sender, args) => RemoveVideoInput();
-            tab.Controls.Add(_btnRemoveVideo);
+            _cmbVideoInputs.DisplayMemberPath = nameof(VideoInputProfile.Name);
+            _cmbVideoInputs.SelectionChanged += VideoInputSelectionChanged;
+            var add = WpfUi.Action("Add", AddVideoInput);
+            AddAt(tab, add, 365, y, 85, 27);
+            _btnRemoveVideo = WpfUi.Action("Remove", RemoveVideoInput);
+            AddAt(tab, _btnRemoveVideo, 460, y, 85, 27);
             y += 40;
             AddSectionLabel(tab, "Source", ref y);
             AddLabel(tab, "Input name:", 20, y);
@@ -54,10 +58,10 @@ namespace NOMAD.MissionPlanner
             y += 32;
             AddLabel(tab, "Source type:", 20, y);
             _cmbVideoSourceType = AddComboBox(tab, 180, y, 250, new[] { "Network stream", "Camera / capture card" });
-            _cmbVideoSourceType.AccessibleName = "Video source type";
-            _cmbVideoSourceType.SelectedIndexChanged += (sender, args) =>
+            System.Windows.Automation.AutomationProperties.SetName(_cmbVideoSourceType, "Video source type");
+            _cmbVideoSourceType.SelectionChanged += (sender, args) =>
             {
-                if (!_loadingVideo) { _chkTrackingCalibrated.Checked = false; }
+                if (!_loadingVideo) { _chkTrackingCalibrated.IsChecked = false; }
                 UpdateVideoSourceFields();
             };
             y += 32;
@@ -65,21 +69,19 @@ namespace NOMAD.MissionPlanner
             _txtVideoUrl = AddTextBox(tab, 180, y, 440);
             _txtVideoUrl.TextChanged += (sender, args) =>
             {
-                if (!_loadingVideo) { _chkTrackingCalibrated.Checked = false; }
+                if (!_loadingVideo) { _chkTrackingCalibrated.IsChecked = false; }
             };
             y += 32;
             AddLabel(tab, "Capture device:", 20, y);
             _cmbVideoDevice = AddComboBox(tab, 180, y, 330, Array.Empty<string>());
-            _cmbVideoDevice.DisplayMember = nameof(VideoCaptureDevice.Name);
-            _cmbVideoDevice.AccessibleName = "Local camera or capture card";
-            _cmbVideoDevice.SelectedIndexChanged += (sender, args) =>
+            _cmbVideoDevice.DisplayMemberPath = nameof(VideoCaptureDevice.Name);
+            System.Windows.Automation.AutomationProperties.SetName(_cmbVideoDevice, "Local camera or capture card");
+            _cmbVideoDevice.SelectionChanged += (sender, args) =>
             {
-                if (!_loadingVideo) { _chkTrackingCalibrated.Checked = false; }
+                if (!_loadingVideo) { _chkTrackingCalibrated.IsChecked = false; }
             };
-            _btnVideoDevices = ControlFactory.Button("Refresh", width: 100, height: 27);
-            _btnVideoDevices.Location = new Point(520, y);
-            _btnVideoDevices.Click += (sender, args) => RefreshVideoDevices();
-            tab.Controls.Add(_btnVideoDevices);
+            _btnVideoDevices = WpfUi.Action("Refresh", RefreshVideoDevices);
+            AddAt(tab, _btnVideoDevices, 520, y, 100, 27);
             y += 30;
             _lblVideoDevices = AddLabel(tab, "Refresh to list connected devices.", 180, y);
             y += 32;
@@ -100,9 +102,8 @@ namespace NOMAD.MissionPlanner
 
             _chkAutoStartHudVideo = AddCheckBox(tab, "Start video on HUD", 20, y);
             y += 35;
-            var info = ControlFactory.Button("Input help ⓘ", width: 150, height: 28);
-            info.Location = new Point(20, y);
-            info.AccessibleName = "Video receiver help";
+            var info = new Button { Content = "Input help ⓘ" };
+            System.Windows.Automation.AutomationProperties.SetName(info, "Video receiver help");
             string help = "Select a network stream or a Windows camera / USB capture card.\n" +
                 "Refresh lists supported devices without opening a camera. Playback and HUD autostart begin capture.\n" +
                 "Windows capture negotiates a supported format up to 1920×1080 at 30 FPS.\n" +
@@ -113,16 +114,15 @@ namespace NOMAD.MissionPlanner
                 "RTSP transport and jitter settings do not affect UDP inputs.\n" +
                 "The display always shows the latest frame; queue backpressure does not preserve every frame.\n" +
                 "Bitrate, resolution and encoded quality are set at the camera or encoder.";
-            _toolTips.SetToolTip(info, help);
-            _toolTips.SetToolTip(_txtVideoUrl, "Absolute RTSP URL or UDP listening port, for example udp://@:5600.");
-            _toolTips.SetToolTip(_numVideoLatency, "RTSP jitter buffering, not end-to-end video delay. Range: 0–5000 ms.");
-            _toolTips.SetToolTip(_numVideoQueue, "Decoded-frame queue: 1–120 frames. The display still shows only the latest frame.");
-            _toolTips.SetToolTip(_chkVideoDrop, "Drop older decode-queue frames and bound RTSP jitter buffering when full.");
-            _toolTips.SetToolTip(_chkRtspSkipOptions,
-                "For receivers such as EDGE T3 that reset OPTIONS requests. Disables RTSP keep-alives; " +
-                "leave off for servers that require them.");
-            info.Click += (sender, args) => _toolTips.Show(help, info, 0, info.Height, 15000);
-            tab.Controls.Add(info);
+            info.ToolTip = help;
+            _txtVideoUrl.ToolTip = "Absolute RTSP URL or UDP listening port, for example udp://@:5600.";
+            _numVideoLatency.ToolTip = "RTSP jitter buffering, not end-to-end video delay. Range: 0–5000 ms.";
+            _numVideoQueue.ToolTip = "Decoded-frame queue: 1–120 frames. The display still shows only the latest frame.";
+            _chkVideoDrop.ToolTip = "Drop older decode-queue frames and bound RTSP jitter buffering when full.";
+            _chkRtspSkipOptions.ToolTip = "For receivers such as EDGE T3 that reset OPTIONS requests. Disables RTSP keep-alives; " +
+                "leave off for servers that require them.";
+            info.Click += (sender, args) => MessageBox.Show(this, help, "Video receiver help");
+            AddAt(tab, info, 20, y, 150, 28);
             y += 40;
             AddVisionSettings(tab, ref y);
 
@@ -135,9 +135,8 @@ namespace NOMAD.MissionPlanner
             AddSectionLabel(tab, "Vision and gimbal calibration", ref y);
             AddLabel(tab, "Detection model:", 20, y);
             _cmbVisionModel = AddComboBox(tab, 180, y, 340, Array.Empty<string>());
-            _cmbVisionModel.AccessibleName = "Detection model";
-            _btnVisionModelBrowse = ControlFactory.Button("Manage", width: 85, height: 27);
-            _btnVisionModelBrowse.Location = new Point(530, y);
+            System.Windows.Automation.AutomationProperties.SetName(_cmbVisionModel, "Detection model");
+            _btnVisionModelBrowse = new Button { Content = "Manage" };
             _btnVisionModelBrowse.Click += (sender, args) =>
             {
                 string current = (_cmbVisionModel.SelectedItem as VisionModelChoice)?.Path ?? "";
@@ -145,29 +144,26 @@ namespace NOMAD.MissionPlanner
                 catch (Exception failure) when (failure is System.IO.IOException ||
                     failure is UnauthorizedAccessException || failure is Newtonsoft.Json.JsonException ||
                     failure is FormatException || failure is ArgumentException)
-                { _toolTips.SetToolTip(_cmbVisionModel, "Model catalog unavailable; current selection is preserved."); }
+                { _cmbVisionModel.ToolTip = "Model catalog unavailable; current selection is preserved."; }
                 LoadModelChoices(current);
             };
-            tab.Controls.Add(_btnVisionModelBrowse);
-            _toolTips.SetToolTip(_cmbVisionModel,
-                "Models are shared by this groundstation. Manage local YOLOX profiles; weights stay in place.");
+            AddAt(tab, _btnVisionModelBrowse, 530, y, 85, 27);
+            _cmbVisionModel.ToolTip = "Models are shared by this groundstation. Manage local YOLOX profiles; weights stay in place.";
             y += 32;
             _chkTrackingCalibrated = AddCheckBox(tab, "Camera and mount calibrated", 20, y);
-            _toolTips.SetToolTip(_chkTrackingCalibrated,
-                "Confirm the camera's field of view, mount travel limits and pitch/yaw directions are calibrated " +
-                "before enabling automatic gimbal tracking.");
+            _chkTrackingCalibrated.ToolTip = "Confirm the camera's field of view, mount travel limits and pitch/yaw directions are calibrated " +
+                "before enabling automatic gimbal tracking.";
             y += 32;
             AddLabel(tab, "Horizontal FOV (deg):", 20, y);
             _numVisionFov = AddNumericUpDown(tab, 180, y, 85, 5, 170, 90);
-            _toolTips.SetToolTip(_numVisionFov,
-                "Rectilinear camera with square pixels and fixed zoom. Vertical FOV is derived from the image aspect ratio. " +
-                "Verify pitch/yaw signs and physical limits before enabling tracking.");
+            _numVisionFov.ToolTip = "Rectilinear camera with square pixels and fixed zoom. Vertical FOV is derived from the image aspect ratio. " +
+                "Verify pitch/yaw signs and physical limits before enabling tracking.";
             y += 32;
             AddLabel(tab, "Pitch limits (deg):", 20, y);
             _numVisionPitchMin = AddNumericUpDown(tab, 180, y, 75, -90, 90, -90);
             _numVisionPitchMax = AddNumericUpDown(tab, 270, y, 75, -90, 90, 90);
-            _numVisionPitchMin.AccessibleName = "Minimum pitch in degrees";
-            _numVisionPitchMax.AccessibleName = "Maximum pitch in degrees";
+            System.Windows.Automation.AutomationProperties.SetName(_numVisionPitchMin, "Minimum pitch in degrees");
+            System.Windows.Automation.AutomationProperties.SetName(_numVisionPitchMax, "Maximum pitch in degrees");
             _cmbVisionPitchSign = AddComboBox(tab, 365, y, 140, new[] { "Normal (+1)", "Reverse (-1)" });
             y += 32;
             AddLabel(tab, "Yaw limits (deg):", 20, y);
@@ -175,8 +171,8 @@ namespace NOMAD.MissionPlanner
                 (decimal)GimbalCommand.YAW_MIN_DEG, (decimal)GimbalCommand.YAW_MAX_DEG, -90);
             _numVisionYawMax = AddNumericUpDown(tab, 270, y, 75,
                 (decimal)GimbalCommand.YAW_MIN_DEG, (decimal)GimbalCommand.YAW_MAX_DEG, 90);
-            _numVisionYawMin.AccessibleName = "Minimum yaw in degrees";
-            _numVisionYawMax.AccessibleName = "Maximum yaw in degrees";
+            System.Windows.Automation.AutomationProperties.SetName(_numVisionYawMin, "Minimum yaw in degrees");
+            System.Windows.Automation.AutomationProperties.SetName(_numVisionYawMax, "Maximum yaw in degrees");
             _cmbVisionYawSign = AddComboBox(tab, 365, y, 140, new[] { "Normal (+1)", "Reverse (-1)" });
             y += 32;
             AddLabel(tab, "Tracking rate (deg/s):", 20, y);
@@ -186,10 +182,9 @@ namespace NOMAD.MissionPlanner
             _cmbTrackingMode = AddComboBox(tab, 180, y, 140, new[] { "Object", "Area" }); y += 32;
             AddLabel(tab, "Object tracker:", 20, y);
             _cmbObjectTracker = AddComboBox(tab, 180, y, 240, new[] { "Standard (CPU)", "GPU (NVIDIA, EfficientTAM)" });
-            _cmbObjectTracker.AccessibleName = "Object tracker";
-            _toolTips.SetToolTip(_cmbObjectTracker,
-                "GPU follows the whole selected object with EfficientTAM video memory on an NVIDIA DirectX 12 GPU. " +
-                "If that GPU or model is unavailable, tracking reports it; it never switches tracker silently.");
+            System.Windows.Automation.AutomationProperties.SetName(_cmbObjectTracker, "Object tracker");
+            _cmbObjectTracker.ToolTip = "GPU follows the whole selected object with EfficientTAM video memory on an NVIDIA DirectX 12 GPU. " +
+                "If that GPU or model is unavailable, tracking reports it; it never switches tracker silently.";
             y += 32;
             _chkGroundPrediction = AddCheckBox(tab, "Use estimated ground-plane search hint", 20, y); y += 32;
             AddLabel(tab, "Plane above HOME (m):", 20, y);
@@ -197,14 +192,11 @@ namespace NOMAD.MissionPlanner
             _numGroundPlaneHeight.DecimalPlaces = 1; y += 32;
             AddLabel(tab, "Camera delay (ms):", 20, y);
             _numCameraDelay = AddNumericUpDown(tab, 180, y, 100, 0, 2000, 0); y += 32;
-            _toolTips.SetToolTip(_chkGroundPrediction,
-                "Area search only: assumes a horizontal ground plane at the entered height relative to HOME. " +
-                "Leave off for walls, uneven terrain or unknown height. GPS/pose estimates never authorize steering.");
-            _toolTips.SetToolTip(_numGroundPlaneHeight,
-                "Explicit horizontal surface height relative to aircraft HOME, not height above the camera.");
-            _toolTips.SetToolTip(_numCameraDelay,
-                "Estimated camera/encoder delay, in addition to receiver jitter buffering. " +
-                "Servo tracking reduces feedback gain as this delay increases.");
+            _chkGroundPrediction.ToolTip = "Area search only: assumes a horizontal ground plane at the entered height relative to HOME. " +
+                "Leave off for walls, uneven terrain or unknown height. GPS/pose estimates never authorize steering.";
+            _numGroundPlaneHeight.ToolTip = "Explicit horizontal surface height relative to aircraft HOME, not height above the camera.";
+            _numCameraDelay.ToolTip = "Estimated camera/encoder delay, in addition to receiver jitter buffering. " +
+                "Servo tracking reduces feedback gain as this delay increases.";
         }
 
         private void LoadVideoSettings(VideoInputProfile editing = null)
@@ -213,7 +205,7 @@ namespace NOMAD.MissionPlanner
             try
             {
                 _cmbVideoInputs.Items.Clear();
-                _cmbVideoInputs.Items.AddRange(Config.VideoInputs.Cast<object>().ToArray());
+                foreach (var input in Config.VideoInputs) _cmbVideoInputs.Items.Add(input);
                 editing = editing ?? Config.SelectedVideoInput;
                 _cmbVideoInputs.SelectedItem = editing;
                 LoadVideoInput(editing);
@@ -233,13 +225,13 @@ namespace NOMAD.MissionPlanner
             _cmbVideoTransport.SelectedItem = input?.RtspTransport ?? "TCP";
             _numVideoLatency.Value = input?.LatencyMs ?? 100;
             _numVideoQueue.Value = input?.QueueMaxBuffers ?? 1;
-            _chkVideoDrop.Checked = input?.DropOldFrames ?? true;
-            _chkRtspSkipOptions.Checked = input?.RtspSkipOptions ?? false;
+            _chkVideoDrop.IsChecked = input?.DropOldFrames ?? true;
+            _chkRtspSkipOptions.IsChecked = input?.RtspSkipOptions ?? false;
             LoadModelChoices(input?.DetectorModelProfilePath ?? "");
-            _chkTrackingCalibrated.Checked = input?.TrackingCalibrated ?? false;
+            _chkTrackingCalibrated.IsChecked = input?.TrackingCalibrated ?? false;
             _cmbTrackingMode.SelectedItem = input?.TrackingMode ?? "Object";
             _cmbObjectTracker.SelectedIndex = input?.ObjectTracker == "GPU" ? 1 : 0;
-            _chkGroundPrediction.Checked = input?.GroundPredictionEnabled ?? false;
+            _chkGroundPrediction.IsChecked = input?.GroundPredictionEnabled ?? false;
             _numGroundPlaneHeight.Value = (decimal)(input?.GroundPlaneHeightMeters ?? 0);
             _numCameraDelay.Value = input?.CameraDelayEstimateMs ?? 0;
             _numVisionFov.Value = input?.HorizontalFovDeg ?? 90;
@@ -250,13 +242,13 @@ namespace NOMAD.MissionPlanner
             _numVisionRate.Value = input?.TrackingMaxRateDegSec ?? 10;
             _cmbVisionPitchSign.SelectedIndex = input?.PitchSign == -1 ? 1 : 0;
             _cmbVisionYawSign.SelectedIndex = input?.YawSign == -1 ? 1 : 0;
-            foreach (var control in new Control[] { _txtVideoName, _txtVideoUrl, _cmbVideoTransport,
+            foreach (var control in new FrameworkElement[] { _txtVideoName, _txtVideoUrl, _cmbVideoTransport,
                 _numVideoLatency, _numVideoQueue, _chkVideoDrop, _chkRtspSkipOptions, _btnRemoveVideo, _cmbVisionModel,
                 _chkTrackingCalibrated, _numVisionFov, _numVisionPitchMin, _numVisionPitchMax,
                 _numVisionYawMin, _numVisionYawMax, _numVisionRate, _cmbVisionPitchSign, _cmbVisionYawSign,
                 _btnVisionModelBrowse, _cmbTrackingMode, _cmbObjectTracker, _chkGroundPrediction, _numGroundPlaneHeight, _numCameraDelay })
-            { control.Enabled = input != null; }
-            _cmbVideoSourceType.Enabled = input != null;
+            { control.IsEnabled = input != null; }
+            _cmbVideoSourceType.IsEnabled = input != null;
             UpdateVideoSourceFields();
         }
 
@@ -264,15 +256,15 @@ namespace NOMAD.MissionPlanner
         {
             bool selected = _editingVideoInput != null;
             bool camera = _cmbVideoSourceType.SelectedIndex == 1;
-            _txtVideoUrl.Enabled = selected && !camera;
-            _cmbVideoTransport.Enabled = selected && !camera;
-            _numVideoLatency.Enabled = selected && !camera;
-            _numVideoQueue.Enabled = selected && !camera;
-            _chkVideoDrop.Enabled = selected && !camera;
-            _chkRtspSkipOptions.Enabled = selected && !camera;
-            _cmbVideoDevice.Enabled = selected && camera;
-            _btnVideoDevices.Enabled = selected && camera;
-            _lblVideoDevices.Visible = selected && camera;
+            _txtVideoUrl.IsEnabled = selected && !camera;
+            _cmbVideoTransport.IsEnabled = selected && !camera;
+            _numVideoLatency.IsEnabled = selected && !camera;
+            _numVideoQueue.IsEnabled = selected && !camera;
+            _chkVideoDrop.IsEnabled = selected && !camera;
+            _chkRtspSkipOptions.IsEnabled = selected && !camera;
+            _cmbVideoDevice.IsEnabled = selected && camera;
+            _btnVideoDevices.IsEnabled = selected && camera;
+            _lblVideoDevices.Visibility = selected && camera ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void LoadVideoDevices(VideoCaptureDevice[] devices, string selectedPath, bool refreshed)
@@ -322,7 +314,7 @@ namespace NOMAD.MissionPlanner
                 error is EntryPointNotFoundException)
             {
                 _lblVideoDevices.Text = "Device list unavailable. Check the driver and Refresh.";
-                _toolTips.SetToolTip(_btnVideoDevices, error.Message);
+                _btnVideoDevices.ToolTip = error.Message;
             }
         }
 
@@ -330,8 +322,8 @@ namespace NOMAD.MissionPlanner
         {
             _cmbVisionModel.Items.Clear();
             var choices = new VisionModelCatalog().SelectionChoices(path, out string error);
-            if (error != null) { _toolTips.SetToolTip(_cmbVisionModel, error); }
-            _cmbVisionModel.Items.AddRange(choices.ToArray());
+            if (error != null) { _cmbVisionModel.ToolTip = error; }
+            foreach (var choice in choices) _cmbVisionModel.Items.Add(choice);
             _cmbVisionModel.SelectedItem = choices.Single(item => VisionModelCatalog.SamePath(item.Path, path));
         }
 
@@ -345,13 +337,13 @@ namespace NOMAD.MissionPlanner
                 CaptureDevicePath = (_cmbVideoDevice.SelectedItem as VideoCaptureDevice)?.Path ?? "",
                 RtspTransport = (string)_cmbVideoTransport.SelectedItem,
                 LatencyMs = (int)_numVideoLatency.Value, QueueMaxBuffers = (int)_numVideoQueue.Value,
-                DropOldFrames = _chkVideoDrop.Checked,
-                RtspSkipOptions = _chkRtspSkipOptions.Checked,
+                DropOldFrames = _chkVideoDrop.IsChecked == true,
+                RtspSkipOptions = _chkRtspSkipOptions.IsChecked == true,
                 DetectorModelProfilePath = (_cmbVisionModel.SelectedItem as VisionModelChoice)?.Path ?? "",
-                TrackingCalibrated = _chkTrackingCalibrated.Checked,
+                TrackingCalibrated = _chkTrackingCalibrated.IsChecked == true,
                 TrackingMode = (string)_cmbTrackingMode.SelectedItem,
                 ObjectTracker = _cmbObjectTracker.SelectedIndex == 1 ? "GPU" : "CPU",
-                GroundPredictionEnabled = _chkGroundPrediction.Checked,
+                GroundPredictionEnabled = _chkGroundPrediction.IsChecked == true,
                 GroundPlaneHeightMeters = (double)_numGroundPlaneHeight.Value,
                 CameraDelayEstimateMs = (int)_numCameraDelay.Value,
                 HorizontalFovDeg = (int)_numVisionFov.Value,

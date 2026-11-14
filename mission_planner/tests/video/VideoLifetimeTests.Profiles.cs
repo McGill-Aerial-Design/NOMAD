@@ -72,12 +72,13 @@ internal static partial class VideoLifetimeTests
                     var payloads = GetField<ActuatorControlPanel>(video, "_actuatorPanel");
                     payloads.Size = new Size(200, 250);
                     payloads.PerformLayout();
-                    var status = GetField<Label>(payloads, "_status");
-                    Check(status.Text == "" && !status.Visible, "Idle payload controls displayed a permanent warning paragraph.");
+                    var status = GetField<System.Windows.Controls.TextBlock>(payloads, "_status");
+                    Check(status.Text == "" && status.Visibility == System.Windows.Visibility.Collapsed,
+                        "Idle payload controls displayed a permanent warning paragraph.");
                     status.Text = "Safe not confirmed. Check payload wiring and the connection before retrying.";
-                    status.Visible = true;
-                    payloads.PerformLayout();
-                    Check(status.Width <= payloads.ClientSize.Width && status.Height > status.Font.Height,
+                    status.Visibility = System.Windows.Visibility.Visible;
+                    status.Measure(new System.Windows.Size(200, double.PositiveInfinity));
+                    Check(status.DesiredSize.Width <= 200 && status.DesiredSize.Height > status.FontSize,
                         "Payload action status did not wrap inside a narrow video-side panel.");
                 }
             }
@@ -97,61 +98,76 @@ internal static partial class VideoLifetimeTests
         profiles.SelectedId = firstId;
         using (var form = new NOMADSettingsForm(profiles))
         {
-            var tabs = GetField<TabControl>(form, "_tabControl");
+            var tabs = GetField<System.Windows.Controls.TabControl>(form, "_tabControl");
             Check(string.Join(",", System.Linq.Enumerable.Select(
-                System.Linq.Enumerable.Cast<TabPage>(tabs.TabPages), tab => tab.Text)) ==
+                System.Linq.Enumerable.Cast<System.Windows.Controls.TabItem>(tabs.Items), tab => tab.Header)) ==
                 "Aircraft,Links,Video,Payloads,Inputs,Preferences", "Settings lost its six focused sections.");
-            Check(GetField<Label>(form, "_profileContext").Text == "Editing: Alpha",
+            Check(GetField<System.Windows.Controls.TextBlock>(form, "_profileContext").Text == "Editing: Alpha",
                 "Settings did not identify the aircraft being edited.");
-            GetField<TextBox>(form, "_txtAircraftName").Text = "Renamed Alpha";
-            Check(GetField<Label>(form, "_profileContext").Text == "Editing: Renamed Alpha",
+            var latency = GetField<WpfNumberBox>(form, "_numVideoLatency");
+            latency.Text = "invalid";
+            GetField<System.Windows.Controls.TextBox>(form, "_txtAircraftName").Text = "Unsaved invalid draft";
+            bool rejected = false;
+            try { typeof(NOMADSettingsForm).GetMethod("SaveSettings", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(form, null); }
+            catch (TargetInvocationException error) when (error.InnerException is FormatException) { rejected = true; }
+            Check(rejected && form.Config.AircraftName == "Alpha", "Invalid numeric input published part of the settings draft.");
+            latency.Value = 100;
+            var height = GetField<WpfNumberBox>(form, "_numGroundPlaneHeight");
+            height.Value = 12.55m;
+            Check(height.Value == 12.55m, "Loading a valid ground height silently lost precision.");
+            height.Text = "12.56"; rejected = false;
+            try { _ = height.Value; } catch (FormatException) { rejected = true; }
+            Check(rejected, "Typed ground height bypassed its decimal precision limit.");
+            height.Value = 0;
+            GetField<System.Windows.Controls.TextBox>(form, "_txtAircraftName").Text = "Renamed Alpha";
+            Check(GetField<System.Windows.Controls.TextBlock>(form, "_profileContext").Text == "Editing: Renamed Alpha",
                 "The persistent Settings context did not track an aircraft rename.");
-            var selector = GetField<ComboBox>(form, "_cmbVideoInputs");
-            var calibrated = GetField<CheckBox>(form, "_chkTrackingCalibrated");
-            Check(calibrated.Checked, "Loading a saved video input lost its calibration confirmation.");
-            GetField<TextBox>(form, "_txtVideoName").Text = "Renamed";
-            GetField<TextBox>(form, "_txtVideoUrl").Text = "rtsp://edited.invalid/live";
-            Check(!calibrated.Checked, "A replacement network camera inherited the previous calibration confirmation.");
+            var selector = GetField<System.Windows.Controls.ComboBox>(form, "_cmbVideoInputs");
+            var calibrated = GetField<System.Windows.Controls.CheckBox>(form, "_chkTrackingCalibrated");
+            Check(calibrated.IsChecked == true, "Loading a saved video input lost its calibration confirmation.");
+            GetField<System.Windows.Controls.TextBox>(form, "_txtVideoName").Text = "Renamed";
+            GetField<System.Windows.Controls.TextBox>(form, "_txtVideoUrl").Text = "rtsp://edited.invalid/live";
+            Check(calibrated.IsChecked != true, "A replacement network camera inherited the previous calibration confirmation.");
             typeof(NOMADSettingsForm).GetMethod("SaveVideoInput", BindingFlags.Instance | BindingFlags.NonPublic)
                 .Invoke(form, null);
             Check(!form.Config.SelectedVideoInput.TrackingCalibrated && profiles.Selected.Config.SelectedVideoInput.TrackingCalibrated,
                 "Saving the changed camera retained its calibration or changed the active profile before acceptance.");
-            GetField<NumericUpDown>(form, "_numVideoLatency").Value = 700;
-            GetField<CheckBox>(form, "_chkRtspSkipOptions").Checked = true;
-            GetField<NumericUpDown>(form, "_numVisionFov").Value = 110;
-            GetField<NumericUpDown>(form, "_numVisionRate").Value = 60;
-            GetField<NumericUpDown>(form, "_numVisionYawMin").Value = -170;
-            GetField<NumericUpDown>(form, "_numVisionYawMax").Value = 170;
-            GetField<CheckBox>(form, "_chkTrackingCalibrated").Checked = true;
-            GetField<ComboBox>(form, "_cmbTrackingMode").SelectedItem = "Area";
-            GetField<ComboBox>(form, "_cmbObjectTracker").SelectedIndex = 1;
-            GetField<CheckBox>(form, "_chkGroundPrediction").Checked = true;
-            GetField<NumericUpDown>(form, "_numGroundPlaneHeight").Value = 12.5m;
-            GetField<NumericUpDown>(form, "_numCameraDelay").Value = 180;
+            GetField<NOMAD.MissionPlanner.WpfNumberBox>(form, "_numVideoLatency").Value = 700;
+            GetField<System.Windows.Controls.CheckBox>(form, "_chkRtspSkipOptions").IsChecked = true;
+            GetField<NOMAD.MissionPlanner.WpfNumberBox>(form, "_numVisionFov").Value = 110;
+            GetField<NOMAD.MissionPlanner.WpfNumberBox>(form, "_numVisionRate").Value = 60;
+            GetField<NOMAD.MissionPlanner.WpfNumberBox>(form, "_numVisionYawMin").Value = -170;
+            GetField<NOMAD.MissionPlanner.WpfNumberBox>(form, "_numVisionYawMax").Value = 170;
+            GetField<System.Windows.Controls.CheckBox>(form, "_chkTrackingCalibrated").IsChecked = true;
+            GetField<System.Windows.Controls.ComboBox>(form, "_cmbTrackingMode").SelectedItem = "Area";
+            GetField<System.Windows.Controls.ComboBox>(form, "_cmbObjectTracker").SelectedIndex = 1;
+            GetField<System.Windows.Controls.CheckBox>(form, "_chkGroundPrediction").IsChecked = true;
+            GetField<NOMAD.MissionPlanner.WpfNumberBox>(form, "_numGroundPlaneHeight").Value = 12.5m;
+            GetField<NOMAD.MissionPlanner.WpfNumberBox>(form, "_numCameraDelay").Value = 180;
             selector.SelectedIndex = 1;
-            Check(GetField<TextBox>(form, "_txtVideoUrl").Text == "rtsp://second.invalid/live",
+            Check(GetField<System.Windows.Controls.TextBox>(form, "_txtVideoUrl").Text == "rtsp://second.invalid/live",
                 "Switching named video input did not load its independent fields.");
-            Check(!GetField<CheckBox>(form, "_chkRtspSkipOptions").Checked,
+            Check(GetField<System.Windows.Controls.CheckBox>(form, "_chkRtspSkipOptions").IsChecked != true,
                 "RTSP compatibility leaked to another input.");
-            GetField<NumericUpDown>(form, "_numVideoQueue").Value = 9;
+            GetField<NOMAD.MissionPlanner.WpfNumberBox>(form, "_numVideoQueue").Value = 9;
             selector.SelectedIndex = 0;
-            Check(GetField<TextBox>(form, "_txtVideoName").Text == "Renamed" &&
-                GetField<CheckBox>(form, "_chkRtspSkipOptions").Checked &&
-                GetField<NumericUpDown>(form, "_numVisionFov").Value == 110 &&
-                GetField<NumericUpDown>(form, "_numVisionRate").Value == 60 &&
-                GetField<CheckBox>(form, "_chkTrackingCalibrated").Checked &&
-                GetField<TextBox>(form, "_txtVideoUrl").Text == "rtsp://edited.invalid/live" &&
-                GetField<NumericUpDown>(form, "_numVideoLatency").Value == 700 &&
+            Check(GetField<System.Windows.Controls.TextBox>(form, "_txtVideoName").Text == "Renamed" &&
+                GetField<System.Windows.Controls.CheckBox>(form, "_chkRtspSkipOptions").IsChecked == true &&
+                GetField<NOMAD.MissionPlanner.WpfNumberBox>(form, "_numVisionFov").Value == 110 &&
+                GetField<NOMAD.MissionPlanner.WpfNumberBox>(form, "_numVisionRate").Value == 60 &&
+                GetField<System.Windows.Controls.CheckBox>(form, "_chkTrackingCalibrated").IsChecked == true &&
+                GetField<System.Windows.Controls.TextBox>(form, "_txtVideoUrl").Text == "rtsp://edited.invalid/live" &&
+                GetField<NOMAD.MissionPlanner.WpfNumberBox>(form, "_numVideoLatency").Value == 700 &&
                 form.Config.SelectedVideoInputName == "Renamed" && form.Config.VideoInputs[1].QueueMaxBuffers == 9,
                 "Switching video input lost a draft, rename, selection or receiver settings.");
-            var aircraft = GetField<ComboBox>(form, "_cmbAircraft");
+            var aircraft = GetField<System.Windows.Controls.ComboBox>(form, "_cmbAircraft");
             aircraft.SelectedIndex = 1;
-            Check(GetField<Label>(form, "_profileContext").Text == "Editing: Beta",
+            Check(GetField<System.Windows.Controls.TextBlock>(form, "_profileContext").Text == "Editing: Beta",
                 "The persistent Settings context retained another aircraft's name.");
-            Check(selector.Items.Count == 0 && !GetField<TextBox>(form, "_txtVideoUrl").Enabled,
+            Check(selector.Items.Count == 0 && !GetField<System.Windows.Controls.TextBox>(form, "_txtVideoUrl").IsEnabled,
                 "Another aircraft inherited the previous aircraft's video inputs.");
             aircraft.SelectedIndex = 0;
-            Check(GetField<Label>(form, "_profileContext").Text == "Editing: Renamed Alpha",
+            Check(GetField<System.Windows.Controls.TextBlock>(form, "_profileContext").Text == "Editing: Renamed Alpha",
                 "Returning to an aircraft lost its edited name in the persistent context.");
             Check(selector.Items.Count == 2 && form.Config.SelectedVideoInputName == "Renamed",
                 "Returning to an aircraft lost its video input list or selection.");
@@ -172,7 +188,7 @@ internal static partial class VideoLifetimeTests
             Check(form.Config.VideoInputs.Count == 0 && form.Config.SelectedVideoInputName == "",
                 "Removing the final video input did not clear the selection.");
             typeof(NOMADSettingsForm).GetMethod("AddVideoInput", flags).Invoke(form, null);
-            GetField<TextBox>(form, "_txtVideoUrl").Text = "rtsp://new.invalid/live";
+            GetField<System.Windows.Controls.TextBox>(form, "_txtVideoUrl").Text = "rtsp://new.invalid/live";
             typeof(NOMADSettingsForm).GetMethod("SaveSettings", flags).Invoke(form, null);
             Check(form.Config.VideoInputs.Count == 1 && form.Config.SelectedVideoInput != null,
                 "Adding and saving a video input did not select it.");

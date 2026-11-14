@@ -6,17 +6,18 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Newtonsoft.Json;
+using Wpf = System.Windows.Controls;
+using Thickness = System.Windows.Thickness;
 
 namespace NOMAD.MissionPlanner
 {
     internal sealed class VisionModelsForm : NOMADForm
     {
         private readonly VisionModelCatalog _catalog;
-        private readonly ListBox _models = new ListBox { Dock = DockStyle.Fill, AccessibleName = "Detection models",
-            BackColor = NOMADTheme.INPUT_BG, ForeColor = NOMADTheme.TEXT_PRIMARY };
+        private readonly Wpf.ListBox _models = new Wpf.ListBox { Background = WpfTheme.Input, Foreground = WpfTheme.Text };
         private readonly string _current;
-        private readonly Button _edit, _export, _remove, _duplicate;
-        private readonly FlowLayoutPanel _actions;
+        private readonly Wpf.Button _edit, _export, _remove, _duplicate, _close;
+        private readonly Wpf.WrapPanel _actions;
         private readonly CancellationTokenSource _shutdown = new CancellationTokenSource();
         private bool _preparing;
 
@@ -26,21 +27,29 @@ namespace NOMAD.MissionPlanner
             Text = "Detection models · this groundstation"; ClientSize = new Size(690, 340);
             MinimumSize = new Size(460, 260);
             StartPosition = FormStartPosition.CenterParent;
-            var actions = _actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(8) };
-            actions.Controls.Add(ControlFactory.Button("Add", async (sender, args) => await Run(() => Edit(null))));
-            _duplicate = ControlFactory.Button("Duplicate", async (sender, args) => await DuplicateSelected());
-            actions.Controls.Add(_duplicate);
-            _edit = ControlFactory.Button("Edit", async (sender, args) => await Run(() => Edit(Selected())));
-            actions.Controls.Add(_edit);
-            actions.Controls.Add(ControlFactory.Button("Import", async (sender, args) => await Run(Import)));
-            _export = ControlFactory.Button("Export", async (sender, args) => await Run(Export));
-            _remove = ControlFactory.Button("Remove", async (sender, args) => await Run(Remove));
-            actions.Controls.Add(_export); actions.Controls.Add(_remove);
-            var close = ControlFactory.Button("Close", (sender, args) => Close());
-            close.DialogResult = DialogResult.Cancel; CancelButton = close;
-            actions.Controls.Add(close);
-            Controls.Add(_models); Controls.Add(actions);
-            _models.SelectedIndexChanged += (sender, args) => UpdateActions();
+            var root = new Wpf.DockPanel { Margin = new Thickness(8) };
+            System.Windows.Automation.AutomationProperties.SetName(_models, "Detection models");
+            var actions = _actions = new Wpf.WrapPanel();
+            Wpf.DockPanel.SetDock(actions, Wpf.Dock.Bottom);
+            actions.Children.Add(WpfUi.Action("Add", async () => await Run(() => Edit(null))));
+            _duplicate = WpfUi.Action("Duplicate", async () => await DuplicateSelected());
+            actions.Children.Add(_duplicate);
+            _edit = WpfUi.Action("Edit", async () => await Run(() => Edit(Selected())));
+            actions.Children.Add(_edit);
+            actions.Children.Add(WpfUi.Action("Import", async () => await Run(Import)));
+            _export = WpfUi.Action("Export", async () => await Run(Export));
+            _remove = WpfUi.Action("Remove", async () => await Run(Remove));
+            actions.Children.Add(_export); actions.Children.Add(_remove);
+            _close = WpfUi.Action("Close", Close);
+            _close.IsCancel = true;
+            actions.Children.Add(_close);
+            root.PreviewKeyDown += (sender, args) =>
+            {
+                if (args.Key == System.Windows.Input.Key.Escape) { Close(); args.Handled = true; }
+            };
+            root.Children.Add(actions); root.Children.Add(_models);
+            Controls.Add(WpfUi.Host(root));
+            _models.SelectionChanged += (sender, args) => UpdateActions();
             Shown += async (sender, args) => await Run(() => RefreshModels(_current));
         }
 
@@ -51,7 +60,7 @@ namespace NOMAD.MissionPlanner
             var choices = await Task.Run(() => _catalog.Choices(_current));
             if (IsDisposed || _shutdown.IsCancellationRequested) { return; }
             _models.Items.Clear();
-            _models.Items.AddRange(choices.ToArray());
+            foreach (var choice in choices) { _models.Items.Add(choice); }
             _models.SelectedIndex = 0;
             for (int index = 0; index < _models.Items.Count; index++)
             {
@@ -64,9 +73,9 @@ namespace NOMAD.MissionPlanner
         {
             if (_preparing) { return; }
             string path = Selected()?.Path;
-            _duplicate.Enabled = Selected() != null;
-            _edit.Enabled = _export.Enabled = !string.IsNullOrEmpty(path);
-            _remove.Enabled = !string.IsNullOrEmpty(path) &&
+            _duplicate.IsEnabled = Selected() != null;
+            _edit.IsEnabled = _export.IsEnabled = !string.IsNullOrEmpty(path);
+            _remove.IsEnabled = !string.IsNullOrEmpty(path) &&
                 VisionModelCatalog.SamePath(Path.GetDirectoryName(path), _catalog.DirectoryPath);
         }
 
@@ -88,9 +97,9 @@ namespace NOMAD.MissionPlanner
         {
             var choice = Selected();
             if (_preparing || choice == null) { return; }
-            _preparing = true; _models.Enabled = false;
-            foreach (Control action in _actions.Controls) { action.Enabled = ReferenceEquals(action, CancelButton); }
-            _duplicate.Text = "Preparing…";
+            _preparing = true; _models.IsEnabled = false;
+            foreach (Wpf.Control control in _actions.Children) { control.IsEnabled = ReferenceEquals(control, _close); }
+            _duplicate.Content = "Preparing…";
             try
             {
                 var token = _shutdown.Token;
@@ -105,8 +114,8 @@ namespace NOMAD.MissionPlanner
             {
                 if (!IsDisposed)
                 {
-                    _preparing = false; _models.Enabled = true; _duplicate.Text = "Duplicate";
-                    foreach (Control action in _actions.Controls) { action.Enabled = true; }
+                    _preparing = false; _models.IsEnabled = true; _duplicate.Content = "Duplicate";
+                    foreach (Wpf.Control control in _actions.Children) { control.IsEnabled = true; }
                     UpdateActions();
                 }
             }
@@ -187,8 +196,8 @@ namespace NOMAD.MissionPlanner
         private async Task Run(Func<Task> action)
         {
             if (_preparing) { return; }
-            _preparing = true; _models.Enabled = false;
-            foreach (Control control in _actions.Controls) { control.Enabled = ReferenceEquals(control, CancelButton); }
+            _preparing = true; _models.IsEnabled = false;
+            foreach (Wpf.Control control in _actions.Children) { control.IsEnabled = ReferenceEquals(control, _close); }
             try { await action(); }
             catch (Exception error) when (!(error is OutOfMemoryException))
             {
@@ -199,8 +208,8 @@ namespace NOMAD.MissionPlanner
             {
                 if (!IsDisposed)
                 {
-                    _preparing = false; _models.Enabled = true;
-                    foreach (Control control in _actions.Controls) { control.Enabled = true; }
+                    _preparing = false; _models.IsEnabled = true;
+                    foreach (Wpf.Control control in _actions.Children) { control.IsEnabled = true; }
                     UpdateActions();
                 }
             }

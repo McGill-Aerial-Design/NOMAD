@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 using System;
+using System.Linq;
 using System.Diagnostics;
 using System.Drawing;
 using System.Reflection;
@@ -116,15 +117,15 @@ internal static partial class VideoLifetimeTests
                 var session = GetField<VideoSession>(player, "_session");
                 PlayerVisionFrame(player, pipeline, Color.Blue);
                 Check(player.TrackingMode == trackingMode &&
-                    GetField<Button>(player, "_clearAreaButton").Visible, "Area default or explicit Clear was missing");
+                    player.VideoControls.ClearButton.IsVisible, "Area default or explicit Clear was missing");
                 Check(player.SelectRegion(new RectangleF(70, 50, 20, 20)), "Area fixture could not select");
                 PlayerVisionFrame(player, pipeline, Color.Blue);
-                var toggle = GetField<Button>(player, "_trackButton");
-                int toggleWidth = toggle.Width;
-                Check(player.Controls.Find("TrackingToggle", true).Length == 1,
+                var toggle = player.VideoControls.TrackButton;
+                double toggleWidth = toggle.ActualWidth;
+                Check(WpfTree(player.VideoControls).OfType<System.Windows.Controls.Button>().Count(item => item.Name == "TrackButton") == 1,
                     "Tracking controls did not collapse to one toggle");
-                toggle.PerformClick();
-                Check(player.IsTracking && toggle.Text == "Stop tracking" && toggle.Width == toggleWidth,
+                ClickVideoButton(toggle);
+                Check(player.IsTracking && player.VideoControls.TrackCaption.Text == "Stop tracking" && toggle.ActualWidth == toggleWidth,
                     "Verified Area toggle did not start without resizing");
                 int commands = player.SubmittedTrackingCommands;
                 Thread.Sleep(110); PlayerVisionFrame(player, pipeline, Color.Blue); peer.Pump(20);
@@ -169,8 +170,8 @@ internal static partial class VideoLifetimeTests
                         "Recovery did not cross the native boundary with a new bounded command");
                 }
                 finally { OutputController.CurrentConnection = previousConnection; }
-                toggle.PerformClick(); commands = player.SubmittedTrackingCommands;
-                Check(toggle.Text == "Start tracking" && toggle.Width == toggleWidth,
+                ClickVideoButton(toggle); commands = player.SubmittedTrackingCommands;
+                Check(player.VideoControls.TrackCaption.Text == "Start tracking" && toggle.ActualWidth == toggleWidth,
                     "Tracking toggle did not stop without resizing");
                 Check(player.SelectedRegion.HasValue && !player.IsTracking && visual.Disposals == 0,
                     "Stop erased Area memory or left tracking intent armed");
@@ -225,13 +226,13 @@ internal static partial class VideoLifetimeTests
                 Check(!player.IsTracking && player.SubmittedTrackingCommands == commands,
                     "UI-gap visual recovery automatically rearmed steering");
                 player.SetTrackingMode(trackingMode == VisualTrackingMode.Area ? VisualTrackingMode.Object : VisualTrackingMode.Area);
-                Check(!player.SelectedRegion.HasValue && GetField<Button>(player, "_clearAreaButton").Visible,
+                Check(!player.SelectedRegion.HasValue && player.VideoControls.ClearButton.IsVisible,
                     "Mode replacement retained the previous Area reference");
                 player.SetTrackingMode(trackingMode);
                 PlayerVisionFrame(player, pipeline, Color.Blue);
                 Check(player.SelectRegion(new RectangleF(30, 20, 20, 20)), "Clear fixture selection failed");
                 PlayerVisionFrame(player, pipeline, Color.Blue);
-                GetField<Button>(player, "_clearAreaButton").PerformClick();
+                ClickVideoButton(player.VideoControls.ClearButton);
                 Check(!player.SelectedRegion.HasValue && !session.HasRegion(GetField<long>(player, "_regionRevision")),
                     "Explicit Clear kept an Area reference alive");
                 PlayerVisionFrame(player, pipeline, Color.Blue);
@@ -312,7 +313,7 @@ internal static partial class VideoLifetimeTests
                 Check(player.SelectRegion(new RectangleF(40, 30, 20, 20)), "New ground-prior selection failed");
                 PlayerVisionFrame(player, pipeline, Color.Black); PlayerVisionFrame(player, pipeline, Color.Black);
                 CheckGroundHintVisibility(player, true);
-                GetField<Button>(player, "_clearAreaButton").PerformClick();
+                ClickVideoButton(player.VideoControls.ClearButton);
                 CheckGroundHintVisibility(player, false);
                 player.SetTrackingMode(VisualTrackingMode.Object);
                 CheckGroundHintVisibility(player, false);
@@ -394,10 +395,7 @@ internal static partial class VideoLifetimeTests
             {
                 typeof(EmbeddedVideoPlayer).GetMethod("MotionEstimateDetail", BindingFlags.NonPublic |
                     BindingFlags.Instance).Invoke(player, null);
-                var tips = GetField<ToolTip>(player, "_videoToolTips");
-                Check(string.IsNullOrEmpty(tips.GetToolTip(primary)) &&
-                    string.IsNullOrEmpty(tips.GetToolTip(fullscreen)) &&
-                    !string.IsNullOrEmpty(primary.AccessibleDescription) &&
+                Check(!string.IsNullOrEmpty(primary.AccessibleDescription) &&
                     fullscreen.AccessibleDescription == primary.AccessibleDescription,
                     "Video hover obscured the feed or removed accessible motion details");
             }

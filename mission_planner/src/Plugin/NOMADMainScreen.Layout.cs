@@ -1,203 +1,74 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
-// ============================================================
-// NOMADMainScreen.Layout.cs - Sidebar and content-area layout
-// ============================================================
-// Builds the default (hardcoded) sidebar, sidebar buttons, section
-// separators, and the header/content panels. View switching and
-// view switching lives in NOMADMainScreen.cs.
-// ============================================================
-
-using System.Drawing;
-using System.Windows.Forms;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using Forms = System.Windows.Forms;
 
 namespace NOMAD.MissionPlanner
 {
     public partial class NOMADMainScreen
     {
-        // ============================================================
-        // UI Initialization
-        // ============================================================
-
         private void InitializeUI()
         {
-            this.BackColor = CONTENT_BG;
-            this.Dock = DockStyle.Fill;
-
-            // IMPORTANT: In Windows Forms, docking order matters!
-            // Controls are docked in REVERSE order of addition.
-            // So we add content area FIRST (fills remaining), then sidebar (docks left).
-            CreateContentArea();
-            CreateSidebar();
-        }
-
-        private void CreateSidebar()
-        {
-            _sidebarPanel = new Panel
-            {
-                Dock = DockStyle.Left,
-                Width = SIDEBAR_WIDTH,
-                BackColor = SIDEBAR_BG,
-                Padding = new Padding(0),
-            };
-
-            // Logo/Title area at top
-            var logoPanel = new Panel
-            {
-                Dock = DockStyle.Top,
-                Height = 45,
-                BackColor = Color.FromArgb(8, 8, 10),
-                Padding = new Padding(12, 8, 12, 5),
-            };
-
-            var logoLabel = new Label
-            {
-                Text = "NOMAD",
-                Font = new Font("Segoe UI", 14, FontStyle.Bold),
-                ForeColor = ACCENT_COLOR,
-                Location = new Point(12, 10),
-                AutoSize = true,
-            };
-            logoPanel.Controls.Add(logoLabel);
-
-            var navPanel = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                Padding = new Padding(5),
-                AutoScroll = true,
-                BackColor = SIDEBAR_BG,
-                FlowDirection = FlowDirection.TopDown,
-                WrapContents = false,
-            };
-
-            _aircraftLabel = new Label
-            {
-                Name = "ActiveAircraft", Text = "Aircraft: " + _config.AircraftName,
-                AutoSize = true, MaximumSize = new Size(SIDEBAR_WIDTH - 20, 0),
-                ForeColor = TEXT_PRIMARY, Margin = new Padding(5, 8, 5, 8),
-            };
-            navPanel.Controls.Add(_aircraftLabel);
-
-            // Dashboard button (primary)
-            _btnDashboard = CreateSidebarButton("Dashboard");
-            _btnDashboard.Click += (s, e) => ShowView("Dashboard");
-            navPanel.Controls.Add(_btnDashboard);
-
-            // Separator
-            navPanel.Controls.Add(CreateSeparatorLabel("SETUP"));
-
-            // Boundaries button (important for competition)
-            _btnBoundaries = CreateSidebarButton("Fence setup");
-            _btnBoundaries.Click += (s, e) => ShowView("Boundaries");
-            navPanel.Controls.Add(_btnBoundaries);
-
-            navPanel.Controls.Add(CreateSeparatorLabel("TOOLS"));
-
-            // Video button
-            _btnVideo = CreateSidebarButton("Video & Payloads");
-            _btnVideo.UseMnemonic = false;
-            _btnVideo.Click += (s, e) => ShowView("Video");
-            navPanel.Controls.Add(_btnVideo);
-
-
-            // Links button
-            _btnLinks = CreateSidebarButton("Link Status");
-            _btnLinks.Click += (s, e) => ShowView("Links");
-            navPanel.Controls.Add(_btnLinks);
-
-            var btnGimbal = CreateSidebarButton("Gimbal");
-            btnGimbal.Click += (s, e) => GimbalJoystickWindow.ShowSingleton(_config, this.FindForm());
-            navPanel.Controls.Add(btnGimbal);
-
-            _btnSimulation = CreateSidebarButton("Testing & Simulation");
-            _btnSimulation.UseMnemonic = false;
-            _btnSimulation.Click += (sender, args) => ShowView("Simulation");
-            navPanel.Controls.Add(_btnSimulation);
-
-            navPanel.Controls.Add(CreateSeparatorLabel("PREFERENCES"));
-            var settings = CreateSidebarButton("Settings…");
-            settings.Name = "OpenSettings";
-            settings.Click += (sender, args) =>
-            {
-                if (!_videoShutdown.IsCancellationRequested) { _showSettings?.Invoke(); }
-            };
-            navPanel.Controls.Add(settings);
-
-            // IMPORTANT: In Windows Forms, docking order is reverse of Z-order
-            // Add navPanel FIRST (will be at back, fills remaining space)
-            // Add logoPanel SECOND (will be in front, docked at top)
-            _sidebarPanel.Controls.Add(navPanel);
-            _sidebarPanel.Controls.Add(logoPanel);
-
-            this.Controls.Add(_sidebarPanel);
-        }
-
-        private Button CreateSidebarButton(string text)
-        {
-            var btn = new Button
-            {
-                Text = text,
-                Size = new Size(SIDEBAR_WIDTH - 15, 36),
-                Margin = new Padding(0, 1, 0, 1),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = SIDEBAR_BG,  // Explicit background color to prevent default green
-                ForeColor = TEXT_SECONDARY,
-                Font = new Font("Segoe UI", 9),
-                TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(10, 0, 0, 0),
-                Cursor = Cursors.Hand,
-            };
-            btn.FlatAppearance.BorderSize = 0;
-            btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(45, 45, 50);
-            btn.FlatAppearance.MouseDownBackColor = ACCENT_COLOR;
-
-            return btn;
-        }
-
-        private Label CreateSeparatorLabel(string text)
-        {
-            if (string.IsNullOrEmpty(text))
-            {
-                return new Label
-                {
-                    Size = new Size(SIDEBAR_WIDTH - 15, 8),
-                    Margin = new Padding(0, 4, 0, 4),
-                };
-            }
-
-            return new Label
-            {
-                Text = text,
-                Font = new Font("Segoe UI", 8, FontStyle.Bold),
-                ForeColor = TEXT_SECONDARY,
-                Size = new Size(SIDEBAR_WIDTH - 15, 22),
-                Margin = new Padding(0, 8, 0, 4),
-                TextAlign = ContentAlignment.BottomLeft,
-                Padding = new Padding(5, 0, 0, 0),
-            };
-        }
-        private void CreateContentArea()
-        {
-            _contentPanel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = CONTENT_BG,
-                Padding = new Padding(0),
-            };
-
-            // No header band: the active sidebar button already names the page,
-            // so the view content gets the full height. _headerPanel stays null
-            // and ShowView/ShowEntry skip the title update.
-            _viewContainer = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = CONTENT_BG,
-                Padding = new Padding(12),
-            };
-
+            BackColor = CONTENT_BG;
+            Dock = Forms.DockStyle.Fill;
+            _contentPanel = new Forms.Panel { Dock = Forms.DockStyle.Fill, BackColor = CONTENT_BG };
+            _viewContainer = new Forms.Panel
+            { Dock = Forms.DockStyle.Fill, BackColor = CONTENT_BG, Padding = new Forms.Padding(12) };
             _contentPanel.Controls.Add(_viewContainer);
+            Controls.Add(_contentPanel);
 
-            this.Controls.Add(_contentPanel);
+            var navigation = new StackPanel { Margin = new Thickness(8), Background = WpfTheme.Background };
+            navigation.Children.Add(new TextBlock
+            {
+                Text = "NOMAD", FontSize = 20, FontWeight = FontWeights.Bold,
+                Foreground = WpfTheme.Accent, Margin = new Thickness(6, 6, 6, 14),
+            });
+            _aircraftLabel = WpfUi.Text("Aircraft: " + _config.AircraftName);
+            _aircraftLabel.Name = "ActiveAircraft";
+            _aircraftLabel.Margin = new Thickness(6, 0, 6, 12);
+            navigation.Children.Add(_aircraftLabel);
+            _btnDashboard = SidebarButton("Dashboard", () => ShowView("Dashboard"));
+            navigation.Children.Add(_btnDashboard);
+            navigation.Children.Add(WpfUi.Section("SETUP"));
+            _btnBoundaries = SidebarButton("Fence setup", () => ShowView("Boundaries"));
+            navigation.Children.Add(_btnBoundaries);
+            navigation.Children.Add(WpfUi.Section("TOOLS"));
+            _btnVideo = SidebarButton("Video & Payloads", () => ShowView("Video"));
+            navigation.Children.Add(_btnVideo);
+            _btnLinks = SidebarButton("Link Status", () => ShowView("Links"));
+            navigation.Children.Add(_btnLinks);
+            navigation.Children.Add(SidebarButton("Gimbal", () => GimbalJoystickWindow.ShowSingleton(_config, FindForm())));
+            _btnSimulation = SidebarButton("Testing & Simulation", () => ShowView("Simulation"));
+            navigation.Children.Add(_btnSimulation);
+            navigation.Children.Add(WpfUi.Section("PREFERENCES"));
+            var settings = SidebarButton("Settings…", () =>
+            { if (!_videoShutdown.IsCancellationRequested) { _showSettings?.Invoke(); } });
+            settings.Name = "OpenSettings";
+            navigation.Children.Add(settings);
+            var scroll = new ScrollViewer
+            {
+                Content = navigation, Background = WpfTheme.Background,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            };
+            _sidebarPanel = new Forms.Panel
+            { Dock = Forms.DockStyle.Left, Width = SIDEBAR_WIDTH, BackColor = SIDEBAR_BG };
+            _sidebarPanel.Controls.Add(WpfUi.Host(scroll));
+            Controls.Add(_sidebarPanel);
+        }
+
+        private static Button SidebarButton(string caption, System.Action action)
+        {
+            var button = WpfUi.Action(caption, action);
+            button.HorizontalContentAlignment = HorizontalAlignment.Left;
+            button.HorizontalAlignment = HorizontalAlignment.Stretch;
+            button.MinHeight = 36;
+            button.Background = WpfTheme.Background;
+            button.Foreground = WpfTheme.SecondaryText;
+            button.Margin = new Thickness(0, 1, 0, 1);
+            return button;
         }
     }
 }

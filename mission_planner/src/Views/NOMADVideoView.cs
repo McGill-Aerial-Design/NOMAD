@@ -70,27 +70,18 @@ namespace NOMAD.MissionPlanner
             }
             catch (Exception ex)
             {
-                controlsSection.Controls.Add(new Label
-                {
-                    Text = $"Actuator controls unavailable: {ex.Message}",
-                    Font = new Font("Segoe UI", 11),
-                    ForeColor = ERROR_COLOR,
-                    Dock = DockStyle.Top,
-                    Height = 60,
-                    TextAlign = ContentAlignment.MiddleCenter,
-                });
+                var error = WpfUi.Text($"Actuator controls unavailable: {ex.Message}");
+                error.Foreground = System.Windows.Media.Brushes.OrangeRed;
+                controlsSection.Controls.Add(WpfUi.Host(error));
             }
-
+            var heading = new System.Windows.Controls.StackPanel();
+            heading.Children.Add(WpfUi.Section("Payloads"));
             if (_config.ActuatorDefinitions == null || _config.ActuatorDefinitions.Count == 0)
             {
-                controlsSection.Controls.Add(new Label
-                {
-                    Text = "Add payloads in Settings → Payloads.",
-                    ForeColor = TEXT_SECONDARY, Dock = DockStyle.Top, Height = 60,
-                });
+                heading.Children.Add(WpfUi.Text("Add payloads in Settings → Payloads."));
             }
-            var payloadsTitle = ControlFactory.SectionTitle("Payloads");
-            payloadsTitle.Dock = DockStyle.Top;
+            var payloadsTitle = WpfUi.Host(heading);
+            payloadsTitle.Dock = DockStyle.Top; payloadsTitle.AutoSize = true;
             controlsSection.Controls.Add(payloadsTitle);
 
             mainLayout.Controls.Add(controlsSection, 0, 1);

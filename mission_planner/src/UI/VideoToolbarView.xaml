@@ -1,0 +1,48 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<UserControl x:Class="NOMAD.MissionPlanner.VideoToolbarView" x:ClassModifier="internal"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:NOMAD.MissionPlanner"
+             Background="{x:Static local:WpfTheme.Card}" Foreground="{x:Static local:WpfTheme.Text}"
+             FontFamily="Segoe UI" FontSize="12" UseLayoutRounding="True" VerticalAlignment="Top">
+    <UserControl.Resources><ResourceDictionary Source="WpfTheme.xaml" /></UserControl.Resources>
+    <StackPanel Margin="8,8,2,2">
+        <WrapPanel>
+            <Button x:Name="PlayButton" Content="▶ Play" AutomationProperties.Name="Play" ToolTip="Play the selected video input." />
+            <Button x:Name="StopButton" Content="■ Stop" AutomationProperties.Name="Stop" ToolTip="Stop video and automatic tracking." />
+            <Button x:Name="FullscreenButton" Content="Full screen" AutomationProperties.Name="Full screen" ToolTip="Full screen; Escape returns to the video page." />
+            <Button x:Name="SnapshotButton" Content="Snapshot" AutomationProperties.Name="Take snapshot" ToolTip="Save the displayed frame to the Desktop." />
+            <ComboBox x:Name="InputSelector" MinWidth="180" MaxWidth="320" AutomationProperties.Name="Active video input"
+                      ToolTip="Active input for HUD, Dashboard and Video. Configure inputs in Settings → Video." />
+        </WrapPanel>
+        <TextBlock x:Name="SelectionError" Visibility="Collapsed" TextWrapping="Wrap"
+                   Foreground="{x:Static local:WpfTheme.Warning}" Margin="0,0,6,6"
+                   AutomationProperties.Name="Video input selection error" />
+        <WrapPanel>
+            <ComboBox x:Name="TrackingModeSelector" Width="100" AutomationProperties.Name="Tracking mode"
+                      ToolTip="Object follows moving appearance. Area remembers a distinctive fixed planar surface, including walls.">
+                <ComboBoxItem Content="Object" /><ComboBoxItem Content="Area" />
+            </ComboBox>
+            <Button x:Name="DetectButton" Content="Detect" AutomationProperties.Name="Detect"
+                    ToolTip="Detect objects in video. Detection alone never moves the gimbal." />
+            <Button x:Name="TrackButton" AutomationProperties.Name="Start tracking" ToolTip="Follow the selected region with the gimbal.">
+                <Grid MinWidth="108">
+                    <TextBlock Text="Start tracking" Visibility="Hidden" />
+                    <TextBlock x:Name="TrackCaption" Text="Start tracking" HorizontalAlignment="Center" />
+                </Grid>
+            </Button>
+            <Button x:Name="ClearButton" Content="Clear target" AutomationProperties.Name="Clear remembered target" ToolTip="Clear the remembered target." />
+            <Button x:Name="MoreButton" Content="More ▾" AutomationProperties.Name="Video options"
+                    ToolTip="Detection model, saved observations and tracking history." />
+        </WrapPanel>
+        <WrapPanel x:Name="OptionsRow" Visibility="Collapsed">
+            <ComboBox x:Name="ModelSelector" Width="220" AutomationProperties.Name="Detection model"
+                      ToolTip="Select the detection model for this camera. Video and generic region tracking continue." />
+            <Button x:Name="ManageModelsButton" Content="Manage models" AutomationProperties.Name="Manage detection models" />
+            <Button x:Name="SaveButton" Content="Save observation" AutomationProperties.Name="Save observation"
+                    ToolTip="Save the current image and observation details." />
+            <Button x:Name="HistoryButton" Content="History" AutomationProperties.Name="Tracking history"
+                    ToolTip="Review the last 32 selection and tracking transitions." />
+        </WrapPanel>
+    </StackPanel>
+</UserControl>

@@ -550,7 +550,7 @@ internal static class NativeTerminationTests
             {
                 peer.SendHeartbeat(0, false); peer.Pump(100);
                 widgetType.GetMethod("RefreshStatus", HiddenInstance).Invoke(widget, null);
-                var status = (Label)widgetType.GetField("_status", HiddenInstance).GetValue(widget);
+                var status = (System.Windows.Controls.TextBlock)widgetType.GetField("_status", HiddenInstance).GetValue(widget);
                 Require(status.Text.Contains("Supported") && status.Text.Contains("disarmed"),
                     "Verified disarmed support still looked unavailable in the Dashboard widget");
             }

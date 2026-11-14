@@ -39,7 +39,7 @@ unless shown otherwise.
 | Video | `Media/VideoSession` owns bounded analysis/display lanes; `MediaWorkerHost` owns the child; `SharedVideoCapture` shares each source; views own presentation |
 | Vision | `Vision/IVideoDetector`, `IVisualTracker`, `VisualTrackerFactory`: model and tracker boundaries |
 | Links | `Connectivity/MAVLinkConnectionManager` projects the router in `infra/transport/ground_router/` through `IRouterStatusProvider` |
-| Views | `Views/`, `Panels/`, `UI/ControlFactory`, `NOMADTheme`, `NOMADViewBase`, `UiAsync`; `IUpdatableView` is declared in `Plugin/NOMADMainScreen.cs` |
+| Views | `Views/`, `Panels/`, `UI/WpfUi`, `WpfTheme`, `NOMADTheme`, `NOMADViewBase`, `UiAsync`; `IUpdatableView` is declared in `Plugin/NOMADMainScreen.cs` |
 | Simulation | `Simulation/` owns the optional page/session; `scripts/simulation/` supplies development launchers |
 
 Read the owning symbol, callers and closest tests before changing behavior.
@@ -103,7 +103,14 @@ Loading validates the current schema without rewriting files; saving atomically
 replaces the collection with a backup. Use `NOMADStorage` for host-resolved paths.
 Aircraft labels describe configuration and do not establish live aircraft identity.
 
-Reuse `ControlFactory` and `NOMADTheme`. Views refreshed by the main screen implement
+NOMAD-owned controls use WPF with the existing palette through `WpfTheme` and `WpfUi`.
+Thin WinForms shells retain Mission Planner's screen, modal owner, foreground and lifecycle APIs.
+WPF `ElementHost` controls sit beside the native video viewport; do not nest a WinForms
+viewport inside WPF inside Mission Planner. The plugin creates no WPF `Application`
+or second message loop, and does not change Mission Planner's DPI mode. Mission Planner's
+own menu, HUD and fence map remain native host controls. This UI targets Windows.
+
+Views refreshed by the main screen implement
 `IUpdatableView`. Use `UiAsync` to observe event-handler errors and marshal synchronous
 updates to an existing UI handle. Unsubscribe events and dispose timers, frames,
 capture leases and cancellation sources with their owner. Fence cached callbacks

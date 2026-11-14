@@ -10,6 +10,8 @@
 using System;
 using System.Windows.Forms;
 using MissionPlanner;
+using System.Windows.Media;
+using TextBlock = System.Windows.Controls.TextBlock;
 
 namespace NOMAD.MissionPlanner
 {
@@ -21,11 +23,11 @@ namespace NOMAD.MissionPlanner
         private readonly Func<IVideoPipeline> _createPipeline;
         private readonly bool _ownsNotificationService;
 
-        private Label _lblFlightMode;
-        private Label _lblGpsFix;
-        private Label _lblBattery;
-        private Label _lblLinks;
-        private Label _lblGimbalCommand;
+        private TextBlock _lblFlightMode;
+        private TextBlock _lblGpsFix;
+        private TextBlock _lblBattery;
+        private TextBlock _lblLinks;
+        private TextBlock _lblGimbalCommand;
 
         private Panel _videoPreviewPanel;
         private VideoInputPlayer _videoHost;
@@ -90,16 +92,16 @@ namespace NOMAD.MissionPlanner
             if (!connected)
             {
                 _lblFlightMode.Text = "DISCONNECTED";
-                _lblFlightMode.ForeColor = NOMADTheme.ERROR;
+                _lblFlightMode.Foreground = Brushes.OrangeRed;
                 _lblGpsFix.Text = "No telemetry";
-                _lblGpsFix.ForeColor = NOMADTheme.TEXT_SECONDARY;
+                _lblGpsFix.Foreground = WpfTheme.SecondaryText;
                 _lblBattery.Text = "--.- V";
-                _lblBattery.ForeColor = NOMADTheme.TEXT_SECONDARY;
+                _lblBattery.Foreground = WpfTheme.SecondaryText;
                 return;
             }
 
             _lblFlightMode.Text = cs.armed ? $"{cs.mode} · ARMED" : (cs.mode ?? "UNKNOWN");
-            _lblFlightMode.ForeColor = cs.armed ? NOMADTheme.WARNING : NOMADTheme.TEXT_PRIMARY;
+            _lblFlightMode.Foreground = cs.armed ? Brushes.Orange : WpfTheme.Text;
 
             int gpsFix = (int)cs.gpsstatus;
             string gpsText = gpsFix switch
@@ -114,9 +116,9 @@ namespace NOMAD.MissionPlanner
                 _ => "Unknown",
             };
             _lblGpsFix.Text = $"{gpsText} ({cs.satcount} sats)";
-            _lblGpsFix.ForeColor = gpsFix >= 3
-                ? NOMADTheme.SUCCESS
-                : (gpsFix >= 1 ? NOMADTheme.WARNING : NOMADTheme.ERROR);
+            _lblGpsFix.Foreground = gpsFix >= 3
+                ? Brushes.LimeGreen
+                : (gpsFix >= 1 ? Brushes.Orange : Brushes.OrangeRed);
 
             UpdateBatteryCard(BatteryHealth.Read(mav, 1));
         }
@@ -126,17 +128,17 @@ namespace NOMAD.MissionPlanner
             if (battery == null)
             {
                 _lblBattery.Text = "Battery unavailable";
-                _lblBattery.ForeColor = NOMADTheme.TEXT_SECONDARY;
+                _lblBattery.Foreground = WpfTheme.SecondaryText;
                 return;
             }
 
             _lblBattery.Text = battery.HasRemainingCapacity
                 ? $"{battery.Voltage:F1}V · {battery.RemainingMah:F0} mAh"
                 : $"{battery.Voltage:F1}V";
-            _lblBattery.ForeColor = battery.Severity == 2
-                ? NOMADTheme.ERROR
-                : (battery.Severity == 1 ? NOMADTheme.WARNING :
-                    (battery.ThresholdsFromVehicle ? NOMADTheme.SUCCESS : NOMADTheme.TEXT_SECONDARY));
+            _lblBattery.Foreground = battery.Severity == 2
+                ? Brushes.OrangeRed
+                : (battery.Severity == 1 ? Brushes.Orange :
+                    (battery.ThresholdsFromVehicle ? Brushes.LimeGreen : WpfTheme.SecondaryText));
         }
 
         private void UpdateLinksCard()
@@ -144,19 +146,19 @@ namespace NOMAD.MissionPlanner
             if (_connectionManager == null)
             {
                 _lblLinks.Text = "Router unavailable";
-                _lblLinks.ForeColor = NOMADTheme.TEXT_SECONDARY;
+                _lblLinks.Foreground = WpfTheme.SecondaryText;
                 return;
             }
 
             _lblLinks.Text = _connectionManager.GetStatusSummary();
             // Retained active IDs can outlive fresh management data; keep this summary neutral.
-            _lblLinks.ForeColor = NOMADTheme.TEXT_PRIMARY;
+            _lblLinks.Foreground = WpfTheme.Text;
         }
 
         private void UpdateGimbalCard()
         {
             _lblGimbalCommand.Text = GimbalController.LastCommandStatus;
-            _lblGimbalCommand.ForeColor = NOMADTheme.TEXT_SECONDARY;
+            _lblGimbalCommand.Foreground = WpfTheme.SecondaryText;
         }
 
         protected override void Dispose(bool disposing)

@@ -9,13 +9,16 @@ $output = Join-Path $root 'build/tests/ui'
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 $plugin = Join-Path $root 'mission_planner/src/bin/Release/NOMADPlugin.dll'
 $references = @('/r:System.Drawing.dll', '/r:System.Windows.Forms.dll', "/r:$plugin")
+$references += Get-WpfTestReferences
 foreach ($name in @('MissionPlanner.exe', 'MissionPlanner.Controls.dll', 'MissionPlanner.Utilities.dll',
     'Newtonsoft.Json.dll', 'Interfaces.dll')) {
     $references += '/r:' + (Join-Path $hostRoot $name)
 }
 $exe = Join-Path $output 'PluginUiTests.exe'
-& $compiler /nologo /target:exe /langversion:latest "/out:$exe" @references `
-    (Join-Path $root 'mission_planner/tests/ui/PluginUiTests.cs')
+& $compiler /nologo /target:exe /langversion:latest "/out:$exe" `
+    ("/win32manifest:" + (Join-Path $root 'mission_planner/tests/ui/host.manifest')) @references `
+    (Join-Path $root 'mission_planner/tests/ui/PluginUiTests.cs') `
+    (Join-Path $root 'mission_planner/tests/ui/ControlRender.cs')
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Copy-Item -LiteralPath $plugin -Destination $output -Force
 $attempt = Join-Path $output ('attempt-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))

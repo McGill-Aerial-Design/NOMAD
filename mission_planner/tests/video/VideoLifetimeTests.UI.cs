@@ -10,9 +10,54 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 
 using NOMAD.MissionPlanner;
+using Label = System.Windows.Controls.TextBlock;
+using Button = System.Windows.Controls.Button;
+using Brushes = System.Windows.Media.Brushes;
+using ElementHost = System.Windows.Forms.Integration.ElementHost;
 
 internal static partial class VideoLifetimeTests
 {
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetThreadDpiAwarenessContext();
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool AreDpiAwarenessContextsEqual(IntPtr first, IntPtr second);
+
+    private static void WpfVideoActions()
+    {
+        IntPtr hostDpi = GetThreadDpiAwarenessContext();
+        var pipeline = new FakeVideoPipeline();
+        using (var form = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual,
+            Location = new Point(-2000, -2000), ClientSize = new Size(900, 600) })
+        using (var player = new EmbeddedVideoPlayer(new VideoInputProfile { Name = "WPF actions", Url = "udp://@:5600" },
+            true, CancellationToken.None, () => pipeline, createTracker: (token, mode) => new FakeVisualTracker()))
+        {
+            form.Controls.Add(player); form.Show(); Application.DoEvents();
+            Check(AreDpiAwarenessContextsEqual(hostDpi, GetThreadDpiAwarenessContext()),
+                "Loading the WPF player changed the Mission Planner host's DPI mode");
+            var play = FindVideoButton(player, "Play");
+            Check(play.Focusable && System.Windows.Input.KeyboardNavigation.GetIsTabStop(play),
+                "The WPF playback action is absent from keyboard navigation");
+            ClickVideoButton(play);
+            Wait(pipeline.ReadEntered, "WPF Play reaches the existing video owner");
+            pipeline.Frames.Add(new Bitmap(12, 8));
+            WaitUi(() => { Tick(player); return player.DisplayedVideoFrame?.Image.Width == 12; }, "WPF playback frame");
+            Check(pipeline.Starts == 1 && player.SubmittedTrackingCommands == 0,
+                "WPF Play started duplicate capture or moved the gimbal");
+            ClickVideoButton(FindVideoButton(player, "Stop"));
+            WaitUi(() => { Tick(player); return player.DisplayedVideoFrame == null; }, "WPF Stop releases displayed pixels");
+            CheckClean(pipeline);
+            ClickVideoButton(FindVideoButton(player, "Full screen"));
+            Check(player.Toolbar.FindForm() == GetField<Form>(player, "_fullscreenForm"),
+                "The WPF controls remained in the hidden original viewport");
+            var source = System.Windows.PresentationSource.FromVisual(player.VideoControls);
+            player.VideoControls.RaiseEvent(new System.Windows.Input.KeyEventArgs(
+                System.Windows.Input.Keyboard.PrimaryDevice, source, Environment.TickCount, System.Windows.Input.Key.Escape)
+                { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent });
+            Check(GetField<Form>(player, "_fullscreenForm") == null && player.Toolbar.Parent == player,
+                "Escape from a WPF control did not restore the embedded video page");
+        }
+    }
+
     private static void PlaybackControlsAttached()
     {
         using (var player = new EmbeddedVideoPlayer(
@@ -25,33 +70,35 @@ internal static partial class VideoLifetimeTests
             foreach (var label in new[] { "Play", "Stop", "Full screen", "Take snapshot" })
             {
                 var button = FindVideoButton(player, label);
-                Check(button != null && button.Parent != null && button.Visible,
+                Check(button != null && button.Parent != null && button.Visibility == System.Windows.Visibility.Visible,
                     $"Playback control {label} is not visible in the player");
-                Check(!string.IsNullOrWhiteSpace(GetField<ToolTip>(player, "_videoToolTips").GetToolTip(button)),
+                Check(!string.IsNullOrWhiteSpace(button.ToolTip as string),
                     $"Playback control {label} has no explanatory tooltip");
             }
-            Check(!player.VisionOptions.Visible, "Occasional video tools clutter the default toolbar");
+            Check(player.VisionOptions.Visibility == System.Windows.Visibility.Collapsed, "Occasional video tools clutter the default toolbar");
             var more = FindVideoButton(player, "Video options");
-            more.PerformClick();
-            Check(player.VisionOptions.Visible, "More did not reveal the video options");
-            more.PerformClick();
-            Check(!player.VisionOptions.Visible, "More did not collapse the video options");
+            ClickVideoButton(more);
+            Check(player.VisionOptions.Visibility == System.Windows.Visibility.Visible, "More did not reveal the video options");
+            ClickVideoButton(more);
+            Check(player.VisionOptions.Visibility == System.Windows.Visibility.Collapsed, "More did not collapse the video options");
+            var footer = GetField<ElementHost>(player, "_statusPanel");
             for (int index = 0; index < 2; index++)
             {
                 player.ToggleFullscreen();
                 var fullscreen = GetField<Form>(player, "_fullscreenForm");
-                Check(player.Toolbar.Parent == fullscreen && GetField<Label>(player, "_lblStatus").Parent == fullscreen &&
-                    GetField<Label>(player, "_lblVisionStatus").Parent == fullscreen &&
-                    GetField<Button>(player, "_trackButton").FindForm() == fullscreen,
+                Check(player.Toolbar.Parent == fullscreen && footer.Parent == fullscreen &&
+                    System.Windows.PresentationSource.FromVisual(GetField<Label>(player, "_lblStatus")) != null &&
+                    System.Windows.PresentationSource.FromVisual(GetField<Label>(player, "_lblVisionStatus")) != null &&
+                    GetField<Button>(player, "_trackButton").IsVisible,
                     "Fullscreen hid playback, tracking controls or live warnings");
                 if (index == 0) { player.ToggleFullscreen(); }
                 else { fullscreen.Close(); }
                 Check(player.Toolbar.Parent == player && !player.Toolbar.IsDisposed &&
-                    GetField<Label>(player, "_lblVisionStatus").Parent == player &&
+                    footer.Parent == player && !footer.IsDisposed &&
                     GetField<Form>(player, "_fullscreenForm") == null,
                     "Leaving fullscreen lost or disposed the player controls");
             }
-            player.Size = new Size(100, 450);
+            player.Size = new Size(380, 600);
             player.PerformLayout();
             var toolbar = player.Controls.Find("VideoToolbar", true)[0];
             Check(toolbar.Height > 45 && toolbar.Height < player.Height,
@@ -60,36 +107,87 @@ internal static partial class VideoLifetimeTests
             var closing = GetField<Form>(player, "_fullscreenForm");
             var ownedToolbar = player.Toolbar;
             player.Dispose();
-            Check(closing.IsDisposed && ownedToolbar.IsDisposed,
-                "Disposing an actively fullscreen player leaked its window or toolbar");
+            Check(closing.IsDisposed && ownedToolbar.IsDisposed && footer.IsDisposed,
+                "Disposing an actively fullscreen player leaked its window, toolbar or footer");
+            Check(System.Windows.Application.Current == null,
+                "The plugin created a WPF Application instead of using the host message loop");
+        }
+    }
+
+    private static void VideoStatusFooterLayout()
+    {
+        using (var form = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual,
+            Location = new Point(-2000, -2000), ClientSize = new Size(1600, 700) })
+        using (var player = new EmbeddedVideoPlayer(new VideoInputProfile { Name = "Footer", Url = "udp://@:5600" },
+            true, CancellationToken.None, () => throw new InvalidOperationException("A layout test must not start video.")))
+        {
+            form.Controls.Add(player); form.Show(); Application.DoEvents();
+            var playback = GetField<Label>(player, "_lblStatus");
+            var tracking = GetField<Label>(player, "_lblVisionStatus");
+            var footer = GetField<ElementHost>(player, "_statusPanel");
+            var view = (VideoStatusView)footer.Child;
+            Check(playback.Parent == tracking.Parent && footer.Parent == player && footer.Dock == DockStyle.Bottom,
+                "Playback and tracking do not share one bottom footer");
+            Check(playback.Text == "Ready - Click Play" && tracking.Text.Contains("calibration"),
+                "The idle footer lost playback readiness or tracking calibration guidance");
+            double normalFont = playback.FontSize;
+            string trackingGuidance = tracking.Text;
+            foreach (int width in new[] { 1600, 800, 380 })
+            {
+                form.ClientSize = new Size(width, 700);
+                foreach (bool warning in new[] { false, true })
+                {
+                    playback.Text = warning ? "Snapshot could not be saved; check the output folder" : "Ready - Click Play";
+                    tracking.Text = warning ? MediaWire.VisualCppRequired : trackingGuidance;
+                    playback.FontSize = tracking.FontSize = warning ? 24 : normalFont;
+                    player.PerformLayout(); footer.PerformLayout(); Application.DoEvents();
+                    view.UpdateLayout();
+                    var video = GetField<PictureBox>(player, "_videoBox");
+                    Check(footer.Bottom == player.ClientSize.Height && video.Bottom <= footer.Top &&
+                        footer.Top >= player.Toolbar.Bottom,
+                        "The status footer overlaps video or controls at width " + width);
+                    var playbackBounds = playback.TransformToAncestor(view).TransformBounds(new System.Windows.Rect(playback.RenderSize));
+                    var trackingBounds = tracking.TransformToAncestor(view).TransformBounds(new System.Windows.Rect(tracking.RenderSize));
+                    Check(playback.Visibility == System.Windows.Visibility.Visible && tracking.Visibility == System.Windows.Visibility.Visible &&
+                        !playbackBounds.IntersectsWith(trackingBounds),
+                        "Status messages overlap or disappear at width " + width);
+                    foreach (var label in new[] { playback, tracking })
+                    {
+                        var bounds = label.TransformToAncestor(view).TransformBounds(new System.Windows.Rect(label.RenderSize));
+                        Check(new System.Windows.Rect(view.RenderSize).Contains(bounds) && label.ActualHeight >= label.DesiredSize.Height,
+                            System.Windows.Automation.AutomationProperties.GetName(label) + " is clipped at width " + width);
+                    }
+                }
+            }
         }
     }
 
     private static void VideoToggleButtonSizing()
     {
+        using (var form = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual,
+            Location = new Point(-2000, -2000), ClientSize = new Size(900, 600) })
         using (var player = new EmbeddedVideoPlayer(new VideoInputProfile { Name = "Sizing", Url = "udp://@:5600" },
             true, CancellationToken.None, () => new FakeVideoPipeline()))
-        using (var enlarged = new Font("Segoe UI", 18))
         {
-            player.Size = new Size(900, 600);
+            form.Controls.Add(player); form.Show(); Application.DoEvents();
             var button = GetField<Button>(player, "_detectButton");
-            button.Font = enlarged;
-            button.Text = "Detect on";
-            button.Parent.PerformLayout(); player.PerformLayout();
-            Size preferred = button.GetPreferredSize(Size.Empty);
-            Size text = TextRenderer.MeasureText(button.Text, enlarged, Size.Empty, TextFormatFlags.SingleLine);
-            Check(button.Width >= preferred.Width && button.Height >= preferred.Height &&
-                button.ClientSize.Width >= text.Width && button.ClientSize.Height >= text.Height,
+            button.FontSize = 24;
+            button.Content = "Detect on";
+            player.PerformLayout(); player.VideoControls.UpdateLayout();
+            Check(button.ActualWidth >= button.DesiredSize.Width - button.Margin.Left - button.Margin.Right &&
+                button.ActualHeight >= button.DesiredSize.Height - button.Margin.Top - button.Margin.Bottom,
                 "Detect on clipped or wrapped at enlarged font size");
             var tracking = GetField<Button>(player, "_trackButton");
-            tracking.Font = enlarged;
-            var fixedSize = tracking.Size;
+            tracking.FontSize = 24;
+            player.PerformLayout(); player.VideoControls.UpdateLayout();
+            var fixedSize = tracking.RenderSize;
             foreach (string caption in new[] { "Start tracking", "Stop tracking", "Start tracking" })
             {
-                tracking.Text = caption; tracking.Parent.PerformLayout();
-                text = TextRenderer.MeasureText(caption, enlarged);
-                Check(tracking.Size == fixedSize && !tracking.AutoSize && tracking.ClientSize.Width >= text.Width &&
-                    tracking.ClientSize.Height >= text.Height, "Tracking toggle resized or clipped when its state changed");
+                player.VideoControls.TrackCaption.Text = caption;
+                player.VideoControls.UpdateLayout();
+                Check(tracking.RenderSize == fixedSize && player.VideoControls.TrackCaption.ActualWidth <= tracking.ActualWidth &&
+                    player.VideoControls.TrackCaption.ActualHeight <= tracking.ActualHeight,
+                    "Tracking toggle resized or clipped when its state changed");
             }
         }
     }
@@ -125,21 +223,21 @@ internal static partial class VideoLifetimeTests
     {
         var fake = new FakeVideoPipeline();
         using (var player = new EmbeddedVideoPlayer(new VideoInputProfile { Name = "Stall", Url = "udp://@:5600" },
-            true, CancellationToken.None, () => fake))
+            true, CancellationToken.None, () => fake, createTracker: (token, mode) => new FakeVisualTracker()))
         {
             player.StartStream(); Wait(fake.ReadEntered, "stalled player startup");
             fake.Frames.Add(new Bitmap(2, 2));
             WaitUi(() => { Tick(player); return player.DisplayedVideoFrame != null; }, "initial player image");
             var image = player.DisplayedVideoFrame.Image;
             var status = GetField<Label>(player, "_lblStatus");
-            Check(status.ForeColor == Color.LimeGreen, "Fresh player frame was not shown as streaming");
+            Check(status.Foreground == Brushes.LimeGreen, "Fresh player frame was not shown as streaming");
             WaitUi(() => { Tick(player); return status.Text.Contains("stale"); }, "stale player warning");
             Tick(player);
-            Check(status.ForeColor == Color.Yellow && ReferenceEquals(player.DisplayedVideoFrame.Image, image),
+            Check(status.Foreground == Brushes.Yellow && ReferenceEquals(player.DisplayedVideoFrame.Image, image),
                 "Silent player stayed healthy or discarded its last frame context");
             fake.Frames.Add(new Bitmap(3, 3));
             WaitUi(() => { Tick(player); return player.DisplayedVideoFrame.Image.Width == 3; }, "fresh player recovery");
-            Check(status.ForeColor == Color.LimeGreen && fake.Starts == 1,
+            Check(status.Foreground == Brushes.LimeGreen && fake.Starts == 1,
                 "Fresh player frame did not restore streaming without a restart");
             CheckDisposed(image);
         }
@@ -213,7 +311,7 @@ internal static partial class VideoLifetimeTests
                     Check(rejected && unchanged.GetPixel(0, 0).ToArgb() == Color.Red.ToArgb(),
                         "A snapshot collision overwrote or removed an existing capture");
                 }
-                Check(player.TakeSnapshot(first) == null && GetField<Label>(player, "_lblStatus").ForeColor == Color.Red &&
+                Check(player.TakeSnapshot(first) == null && GetField<Label>(player, "_lblStatus").Foreground == Brushes.Red &&
                     GetField<Label>(player, "_lblStatus").Text.Contains("could not be saved") &&
                     source.GetPixel(0, 0).ToArgb() == Color.Blue.ToArgb() && Directory.GetFiles(directory).Length == 2,
                     "A failed snapshot escaped, claimed success, changed files or disposed the displayed source");
@@ -222,7 +320,7 @@ internal static partial class VideoLifetimeTests
                 {
                     Environment.CurrentDirectory = directory;
                     Check(player.TakeSnapshot("") == null && player.TakeSnapshot(".") == null &&
-                        GetField<Label>(player, "_lblStatus").ForeColor == Color.Red &&
+                        GetField<Label>(player, "_lblStatus").Foreground == Brushes.Red &&
                         Directory.GetFiles(directory).Length == 2,
                         "An unavailable Desktop or relative destination wrote to the host working directory");
                 }
@@ -235,39 +333,57 @@ internal static partial class VideoLifetimeTests
     private static void DisabledButtonsKeepContrast()
     {
         int clicks = 0;
-        foreach (var alignment in new[] { ContentAlignment.MiddleLeft, ContentAlignment.MiddleCenter,
-            ContentAlignment.MiddleRight })
-        using (var button = ControlFactory.Button("Track", (sender, args) => clicks++, width: 180, height: 32))
-        using (var image = new Bitmap(180, 32))
+        foreach (var alignment in new[] { System.Windows.HorizontalAlignment.Left,
+            System.Windows.HorizontalAlignment.Center, System.Windows.HorizontalAlignment.Right })
         {
-            button.TextAlign = alignment; button.Enabled = false; button.CreateControl();
-            button.DrawToBitmap(image, new Rectangle(0, 0, 180, 32));
+            var button = WpfUi.Action("Track", () => clicks++);
+            button.Resources.MergedDictionaries.Add(WpfTheme.Resources());
+            button.HorizontalContentAlignment = alignment; button.IsEnabled = false;
+            button.Margin = new System.Windows.Thickness(); button.Width = 180; button.Height = 32;
+            button.Measure(new System.Windows.Size(180, 32));
+            button.Arrange(new System.Windows.Rect(0, 0, 180, 32)); button.UpdateLayout();
+            var image = new System.Windows.Media.Imaging.RenderTargetBitmap(180, 32, 96, 96,
+                System.Windows.Media.PixelFormats.Pbgra32);
+            image.Render(button);
+            var pixels = new byte[180 * 32 * 4]; image.CopyPixels(pixels, 180 * 4, 0);
             int count = 0, totalX = 0;
-            for (int y = 0; y < image.Height; y++)
-            for (int x = 0; x < image.Width; x++)
+            for (int y = 0; y < 32; y++)
+            for (int x = 0; x < 180; x++)
             {
-                var color = image.GetPixel(x, y);
-                if (color.R >= 140 && color.G >= 140 && color.B >= 140)
+                int offset = (y * 180 + x) * 4;
+                if (pixels[offset] >= 140 && pixels[offset + 1] >= 140 && pixels[offset + 2] >= 140)
                 { count++; totalX += x; }
             }
             Check(count > 10, "Disabled button text disappeared into the dark theme");
             double center = totalX / (double)count;
-            Check(alignment == ContentAlignment.MiddleLeft ? center < 60 :
-                alignment == ContentAlignment.MiddleRight ? center > 120 : center > 65 && center < 115,
+            Check(alignment == System.Windows.HorizontalAlignment.Left ? center < 60 :
+                alignment == System.Windows.HorizontalAlignment.Right ? center > 120 : center > 65 && center < 115,
                 "Disabled themed button ignored text alignment");
-            button.PerformClick();
+            bool refused = false;
+            try
+            {
+                var peer = new System.Windows.Automation.Peers.ButtonAutomationPeer(button);
+                ((System.Windows.Automation.Provider.IInvokeProvider)peer.GetPattern(
+                    System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke();
+            }
+            catch (System.Windows.Automation.ElementNotEnabledException) { refused = true; }
+            Check(refused, "Disabled WPF action remained available to accessibility input");
         }
         Check(clicks == 0, "Readable disabled button became actionable");
     }
 
     private static Button FindVideoButton(Control parent, string label)
     {
+        if (parent is EmbeddedVideoPlayer player)
+        {
+            foreach (var item in WpfTree(player.VideoControls))
+            {
+                if (item is Button button && System.Windows.Automation.AutomationProperties.GetName(button) == label)
+                { return button; }
+            }
+        }
         foreach (Control child in parent.Controls)
         {
-            if (child is Button button && button.AccessibleName == label)
-            {
-                return button;
-            }
             var match = FindVideoButton(child, label);
             if (match != null)
             {
@@ -275,6 +391,26 @@ internal static partial class VideoLifetimeTests
             }
         }
         return null;
+    }
+
+    private static System.Collections.Generic.IEnumerable<System.Windows.DependencyObject> WpfTree(System.Windows.DependencyObject root)
+    {
+        yield return root;
+        for (int index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            foreach (var child in WpfTree(System.Windows.Media.VisualTreeHelper.GetChild(root, index)))
+            { yield return child; }
+        }
+    }
+
+    private static void ClickVideoButton(Button button)
+    {
+        Check(button != null && button.IsEnabled, "The requested WPF action is unavailable");
+        var peer = new System.Windows.Automation.Peers.ButtonAutomationPeer(button);
+        var invoke = (System.Windows.Automation.Provider.IInvokeProvider)
+            peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke);
+        invoke.Invoke();
+        button.Dispatcher.Invoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, new Action(() => { }));
     }
 
     private static T GetField<T>(object owner, string name)

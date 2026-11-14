@@ -25,6 +25,7 @@ wheels/
 *.egg
 *.manifest
 !mission_planner/packaging/installer/app.manifest
+!mission_planner/tests/ui/host.manifest
 *.spec
 htmlcov/
 .tox/

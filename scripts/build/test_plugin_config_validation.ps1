@@ -3,6 +3,10 @@
 # Test Mission Planner's current configuration validation using the built plugin.
 
 $ErrorActionPreference = 'Stop'
+if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne [Threading.ApartmentState]::STA) {
+    throw 'Configuration UI fixture requires an STA PowerShell process.'
+}
+Add-Type -AssemblyName WindowsBase,PresentationCore,PresentationFramework,WindowsFormsIntegration
 & (Join-Path $PSScriptRoot 'test_plugin_storage.ps1')
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $pluginPath = Join-Path $repoRoot 'mission_planner\src\bin\Release\NOMADPlugin.dll'
@@ -93,39 +97,45 @@ try {
             $fenceForm.Show()
             [Windows.Forms.Application]::DoEvents()
             $orderControl = $fenceViewType.GetField('_order', [Reflection.BindingFlags]'Instance,NonPublic').GetValue($fenceView)
-            $null = $orderControl.Handle
-            if ($orderControl.SelectedIndex -ne 0 -or $orderControl.Text -ne 'Latitude, longitude') {
+            if ($orderControl.SelectedIndex -ne 0 -or $orderControl.SelectedItem -ne 'Latitude, longitude') {
                 throw 'Fence coordinate order is not selected or readable.'
             }
             $coordinates = "1,1`r`n1,2`r`n2,1"
-            $fenceView.Controls.Find('FenceCoordinates', $true)[0].Text = $coordinates
+            $coordinateControl = $fenceViewType.GetField('_coordinates', [Reflection.BindingFlags]'Instance,NonPublic').GetValue($fenceView)
+            $coordinateControl.Text = $coordinates
             $fenceView.Scale([Drawing.SizeF]::new($scale, $scale))
             $fenceForm.ClientSize = $fenceView.Size
             $fenceForm.PerformLayout()
             [Windows.Forms.Application]::DoEvents()
-            $bitmap = [Drawing.Bitmap]::new($fenceView.Width, $fenceView.Height)
+            $root = $fenceView.Controls[0].Child
+            $bitmap = [Windows.Media.Imaging.RenderTargetBitmap]::new(
+                [int]$root.ActualWidth, [int]$root.ActualHeight, 96, 96,
+                [Windows.Media.PixelFormats]::Pbgra32)
+            $bitmap.Render($root)
+            $encoder = [Windows.Media.Imaging.PngBitmapEncoder]::new()
+            $encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
+            $stream = [IO.File]::Create((Join-Path $fenceRenderDir ('fence-setup-' + $scale + '.png')))
             try {
-                $fenceView.DrawToBitmap($bitmap, [Drawing.Rectangle]::new(0, 0, $bitmap.Width, $bitmap.Height))
-                $bitmap.Save((Join-Path $fenceRenderDir ('fence-setup-' + $scale + '.png')))
-            } finally { $bitmap.Dispose() }
-            $text = $fenceView.Controls.Find('FenceSetupStatus', $true)[0].Text
+                $encoder.Save($stream)
+            } finally { $stream.Dispose() }
+            $text = $fenceViewType.GetField('_status', [Reflection.BindingFlags]'Instance,NonPublic').GetValue($fenceView).Text
             if ($text -ne '') { throw 'Idle Fence setup displayed a stale action status.' }
-            if ($fenceView.Controls.Find('FenceCoordinates', $true).Count -ne 1) { throw 'Fence coordinate editor missing.' }
+            if ($null -eq $coordinateControl -or $coordinateControl.Name -ne 'FenceCoordinates') { throw 'Fence coordinate editor missing.' }
         } finally { $fenceForm.Dispose() }
     }
     $draftText = "1,1`r`n1,2`r`n2,1"
     $firstView = $fenceConstructor.Invoke([object[]]@([Threading.CancellationToken]::None, $fenceInput, [Activator]::CreateInstance($configType)))
-    $firstView.Controls.Find('FenceCoordinates', $true)[0].Text = $draftText
+    $fenceViewType.GetField('_coordinates', [Reflection.BindingFlags]'Instance,NonPublic').GetValue($firstView).Text = $draftText
     $firstView.Dispose()
     $secondView = $fenceConstructor.Invoke([object[]]@([Threading.CancellationToken]::None, $fenceInput, [Activator]::CreateInstance($configType)))
     try {
-        if ($secondView.Controls.Find('FenceCoordinates', $true)[0].Text -cne $draftText) {
+        if ($fenceViewType.GetField('_coordinates', [Reflection.BindingFlags]'Instance,NonPublic').GetValue($secondView).Text -cne $draftText) {
             throw 'Native page navigation/disposal lost the unsaved coordinate draft.'
         }
     } finally { $secondView.Dispose() }
     $cancelledView = $fenceConstructor.Invoke([object[]]@([Threading.CancellationToken]::new($true), $fenceInput, [Activator]::CreateInstance($configType)))
     try {
-        $cancelledView.Controls.Find('FenceCoordinates', $true)[0].Text = 'stale input'
+        $fenceViewType.GetField('_coordinates', [Reflection.BindingFlags]'Instance,NonPublic').GetValue($cancelledView).Text = 'stale input'
         if ($fenceInputType.GetField('Coordinates', [Reflection.BindingFlags]'Instance,NonPublic').GetValue($fenceInput) -cne $draftText) {
             throw 'A cancelled session modified the retained input.'
         }
@@ -353,7 +363,7 @@ try {
         if ($horizontal.SelectedItem -ne 'Yaw' -or $vertical.SelectedItem -ne 'Pitch') {
             throw 'Settings did not load the screen-axis defaults.'
         }
-        $horizontal.SelectedItem = 'Roll'; $reverse.Checked = $true
+        $horizontal.SelectedItem = 'Roll'; $reverse.IsChecked = $true
         if ($profiles.Selected.Config.JoystickGimbalHorizontalAxis -ne 'Yaw') {
             throw 'Editing a screen-axis draft mutated the active profile.'
         }

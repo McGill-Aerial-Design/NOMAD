@@ -73,7 +73,7 @@ internal static partial class VideoLifetimeTests
     private static void AwaitCapture(Func<bool> ready, string message)
     {
         var clock = Stopwatch.StartNew();
-        while (!ready() && clock.Elapsed.TotalSeconds < 5) { Thread.Sleep(2); }
+        while (!ready() && clock.Elapsed.TotalSeconds < 5) { Application.DoEvents(); Thread.Sleep(2); }
         Check(ready(), "Timed out: " + message);
     }
 

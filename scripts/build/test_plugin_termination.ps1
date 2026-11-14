@@ -16,7 +16,9 @@ foreach ($name in @('MissionPlanner.exe', 'MissionPlanner.ArduPilot.dll', 'Missi
 }
 $references += '/r:' + (Join-Path ${env:ProgramFiles(x86)} 'Reference Assemblies/Microsoft/Framework/.NETFramework/v4.8/Facades/netstandard.dll')
 $exe = Join-Path $output 'NativeTerminationTests.exe'
-& $compiler /nologo /target:exe /langversion:latest "/out:$exe" @references `
+$references += Get-WpfTestReferences
+& $compiler /nologo /target:exe /langversion:latest "/out:$exe" `
+    ("/win32manifest:" + (Join-Path $root 'mission_planner/tests/ui/host.manifest')) @references `
     (Join-Path $root 'mission_planner/tests/termination/NativeTerminationTests.cs')
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Copy-Item -LiteralPath $plugin -Destination $output -Force

@@ -7,6 +7,11 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using TextBox = System.Windows.Controls.TextBox;
+using ComboBox = System.Windows.Controls.ComboBox;
+using CheckBox = System.Windows.Controls.CheckBox;
+using Label = System.Windows.Controls.TextBlock;
+using Button = System.Windows.Controls.Button;
 
 namespace NOMAD.MissionPlanner
 {
@@ -18,15 +23,13 @@ namespace NOMAD.MissionPlanner
         private readonly bool _detectOnOpen;
         private readonly TextBox _tools = Input("SimulationTools"),
             _workspace = Input("SimulationWorkspace"), _world = Input("SimulationWorld"), _python = Input("SimulationPython");
-        private readonly ComboBox _distribution = new ComboBox { Name = "SimulationDistribution", Dock = DockStyle.Fill,
-            DropDownStyle = ComboBoxStyle.DropDown, BackColor = NOMADTheme.INPUT_BG, ForeColor = NOMADTheme.TEXT_PRIMARY };
-        private readonly ComboBox _scenarios = new ComboBox { Name = "SimulationScenario", Dock = DockStyle.Fill,
-            DropDownStyle = ComboBoxStyle.DropDownList, BackColor = NOMADTheme.INPUT_BG, ForeColor = NOMADTheme.TEXT_PRIMARY };
-        private readonly CheckBox _visible = new CheckBox { Text = "Show Gazebo", AutoSize = true },
-            _autoConnect = new CheckBox { Text = "Connect automatically", AutoSize = true };
-        private readonly NumericUpDown _minutes = new NumericUpDown { Minimum = 1, Maximum = 1440, Width = 70 };
-        private readonly Label _status = new Label { Dock = DockStyle.Fill, ForeColor = NOMADTheme.TEXT_SECONDARY };
-        private readonly TextBox _url = new TextBox { Dock = DockStyle.Fill, ReadOnly = true };
+        private readonly ComboBox _distribution = new ComboBox { Name = "SimulationDistribution", IsEditable = true };
+        private readonly ComboBox _scenarios = new ComboBox { Name = "SimulationScenario" };
+        private readonly CheckBox _visible = new CheckBox { Content = "Show Gazebo" },
+            _autoConnect = new CheckBox { Content = "Connect automatically" };
+        private readonly TextBox _minutes = new TextBox { Width = 70 };
+        private readonly Label _status = WpfUi.Text("");
+        private readonly TextBox _url = new TextBox { IsReadOnly = true };
         private readonly Panel _previewPanel = new Panel { Dock = DockStyle.Fill, BackColor = Color.Black };
         private Button _start, _connect, _stop, _logs, _browseTools, _loadScenario, _loadWorld, _detect;
         private EmbeddedVideoPlayer _preview;
@@ -50,44 +53,40 @@ namespace NOMAD.MissionPlanner
             _tools.Text = preferences.ToolsDirectory; _distribution.Text = preferences.Distribution;
             _workspace.Text = preferences.Workspace; _world.Text = preferences.WorldPath;
             _python.Text = preferences.PythonExecutable;
-            _visible.Checked = preferences.Visible; _autoConnect.Checked = preferences.AutoConnect;
-            _minutes.Value = Math.Max(1, Math.Min(1440, preferences.DurationMinutes));
-            _minutes.BackColor = NOMADTheme.INPUT_BG; _minutes.ForeColor = TEXT_PRIMARY;
-            _url.BackColor = NOMADTheme.INPUT_BG; _url.ForeColor = TEXT_PRIMARY;
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 11 };
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
-            for (int i = 0; i < 9; i++) { layout.RowStyles.Add(new RowStyle(SizeType.Absolute, i == 8 ? 68 : 38)); }
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            _visible.IsChecked = preferences.Visible; _autoConnect.IsChecked = preferences.AutoConnect;
+            _minutes.Text = Math.Max(1, Math.Min(1440, preferences.DurationMinutes)).ToString();
+            var layout = new System.Windows.Controls.StackPanel { Margin = new System.Windows.Thickness(0, 0, 0, 8) };
             _browseTools = Button("Browse…", BrowseTools);
             _loadScenario = Button("Load scenario…", LoadScenario);
             _loadWorld = Button("Load world…", LoadWorld);
-            Row(layout, 0, "Simulation tools folder", _tools, _browseTools);
+            layout.Children.Add(Row("Simulation tools folder", _tools, _browseTools));
             _detect = AsyncButton("Detect setup", DetectSetup);
-            Row(layout, 1, "WSL distribution", _distribution, _detect);
-            Row(layout, 2, "Python in WSL", _python, null);
-            Row(layout, 3, "Simulator folder in WSL", _workspace, null);
-            Row(layout, 4, "Scenario", _scenarios, _loadScenario);
-            Row(layout, 5, "World override (optional)", _world, _loadWorld);
-            var options = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-            options.Controls.AddRange(new Control[] { _visible, _autoConnect, new Label { Text = "Minutes:", AutoSize = true }, _minutes });
-            layout.Controls.Add(options, 0, 6); layout.SetColumnSpan(options, 3);
-            var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+            layout.Children.Add(Row("WSL distribution", _distribution, _detect));
+            layout.Children.Add(Row("Python in WSL", _python, null));
+            layout.Children.Add(Row("Simulator folder in WSL", _workspace, null));
+            layout.Children.Add(Row("Scenario", _scenarios, _loadScenario));
+            layout.Children.Add(Row("World override (optional)", _world, _loadWorld));
+            var options = new System.Windows.Controls.WrapPanel();
+            foreach (var element in new System.Windows.UIElement[] { _visible, _autoConnect, WpfUi.Text("Minutes:"), _minutes })
+            { options.Children.Add(element); }
+            layout.Children.Add(options);
+            var actions = new System.Windows.Controls.WrapPanel();
             _start = AsyncButton("Start", Start);
             _connect = AsyncButton("Connect", () => _session.ConnectAsync());
             _stop = AsyncButton("Stop simulation", () => _session.StopAsync());
             _logs = Button("Open logs", () => { var path = _session?.Status.Directory;
                 if (Directory.Exists(path)) { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); } });
-            actions.Controls.AddRange(new Control[] { _start, _connect, _stop, _logs });
-            layout.Controls.Add(actions, 0, 7); layout.SetColumnSpan(actions, 3);
-            layout.Controls.Add(_status, 0, 8); layout.SetColumnSpan(_status, 3);
-            layout.Controls.Add(_url, 0, 9); layout.SetColumnSpan(_url, 2);
-            layout.Controls.Add(Button("Copy video URL", () => { if (_url.Text.Length > 0) { Clipboard.SetText(_url.Text); } }), 2, 9);
-            layout.Controls.Add(_previewPanel, 0, 10); layout.SetColumnSpan(_previewPanel, 3);
-            Controls.Add(layout);
-            _tools.Validated += (sender, args) => ReadScenarios(null);
+            foreach (var action in new[] { _start, _connect, _stop, _logs }) { actions.Children.Add(action); }
+            layout.Children.Add(actions);
+            layout.Children.Add(_status);
+            layout.Children.Add(Row("Video URL", _url, Button("Copy video URL", () =>
+            { if (_url.Text.Length > 0) { Clipboard.SetText(_url.Text); } })));
+            Controls.Add(_previewPanel);
+            var header = WpfUi.Host(new System.Windows.Controls.ScrollViewer
+            { Content = layout, MaxHeight = 500, VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto });
+            header.Dock = DockStyle.Top; header.AutoSize = true;
+            Controls.Add(header);
+            _tools.LostKeyboardFocus += (sender, args) => ReadScenarios(null);
             ReadScenarios(preferences.ScenarioPath);
             if (_session != null) { _session.Changed += OnChanged; }
             UpdateData();
@@ -109,7 +108,8 @@ namespace NOMAD.MissionPlanner
             {
                 var found = await SimulationSetup.DetectAsync(_distribution.Text.Trim(), _workspace.Text.Trim());
                 if (IsDisposed || _shutdown.IsCancellationRequested) { return; }
-                _distribution.Items.Clear(); _distribution.Items.AddRange(found.Distributions);
+                _distribution.Items.Clear();
+                foreach (var distribution in found.Distributions) { _distribution.Items.Add(distribution); }
                 _distribution.Text = found.Distribution; _workspace.Text = found.Workspace;
                 if (string.IsNullOrWhiteSpace(_python.Text) || _python.Text == "python3")
                 { _python.Text = string.IsNullOrEmpty(found.Python) ? "python3" : found.Python; }
@@ -120,20 +120,23 @@ namespace NOMAD.MissionPlanner
             finally { _detecting = false; if (!IsDisposed) { UpdateData(); } }
         }
 
-        private static TextBox Input(string name) => new TextBox { Name = name, Dock = DockStyle.Fill,
-            BackColor = NOMADTheme.INPUT_BG, ForeColor = NOMADTheme.TEXT_PRIMARY, BorderStyle = BorderStyle.FixedSingle };
-        private static void Row(TableLayoutPanel table, int row, string text, Control field, Control action)
+        private static TextBox Input(string name) => new TextBox { Name = name };
+        private static System.Windows.Controls.Grid Row(string text, System.Windows.FrameworkElement field,
+            System.Windows.FrameworkElement action)
         {
-            table.Controls.Add(new Label { Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, row);
-            table.Controls.Add(field, 1, row);
-            if (action != null) { table.Controls.Add(action, 2, row); }
+            var row = new System.Windows.Controls.Grid { Margin = new System.Windows.Thickness(0, 0, 0, 6) };
+            row.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new System.Windows.GridLength(180) });
+            row.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition());
+            row.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = System.Windows.GridLength.Auto });
+            var label = WpfUi.Text(text); label.VerticalAlignment = System.Windows.VerticalAlignment.Center;
+            row.Children.Add(label);
+            System.Windows.Controls.Grid.SetColumn(field, 1); row.Children.Add(field);
+            if (action != null) { System.Windows.Controls.Grid.SetColumn(action, 2); row.Children.Add(action); }
+            return row;
         }
         private static Button Button(string text, Action click)
         {
-            var button = new ControlFactory.ThemedButton { Text = text, UseMnemonic = false, AutoSize = true, MinimumSize = new Size(90, 29),
-                FlatStyle = FlatStyle.Flat, BackColor = NOMADTheme.BUTTON_BG, ForeColor = NOMADTheme.TEXT_PRIMARY };
-            button.Click += (sender, args) => click();
-            return button;
+            return WpfUi.Action(text, click);
         }
         private Button AsyncButton(string text, Func<Task> action)
         {
@@ -151,9 +154,11 @@ namespace NOMAD.MissionPlanner
         {
             var scenario = _scenarios.SelectedItem as SimulationScenario;
             if (scenario == null) { throw new InvalidOperationException("Choose or load a scenario configuration."); }
+            if (!int.TryParse(_minutes.Text, out int minutes) || minutes < 1 || minutes > 1440)
+            { throw new ArgumentException("Duration must be a whole number between 1 and 1440 minutes."); }
             var options = new SimulationPreferences { ToolsDirectory = _tools.Text.Trim(), Distribution = _distribution.Text.Trim(),
                 Workspace = _workspace.Text.Trim(), PythonExecutable = _python.Text.Trim(), ScenarioPath = scenario.Path, WorldPath = _world.Text.Trim(),
-                Visible = _visible.Checked, AutoConnect = _autoConnect.Checked, DurationMinutes = (int)_minutes.Value };
+                Visible = _visible.IsChecked == true, AutoConnect = _autoConnect.IsChecked == true, DurationMinutes = minutes };
             options.Validate(); options.Save();
             await _session.StartAsync(options, scenario);
         }
@@ -209,16 +214,16 @@ namespace NOMAD.MissionPlanner
         {
             if (IsDisposed || Disposing) { return; }
             var status = _session?.Status;
-            _start.Enabled = status != null && !status.Active && !_detecting && status.Phase != "Cleanup failed" && !_shutdown.IsCancellationRequested;
-            _connect.Enabled = status?.CanConnect == true;
-            _stop.Enabled = status?.Active == true;
-            _logs.Enabled = Directory.Exists(status?.Directory);
+            _start.IsEnabled = status != null && !status.Active && !_detecting && status.Phase != "Cleanup failed" && !_shutdown.IsCancellationRequested;
+            _connect.IsEnabled = status?.CanConnect == true;
+            _stop.IsEnabled = status?.Active == true;
+            _logs.IsEnabled = Directory.Exists(status?.Directory);
             _status.Text = _detecting ? "Finding WSL and the simulator folder…" :
                 _actionError ?? (status == null ? "Simulation owner unavailable." : status.Phase + " — " + status.Message);
             _url.Text = status?.VideoUrl ?? "";
-            foreach (Control control in new Control[] { _tools, _distribution, _workspace, _python, _scenarios, _world,
+            foreach (var control in new System.Windows.UIElement[] { _tools, _distribution, _workspace, _python, _scenarios, _world,
                 _visible, _autoConnect, _minutes, _browseTools, _loadScenario, _loadWorld, _detect })
-            { control.Enabled = status?.Active != true && !_detecting; }
+            { control.IsEnabled = status?.Active != true && !_detecting; }
             if (_shutdown.IsCancellationRequested || !Visible || string.IsNullOrEmpty(status?.VideoUrl)) { PausePreview(); return; }
             if (_previewUrl == status.VideoUrl) { return; }
             PausePreview(); _previewUrl = status.VideoUrl;

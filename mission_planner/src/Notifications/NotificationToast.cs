@@ -147,43 +147,31 @@ namespace NOMAD.MissionPlanner
                 ShowInTaskbar = false;
                 TopMost = true;
                 Size = new Size(TOAST_WIDTH, TOAST_HEIGHT);
-                BackColor = critical ? Color.FromArgb(120, 25, 25) : Color.FromArgb(120, 85, 15);
-
-                var accent = new Panel
+                var root = new System.Windows.Controls.Border
                 {
-                    Dock = DockStyle.Left,
-                    Width = 5,
-                    BackColor = critical ? Color.Red : Color.Orange,
+                    Background = critical ? System.Windows.Media.Brushes.DarkRed : System.Windows.Media.Brushes.DarkGoldenrod,
+                    BorderBrush = critical ? System.Windows.Media.Brushes.Red : System.Windows.Media.Brushes.Orange,
+                    BorderThickness = new System.Windows.Thickness(5, 0, 0, 0),
+                    Padding = new System.Windows.Thickness(9, 6, 8, 4),
                 };
-                Controls.Add(accent);
-
-                var lblTitle = new Label
+                var content = new System.Windows.Controls.StackPanel();
+                content.Children.Add(new System.Windows.Controls.TextBlock
                 {
                     Text = $"{(critical ? "CRITICAL" : "WARNING")} — {n.Title}",
-                    Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-                    ForeColor = Color.White,
-                    Location = new Point(14, 8),
-                    Size = new Size(TOAST_WIDTH - 22, 20),
-                    AutoEllipsis = true,
-                };
-                Controls.Add(lblTitle);
-
-                var lblMessage = new Label
+                    FontWeight = System.Windows.FontWeights.Bold,
+                    Foreground = System.Windows.Media.Brushes.White,
+                    TextTrimming = System.Windows.TextTrimming.CharacterEllipsis,
+                });
+                content.Children.Add(new System.Windows.Controls.TextBlock
                 {
-                    Text = n.Message ?? "",
-                    Font = new Font("Segoe UI", 8.5f),
-                    ForeColor = Color.Gainsboro,
-                    Location = new Point(14, 30),
-                    Size = new Size(TOAST_WIDTH - 22, 42),
-                    AutoEllipsis = true,
-                };
-                Controls.Add(lblMessage);
-
-                // Click anywhere (form or child labels) dismisses.
-                Click += (s, e) => Close();
-                lblTitle.Click += (s, e) => Close();
-                lblMessage.Click += (s, e) => Close();
-                accent.Click += (s, e) => Close();
+                    Text = n.Message ?? "", Foreground = System.Windows.Media.Brushes.Gainsboro,
+                    TextWrapping = System.Windows.TextWrapping.Wrap,
+                    TextTrimming = System.Windows.TextTrimming.CharacterEllipsis,
+                    MaxHeight = 42,
+                });
+                root.Child = content;
+                root.MouseLeftButtonUp += (s, e) => Close();
+                Controls.Add(WpfUi.Host(root));
 
                 _dismissTimer = new Timer { Interval = critical ? 12000 : 7000 };
                 _dismissTimer.Tick += (s, e) => Close();

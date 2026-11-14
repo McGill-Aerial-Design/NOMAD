@@ -17,27 +17,27 @@ internal static partial class VideoLifetimeTests
             () => throw new InvalidOperationException("History must not activate video")))
         {
             form.Controls.Add(player); form.Show();
-            FindVideoButton(player, "Video options").PerformClick();
-            var button = player.Toolbar.Controls.OfType<FlowLayoutPanel>().SelectMany(row => row.Controls.OfType<Button>())
-                .Single(item => item.Text == "History");
+            ClickVideoButton(FindVideoButton(player, "Video options"));
+            var button = player.VideoControls.HistoryButton;
             var show = typeof(EmbeddedVideoPlayer).GetMethod("ShowTrackingHistory", BindingFlags.Instance | BindingFlags.NonPublic);
-            var menu = GetField<ContextMenuStrip>(player, "_trackingHistoryMenu");
+            var menu = GetField<System.Windows.Controls.ContextMenu>(player, "_trackingHistoryMenu");
             for (int index = 0; index < 4; index++)
             {
                 show.Invoke(player, new object[] { button, EventArgs.Empty });
                 Application.DoEvents();
-                Check(menu.Visible && menu.Items.Count > 0, "History menu failed to open");
-                typeof(ToolStripDropDown).GetMethod("OnItemClicked", BindingFlags.Instance | BindingFlags.NonPublic)
-                    .Invoke(menu, new object[] { new ToolStripItemClickedEventArgs(menu.Items[0]) });
-                Application.DoEvents();
-                Check(!menu.Visible && !menu.IsDisposed &&
-                    ReferenceEquals(menu, GetField<ContextMenuStrip>(player, "_trackingHistoryMenu")),
-                    "History click/close disposed the menu while WinForms still owned its click processing");
+                Check(menu.IsOpen && menu.Items.Count > 0, "History menu failed to open");
+                var peer = new System.Windows.Automation.Peers.MenuItemAutomationPeer((System.Windows.Controls.MenuItem)menu.Items[0]);
+                ((System.Windows.Automation.Provider.IInvokeProvider)peer.GetPattern(
+                    System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke();
+                WaitUi(() => !menu.IsOpen, "history item click closes its popup");
+                Check(ReferenceEquals(menu, GetField<System.Windows.Controls.ContextMenu>(player, "_trackingHistoryMenu")),
+                    "History click/close lost its player-owned menu");
             }
             show.Invoke(player, new object[] { button, EventArgs.Empty });
-            Check(menu.Visible, "Final History menu did not open before owner close");
+            Check(menu.IsOpen, "Final History menu did not open before owner close");
             player.Dispose(); Application.DoEvents();
-            Check(menu.IsDisposed, "Player disposal leaked its owned History menu");
+            Check(!menu.IsOpen && menu.PlacementTarget == null && menu.Items.Count == 0,
+                "Player disposal leaked its owned History menu or placement target");
             using (var other = new ContextMenuStrip())
             { other.Items.Add("Unrelated popup"); other.Show(form, Point.Empty); other.Close(); Application.DoEvents(); }
         }

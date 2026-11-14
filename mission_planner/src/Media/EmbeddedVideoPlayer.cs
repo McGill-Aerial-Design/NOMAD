@@ -11,14 +11,13 @@ namespace NOMAD.MissionPlanner
     {
         private VideoInputProfile _input;
         private readonly VideoSession _session;
-        private readonly ToolTip _videoToolTips = new ToolTip();
         private readonly System.Windows.Forms.Timer _frameTimer;
         private CancellationTokenRegistration _shutdown;
         private Bitmap _displayFrame;
         private VideoFrame _displayedVideoFrame;
         private readonly NOMADConfig _aircraft;
         private PictureBox _videoBox;
-        private Label _lblStatus;
+        private System.Windows.Controls.TextBlock _lblStatus;
         private Form _fullscreenForm;
         private PictureBox _fullscreenBox;
         private readonly bool _showControls;
@@ -131,8 +130,9 @@ namespace NOMAD.MissionPlanner
                     }
                     finally
                     {
-                        _videoToolTips.Dispose();
-                        _trackingHistoryMenu.Dispose();
+                        _trackingHistoryMenu.IsOpen = false;
+                        _trackingHistoryMenu.PlacementTarget = null;
+                        _trackingHistoryMenu.Items.Clear();
                         _fullscreenForm?.Dispose();
                     }
                 }

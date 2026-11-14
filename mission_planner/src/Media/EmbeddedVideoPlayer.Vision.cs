@@ -8,6 +8,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using MissionPlanner;
+using WpfButton = System.Windows.Controls.Button;
+using WpfComboBox = System.Windows.Controls.ComboBox;
+using WpfTextBlock = System.Windows.Controls.TextBlock;
+using System.Windows.Automation;
 
 namespace NOMAD.MissionPlanner
 {
@@ -21,16 +25,16 @@ namespace NOMAD.MissionPlanner
         private OutputController.NativeTarget _selectionTarget;
         private MAVState _selectionMav;
         private VisualTrackingMode _trackingMode;
-        private ComboBox _trackingModeSelector;
-        private Button _clearAreaButton;
-        private readonly ContextMenuStrip _trackingHistoryMenu = new ContextMenuStrip
-        { BackColor = NOMADTheme.CARD_BG, ForeColor = NOMADTheme.TEXT_PRIMARY, Font = NOMADTheme.Font() };
+        private WpfComboBox _trackingModeSelector;
+        private WpfButton _clearAreaButton;
+        private readonly System.Windows.Controls.ContextMenu _trackingHistoryMenu = new System.Windows.Controls.ContextMenu
+        { Background = WpfTheme.Card, Foreground = WpfTheme.Text };
         private bool _selectionInitialized, _trackingPaused;
         private bool _regionReady, _trackingVisible;
         private long _regionRevision, _trackingClaim, _selectionStartedTicks;
         private readonly Queue<TrackingTransition> _trackingEvents = new Queue<TrackingTransition>();
-        private Label _lblVisionStatus;
-        private Button _detectButton, _trackButton;
+        private WpfTextBlock _lblVisionStatus;
+        private WpfButton _detectButton, _trackButton;
         private bool _tracking;
         private string _trackingStatus = "Click or drag to select a target";
         private string _trackingFeedback;
@@ -69,81 +73,32 @@ namespace NOMAD.MissionPlanner
             GimbalController.ManualInput += OnManualGimbalInput;
             OutputController.ConnectionChanged += OnAircraftChanged;
             AttachSelectionMouse(_videoBox);
-            var controls = new FlowLayoutPanel
-            { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Margin = Padding.Empty };
-            _trackingModeSelector = ControlFactory.Combo(new[] { "Object", "Area" }, (int)_trackingMode);
-            _trackingModeSelector.Width = 90; _trackingModeSelector.AccessibleName = "Tracking mode";
-            _trackingModeSelector.SelectedIndexChanged += (sender, args) =>
+            _trackingModeSelector = VideoControls.TrackingModeSelector;
+            _trackingModeSelector.SelectedIndex = (int)_trackingMode;
+            _trackingModeSelector.SelectionChanged += (sender, args) =>
                 SetTrackingMode((VisualTrackingMode)_trackingModeSelector.SelectedIndex);
-            _clearAreaButton = CreateVideoButton("\uE74D", "Clear remembered target",
-                (sender, args) => { RetireTracking("Target cleared; select again"); UpdateVisionStatus(); });
-            _detectButton = ControlFactory.Button("Detect", (sender, args) => EnableDetection(!_session.DetectionEnabled),
-                width: 65, height: 28);
-            _detectButton.MinimumSize = _detectButton.Size;
-            _detectButton.AutoSize = true;
-            _detectButton.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            _trackButton = ControlFactory.Button("Start tracking", (sender, args) =>
+            _clearAreaButton = VideoControls.ClearButton;
+            _clearAreaButton.Click += (sender, args) =>
+            { RetireTracking("Target cleared; select again"); UpdateVisionStatus(); };
+            _detectButton = VideoControls.DetectButton;
+            _detectButton.Click += (sender, args) => EnableDetection(!_session.DetectionEnabled);
+            _trackButton = VideoControls.TrackButton;
+            _trackButton.Click += (sender, args) =>
             {
                 if (IsTracking) { StopTracking(); }
                 else { StartTracking(); }
                 UpdateVisionStatus();
-            }, width: 130, height: 28);
-            _trackButton.AutoSize = false;
-            _trackButton.Name = "TrackingToggle";
-            _trackButton.FontChanged += (sender, args) => SizeTrackingToggle();
-            SizeTrackingToggle();
-            var save = ControlFactory.Button("Save observation", async (sender, args) =>
-                await SaveObservationAsync(), width: 130, height: 28);
-            var history = ControlFactory.Button("History", ShowTrackingHistory, width: 70, height: 28);
-            save.AutoSize = history.AutoSize = true;
-            VisionOptions = new FlowLayoutPanel
-            {
-                Name = "VideoOptions", Dock = DockStyle.Fill, AutoSize = true, WrapContents = true,
-                Margin = Padding.Empty, Visible = false,
             };
-            VisionOptions.Controls.AddRange(new Control[] { save, history });
-            var more = ControlFactory.Button("More ▾", (sender, args) =>
+            VideoControls.SaveButton.Click += async (sender, args) => await SaveObservationAsync();
+            VideoControls.HistoryButton.Click += ShowTrackingHistory;
+            VideoControls.MoreButton.Click += (sender, args) =>
             {
-                VisionOptions.Visible = !VisionOptions.Visible;
-                ((Button)sender).Text = VisionOptions.Visible ? "Less ▴" : "More ▾";
-            }, width: 80, height: 28);
-            more.AccessibleName = "Video options";
-            more.AutoSize = true;
-            controls.Controls.AddRange(new Control[] { _trackingModeSelector, _detectButton, _trackButton,
-                _clearAreaButton, more });
-            _videoToolTips.SetToolTip(_trackingModeSelector,
-                "Object follows moving appearance. Area remembers a distinctive fixed planar surface, including walls.");
-            _videoToolTips.SetToolTip(_detectButton, "Detect objects in video. Detection alone never moves the gimbal.");
-            _videoToolTips.SetToolTip(_trackButton, "Follow the selected region with the gimbal.");
-            _videoToolTips.SetToolTip(save, "Save the current image and observation details.");
-            _videoToolTips.SetToolTip(history, "Review the last 32 selection and tracking transitions.");
-            _videoToolTips.SetToolTip(more, "Detection model, saved observations and tracking history.");
-            Toolbar.RowCount = 3;
-            Toolbar.Controls.Add(controls, 0, 1);
-            Toolbar.SetColumnSpan(controls, 2);
-            Toolbar.Controls.Add(VisionOptions, 0, 2);
-            Toolbar.SetColumnSpan(VisionOptions, 2);
-            _lblVisionStatus = new Label
-            { Dock = DockStyle.Bottom, Height = 36, ForeColor = Color.Gainsboro, TextAlign = ContentAlignment.MiddleLeft };
-            void FitVisionStatus()
-            {
-                _lblVisionStatus.Height = Math.Max(36,
-                    _lblVisionStatus.GetPreferredSize(new Size(Math.Max(1, _lblVisionStatus.Width), 0)).Height);
-            }
-            _lblVisionStatus.SizeChanged += (sender, args) => FitVisionStatus();
-            _lblVisionStatus.TextChanged += (sender, args) => FitVisionStatus();
-            Controls.Add(_lblVisionStatus);
+                bool expand = VisionOptions.Visibility != System.Windows.Visibility.Visible;
+                VisionOptions.Visibility = expand ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+                VideoControls.MoreButton.Content = expand ? "Less ▴" : "More ▾";
+                PerformLayout();
+            };
             UpdateVisionStatus();
-        }
-
-        private void SizeTrackingToggle()
-        {
-            var start = TextRenderer.MeasureText("Start tracking", _trackButton.Font);
-            var stop = TextRenderer.MeasureText("Stop tracking", _trackButton.Font);
-            var size = new Size(Math.Max(130, Math.Max(start.Width, stop.Width) + 20),
-                Math.Max(28, Math.Max(start.Height, stop.Height) + 8));
-            _trackButton.MinimumSize = size;
-            _trackButton.Size = size;
         }
 
         internal void EnableDetection(bool enabled)
@@ -315,14 +270,15 @@ namespace NOMAD.MissionPlanner
             TrackingTransition[] events;
             lock (_visionGate) { events = _trackingEvents.Reverse().ToArray(); }
             var menu = _trackingHistoryMenu;
-            if (menu.Visible) { menu.Close(); }
-            foreach (var item in menu.Items.Cast<ToolStripItem>().ToArray()) { item.Dispose(); }
+            menu.IsOpen = false;
             menu.Items.Clear();
             foreach (var item in events)
-            { menu.Items.Add(new ToolStripLabel(item.Utc.ToString("HH:mm:ss") + " UTC  " + item.Reason)); }
-            if (events.Length == 0) { menu.Items.Add(new ToolStripLabel("No tracking events")); }
-            var button = (Control)sender;
-            menu.Show(button, new Point(0, button.Height));
+            { menu.Items.Add(new System.Windows.Controls.MenuItem
+                { Header = item.Utc.ToString("HH:mm:ss") + " UTC  " + item.Reason }); }
+            if (events.Length == 0) { menu.Items.Add(new System.Windows.Controls.MenuItem { Header = "No tracking events" }); }
+            menu.PlacementTarget = (System.Windows.UIElement)sender;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            menu.IsOpen = true;
         }
 
         private static bool FreshAircraft(OutputController.NativeTarget target, MAVState mav)
@@ -539,17 +495,17 @@ namespace NOMAD.MissionPlanner
             string detail = TrackingStatus + (error == null ? "" : " | " + error) +
                 MotionEstimateDetail() +
                 (!_input.TrackingCalibrated ? " | Calibration: Settings → Video" : "");
-            _videoToolTips.SetToolTip(_lblStatus, detail);
-            _videoToolTips.SetToolTip(_lblVisionStatus, detail);
-            _detectButton.Text = _session.DetectionLoading ? "Loading…" : _session.DetectionEnabled ? "Detect on" : "Detect";
-            _trackButton.Text = IsTracking ? "Stop tracking" : "Start tracking";
-            _trackButton.AccessibleName = _trackButton.Text;
-            _trackButton.Enabled = IsTracking || (_input.TrackingCalibrated && RegionReady &&
+            _lblStatus.ToolTip = detail;
+            _lblVisionStatus.ToolTip = detail;
+            _detectButton.Content = _session.DetectionLoading ? "Loading…" : _session.DetectionEnabled ? "Detect on" : "Detect";
+            VideoControls.TrackCaption.Text = IsTracking ? "Stop tracking" : "Start tracking";
+            AutomationProperties.SetName(_trackButton, VideoControls.TrackCaption.Text);
+            _trackButton.IsEnabled = IsTracking || (_input.TrackingCalibrated && RegionReady &&
                 _latestTrackingSample?.Fresh == true &&
                 _session.IsRegionCurrent(_regionRevision));
-            _videoToolTips.SetToolTip(_trackButton, IsTracking ? "Stop automatic gimbal tracking." :
-                "Follow the verified selection with the gimbal.");
-            _clearAreaButton.Enabled = SelectedRegion.HasValue;
+            _trackButton.ToolTip = IsTracking ? "Stop automatic gimbal tracking." :
+                "Follow the verified selection with the gimbal.";
+            _clearAreaButton.IsEnabled = SelectedRegion.HasValue;
         }
 
         private void PaintDetections(PictureBox box, Graphics graphics)

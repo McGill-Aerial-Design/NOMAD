@@ -74,7 +74,7 @@ internal static partial class VideoLifetimeTests
         using var preview = new VideoInputPlayer(config, false, CancellationToken.None,
             () => previewSources.Dequeue(), select);
         using var full = new VideoInputPlayer(config, true, CancellationToken.None,
-            () => fullSources.Dequeue(), select);
+            () => fullSources.Dequeue(), select, createTracker: (token, mode) => new FakeVisualTracker());
         var player = preview.Player;
         var handle = player.Handle;
         Wait(first.ReadEntered, "selected preview source");
@@ -91,7 +91,7 @@ internal static partial class VideoLifetimeTests
         full.Player.StopStream();
         Check(oldSession.State == VideoState.Streaming && first.Disposals == 0,
             "Stopping the full view closed a receiver the preview still uses.");
-        GetField<ComboBox>(preview, "_selector").SelectedItem = "Alternate";
+        GetField<System.Windows.Controls.ComboBox>(preview, "_selector").SelectedItem = "Alternate";
         WaitUi(() => second.ReadEntered.IsSet, "replacement preview");
         full.RefreshInput();
         Check(ReferenceEquals(preview.Player, player) && player.Handle == handle,
@@ -111,10 +111,13 @@ internal static partial class VideoLifetimeTests
             "restarted full view joins the replacement receiver");
         Check(fullSecond.Starts == 0, "Cached full video retained the old input or opened a second receiver.");
         save = false;
-        GetField<ComboBox>(preview, "_selector").SelectedItem = "Synthetic";
+        GetField<System.Windows.Controls.ComboBox>(preview, "_selector").SelectedItem = "Synthetic";
         Check(config.SelectedVideoInputName == "Alternate" &&
-            (string)GetField<ComboBox>(preview, "_selector").SelectedItem == "Alternate" && second.Starts == 1,
+            (string)GetField<System.Windows.Controls.ComboBox>(preview, "_selector").SelectedItem == "Alternate" && second.Starts == 1,
             "Failed selection did not restore the selector/current playback.");
+        var failure = GetField<System.Windows.Controls.TextBlock>(preview, "_selectionError");
+        Check(failure.Visibility == System.Windows.Visibility.Visible && failure.Text.Contains("not changed or saved"),
+            "Failed source save silently restored the selection without an immediately visible explanation.");
     }
 
     private static void ActiveVideoInputSave()
@@ -188,20 +191,20 @@ internal static partial class VideoLifetimeTests
     private static void VideoDefinitionSelection()
     {
         using var form = new NOMADSettingsForm(new NOMADProfiles(TwoInputs()));
-        var selector = GetField<ComboBox>(form, "_cmbVideoInputs");
+        var selector = GetField<System.Windows.Controls.ComboBox>(form, "_cmbVideoInputs");
         var save = typeof(NOMADSettingsForm).GetMethod("SaveSettings", BindingFlags.Instance | BindingFlags.NonPublic);
         var remove = typeof(NOMADSettingsForm).GetMethod("RemoveVideoInput", BindingFlags.Instance | BindingFlags.NonPublic);
         selector.SelectedIndex = 1;
-        GetField<TextBox>(form, "_txtVideoName").Text = "Renamed inactive";
+        GetField<System.Windows.Controls.TextBox>(form, "_txtVideoName").Text = "Renamed inactive";
         save.Invoke(form, null);
         Check(form.Config.SelectedVideoInputName == "Synthetic", "Editing an inactive definition selected it.");
         remove.Invoke(form, null);
         Check(form.Config.SelectedVideoInputName == "Synthetic", "Removing an inactive definition selected another input.");
-        GetField<TextBox>(form, "_txtVideoName").Text = "Renamed active";
+        GetField<System.Windows.Controls.TextBox>(form, "_txtVideoName").Text = "Renamed active";
         save.Invoke(form, null);
         Check(form.Config.SelectedVideoInputName == "Renamed active", "Renaming the active definition lost its selection.");
         typeof(NOMADSettingsForm).GetMethod("AddVideoInput", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(form, null);
-        GetField<TextBox>(form, "_txtVideoUrl").Text = "rtsp://new.invalid/live";
+        GetField<System.Windows.Controls.TextBox>(form, "_txtVideoUrl").Text = "rtsp://new.invalid/live";
         save.Invoke(form, null);
         Check(form.Config.SelectedVideoInputName == "Renamed active", "Adding another definition changed the active input.");
         selector.SelectedIndex = 0;

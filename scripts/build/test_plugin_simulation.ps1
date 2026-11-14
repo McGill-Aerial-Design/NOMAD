@@ -18,7 +18,9 @@ foreach ($name in @('MissionPlanner.exe', 'MissionPlanner.Comms.dll', 'MissionPl
     $references += '/r:' + (Join-Path $hostRoot $name)
 }
 $exe = Join-Path $output 'SimulationControlTests.exe'
-& $compiler /nologo /target:exe /platform:x64 /langversion:latest "/out:$exe" @references `
+$references += Get-WpfTestReferences
+& $compiler /nologo /target:exe /platform:x64 /langversion:latest "/out:$exe" `
+    ("/win32manifest:" + (Join-Path $root 'mission_planner/tests/ui/host.manifest')) @references `
     (Join-Path $root 'mission_planner/tests/simulation/SimulationControlTests.cs')
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Copy-Item -LiteralPath $plugin -Destination $output -Force

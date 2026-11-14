@@ -21,7 +21,9 @@ New-Item -ItemType Directory -Force $outDir | Out-Null
 $exe = Join-Path $outDir 'JoystickPadUiTests.exe'
 
 Write-Host 'Compiling joystick-pad UI harness...' -ForegroundColor Yellow
-& $csc /nologo /target:exe /langversion:latest /r:System.Drawing.dll /r:System.Windows.Forms.dll "/out:$exe" $testSource
+$references = @('/r:System.Windows.Forms.dll', '/r:System.Drawing.dll') + @(Get-WpfTestReferences)
+& $csc /nologo /target:exe /langversion:latest @references "/out:$exe" `
+    ("/win32manifest:" + (Join-Path $repoRoot 'mission_planner/tests/ui/host.manifest')) $testSource
 if ($LASTEXITCODE -ne 0) {
     Write-Host 'Compile FAILED.' -ForegroundColor Red
     exit 1

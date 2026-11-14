@@ -16,7 +16,8 @@ function Invoke-SetupEditorTests($Plugin, $ConfigType) {
     function Reject-Editor($Form) {
         $failed = $false
         try { Candidate $Form | Out-Null } catch { $failed = $true }
-        Require $failed 'Invalid editor candidate bypassed model validation.'
+        Require $failed ('Invalid editor candidate bypassed model validation: ' + $Form.GetType().Name +
+            ' at fixture line ' + (Get-PSCallStack)[1].ScriptLineNumber)
     }
     $types = @('ServoToggle','ServoPosition','ServoBidirectional','RelayToggle','RelayPulse')
     foreach ($behavior in $types) {
@@ -35,10 +36,12 @@ function Invoke-SetupEditorTests($Plugin, $ConfigType) {
             (Field $form '_name').Text = 'Renamed output'
             $renamed = Candidate $form
             Require ($renamed[0]['id'].ToString() -eq 'stable' -and $renamed[0]['name'].ToString() -eq 'Renamed output') 'Payload rename changed its stable ID.'
-            (Field $form '_count').Value = 1; Reject-Editor $form
-            (Field $form '_count').Value = 3; (Field $form '_requireNeutral').Checked = $false; Reject-Editor $form
-            (Field $form '_requireNeutral').Checked = $true
-            (Field $form '_minimum').Value = 2100; Reject-Editor $form
+            (Field $form '_count').Text = '1'; Reject-Editor $form
+            (Field $form '_count').Text = '3'; (Field $form '_requireNeutral').IsChecked = $false; Reject-Editor $form
+            (Field $form '_requireNeutral').IsChecked = $true
+            if ($behavior.StartsWith('Servo')) { (Field $form '_minimum').Text = '2100' }
+            else { (Field $form '_channel').Text = '16' }
+            Reject-Editor $form
             Require ($source.ToString() -ceq $before) 'Invalid or cancelled payload edit changed its source.'
         } finally { $form.Dispose() }
         $empty = [Newtonsoft.Json.Linq.JArray]::new()
@@ -55,7 +58,33 @@ function Invoke-SetupEditorTests($Plugin, $ConfigType) {
     $form = New-Editor $payloadType $duplicate -1 'b'
     try { Reject-Editor $form; Require ($duplicate.Count -eq 1) 'Duplicate output changed payload source.' } finally { $form.Dispose() }
     $form = New-Editor $payloadType $duplicate -1 'a'
-    try { (Field $form '_channel').Value = 2; Reject-Editor $form } finally { $form.Dispose() }
+    try { (Field $form '_channel').Text = '2'; Reject-Editor $form } finally { $form.Dispose() }
+
+    $form = New-Editor $payloadType ([Newtonsoft.Json.Linq.JArray]::new()) -1 'hidden_values'
+    try {
+        foreach ($field in @('_minimum', '_maximum', '_neutral', '_safe', '_hold', '_pulse')) {
+            (Field $form $field).Text = 'invalid'
+        }
+        (Field $form '_behavior').SelectedIndex = [array]::IndexOf($types, 'RelayToggle')
+        $candidate = Candidate $form
+        Require ($candidate[0]['pwm_min'].ToObject([int]) -eq 1000 -and $candidate[0]['pwm_max'].ToObject([int]) -eq 2000 -and
+            $candidate[0]['pwm_neutral'].ToObject([int]) -eq 1500 -and $candidate[0]['safe_pwm'].ToObject([int]) -eq 1000 -and
+            $candidate[0]['hold_ms'].ToObject([int]) -eq 1000 -and $candidate[0]['pulse_ms'].ToObject([int]) -eq 500) `
+            'Inactive invalid payload edits replaced the original calibration or blocked relay acceptance.'
+        foreach ($field in @('_minimum', '_maximum', '_neutral', '_hold')) {
+            foreach ($entry in @(@('_minimum','1000'), @('_maximum','2000'), @('_neutral','1500'), @('_hold','1000'))) {
+                (Field $form $entry[0]).Text = $entry[1]
+            }
+            (Field $form '_behavior').SelectedIndex = [array]::IndexOf($types, 'ServoBidirectional')
+            (Field $form $field).Text = 'invalid'; Reject-Editor $form
+        }
+        (Field $form '_minimum').Text = '1000'; (Field $form '_maximum').Text = '2000'
+        (Field $form '_neutral').Text = '1500'; (Field $form '_hold').Text = '1000'
+        (Field $form '_behavior').SelectedIndex = [array]::IndexOf($types, 'ServoPosition')
+        (Field $form '_safe').Text = 'invalid'; Reject-Editor $form
+        (Field $form '_behavior').SelectedIndex = [array]::IndexOf($types, 'RelayPulse')
+        (Field $form '_pulse').Text = 'invalid'; Reject-Editor $form
+    } finally { $form.Dispose() }
 
     foreach ($transport in @('UDP','TCP','COM')) {
         $draft = Load-Config ('{"RouterLinks":[{"Id":"stable_link","Name":"Friendly link","Transport":"' + $transport +
@@ -80,7 +109,7 @@ function Invoke-SetupEditorTests($Plugin, $ConfigType) {
         try {
             (Field $form '_transport').SelectedItem = $transport
             (Field $form '_host').Text = 'server.invalid'; (Field $form '_device').Text = 'COM8'
-            (Field $form '_remotePort').Value = 14790
+            (Field $form '_remotePort').Text = '14790'
             $candidate = Candidate $form
             Require ($candidate.RouterLinks.Count -eq 1 -and $candidate.RouterLinks[0].Transport -eq $transport -and
                 !$candidate.RouterClientEnabled -and $empty.RouterLinks.Count -eq 0) 'New physical link changed the source or enabled the router.'
@@ -89,23 +118,23 @@ function Invoke-SetupEditorTests($Plugin, $ConfigType) {
     $draft = Load-Config '{"RouterLinks":[{"Id":"one","Port":14750},{"Id":"two","Port":14760}]}'
     $form = New-Editor $linkType $draft 1 ''
     try {
-        (Field $form '_port').Value = 14750; Reject-Editor $form
-        (Field $form '_port').Value = 14600; Reject-Editor $form
-        (Field $form '_port').Value = 0; Reject-Editor $form
+        (Field $form '_port').Text = '14750'; Reject-Editor $form
+        (Field $form '_port').Text = '14600'; Reject-Editor $form
+        (Field $form '_port').Text = '0'; Reject-Editor $form
         Require ($draft.RouterLinks[1].Port -eq 14760) 'Port validation changed the previous link draft.'
     } finally { $form.Dispose() }
 
     $draft.RouterPreferredLink = 'one'
     $form = New-Editor $linkType $draft 0 ''
     try {
-        (Field $form '_enabled').Checked = $false; Reject-Editor $form
-        (Field $form '_enabled').Checked = $true; (Field $form '_bind').Text = 'not-an-ip'; Reject-Editor $form
+        (Field $form '_enabled').IsChecked = $false; Reject-Editor $form
+        (Field $form '_enabled').IsChecked = $true; (Field $form '_bind').Text = 'not-an-ip'; Reject-Editor $form
         (Field $form '_bind').Text = '0.0.0.0'; (Field $form '_host').Text = 'bad host'; Reject-Editor $form
     } finally { $form.Dispose() }
 
     $config = Load-Config ('{"AircraftName":"Draft","Inputs":[' +
         '{"Id":"button","Name":"Button","Device":"missing","Source":"Button","Action":"removed:activate"},' +
-        '{"Id":"axis","Name":"Axis","Device":"missing","Source":"Axis","Action":"toggle:position"}],' +
+        '{"Id":"axis","Name":"Axis","Device":"missing","Source":"Axis","Action":"toggle:position","Deadzone":0.2}],' +
         '"ActuatorDefinitions":[{"id":"position","name":"Friendly position","behavior":"ServoPosition","channel":1,"safe_pwm":1500,' +
         '"hazardous":false,"confirmation_count":0},{"id":"toggle","name":"Friendly toggle","behavior":"ServoToggle","channel":2,"safe_pwm":1000}]}')
     $profilesType = $Plugin.GetType('NOMAD.MissionPlanner.NOMADProfiles', $true)
@@ -119,8 +148,8 @@ function Invoke-SetupEditorTests($Plugin, $ConfigType) {
     try {
         $form.Config.Inputs.Add([Newtonsoft.Json.Linq.JObject]::Parse('{"Id":"switch","Name":"Switch","Device":"missing","Source":"AxisSwitch3","Action":"toggle:safe"}'))
         $formType.GetMethod('LoadInputList', $private).Invoke($form, @()) | Out-Null
-        $inputRow = (Field $form '_inputList').Rows[2]
-        Require ($inputRow.Cells[1].Value.Contains('3-position switch') -and $inputRow.Cells[1].Value.Contains('Unavailable: missing') -and
+        $inputRow = (Field $form '_inputList').Items[2]
+        Require ($inputRow[1].Contains('3-position switch') -and $inputRow[1].Contains('Unavailable: missing') -and
             $form.Config.Inputs[2]['Device'].Value -eq 'missing' -and $form.Config.Inputs[2]['Source'].Value -eq 'AxisSwitch3') 'Input list lost friendly/missing labels or changed raw source identity.'
         $form.Config.Inputs.RemoveAt(2)
         $editor = Input-Editor $form.Config 0
@@ -138,6 +167,16 @@ function Invoke-SetupEditorTests($Plugin, $ConfigType) {
             Require ($actions.SelectedItem.Key -eq 'toggle:position' -and $actions.SelectedItem.Value.StartsWith('Unavailable:') -and
                 @($actions.Items | Where-Object { $_.Key -eq 'position:position' }).Count -eq 1) 'Continuous eligibility/unavailable action was incorrect.'
             Require (@($actions.Items | Where-Object { $_.Key -eq 'gimbal:pitch' }).Count -eq 1) 'Gimbal movement was missing from continuous inputs.'
+            (Field $editor '_deadzone').Text = 'invalid'
+            $source = Field $editor '_source'
+            $source.SelectedItem = @($source.Items | Where-Object { $_.Key -eq 'Button' })[0]
+            (Field $editor '_button').SelectedIndex = 1
+            $actions.SelectedItem = @($actions.Items | Where-Object { $_.Key -eq 'toggle:safe' })[0]
+            $candidate = Candidate $editor
+            Require ([math]::Abs($candidate[1]['Deadzone'].ToObject([double]) - 0.2) -lt 0.00001) `
+                'Inactive invalid deadzone replaced the original value or blocked button acceptance.'
+            $source.SelectedItem = @($source.Items | Where-Object { $_.Key -eq 'Axis' })[0]
+            Reject-Editor $editor
         } finally { $editor.Dispose() }
         $edited = [Newtonsoft.Json.Linq.JArray]$form.Config.ActuatorDefinitions.DeepClone()
         $edited[1]['name'] = [Newtonsoft.Json.Linq.JValue]::new('Renamed friendly toggle')
@@ -158,7 +197,7 @@ function Invoke-SetupEditorTests($Plugin, $ConfigType) {
         $formType.GetMethod('ApplyPayloadDefinitions', $private).Invoke($form, $applyArguments) | Out-Null
         $newEditor = $formType.GetMethod('CreatePayloadEditor', $private).Invoke($form, [object[]]@([int]-1))
         try {
-            (Field $newEditor '_channel').Value = 1
+            (Field $newEditor '_channel').Text = '1'
             $added = Candidate $newEditor
             $newId = $added[1]['id'].Value
             Require ($newId -ne 'position' -and $newId.StartsWith('payload_') -and $newId.Length -eq 40) 'New output reused old identity.'
@@ -185,16 +224,19 @@ function Invoke-SetupEditorTests($Plugin, $ConfigType) {
         Require ((Field $form '_linkError').Text -eq '') 'Reload retained old link validation error.'
         foreach ($name in @('_payloadList', '_inputList', '_linkList')) {
             $list = Field $form $name
-            $buttons = @($list.Parent.Controls | Where-Object { $_ -is [Windows.Forms.FlowLayoutPanel] } |
-                ForEach-Object { $_.Controls } | Where-Object { $_.Text -in @('Edit', 'Remove') })
+            $buttons = @($list.Parent.Children | Where-Object { $_ -is [Windows.Controls.StackPanel] } |
+                ForEach-Object { $_.Children } | Where-Object { $_ -is [Windows.Controls.Button] -and $_.Content -in @('Edit', 'Remove') })
             Require ($buttons.Count -eq 2) ('Setup action buttons unavailable: ' + $name)
-            $list.Rows.Clear()
-            Require (@($buttons | Where-Object { $_.Enabled }).Count -eq 0) ('Empty list offers Edit/Remove: ' + $name)
-            $row = $list.Rows.Add()
-            $list.CurrentCell = $list.Rows[$row].Cells[0]
-            Require (@($buttons | Where-Object { $_.Enabled }).Count -eq 2) ('Selected row cannot be edited: ' + $name)
-            Require ($list.DefaultCellStyle.WrapMode -eq [Windows.Forms.DataGridViewTriState]::True -and
-                $list.AutoSizeRowsMode -eq [Windows.Forms.DataGridViewAutoSizeRowsMode]::AllCells) 'Setup list hides full bindings/endpoints.'
+            $list.Items.Clear()
+            Require (@($buttons | Where-Object { $_.IsEnabled }).Count -eq 0) ('Empty list offers Edit/Remove: ' + $name)
+            $null = $list.Items.Add([object[]]@('fixture', 'fixture', 'fixture', 'fixture', 'fixture'))
+            $list.SelectedIndex = 0
+            Require (@($buttons | Where-Object { $_.IsEnabled }).Count -eq 2) ('Selected row cannot be edited: ' + $name)
+            foreach ($column in $list.Columns) {
+                $wrap = @($column.ElementStyle.Setters | Where-Object { $_.Property -eq [Windows.Controls.TextBlock]::TextWrappingProperty })
+                Require ($wrap.Count -eq 1 -and $wrap[0].Value -eq [Windows.TextWrapping]::Wrap) 'Setup list hides full bindings/endpoints.'
+            }
+            Require ([double]::IsNaN($list.RowHeight)) 'Setup list does not size rows to show wrapped content.'
         }
     } finally { $form.Dispose() }
     Write-Host 'Payload/link/input editors passed current source choices, interlocks, unavailable bindings and independent drafts.'

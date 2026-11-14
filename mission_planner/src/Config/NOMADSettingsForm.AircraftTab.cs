@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 using System;
-using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
+using ComboBox = System.Windows.Controls.ComboBox;
+using TextBox = System.Windows.Controls.TextBox;
+using Button = System.Windows.Controls.Button;
+using TabPage = System.Windows.Controls.TabItem;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -22,20 +25,14 @@ namespace NOMAD.MissionPlanner
             int y = 15;
             AddSectionLabel(tab, "Aircraft profiles", ref y);
             _cmbAircraft = AddComboBox(tab, 20, y, 330, Array.Empty<string>());
-            _cmbAircraft.DisplayMember = nameof(AircraftProfile.Name);
-            _cmbAircraft.SelectedIndexChanged += AircraftSelectionChanged;
-            var create = ControlFactory.Button("New", width: 85, height: 27);
-            create.Location = new Point(365, y);
-            create.Click += (sender, args) => AddAircraft(false);
-            tab.Controls.Add(create);
-            var copy = ControlFactory.Button("Copy", width: 85, height: 27);
-            copy.Location = new Point(460, y);
-            copy.Click += (sender, args) => AddAircraft(true);
-            tab.Controls.Add(copy);
-            _btnRemoveAircraft = ControlFactory.Button("Remove", width: 85, height: 27);
-            _btnRemoveAircraft.Location = new Point(555, y);
-            _btnRemoveAircraft.Click += (sender, args) => RemoveAircraft();
-            tab.Controls.Add(_btnRemoveAircraft);
+            _cmbAircraft.DisplayMemberPath = nameof(AircraftProfile.Name);
+            _cmbAircraft.SelectionChanged += AircraftSelectionChanged;
+            var create = WpfUi.Action("New", () => AddAircraft(false));
+            AddAt(tab, create, 365, y, 85, 27);
+            var copy = WpfUi.Action("Copy", () => AddAircraft(true));
+            AddAt(tab, copy, 460, y, 85, 27);
+            _btnRemoveAircraft = WpfUi.Action("Remove", RemoveAircraft);
+            AddAt(tab, _btnRemoveAircraft, 555, y, 85, 27);
             y += 45;
             AddLabel(tab, "Aircraft name:", 20, y);
             _txtAircraftName = AddTextBox(tab, 180, y, 440);
@@ -64,9 +61,9 @@ namespace NOMAD.MissionPlanner
         private void LoadAircraftSettings()
         {
             _cmbAircraft.Items.Clear();
-            _cmbAircraft.Items.AddRange(Profiles.Aircraft.Cast<object>().ToArray());
+            foreach (var profile in Profiles.Aircraft) _cmbAircraft.Items.Add(profile);
             _cmbAircraft.SelectedItem = Profiles.Selected;
-            _btnRemoveAircraft.Enabled = Profiles.Aircraft.Count > 1;
+            _btnRemoveAircraft.IsEnabled = Profiles.Aircraft.Count > 1;
             _txtAircraftName.Text = Config.AircraftName;
             _txtFlightController.Text = Config.FlightControllerModel;
             _txtReceiver.Text = Config.ReceiverType;

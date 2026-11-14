@@ -7,6 +7,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using ComboBox = System.Windows.Controls.ComboBox;
 
 namespace NOMAD.MissionPlanner
 {
@@ -18,8 +19,8 @@ namespace NOMAD.MissionPlanner
         private ComboBox _models;
         private string _modelPath;
         private readonly ComboBox _selector;
-        private readonly Label _empty;
-        private readonly ToolTip _toolTip = new ToolTip();
+        private readonly System.Windows.Controls.TextBlock _selectionError;
+        private readonly System.Windows.Forms.Integration.ElementHost _empty;
         private string _inputName;
         private bool _loading;
         private bool _savingModel;
@@ -29,7 +30,8 @@ namespace NOMAD.MissionPlanner
 
         internal VideoInputPlayer(NOMADConfig config, bool showControls, CancellationToken shutdown,
             Func<IVideoPipeline> createPipeline, Func<NOMADConfig, string, bool> selectInput,
-            Func<NOMADConfig, string, string, Task<bool>> selectModel = null)
+            Func<NOMADConfig, string, string, Task<bool>> selectModel = null,
+            Func<CancellationToken, VisualTrackingMode, IVisualTracker> createTracker = null)
         {
             _config = config;
             _selectInput = selectInput;
@@ -37,48 +39,54 @@ namespace NOMAD.MissionPlanner
             _shutdown = shutdown;
             Dock = DockStyle.Fill;
             BackColor = Color.Black;
-            _empty = new Label
-            {
-                Text = "No video inputs. Configure Settings → Video.", Dock = DockStyle.Fill,
-                ForeColor = NOMADTheme.TEXT_SECONDARY, TextAlign = ContentAlignment.MiddleCenter,
-            };
+            var emptyMessage = WpfUi.Text("No video inputs. Configure Settings → Video.");
+            emptyMessage.TextAlignment = System.Windows.TextAlignment.Center;
+            emptyMessage.VerticalAlignment = System.Windows.VerticalAlignment.Center;
+            _empty = WpfUi.Host(emptyMessage);
             Controls.Add(_empty);
             if (config.SelectedVideoInput != null)
             {
                 var input = config.SelectedVideoInput;
-                Player = new EmbeddedVideoPlayer(input, showControls, shutdown, createPipeline, config);
+                Player = new EmbeddedVideoPlayer(input, showControls, shutdown, createPipeline, config,
+                    createTracker: createTracker);
                 Controls.Add(Player);
                 Player.BringToFront();
             }
-            _selector = ControlFactory.Combo(config.VideoInputs.Select(input => input.Name).ToArray(),
-                config.VideoInputs.Count == 0 ? -1 : 0);
+            _selector = showControls && Player != null ? Player.VideoControls.InputSelector : new ComboBox
+            {
+                Resources = WpfTheme.Resources(), MinWidth = 180, MaxWidth = 320,
+                Margin = new System.Windows.Thickness(8, 4, 8, 4),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+            };
+            foreach (var input in config.VideoInputs) { _selector.Items.Add(input.Name); }
             if (config.VideoInputs.Count == 0) { _selector.Items.Add("No inputs"); }
             _selector.Name = "ActiveVideoInput";
-            _selector.AccessibleName = "Active video input";
-            _selector.Width = 180;
-            _selector.FontChanged += (sender, args) => _selector.Width = Math.Max(180, Math.Min(360,
-                config.VideoInputs.Select(input => TextRenderer.MeasureText(input.Name, _selector.Font).Width + 30)
-                    .DefaultIfEmpty(180).Max()));
-            _selector.Enabled = selectInput != null && config.VideoInputs.Count > 1 &&
+            System.Windows.Automation.AutomationProperties.SetName(_selector, "Active video input");
+            _selector.IsEnabled = selectInput != null && config.VideoInputs.Count > 1 &&
                 !shutdown.IsCancellationRequested;
-            _toolTip.SetToolTip(_selector,
-                "Active input for HUD, Dashboard and Video. Configure inputs in Settings → Video.");
+            _selector.ToolTip = "Active input for HUD, Dashboard and Video. Configure inputs in Settings → Video.";
+            _selectionError = showControls && Player != null ? Player.VideoControls.SelectionError : WpfUi.Text("");
+            _selectionError.Foreground = WpfTheme.Warning;
+            _selectionError.Visibility = System.Windows.Visibility.Collapsed;
             if (showControls && Player != null)
             {
-                _selector.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-                _selector.Margin = new Padding(5);
-                Player.Toolbar.Controls.Add(_selector, 1, 0);
                 AddModelSelection(shutdown);
             }
             else
             {
-                var header = new Panel { Dock = DockStyle.Top, Height = 32, BackColor = NOMADTheme.CARD_BG };
-                _selector.Dock = DockStyle.Right;
-                header.Controls.Add(_selector);
+                var row = new System.Windows.Controls.Grid { Background = WpfTheme.Card };
+                row.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = System.Windows.GridLength.Auto });
+                row.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = System.Windows.GridLength.Auto });
+                row.Children.Add(_selector);
+                _selectionError.Margin = new System.Windows.Thickness(8, 0, 8, 6);
+                System.Windows.Controls.Grid.SetRow(_selectionError, 1); row.Children.Add(_selectionError);
+                var header = new System.Windows.Forms.Integration.ElementHost
+                { Dock = DockStyle.Top, AutoSize = true, Child = row, BackColor = NOMADTheme.CARD_BG,
+                    Font = NOMADTheme.Font() };
                 Controls.Add(header);
             }
             RefreshInput();
-            _selector.SelectedIndexChanged += SelectionChanged;
+            _selector.SelectionChanged += SelectionChanged;
         }
 
         private void SelectionChanged(object sender, EventArgs args)
@@ -88,10 +96,18 @@ namespace NOMAD.MissionPlanner
             if (_selectInput?.Invoke(_config, name) != true)
             {
                 const string error = "Video input was not changed or saved. Review the active profile and try again.";
-                _toolTip.SetToolTip(_selector, error);
-                if (FindForm()?.ContainsFocus == true) { _toolTip.Show(error, _selector, 4000); }
+                _selector.ToolTip = error;
+                _selectionError.Text = error;
+                _selectionError.Visibility = System.Windows.Visibility.Visible;
+            }
+            else
+            {
+                _selector.ToolTip = "Active input for HUD, Dashboard and Video. Configure inputs in Settings → Video.";
+                _selectionError.Text = ""; _selectionError.Visibility = System.Windows.Visibility.Collapsed;
             }
             RefreshInput();
+            Player?.Toolbar.Parent?.PerformLayout();
+            PerformLayout();
         }
 
         internal void RefreshInput()
@@ -114,13 +130,9 @@ namespace NOMAD.MissionPlanner
 
         private void AddModelSelection(CancellationToken shutdown)
         {
-            _models = ControlFactory.Combo(Array.Empty<string>(), -1);
-            _models.Width = 220; _models.AccessibleName = "Detection model"; _models.Name = "DetectionModel";
-            _models.Enabled = _selectModel != null && !shutdown.IsCancellationRequested;
-            _toolTip.SetToolTip(_models, "Select the detection model for this camera. Video and generic region tracking continue.");
-            var row = Player.VisionOptions;
-            row.Controls.Add(_models);
-            var manage = ControlFactory.Button("Manage models", async (sender, args) =>
+            _models = Player.VideoControls.ModelSelector;
+            _models.IsEnabled = _selectModel != null && !shutdown.IsCancellationRequested;
+            Player.VideoControls.ManageModelsButton.Click += async (sender, args) =>
             {
                 try
                 {
@@ -134,26 +146,22 @@ namespace NOMAD.MissionPlanner
                     failure is UnauthorizedAccessException || failure is Newtonsoft.Json.JsonException ||
                     failure is FormatException || failure is ArgumentException)
                 {
-                    if (!IsDisposed) { _toolTip.SetToolTip(_models,
-                        "Model catalog unavailable; current selection and video continue."); }
+                    if (!IsDisposed) { _models.ToolTip = "Model catalog unavailable; current selection and video continue."; }
                 }
                 if (!IsDisposed) { _modelPath = null; RefreshModel(_config.SelectedVideoInput); }
-            }, width: 115, height: 28);
-            manage.AccessibleName = "Manage detection models"; manage.AutoSize = true; row.Controls.Add(manage);
-            row.Controls.SetChildIndex(_models, 0);
-            row.Controls.SetChildIndex(manage, 1);
-            _models.SelectedIndexChanged += async (sender, args) =>
+            };
+            _models.SelectionChanged += async (sender, args) =>
             {
                 if (_loading || _savingModel || !(_models.SelectedItem is VisionModelChoice selected)) { return; }
                 var input = _config.SelectedVideoInput;
                 if (input == null || VisionModelCatalog.SamePath(input.DetectorModelProfilePath, selected.Path)) { return; }
-                _savingModel = true; _models.Enabled = false;
+                _savingModel = true; _models.IsEnabled = false;
                 try
                 {
                     if (_selectModel == null || !await _selectModel(_config, input.Name, selected.Path))
                     {
-                        if (!IsDisposed) { _toolTip.SetToolTip(_models,
-                            "Model selection was not saved. Review the active aircraft and try again."); }
+                        if (!IsDisposed) { _models.ToolTip =
+                            "Model selection was not saved. Review the active aircraft and try again."; }
                     }
                 }
                 catch (Exception error) { Log.Error("Detection model selection failed: " + error); }
@@ -162,7 +170,7 @@ namespace NOMAD.MissionPlanner
                     _savingModel = false;
                     if (!IsDisposed)
                     {
-                        _models.Enabled = _selectModel != null && !_shutdown.IsCancellationRequested;
+                        _models.IsEnabled = _selectModel != null && !_shutdown.IsCancellationRequested;
                         RefreshModel(_config.SelectedVideoInput);
                     }
                 }
@@ -184,7 +192,7 @@ namespace NOMAD.MissionPlanner
             _modelPath = input.DetectorModelProfilePath;
             long revision = ++_modelRevision;
             Player.UpdateDetectionModel(_modelPath);
-            _models.Enabled = false;
+            _models.IsEnabled = false;
             _ = LoadModelChoicesAsync(_modelPath, revision);
         }
 
@@ -208,22 +216,17 @@ namespace NOMAD.MissionPlanner
             try
             {
                 _models.Items.Clear();
-                if (error != null) { _toolTip.SetToolTip(_models, error); }
-                _models.Items.AddRange(choices.ToArray());
+                if (error != null) { _models.ToolTip = error; }
+                foreach (var choice in choices) { _models.Items.Add(choice); }
                 _models.SelectedItem = choices.Single(choice =>
                     VisionModelCatalog.SamePath(choice.Path, path));
             }
             finally
             {
                 _loading = false;
-                _models.Enabled = _selectModel != null && !_savingModel && !_shutdown.IsCancellationRequested;
+                _models.IsEnabled = _selectModel != null && !_savingModel && !_shutdown.IsCancellationRequested;
             }
         }
 
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing) { _toolTip.Dispose(); }
-            base.Dispose(disposing);
-        }
     }
 }

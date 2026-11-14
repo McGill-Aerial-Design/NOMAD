@@ -73,11 +73,10 @@ namespace NOMAD.MissionPlanner
 
         // UI
         private JoystickPad _pad;
-        private Label _lblPitch, _lblRoll, _lblYaw, _lblMode, _lblRate, _lblTitle;
-        private TableLayoutPanel _rateRow;
-        private TrackBar _trkRate;
-        private Button _btnRetract, _btnNeutral, _btnRcTgt, _btnMavTgt, _btnCenter, _btnLevel;
-        private CheckBox _chkTopMost, _chkArrowKeys;
+        private System.Windows.Controls.TextBlock _lblPitch, _lblRoll, _lblYaw, _lblMode, _lblRate;
+        private System.Windows.Controls.Slider _trkRate;
+        private System.Windows.Controls.Button _btnRetract, _btnNeutral, _btnRcTgt, _btnMavTgt, _btnCenter, _btnLevel;
+        private System.Windows.Controls.CheckBox _chkTopMost, _chkArrowKeys;
         private Timer _streamTimer;
 
         private GimbalJoystickWindow(NOMADConfig config)
@@ -165,8 +164,8 @@ namespace NOMAD.MissionPlanner
             {
                 if (_trkRate == null) return;
                 int v = (int)Math.Round(rate);
-                if (v < _trkRate.Minimum) v = _trkRate.Minimum;
-                if (v > _trkRate.Maximum) v = _trkRate.Maximum;
+                if (v < _trkRate.Minimum) v = (int)_trkRate.Minimum;
+                if (v > _trkRate.Maximum) v = (int)_trkRate.Maximum;
                 if (_trkRate.Value != v) _trkRate.Value = v; // ValueChanged fires; the controller setter dedupes.
                 if (_lblRate != null) _lblRate.Text = $"{v}";
             }, "OnExternalMaxRateChanged");
@@ -189,264 +188,102 @@ namespace NOMAD.MissionPlanner
             if (IsDisposed) return;
             UiAsync.RunSync(this, () =>
             {
-                if (_chkArrowKeys != null && _chkArrowKeys.Checked != enabled)
-                    _chkArrowKeys.Checked = enabled;
+                if (_chkArrowKeys != null && _chkArrowKeys.IsChecked != enabled)
+                    _chkArrowKeys.IsChecked = enabled;
             }, "OnArrowKeysEnabledChanged");
         }
 
-        // ============================================================
-        // UI — a docked TableLayoutPanel of AutoSize rows + a fill pad row, so
-        // everything reflows and nothing overlaps at any window size.
-        // ============================================================
         private void BuildUi()
         {
-            var root = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 5,
-                BackColor = Color.Transparent,
-                Padding = new Padding(0),
-                Margin = new Padding(0),
-            };
-            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 0 title
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f)); // 1 joystick pad (fills)
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 2 readouts
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 3 rate slider
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 4 mode + preset buttons
-
-            _lblTitle = new Label
-            {
-                Text = "GIMBAL — Rate Joystick",
-                Font = NOMADTheme.Font(NOMADTheme.SIZE_HEADING, FontStyle.Bold),
-                ForeColor = NOMADTheme.ACCENT,
-                AutoSize = true,
-                Margin = new Padding(2, 2, 0, NOMADTheme.GAP),
-            };
-            root.Controls.Add(_lblTitle, 0, 0);
-
-            // Joystick pad — fills the flexible row and stays circular via OnPaint.
-            // It caps its own drawn radius so it never grows uncomfortably large.
-            _pad = new JoystickPad(STICK_DEADZONE)
-            {
-                Dock = DockStyle.Fill,
-                Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
-                MinimumSize = new Size(150, 150),
-                BackColor = NOMADTheme.CARD_BG,
-                HorizontalLabel = GimbalController.ScreenHorizontalAxis,
-                VerticalLabel = GimbalController.ScreenVerticalAxis,
-                HorizontalInverted = GimbalController.ScreenHorizontalInverted,
-                VerticalInverted = GimbalController.ScreenVerticalInverted,
-            };
-            _pad.StickChanged += (x, y) => { _stickX = x; _stickY = y; };
-            root.Controls.Add(_pad, 0, 1);
-
-            // Target readouts — a wrapping flow so they never clip.
-            var readouts = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Top,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                WrapContents = true,
-                Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
-            };
-            _lblPitch = MakeReadout("Pitch: +0.0°");
-            _lblRoll = MakeReadout("Roll: +0.0°");
-            _lblYaw = MakeReadout("Yaw: +0.0°");
-            _lblMode = MakeReadout("Selected mode: MAVLINK");
-            readouts.Controls.Add(_lblPitch);
-            readouts.Controls.Add(_lblRoll);
-            readouts.Controls.Add(_lblYaw);
-            readouts.Controls.Add(_lblMode);
-            root.Controls.Add(readouts, 0, 2);
-
-            _rateRow = BuildRateRow();
-            root.Controls.Add(_rateRow, 0, 3);
-            root.Controls.Add(BuildButtonRows(), 0, 4);
-
-            Controls.Add(root);
-        }
-
-        // Rate slider row: "Max Rate (deg/s):" | [====slider====] | value.
-        private TableLayoutPanel BuildRateRow()
-        {
-            var row = new TableLayoutPanel
-            {
-                Dock = DockStyle.Top,
-                ColumnCount = 3,
-                RowCount = 1,
-                AutoSize = false,
-                Height = 36,
-                BackColor = NOMADTheme.BG_DARK,
-                Padding = new Padding(NOMADTheme.GAP, 4, NOMADTheme.GAP, 4),
-                Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
-            };
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            row.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-
-            var lbl = new Label
-            {
-                Text = "Max Rate (deg/s):",
-                AutoSize = true,
-                Anchor = AnchorStyles.Left,
-                ForeColor = NOMADTheme.TEXT_SECONDARY,
-                Margin = new Padding(0, 0, NOMADTheme.GAP, 0),
-            };
-            row.Controls.Add(lbl, 0, 0);
-
-            _trkRate = new TrackBar
-            {
-                Minimum = (int)GimbalController.MIN_MAX_RATE_DEG_SEC,
-                Maximum = (int)GimbalController.MAX_MAX_RATE_DEG_SEC,
-                Value = (int)Math.Round(GimbalController.MaxRateDegSec),
-                TickStyle = TickStyle.None,
-                AutoSize = false,
-                Height = 24,
-                Anchor = AnchorStyles.Left | AnchorStyles.Right,
-                BackColor = NOMADTheme.BG_DARK,
-                Margin = new Padding(0),
-            };
-            _trkRate.ValueChanged += (s, e) =>
-            {
-                // Single source of truth — controller setter fires MaxRateChanged
-                // which all other UIs subscribe to.
-                GimbalController.MaxRateDegSec = _trkRate.Value;
-                _lblRate.Text = $"{_trkRate.Value}";
-            };
-            row.Controls.Add(_trkRate, 1, 0);
-
-            _lblRate = new Label
-            {
-                Text = $"{_trkRate.Value}",
-                AutoSize = true,
-                Anchor = AnchorStyles.Right,
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Margin = new Padding(NOMADTheme.GAP, 0, 0, 0),
-            };
-            row.Controls.Add(_lblRate, 2, 0);
-            return row;
-        }
-
-        // Mode + preset buttons, each in a wrapping flow so they re-pack when the
-        // window is narrow instead of running off the edge.
-        private FlowLayoutPanel BuildButtonRows()
-        {
-            var flow = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Top,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                WrapContents = true,
-                FlowDirection = FlowDirection.LeftToRight,
-                Margin = new Padding(0, 0, 0, 0),
-                Padding = new Padding(0),
-            };
-
-            _btnMavTgt = MakeButton("MAVLink Tgt", c => SetModePreset("MAVLINK", MountMode.MavlinkTargeting));
-            _btnRcTgt = MakeButton("RC Tgt", c => SetModePreset("RC", MountMode.RcTargeting));
-            _btnNeutral = MakeButton("Neutral", c => SetModePreset("NEUTRAL", MountMode.Neutral));
-            _btnRetract = MakeButton("Retract", c => SetModePreset("RETRACT", MountMode.Retract));
-            _btnCenter = MakeButton("Center", c => SnapAngles(0, 0, 0));
-            _btnLevel = MakeButton("Look Down −90°", c => SnapAngles(-90,
+            var root = new System.Windows.Controls.DockPanel { Background = WpfTheme.Card };
+            var title = WpfUi.Section("GIMBAL — Rate Joystick");
+            System.Windows.Controls.DockPanel.SetDock(title, System.Windows.Controls.Dock.Top);
+            root.Children.Add(title);
+            var bottom = new System.Windows.Controls.StackPanel();
+            System.Windows.Controls.DockPanel.SetDock(bottom, System.Windows.Controls.Dock.Bottom);
+            var readouts = new System.Windows.Controls.WrapPanel();
+            _lblPitch = MakeReadout("Pitch: +0.0°"); _lblRoll = MakeReadout("Roll: +0.0°");
+            _lblYaw = MakeReadout("Yaw: +0.0°"); _lblMode = MakeReadout("Selected mode: MAVLINK");
+            readouts.Children.Add(_lblPitch); readouts.Children.Add(_lblRoll);
+            readouts.Children.Add(_lblYaw); readouts.Children.Add(_lblMode);
+            bottom.Children.Add(readouts);
+            var rate = new System.Windows.Controls.DockPanel();
+            var rateTitle = WpfUi.Text("Max Rate (deg/s):");
+            System.Windows.Controls.DockPanel.SetDock(rateTitle, System.Windows.Controls.Dock.Left);
+            rate.Children.Add(rateTitle);
+            _lblRate = WpfUi.Text("");
+            System.Windows.Controls.DockPanel.SetDock(_lblRate, System.Windows.Controls.Dock.Right);
+            rate.Children.Add(_lblRate);
+            _trkRate = new System.Windows.Controls.Slider { Minimum = GimbalController.MIN_MAX_RATE_DEG_SEC,
+                Maximum = GimbalController.MAX_MAX_RATE_DEG_SEC, Value = Math.Round(GimbalController.MaxRateDegSec),
+                TickFrequency = 1, IsSnapToTickEnabled = true };
+            System.Windows.Automation.AutomationProperties.SetName(_trkRate, "Max Rate (deg/s)");
+            _lblRate.Text = $"{_trkRate.Value}";
+            _trkRate.ValueChanged += (sender, args) =>
+            { GimbalController.MaxRateDegSec = (float)_trkRate.Value; _lblRate.Text = $"{_trkRate.Value}"; };
+            rate.Children.Add(_trkRate); bottom.Children.Add(rate);
+            var buttons = new System.Windows.Controls.WrapPanel();
+            _btnMavTgt = WpfUi.Action("MAVLink Tgt", () => SetModePreset("MAVLINK", MountMode.MavlinkTargeting));
+            _btnRcTgt = WpfUi.Action("RC Tgt", () => SetModePreset("RC", MountMode.RcTargeting));
+            _btnNeutral = WpfUi.Action("Neutral", () => SetModePreset("NEUTRAL", MountMode.Neutral));
+            _btnRetract = WpfUi.Action("Retract", () => SetModePreset("RETRACT", MountMode.Retract));
+            _btnCenter = WpfUi.Action("Center", () => SnapAngles(0, 0, 0));
+            _btnLevel = WpfUi.Action("Look Down −90°", () => SnapAngles(-90,
                 GimbalController.TargetRollDeg, GimbalController.TargetYawDeg));
-            flow.Controls.Add(_btnMavTgt);
-            flow.Controls.Add(_btnRcTgt);
-            flow.Controls.Add(_btnNeutral);
-            flow.Controls.Add(_btnRetract);
-            flow.Controls.Add(_btnCenter);
-            flow.Controls.Add(_btnLevel);
-
-            _chkTopMost = new CheckBox
+            buttons.Children.Add(_btnMavTgt); buttons.Children.Add(_btnRcTgt); buttons.Children.Add(_btnNeutral);
+            buttons.Children.Add(_btnRetract); buttons.Children.Add(_btnCenter); buttons.Children.Add(_btnLevel);
+            _chkTopMost = new System.Windows.Controls.CheckBox { Content = "Always on top" };
+            _chkTopMost.Checked += (sender, args) => TopMost = true;
+            _chkTopMost.Unchecked += (sender, args) => TopMost = false;
+            buttons.Children.Add(_chkTopMost);
+            _chkArrowKeys = new System.Windows.Controls.CheckBox { Content = "Arrow keys across Mission Planner",
+                IsChecked = GimbalArrowKeyFilter.Enabled };
+            System.Windows.RoutedEventHandler change = (sender, args) =>
             {
-                Text = "Always on top",
-                AutoSize = true,
-                ForeColor = NOMADTheme.TEXT_SECONDARY,
-                Margin = new Padding(NOMADTheme.GAP, 4, 0, 0),
-            };
-            _chkTopMost.CheckedChanged += (s, e) => TopMost = _chkTopMost.Checked;
-            flow.Controls.Add(_chkTopMost);
-
-            _chkArrowKeys = new CheckBox
-            {
-                Text = "Arrow keys across Mission Planner",
-                AutoSize = true,
-                Checked = GimbalArrowKeyFilter.Enabled,
-                ForeColor = NOMADTheme.TEXT_SECONDARY,
-                Margin = new Padding(NOMADTheme.GAP, 4, 0, 0),
-            };
-            _chkArrowKeys.CheckedChanged += (s, e) =>
-            {
-                try { GimbalArrowKeyFilter.SetEnabled(_chkArrowKeys.Checked); }
+                try { GimbalArrowKeyFilter.SetEnabled(_chkArrowKeys.IsChecked == true); }
                 catch (Exception error)
                 {
-                    _chkArrowKeys.Checked = GimbalArrowKeyFilter.Enabled;
+                    _chkArrowKeys.IsChecked = GimbalArrowKeyFilter.Enabled;
                     Log.Warn("Arrow key setting was not saved: " + error.Message);
                     NotificationService.Shared?.AddNotification(NotificationSeverity.Warning, NotificationCategory.System,
                         "Arrow key setting was not saved", error.Message);
                 }
             };
-            flow.Controls.Add(_chkArrowKeys);
-
+            _chkArrowKeys.Checked += change; _chkArrowKeys.Unchecked += change;
+            buttons.Children.Add(_chkArrowKeys); bottom.Children.Add(buttons);
+            root.Children.Add(bottom);
+            _pad = new JoystickPad(STICK_DEADZONE) { MinWidth = 150, MinHeight = 150,
+                HorizontalLabel = GimbalController.ScreenHorizontalAxis, VerticalLabel = GimbalController.ScreenVerticalAxis,
+                HorizontalInverted = GimbalController.ScreenHorizontalInverted,
+                VerticalInverted = GimbalController.ScreenVerticalInverted };
+            _pad.StickChanged += (x, y) => { _stickX = x; _stickY = y; };
+            root.Children.Add(_pad);
+            Controls.Add(WpfUi.Host(root));
             HighlightModeButtons();
-            return flow;
         }
 
-        // Paint the currently-selected mount mode button filled red (ACCENT); the
-        // rest stay black with a red outline. Keeps the window on-theme and makes
-        // the active mode obvious.
         private void HighlightModeButtons()
         {
             bool servo = OutputController.GimbalAxes?.Count > 0;
-            _btnMavTgt.Text = servo ? "Servo targets" : "MAVLink Tgt";
-            _btnMavTgt.Enabled = _btnRcTgt.Enabled = _btnNeutral.Enabled = _btnRetract.Enabled = !servo;
+            _btnMavTgt.Content = servo ? "Servo targets" : "MAVLink Tgt";
+            _btnMavTgt.IsEnabled = _btnRcTgt.IsEnabled = _btnNeutral.IsEnabled = _btnRetract.IsEnabled = !servo;
             SetModeButtonState(_btnMavTgt, _mountMode == MountMode.MavlinkTargeting);
             SetModeButtonState(_btnRcTgt, _mountMode == MountMode.RcTargeting);
             SetModeButtonState(_btnNeutral, _mountMode == MountMode.Neutral);
             SetModeButtonState(_btnRetract, _mountMode == MountMode.Retract);
         }
 
-        private static void SetModeButtonState(Button b, bool active)
+        private static void SetModeButtonState(System.Windows.Controls.Button button, bool active)
         {
-            if (b == null) return;
-            b.BackColor = active ? NOMADTheme.ACCENT : NOMADTheme.CARD_BG;
-            b.FlatAppearance.BorderColor = active ? NOMADTheme.ACCENT : NOMADTheme.CARD_BORDER;
+            button.Background = active ? WpfTheme.Accent : WpfTheme.Card;
+            button.BorderBrush = active ? WpfTheme.Accent : WpfTheme.Outline;
         }
 
-        private Label MakeReadout(string text) => new Label
+        private static System.Windows.Controls.TextBlock MakeReadout(string text)
         {
-            Text = text,
-            AutoSize = true,
-            Font = NOMADTheme.Mono(NOMADTheme.SIZE_LARGE, FontStyle.Bold),
-            ForeColor = NOMADTheme.TEXT_PRIMARY,
-            Margin = new Padding(0, 0, NOMADTheme.PAD, 0),
-        };
-
-        private Button MakeButton(string text, Action<Button> onClick)
-        {
-            var btn = new Button
-            {
-                Text = text,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                Padding = new Padding(6, 3, 6, 3),
-                Margin = new Padding(0, 0, NOMADTheme.GAP, NOMADTheme.GAP),
-                FlatStyle = FlatStyle.Flat,
-                // Black fill + red outline = on-theme; active mode buttons get
-                // filled red by HighlightModeButtons.
-                BackColor = NOMADTheme.CARD_BG,
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Bold),
-                Cursor = Cursors.Hand,
-            };
-            btn.FlatAppearance.BorderSize = 1;
-            btn.FlatAppearance.BorderColor = NOMADTheme.CARD_BORDER;
-            btn.FlatAppearance.MouseOverBackColor = NOMADTheme.BUTTON_BG;
-            btn.FlatAppearance.MouseDownBackColor = NOMADTheme.ACCENT;
-            btn.Click += (s, e) => onClick(btn);
-            return btn;
+            var result = WpfUi.Text(text);
+            result.Margin = new System.Windows.Thickness(0, 0, NOMADTheme.PAD, 0);
+            return result;
         }
 
         // ============================================================

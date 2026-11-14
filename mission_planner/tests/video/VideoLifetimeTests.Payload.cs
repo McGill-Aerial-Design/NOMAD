@@ -28,33 +28,36 @@ internal static partial class VideoLifetimeTests
                 using (var panel = new ActuatorControlPanel(peer.Config) { Dock = DockStyle.Fill })
                 {
                     form.Controls.Add(panel); form.Show(); peer.Pump(80);
-                    var slider = panel.Controls.Find("camera:slider", true).OfType<TrackBar>().Single();
-                    var pwm = panel.Controls.Find("camera:pwm", true).OfType<Label>().Single();
-                    var safe = panel.Controls.Find("camera:safe", true).OfType<Button>().Single();
-                    Check(panel.Controls.Find("camera:position", true).Length == 0 && slider.Value == 1300 &&
+                    var slider = FindPayloadControl<System.Windows.Controls.Slider>(panel, "camera:slider");
+                    var pwm = FindPayloadControl<System.Windows.Controls.TextBlock>(panel, "camera:pwm");
+                    var safe = FindPayloadControl<System.Windows.Controls.Button>(panel, "camera:safe");
+                    Check(FindPayloadControls(panel.WpfRoot, "camera:position").Count() == 0 && slider.Value == 1300 &&
                         pwm.Text.Contains("1300") && peer.ServoTargets.Length == 0,
                         "Continuous payload retained Activate, changed neutral or sent during construction");
-                    int originalWidth = slider.Width;
+                    double originalWidth = slider.ActualWidth;
                     form.ClientSize = new Size(1100, 200); peer.Pump(10);
-                    Check(slider.Width > originalWidth && slider.Width >= 350,
+                    Check(slider.ActualWidth > originalWidth && slider.ActualWidth >= 350,
                         "Payload slider did not use the available horizontal space");
-                    panel.BackColor = NOMADTheme.CARD_BG;
-                    using (var image = new Bitmap(panel.Width, panel.Height))
-                    { panel.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size));
-                      image.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "payload-continuous.png")); }
-                    var scroll = typeof(TrackBar).GetMethod("OnScroll", BindingFlags.Instance | BindingFlags.NonPublic);
-                    slider.Value = 1100; scroll.Invoke(slider, new object[] { EventArgs.Empty });
-                    slider.Value = 1800; scroll.Invoke(slider, new object[] { EventArgs.Empty });
+                    var image = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                        (int)panel.WpfRoot.ActualWidth, (int)panel.WpfRoot.ActualHeight, 96, 96,
+                        System.Windows.Media.PixelFormats.Pbgra32);
+                    image.Render(panel.WpfRoot);
+                    var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                    encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(image));
+                    using (var output = File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "payload-continuous.png")))
+                    { encoder.Save(output); }
+                    slider.Value = 1100;
+                    slider.Value = 1800;
                     Check(pwm.Text.Contains("1800"), "Slider did not preview the requested PWM immediately");
                     peer.Until(() => peer.ServoTargets.Length == 1 && PayloadController.Current.TargetPwm("camera") == 1800,
                         "direct slider command and acknowledgement");
                     Check(peer.ServoTargets[0] == (14, 1800), "Slider sent intermediate or uncalibrated PWM");
-                    safe.PerformClick();
+                    safe.RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                     peer.Until(() => PayloadController.Current.TargetPwm("camera") == 1000 &&
                         peer.ServoTargets.Length == 2, "explicit Safe after slider movement");
                     Check(pwm.Text.Contains("1000") && slider.Value == 1000 && peer.ServoTargets[1] == (14, 1000),
                         "Safe did not update the payload target and PWM readout");
-                    slider.Value = 1600; scroll.Invoke(slider, new object[] { EventArgs.Empty });
+                    slider.Value = 1600;
                     panel.Dispose(); peer.Pump(100);
                     Check(peer.ServoTargets.Length == 2, "Disposed payload view sent its pending slider value");
                 }
@@ -62,4 +65,20 @@ internal static partial class VideoLifetimeTests
             finally { PayloadController.Shutdown(); }
         }
     }
+    private static T FindPayloadControl<T>(ActuatorControlPanel panel, string id) where T : System.Windows.DependencyObject =>
+        FindPayloadControls(panel.WpfRoot, id).OfType<T>().Single();
+
+    private static System.Collections.Generic.IEnumerable<System.Windows.DependencyObject> FindPayloadControls(
+        System.Windows.DependencyObject parent, string id)
+    {
+        if (System.Windows.Automation.AutomationProperties.GetAutomationId(parent) == id) { yield return parent; }
+        foreach (object child in System.Windows.LogicalTreeHelper.GetChildren(parent))
+        {
+            if (child is System.Windows.DependencyObject element)
+            {
+                foreach (var result in FindPayloadControls(element, id)) { yield return result; }
+            }
+        }
+    }
+
 }

@@ -2,6 +2,7 @@
 // Copyright 2026 The NOMAD Authors
 using System;
 using System.Drawing;
+using Brushes = System.Windows.Media.Brushes;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -38,7 +39,7 @@ namespace NOMAD.MissionPlanner
                 {
                     _frameTimer.Start();
                     _lblStatus.Text = "Connecting...";
-                    _lblStatus.ForeColor = Color.Yellow;
+                    _lblStatus.Foreground = Brushes.Yellow;
                 }
             }
             catch (Exception error)
@@ -49,7 +50,7 @@ namespace NOMAD.MissionPlanner
                     _playbackRequested = false;
                     _lblStatus.Text = error is FormatException || error is Newtonsoft.Json.JsonSerializationException
                         ? error.Message : "Video could not start; review the input and try again";
-                    _lblStatus.ForeColor = Color.Red;
+                    _lblStatus.Foreground = Brushes.Red;
                 }
             }
         }
@@ -72,7 +73,7 @@ namespace NOMAD.MissionPlanner
             if (!IsDisposed)
             {
                 _lblStatus.Text = "Stopping…";
-                _lblStatus.ForeColor = _session.Error == null ? Color.Gray : Color.Red;
+                _lblStatus.Foreground = _session.Error == null ? Brushes.Gray : Brushes.Red;
                 _ = UpdateStoppedStatusAsync(revision);
             }
         }

@@ -37,6 +37,8 @@ internal static partial class VideoLifetimeTests
                 return 0;
             }
             Run("shared video leaves a bounded thread pool available", VideoThreadPoolAvailability);
+            Run("native worker startup and heartbeat survive an exhausted parent pool", MediaWorkerPoolStarvation);
+            Run("native worker shutdown retires process handles without a subsequent open", MediaWorkerShutdownHandles);
             Run("owned media worker faults preserve parent UI and bounded plain recovery", MediaWorkerIsolation);
             Run("owned media worker held operations and high-rate display alignment", MediaWorkerHeldOperations);
             Run("native RTSP discovery preserves normal OPTIONS", () => NativeRtspDiscovery(false));
@@ -54,6 +56,8 @@ internal static partial class VideoLifetimeTests
             Run("camera close joins before reopen, source generations fence late pixels and networks stay separate",
                 SharedCameraClosingAndSourceChange);
             Run("playback controls attached", PlaybackControlsAttached);
+            Run("WPF video actions preserve native playback, host DPI and fullscreen keyboard input", WpfVideoActions);
+            Run("video status footer keeps playback and tracking readable at every size", VideoStatusFooterLayout);
             Run("tracking refusal stays visible after fresh video", TrackingFailureFeedback);
             Run("silent video shows stale status and releases HUD pixels until fresh recovery", StaleVideoDisplay);
             Run("snapshot files preserve captures and handle write failure", SnapshotFilesAndFailure);
@@ -114,6 +118,7 @@ internal static partial class VideoLifetimeTests
             Run("detector failure preserves plain video", VisionFailureKeepsVideo);
             Run("model construction hot swap, plain playback and explicit recovery", DetectionModelSwap);
             Run("shared model catalog, editor cancellation and stable files", ModelCatalogAndEditor);
+            Run("native built-in model duplication reuses verified worker assets", NativeBuiltinModelDuplication);
             Run("oversized optional model catalog preserves plain video and exact selection", OversizedCatalogKeepsPlainVideo);
             Run("observation retains selection-time model provenance after a swap", ObservationSelectionModelProvenance);
             Run("model-only selection preserves source and generic region ownership", ModelSwitchKeepsRegionAndSource);

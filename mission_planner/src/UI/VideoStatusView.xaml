@@ -1,0 +1,17 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<UserControl x:Class="NOMAD.MissionPlanner.VideoStatusView" x:ClassModifier="internal"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:NOMAD.MissionPlanner"
+             Background="{x:Static local:WpfTheme.Card}" FontFamily="Segoe UI" FontSize="12"
+             UseLayoutRounding="True" VerticalAlignment="Top">
+    <Grid Margin="10,7">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="3*" /></Grid.ColumnDefinitions>
+        <TextBlock x:Name="PlaybackStatus" Text="Ready - Click Play" TextWrapping="Wrap" Margin="0,0,12,0"
+                   Foreground="{x:Static local:WpfTheme.SecondaryText}" VerticalAlignment="Center"
+                   AutomationProperties.Name="Playback status" />
+        <TextBlock x:Name="TrackingStatus" Grid.Column="1" TextWrapping="Wrap" TextAlignment="Right"
+                   Foreground="{x:Static local:WpfTheme.Text}" VerticalAlignment="Center"
+                   AutomationProperties.Name="Tracking status" />
+    </Grid>
+</UserControl>

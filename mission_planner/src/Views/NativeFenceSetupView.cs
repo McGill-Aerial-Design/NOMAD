@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 using System;
-using System.Drawing;
 using System.Threading;
 using System.Windows.Forms;
+using System.Windows;
+using Wpf = System.Windows.Controls;
+using MessageBox = System.Windows.Forms.MessageBox;
 using MissionPlanner;
 using MissionPlanner.GCSViews;
 
@@ -19,10 +21,9 @@ namespace NOMAD.MissionPlanner
     public sealed partial class NativeFenceSetupView : UserControl
     {
         private readonly CancellationToken _shutdown;
-        private readonly TextBox _coordinates;
-        private readonly ComboBox _order;
-        private readonly Label _status;
-        private readonly ToolTip _tips = new ToolTip();
+        private readonly Wpf.TextBox _coordinates;
+        private readonly Wpf.ComboBox _order;
+        private readonly Wpf.TextBlock _status;
         private readonly FenceSetupInput _input;
 
         internal NativeFenceSetupView(CancellationToken shutdown, FenceSetupInput input, NOMADConfig config)
@@ -32,56 +33,37 @@ namespace NOMAD.MissionPlanner
             BackColor = NOMADTheme.BG_DARK;
             ForeColor = NOMADTheme.TEXT_PRIMARY;
             Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL);
-            AutoScroll = true;
-            var layout = new TableLayoutPanel
-            {
-                Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Padding = new Padding(16),
-            };
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            Add(layout, new Label
-            {
-                Text = "FENCE SETUP", AutoSize = true,
-                Font = NOMADTheme.Font(NOMADTheme.SIZE_TITLE, FontStyle.Bold),
-            });
+            var layout = new Wpf.StackPanel { Margin = new Thickness(16) };
+            Add(layout, WpfUi.Section("FENCE SETUP"));
             var polygon = Group(layout, "Polygon draft");
-            _order = new ComboBox
-            {
-                DropDownStyle = ComboBoxStyle.DropDownList, Width = 240,
-                BackColor = NOMADTheme.CONTROL_BG, ForeColor = NOMADTheme.TEXT_PRIMARY,
-            };
-            _order.Items.AddRange(new object[] { "Latitude, longitude", "Longitude, latitude" });
+            _order = new Wpf.ComboBox { Width = 240, HorizontalAlignment = System.Windows.HorizontalAlignment.Left };
+            _order.Items.Add("Latitude, longitude"); _order.Items.Add("Longitude, latitude");
             _order.SelectedIndex = input.LongitudeFirst ? 1 : 0;
-            _order.SelectedIndexChanged += (s, e) =>
+            _order.SelectionChanged += (s, e) =>
             {
                 if (Active) { input.LongitudeFirst = _order.SelectedIndex == 1; }
             };
             Add(polygon, _order);
-            _coordinates = new TextBox
+            _coordinates = new Wpf.TextBox
             {
-                Name = "FenceCoordinates", Multiline = true, AcceptsReturn = true,
-                ScrollBars = ScrollBars.Vertical, Height = 140, Dock = DockStyle.Fill,
-                Font = NOMADTheme.Mono(NOMADTheme.SIZE_SMALL),
-                BackColor = NOMADTheme.CONTROL_BG, ForeColor = NOMADTheme.TEXT_PRIMARY,
+                Name = "FenceCoordinates", AcceptsReturn = true,
+                VerticalScrollBarVisibility = Wpf.ScrollBarVisibility.Auto, Height = 140,
                 Text = input.Coordinates,
+                ToolTip = "One coordinate pair per line. Separate values with a comma, space or tab.",
             };
             _coordinates.TextChanged += (s, e) =>
             {
                 if (Active) { input.Coordinates = _coordinates.Text; }
             };
-            _tips.SetToolTip(_coordinates, "One coordinate pair per line. Separate values with a comma, space or tab.");
             Add(polygon, _coordinates);
-            var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true };
-            actions.Controls.Add(Button("Open Fence in Plan", (s, e) => OpenPlan()));
-            actions.Controls.Add(Button("Stage in Plan…", Stage));
+            var actions = new Wpf.WrapPanel();
+            actions.Children.Add(Button("Open Fence in Plan", (s, e) => OpenPlan()));
+            actions.Children.Add(Button("Stage in Plan…", Stage));
             Add(polygon, actions);
-            _status = new Label
-            {
-                Name = "FenceSetupStatus", AutoSize = true, MaximumSize = new Size(680, 0),
-                Text = "",
-            };
+            _status = WpfUi.Text(""); _status.Name = "FenceSetupStatus";
             Add(polygon, _status);
             AddParameters(layout, config);
-            Controls.Add(layout);
+            Controls.Add(WpfUi.Host(new Wpf.ScrollViewer { Content = layout, VerticalScrollBarVisibility = Wpf.ScrollBarVisibility.Auto }));
         }
 
         private bool Active => !IsDisposed && !Disposing && !_shutdown.IsCancellationRequested;
@@ -162,32 +144,21 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private static Button Button(string text, EventHandler click)
+        private static Wpf.Button Button(string text, EventHandler click)
         {
-            var button = ControlFactory.Button(text, click);
-            button.AutoSize = true;
-            button.Padding = new Padding(8, 4, 8, 4);
-            return button;
+            return WpfUi.Action(text, () => click(null, EventArgs.Empty));
         }
 
-        private static void Add(TableLayoutPanel layout, Control control)
+        private static void Add(Wpf.StackPanel layout, FrameworkElement control)
         {
-            int row = layout.RowCount++;
-            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            control.Margin = new Padding(0, 0, 0, 10);
-            layout.Controls.Add(control, 0, row);
+            control.Margin = new Thickness(0, 0, 0, 10);
+            layout.Children.Add(control);
         }
 
-        private static TableLayoutPanel Group(TableLayoutPanel parent, string title)
+        private static Wpf.StackPanel Group(Wpf.StackPanel parent, string title)
         {
-            var panel = new TableLayoutPanel
-            {
-                AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(14),
-                BackColor = NOMADTheme.CARD_BG,
-            };
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            Add(panel, new Label { Text = title, AutoSize = true,
-                Font = NOMADTheme.Font(NOMADTheme.SIZE_HEADING, FontStyle.Bold) });
+            var panel = new Wpf.StackPanel { Background = WpfTheme.Card, Margin = new Thickness(0, 0, 0, 10) };
+            Add(panel, WpfUi.Section(title));
             Add(parent, panel);
             return panel;
         }
@@ -198,7 +169,6 @@ namespace NOMAD.MissionPlanner
             {
                 _parameterShutdown.Dispose();
                 _parameters?.Dispose();
-                _tips.Dispose();
             }
             base.Dispose(disposing);
         }

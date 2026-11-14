@@ -1,223 +1,135 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
-
 using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Windows;
 using System.Windows.Forms;
+using System.Windows.Forms.Integration;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using Application = System.Windows.Forms.Application;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;
+using Color = System.Drawing.Color;
 
 internal static class JoystickPadUiTests
 {
-    private const uint WM_LBUTTONDOWN = 0x0201;
-    private const uint WM_LBUTTONUP = 0x0202;
-    private const uint WM_MOUSEMOVE = 0x0200;
-    private const uint WM_MOUSELEAVE = 0x02A3;
-    private const int PAD_CENTER_X = 160;
-    private const int PAD_CENTER_Y = 150;
-    // The input vector extends 2 px past the control's 120 px drawing cap to test clamping.
-    private const int PAD_TEST_RADIUS = 122;
-
-    private static int _failures;
+    private const int CX = 160, CY = 150, RADIUS = 122;
+    private static int failures;
 
     [STAThread]
     private static int Main(string[] args)
     {
-        if (args.Length != 1)
-        {
-            Console.Error.WriteLine("Pass the built NOMADPlugin.dll path.");
-            return 2;
-        }
-
-        Application.EnableVisualStyles();
-        Assembly plugin = Assembly.LoadFrom(args[0]);
-        Type padType = FindPadType(plugin);
-        RunInteractionChecks(plugin, padType);
-        return _failures == 0 ? 0 : 1;
-    }
-
-    private static Type FindPadType(Assembly plugin)
-    {
-        Type padType = plugin.GetType("NOMAD.MissionPlanner.GimbalJoystickWindow+JoystickPad")
-            ?? plugin.GetType("NOMAD.MissionPlanner.JoystickPad");
-        if (padType == null)
-        {
-            throw new InvalidOperationException("JoystickPad was not found in the plugin assembly.");
-        }
-        return padType;
-    }
-
-    private static void RunInteractionChecks(Assembly plugin, Type padType)
-    {
-        Color card = GetThemeColor(plugin, "CARD_BG");
-        Color accent = GetThemeColor(plugin, "ACCENT");
-        using (Form host = CreateOffscreenHost())
-        using (Control pad = CreatePad(plugin, padType))
-        {
-            List<PointF> values = AttachStickListener(pad);
-            pad.BackColor = card;
-            pad.SetBounds(0, 0, 320, 300);
-            host.Controls.Add(pad);
-            host.Show();
-            Application.DoEvents();
-
-            IntPtr handle = pad.Handle;
-            CheckMouseDrag(handle, pad, values);
-            CheckMouseLeave(handle, values);
-            CheckRendering(pad, card, accent);
-            ObserveDisableDuringDrag(handle, pad, values);
-        }
-    }
-
-    private static Form CreateOffscreenHost()
-    {
-        return new Form
-        {
-            AutoScaleMode = AutoScaleMode.None,
-            FormBorderStyle = FormBorderStyle.None,
-            ShowInTaskbar = false,
-            StartPosition = FormStartPosition.Manual,
-            Location = new Point(-10000, -10000),
-            ClientSize = new Size(320, 300),
-        };
-    }
-
-    private static Control CreatePad(Assembly plugin, Type padType)
-    {
-        if (padType.IsNested)
-        {
-            return (Control)Activator.CreateInstance(padType, nonPublic: true);
-        }
-
-        Type window = plugin.GetType("NOMAD.MissionPlanner.GimbalJoystickWindow");
-        FieldInfo deadzoneField = window.GetField("STICK_DEADZONE", BindingFlags.NonPublic | BindingFlags.Static);
-        float deadzone = (float)deadzoneField.GetRawConstantValue();
-        ConstructorInfo constructor = padType.GetConstructor(
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-            binder: null,
-            types: new[] { typeof(float) },
-            modifiers: null);
-        return (Control)constructor.Invoke(new object[] { deadzone });
-    }
-
-    private static List<PointF> AttachStickListener(Control pad)
-    {
+        if (args.Length != 1) { Console.Error.WriteLine("Pass the built NOMADPlugin.dll path."); return 2; }
+        var plugin = Assembly.LoadFrom(args[0]);
+        var type = plugin.GetType("NOMAD.MissionPlanner.JoystickPad", true);
+        var position = new System.Windows.Point();
+        bool captured = false, allowCapture = true;
+        Func<MouseEventArgs, System.Windows.Point> positionProvider = mouseArgs => position;
+        Func<bool> capture = () => captured = allowCapture;
+        Action release = () => captured = false;
+        var pad = (FrameworkElement)Activator.CreateInstance(type, BindingFlags.Instance | BindingFlags.Public |
+            BindingFlags.NonPublic, null, new object[] { 0.06f, positionProvider, capture, release }, null);
         var values = new List<PointF>();
-        EventInfo stickChanged = pad.GetType().GetEvent("StickChanged");
-        if (stickChanged == null)
+        type.GetEvent("StickChanged").AddEventHandler(pad,
+            new Action<float, float>((x, y) => values.Add(new PointF(x, y))));
+        using (var form = new Form { AutoScaleMode = AutoScaleMode.None, FormBorderStyle = FormBorderStyle.None,
+            ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Location = new System.Drawing.Point(-10000, -10000),
+            ClientSize = new System.Drawing.Size(320, 300) })
+        using (var host = new ElementHost { Dock = DockStyle.Fill, Child = pad })
         {
-            throw new InvalidOperationException("JoystickPad has no StickChanged event.");
+            form.Controls.Add(host); form.Show(); Application.DoEvents();
+            position = new System.Windows.Point(CX + RADIUS, CY);
+            SendButton(pad, UIElement.MouseLeftButtonDownEvent);
+            Check(values.Count == 1, "left press emits one stick value");
+            CheckValue(values, 0, 1, 0, "right edge is +horizontal");
+            Check(captured, "left press captures pointer");
+            position = new System.Windows.Point(CX + RADIUS, CY - RADIUS); SendMove(pad, UIElement.MouseMoveEvent);
+            Check(values.Count == 2, "drag emits one new stick value");
+            CheckValue(values, 1, 0.7071f, 0.7071f, "diagonal drag is bounded and upward is positive");
+            position = new System.Windows.Point(319, 28); SendMove(pad, UIElement.MouseMoveEvent);
+            Check(values.Count == 3, "second drag emits one new stick value");
+            CheckValue(values, 2, 0.7934f, 0.6087f, "outward drag clamps to circular boundary");
+            SendButton(pad, UIElement.MouseLeftButtonUpEvent);
+            Check(values.Count == 4, "release emits one center value");
+            CheckValue(values, 3, 0, 0, "release centers both axes");
+            Check(!captured, "release drops pointer capture");
+            position = new System.Windows.Point(CX, CY - RADIUS); SendMove(pad, UIElement.MouseMoveEvent);
+            Check(values.Count == 4, "movement after release emits no value");
+            SendButton(pad, UIElement.MouseLeftButtonDownEvent);
+            Check(values.Count == 5, "second press emits one stick value");
+            CheckValue(values, 4, 0, 1, "top edge is positive vertical");
+            SendMove(pad, UIElement.MouseLeaveEvent);
+            Check(values.Count == 6, "leaving during drag emits one center value");
+            CheckValue(values, 5, 0, 0, "leave centers both axes");
+            CheckRendering(pad, plugin);
+            position = new System.Windows.Point(CX + RADIUS / 2, CY); SendButton(pad, UIElement.MouseLeftButtonDownEvent);
+            int before = values.Count;
+            pad.IsEnabled = false; Application.DoEvents();
+            Check(values.Count == before + 1, "disabling during drag emits one center value");
+            CheckValue(values, before, 0, 0, "disable centers both axes");
+            Check(!captured, "disabling releases pointer capture");
+            pad.IsEnabled = true;
+            position = new System.Windows.Point(CX + RADIUS / 2, CY); SendButton(pad, UIElement.MouseLeftButtonDownEvent);
+            before = values.Count;
+            captured = false; SendMove(pad, Mouse.LostMouseCaptureEvent);
+            Check(values.Count == before + 1, "capture loss emits one center value");
+            CheckValue(values, before, 0, 0, "capture loss centers both axes");
+            position = new System.Windows.Point(CX + RADIUS / 2, CY); SendButton(pad, UIElement.MouseLeftButtonDownEvent);
+            before = values.Count;
+            host.Child = null; Application.DoEvents();
+            Check(values.Count == before + 1, "unloading during drag emits one center value");
+            CheckValue(values, before, 0, 0, "unloading centers both axes");
+            Check(!captured, "unloading releases pointer capture");
+            host.Child = pad; Application.DoEvents();
+            allowCapture = false;
+            before = values.Count;
+            SendButton(pad, UIElement.MouseLeftButtonDownEvent);
+            Check(values.Count == before && !captured, "failed capture emits no stick value");
+            SendMove(pad, UIElement.MouseMoveEvent);
+            Check(values.Count == before, "movement after failed capture emits no stick value");
         }
-
-        Action<float, float> onStickChanged = (x, y) => values.Add(new PointF(x, y));
-        stickChanged.AddEventHandler(pad, onStickChanged);
-        return values;
+        return failures == 0 ? 0 : 1;
     }
-
-    private static void CheckMouseDrag(IntPtr handle, Control pad, List<PointF> values)
+    private static void CheckRendering(FrameworkElement pad, Assembly plugin)
     {
-        SendMouse(handle, WM_LBUTTONDOWN, 1, PAD_CENTER_X + PAD_TEST_RADIUS, PAD_CENTER_Y);
-        Check(values.Count == 1, "left press emits one stick value");
-        CheckNear(1f, values[0].X, "right edge is +roll");
-        CheckNear(0f, values[0].Y, "right edge has no pitch");
-        Check(pad.Capture, "left press captures the pointer");
-
-        SendMouse(handle, WM_MOUSEMOVE, 1, PAD_CENTER_X + PAD_TEST_RADIUS, PAD_CENTER_Y - PAD_TEST_RADIUS);
-        Check(values.Count == 2, "drag emits one new stick value");
-        CheckNear(0.7071f, values[1].X, "diagonal drag is bounded on roll");
-        CheckNear(0.7071f, values[1].Y, "upward diagonal drag is positive pitch");
-
-        SendMouse(handle, WM_MOUSEMOVE, 1, 319, 28);
-        Check(values.Count == 3, "second drag emits one new stick value");
-        CheckNear(0.7934f, values[2].X, "outward drag clamps to the circular boundary");
-        CheckNear(0.6087f, values[2].Y, "outward drag keeps the pitch axis orientation");
-
-        SendMouse(handle, WM_LBUTTONUP, 0, 319, 28);
-        Check(values.Count == 4, "release emits one center value");
-        CheckNear(0f, values[3].X, "release centers roll");
-        CheckNear(0f, values[3].Y, "release centers pitch");
-        Check(!pad.Capture, "release drops pointer capture");
-
-        SendMouse(handle, WM_MOUSEMOVE, 0, PAD_CENTER_X, PAD_CENTER_Y - PAD_TEST_RADIUS);
-        Check(values.Count == 4, "mouse movement after release emits no value");
+        var bitmap = new RenderTargetBitmap(320, 300, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(pad);
+        var pixels = new byte[320 * 300 * 4]; bitmap.CopyPixels(pixels, 320 * 4, 0);
+        var theme = plugin.GetType("NOMAD.MissionPlanner.NOMADTheme", true);
+        Check(PixelMatches(pixels, CX, CY, (Color)theme.GetField("ACCENT").GetValue(null)), "puck uses theme accent");
+        Check(PixelMatches(pixels, 2, 2, (Color)theme.GetField("CARD_BG").GetValue(null)), "pad uses themed background");
+        var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(bitmap));
+        using (var output = File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "JoystickPadRender.png")))
+        { png.Save(output); }
     }
-
-    private static void CheckMouseLeave(IntPtr handle, List<PointF> values)
+    private static bool PixelMatches(byte[] data, int x, int y, Color expected)
     {
-        SendMouse(handle, WM_LBUTTONDOWN, 1, PAD_CENTER_X, PAD_CENTER_Y - PAD_TEST_RADIUS);
-        Check(values.Count == 5, "second press emits one stick value");
-        CheckNear(1f, values[4].Y, "top edge is positive pitch");
-
-        SendMouse(handle, WM_MOUSELEAVE, 0, 0, 0);
-        Check(values.Count == 6, "leaving during a drag emits one center value");
-        CheckNear(0f, values[5].X, "mouse leave centers roll");
-        CheckNear(0f, values[5].Y, "mouse leave centers pitch");
+        int index = (y * 320 + x) * 4;
+        return data[index] == expected.B && data[index + 1] == expected.G && data[index + 2] == expected.R &&
+            data[index + 3] == expected.A;
     }
-
-    private static void CheckRendering(Control pad, Color card, Color accent)
-    {
-        using (var bitmap = new Bitmap(pad.Width, pad.Height))
-        {
-            pad.DrawToBitmap(bitmap, new Rectangle(Point.Empty, pad.Size));
-            Check(bitmap.GetPixel(PAD_CENTER_X, PAD_CENTER_Y).ToArgb() == accent.ToArgb(),
-                "rendered puck uses the theme accent at center");
-            Check(bitmap.GetPixel(2, 2).ToArgb() == card.ToArgb(),
-                "rendered pad keeps its themed background");
-            bitmap.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "JoystickPadRender.png"));
-        }
-    }
-
-    private static void ObserveDisableDuringDrag(IntPtr handle, Control pad, List<PointF> values)
-    {
-        pad.Enabled = true;
-        SendMouse(handle, WM_LBUTTONDOWN, 1, PAD_CENTER_X + PAD_TEST_RADIUS / 2, PAD_CENTER_Y);
-        int beforeDisable = values.Count;
-        PointF heldValue = values[values.Count - 1];
-        pad.Enabled = false;
-        Application.DoEvents();
-
-        Console.WriteLine(
-            $"OBSERVED disable during drag: events {beforeDisable}->{values.Count}, " +
-            $"before=({heldValue.X:0.0000},{heldValue.Y:0.0000}), " +
-            $"after=({values[values.Count - 1].X:0.0000},{values[values.Count - 1].Y:0.0000}), " +
-            $"capture={pad.Capture}");
-        Check(values.Count == beforeDisable + 1, "disabling during drag emits one center value");
-        CheckNear(0f, values[values.Count - 1].X, "disable centers roll");
-        CheckNear(0f, values[values.Count - 1].Y, "disable centers pitch");
-        Check(!pad.Capture, "disabling during drag releases pointer capture");
-        SendMouse(handle, WM_LBUTTONUP, 0, PAD_CENTER_X + PAD_TEST_RADIUS / 2, PAD_CENTER_Y);
-        pad.Enabled = true;
-    }
-
-    private static Color GetThemeColor(Assembly plugin, string name)
-    {
-        Type theme = plugin.GetType("NOMAD.MissionPlanner.NOMADTheme");
-        return (Color)theme.GetField(name, BindingFlags.Public | BindingFlags.Static).GetValue(null);
-    }
-
-    private static void SendMouse(IntPtr handle, uint message, int buttons, int x, int y)
-    {
-        int coordinates = (y << 16) | (x & 0xffff);
-        SendMessage(handle, message, new IntPtr(buttons), new IntPtr(coordinates));
-    }
-
-    private static void CheckNear(float expected, float actual, string name)
-    {
-        Check(Math.Abs(expected - actual) <= 0.01f,
-            $"{name} (expected {expected:0.0000}, got {actual:0.0000})");
-    }
-
+    private static void CheckValue(List<PointF> values, int index, float x, float y, string name) =>
+        Check(values.Count > index && Math.Abs(values[index].X - x) < 0.01f && Math.Abs(values[index].Y - y) < 0.01f, name);
     private static void Check(bool passed, string name)
     {
         Console.WriteLine($"  {(passed ? "PASS" : "FAIL")}  {name}");
-        if (!passed)
-        {
-            _failures++;
-        }
+        if (!passed) failures++;
     }
-
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    private static extern IntPtr SendMessage(IntPtr handle, uint message, IntPtr wParam, IntPtr lParam);
+    private static void SendButton(FrameworkElement pad, RoutedEvent routedEvent)
+    {
+        pad.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+            { RoutedEvent = routedEvent, Source = pad });
+        Application.DoEvents();
+    }
+    private static void SendMove(FrameworkElement pad, RoutedEvent routedEvent)
+    {
+        pad.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, Environment.TickCount)
+            { RoutedEvent = routedEvent, Source = pad });
+        Application.DoEvents();
+    }
 }

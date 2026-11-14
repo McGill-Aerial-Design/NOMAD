@@ -118,9 +118,9 @@ try {
         $settingsType = $plugin.GetType('NOMAD.MissionPlanner.NOMADSettingsForm')
         $settings = $settingsType.GetConstructors()[0].Invoke([object[]]@($profiles))
         $tabs = $settingsType.GetField('_tabControl', $private).GetValue($settings)
-        $page = @($tabs.TabPages | Where-Object { $_.Text -eq $tab[0] })
+        $page = @($tabs.Items | Where-Object { $_.Header -eq $tab[0] })
         if ($page.Count -ne 1) { throw ('Expected one settings page: ' + $tab[0]) }
-        $tabs.SelectedTab = $page[0]
+        $tabs.SelectedItem = $page[0]
         Capture $settings $tab[1]
     }
     $editorType = $plugin.GetType('NOMAD.MissionPlanner.InputBindingEditorForm', $true)

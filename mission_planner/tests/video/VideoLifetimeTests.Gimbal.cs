@@ -53,17 +53,21 @@ internal static partial class VideoLifetimeTests
         }
         using (var editor = new ServoGimbalEditorForm(clone.SelectedGimbalAxes))
         {
-            var grid = GetField<DataGridView>(editor, "_axes");
-            grid.Rows[1].Cells["Use"].Value = true; grid.Rows[1].Cells["Channel"].Value = 15;
-            grid.Rows[2].Cells["Use"].Value = true; grid.Rows[2].Cells["Channel"].Value = 16;
-            grid.Rows[2].Cells["Reverse"].Value = true;
+            var grid = GetField<System.Windows.Controls.Grid>(editor, "_axes");
+            T Cell<T>(int row, int column) where T : System.Windows.UIElement => grid.Children.OfType<T>().Single(
+                item => System.Windows.Controls.Grid.GetRow(item) == row && System.Windows.Controls.Grid.GetColumn(item) == column);
+            Cell<System.Windows.Controls.CheckBox>(2, 0).IsChecked = true;
+            Cell<System.Windows.Controls.TextBox>(2, 2).Text = "15";
+            Cell<System.Windows.Controls.CheckBox>(3, 0).IsChecked = true;
+            Cell<System.Windows.Controls.TextBox>(3, 2).Text = "16";
+            Cell<System.Windows.Controls.CheckBox>(3, 7).IsChecked = true;
             var edited = editor.BuildCandidate();
             Check(edited.Count == 3 && edited[2].Axis == "Roll" && edited[2].Reversed &&
                 clone.SelectedGimbalAxes.Count == 1, "Gimbal editor did not keep its draft independent");
-            grid.Rows[1].Cells["Channel"].Value = 14; bool rejected = false;
+            Cell<System.Windows.Controls.TextBox>(2, 2).Text = "14"; bool rejected = false;
             try { editor.BuildCandidate(); } catch (JsonException) { rejected = true; }
             Check(rejected, "Two gimbal axes shared one servo output");
-            grid.Rows[1].Cells["Channel"].Value = 15;
+            Cell<System.Windows.Controls.TextBox>(2, 2).Text = "15";
             editor.ShowInTaskbar = false; editor.Location = new Point(-2000, -2000); editor.Show();
             using (var image = new Bitmap(editor.Width, editor.Height))
             { editor.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size));
@@ -176,15 +180,21 @@ internal static partial class VideoLifetimeTests
                 PlayerVisionFrame(player, pipeline, Color.Blue);
                 Check(player.SelectRegion(new RectangleF(60, 10, 20, 20)), "Servo camera selection failed");
                 PlayerVisionFrame(player, pipeline, Color.Blue);
+                var previousHeartbeat = peer.Connection.MAV.getPacketLast((uint)MAVLink.MAVLINK_MSG_ID.HEARTBEAT);
+                var previousAttitude = peer.Connection.MAV.getPacketLast((uint)MAVLink.MAVLINK_MSG_ID.ATTITUDE);
+                peer.Heartbeat(4); peer.Attitude(0);
+                peer.Until(() => !ReferenceEquals(previousHeartbeat,
+                    peer.Connection.MAV.getPacketLast((uint)MAVLink.MAVLINK_MSG_ID.HEARTBEAT)) &&
+                    !ReferenceEquals(previousAttitude,
+                    peer.Connection.MAV.getPacketLast((uint)MAVLink.MAVLINK_MSG_ID.ATTITUDE)),
+                    "fresh selected heartbeat and attitude before servo tracking");
                 Check(player.StartTracking(), "Calibrated servo gimbal refused tracking: " + player.TrackingStatus);
                 Thread.Sleep(60); PlayerVisionFrame(player, pipeline, Color.Blue);
                 peer.Until(() => peer.ServoTargets.Length >= 2, "pitch/yaw tracking servo commands");
                 Check(peer.ServoTargets.Any(value => value.Channel == 14) && peer.ServoTargets.Any(value => value.Channel == 15),
                     "Tracking did not use both mapped servo axes");
-                var slider = panel.Controls.Find("camera:slider", true).OfType<TrackBar>().Single();
+                var slider = FindPayloadControl<System.Windows.Controls.Slider>(panel, "camera:slider");
                 slider.Value = 1700;
-                typeof(TrackBar).GetMethod("OnScroll", BindingFlags.Instance | BindingFlags.NonPublic)
-                    .Invoke(slider, new object[] { EventArgs.Empty });
                 Check(!player.IsTracking, "Shared payload slider did not retire automatic gimbal tracking immediately");
                 peer.Until(() => PayloadController.Current.TargetPwm("camera") == 1700, "manual shared-servo target");
                 int commands = peer.ServoTargets.Length;
