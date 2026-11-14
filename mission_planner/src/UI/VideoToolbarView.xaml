@@ -8,8 +8,12 @@
     <UserControl.Resources><ResourceDictionary Source="WpfTheme.xaml" /></UserControl.Resources>
     <StackPanel Margin="8,8,2,2">
         <WrapPanel>
-            <Button x:Name="PlayButton" Content="▶ Play" AutomationProperties.Name="Play" ToolTip="Play the selected video input." />
-            <Button x:Name="StopButton" Content="■ Stop" AutomationProperties.Name="Stop" ToolTip="Stop video and automatic tracking." />
+            <Button x:Name="PlayButton" AutomationProperties.Name="Play" ToolTip="Play the selected video input.">
+                <Grid MinWidth="56">
+                    <TextBlock Text="■ Stop" Visibility="Hidden" />
+                    <TextBlock x:Name="PlayCaption" Text="▶ Play" HorizontalAlignment="Center" />
+                </Grid>
+            </Button>
             <Button x:Name="FullscreenButton" Content="Full screen" AutomationProperties.Name="Full screen" ToolTip="Full screen; Escape returns to the video page." />
             <Button x:Name="SnapshotButton" Content="Snapshot" AutomationProperties.Name="Take snapshot" ToolTip="Save the displayed frame to the Desktop." />
             <ComboBox x:Name="InputSelector" MinWidth="180" MaxWidth="320" AutomationProperties.Name="Active video input"
@@ -24,7 +28,14 @@
                 <ComboBoxItem Content="Object" /><ComboBoxItem Content="Area" />
             </ComboBox>
             <Button x:Name="DetectButton" Content="Detect" AutomationProperties.Name="Detect"
-                    ToolTip="Detect objects in video. Detection alone never moves the gimbal." />
+                    ToolTip="Detect objects in video. Click a box to follow it with the gimbal; detection alone never moves it." />
+            <Button x:Name="AutoFollowButton" AutomationProperties.Name="Auto follow"
+                    ToolTip="Follow the most confident detection near the center, re-find it after a brief loss and pick the next one when it is gone. Stop, Clear or manual gimbal input turns it off.">
+                <Grid MinWidth="92">
+                    <TextBlock Text="Auto follow on" Visibility="Hidden" />
+                    <TextBlock x:Name="AutoFollowCaption" Text="Auto follow" HorizontalAlignment="Center" />
+                </Grid>
+            </Button>
             <Button x:Name="TrackButton" AutomationProperties.Name="Start tracking" ToolTip="Follow the selected region with the gimbal.">
                 <Grid MinWidth="108">
                     <TextBlock Text="Start tracking" Visibility="Hidden" />
@@ -38,7 +49,10 @@
         <WrapPanel x:Name="OptionsRow" Visibility="Collapsed">
             <ComboBox x:Name="ModelSelector" Width="220" AutomationProperties.Name="Detection model"
                       ToolTip="Select the detection model for this camera. Video and generic region tracking continue." />
-            <Button x:Name="ManageModelsButton" Content="Manage models" AutomationProperties.Name="Manage detection models" />
+            <Button x:Name="ManageModelsButton" Content="Models &amp; classes" AutomationProperties.Name="Manage detection models"
+                    ToolTip="Choose which classes each model detects, or add your own YOLOX model." />
+            <Button x:Name="MeasureDelayButton" Content="Measure delay" AutomationProperties.Name="Measure camera delay"
+                    ToolTip="Point the camera at a still scene. NOMAD tilts the gimbal 10° four times and times the picture change." />
             <Button x:Name="SaveButton" Content="Save observation" AutomationProperties.Name="Save observation"
                     ToolTip="Save the current image and observation details." />
             <Button x:Name="HistoryButton" Content="History" AutomationProperties.Name="Tracking history"

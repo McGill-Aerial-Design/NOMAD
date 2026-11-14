@@ -31,61 +31,87 @@ namespace NOMAD.MissionPlanner
             InitializeUI();
         }
 
+        private const int SidebarWidth = 340;
+        private SplitContainer _split;
+        private Control _sidebarTab;
+
         private void InitializeUI()
         {
-            var mainLayout = new TableLayoutPanel
+            // Video fills the left; payloads are a resizable right sidebar the operator can hide.
+            _split = new SplitContainer
             {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 2,
+                Dock = DockStyle.Fill, Orientation = Orientation.Vertical, FixedPanel = FixedPanel.Panel2,
+                SplitterWidth = 6, BackColor = NOMADTheme.CARD_BORDER, Panel1MinSize = 200,
             };
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));
-
-            var videoPanel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.Black,
-                Margin = new Padding(5),
-            };
+            _split.Panel1.BackColor = Color.Black;
+            _split.Panel2.BackColor = CARD_BG;
 
             _videoHost = new VideoInputPlayer(_config, true, _shutdown, _createPipeline,
-                NOMADMainScreen.SelectVideoInput, NOMADMainScreen.SelectVideoModel);
-            videoPanel.Controls.Add(_videoHost);
+                NOMADMainScreen.SelectVideoInput, NOMADMainScreen.UpdateVideoInput);
+            _split.Panel1.Controls.Add(_videoHost);
 
-            mainLayout.Controls.Add(videoPanel, 0, 0);
-
-            var controlsSection = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = CARD_BG,
-                Padding = new Padding(NOMADTheme.PAD),
-            };
             try
             {
-                _actuatorPanel = new ActuatorControlPanel(_config) { Dock = DockStyle.Fill };
-                _actuatorPanel.BackColor = CARD_BG;
-                controlsSection.Controls.Add(_actuatorPanel);
+                _actuatorPanel = new ActuatorControlPanel(_config) { Dock = DockStyle.Fill, BackColor = CARD_BG };
+                _split.Panel2.Controls.Add(_actuatorPanel);
             }
             catch (Exception ex)
             {
                 var error = WpfUi.Text($"Actuator controls unavailable: {ex.Message}");
                 error.Foreground = System.Windows.Media.Brushes.OrangeRed;
-                controlsSection.Controls.Add(WpfUi.Host(error));
+                error.Margin = new System.Windows.Thickness(NOMADTheme.PAD);
+                var errorHost = WpfUi.Host(error); errorHost.BackColor = CARD_BG;
+                _split.Panel2.Controls.Add(errorHost);
             }
-            var heading = new System.Windows.Controls.StackPanel();
-            heading.Children.Add(WpfUi.Section("Payloads"));
+            _split.Panel2.Controls.Add(SidebarHeader());
+
+            var tab = WpfUi.Action("◂ Payloads", () => ShowSidebar(true));
+            tab.ToolTip = "Show payload controls.";
+            tab.Margin = new System.Windows.Thickness(0, NOMADTheme.PAD, 0, 0);
+            tab.VerticalAlignment = System.Windows.VerticalAlignment.Top;
+            tab.LayoutTransform = new System.Windows.Media.RotateTransform(-90);
+            var tabRoot = new System.Windows.Controls.Grid { Background = WpfTheme.Card };
+            tabRoot.Children.Add(tab);
+            var tabHost = WpfUi.Host(tabRoot);
+            tabHost.Dock = DockStyle.Right; tabHost.Width = 40; tabHost.BackColor = CARD_BG; tabHost.Visible = false;
+            _sidebarTab = tabHost;
+
+            Controls.Add(_split);
+            Controls.Add(tabHost);
+            _split.HandleCreated += (sender, args) => _split.SplitterDistance =
+                Math.Max(_split.Panel1MinSize, _split.Width - SidebarWidth - _split.SplitterWidth);
+        }
+
+        private Control SidebarHeader()
+        {
+            var header = new System.Windows.Controls.DockPanel
+            {
+                Background = WpfTheme.Card, Margin = new System.Windows.Thickness(NOMADTheme.PAD, 0, NOMADTheme.PAD, 0),
+            };
+            var hide = WpfUi.Action("Hide ▸", () => ShowSidebar(false));
+            hide.ToolTip = "Hide payload controls and widen the video.";
+            hide.VerticalAlignment = System.Windows.VerticalAlignment.Top;
+            hide.Margin = new System.Windows.Thickness(8, NOMADTheme.PAD - 4, 0, 0);
+            System.Windows.Controls.DockPanel.SetDock(hide, System.Windows.Controls.Dock.Right);
+            header.Children.Add(hide);
+            var text = new System.Windows.Controls.StackPanel();
+            text.Children.Add(WpfUi.Section("Payloads"));
             if (_config.ActuatorDefinitions == null || _config.ActuatorDefinitions.Count == 0)
             {
-                heading.Children.Add(WpfUi.Text("Add payloads in Settings → Payloads."));
+                var hint = WpfUi.Text("Add payloads in Settings → Payloads.");
+                hint.Foreground = WpfTheme.SecondaryText;
+                text.Children.Add(hint);
             }
-            var payloadsTitle = WpfUi.Host(heading);
-            payloadsTitle.Dock = DockStyle.Top; payloadsTitle.AutoSize = true;
-            controlsSection.Controls.Add(payloadsTitle);
+            header.Children.Add(text);
+            var host = WpfUi.Host(header);
+            host.Dock = DockStyle.Top; host.AutoSize = true; host.BackColor = CARD_BG;
+            return host;
+        }
 
-            mainLayout.Controls.Add(controlsSection, 0, 1);
-            Controls.Add(mainLayout);
+        private void ShowSidebar(bool visible)
+        {
+            _split.Panel2Collapsed = !visible;
+            _sidebarTab.Visible = !visible;
         }
 
         public void UpdateData() { _videoHost?.RefreshInput(); }

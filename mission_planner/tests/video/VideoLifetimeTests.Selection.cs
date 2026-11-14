@@ -155,9 +155,10 @@ internal static partial class VideoLifetimeTests
             second.Pipeline == VideoPipeline.Build(config.VideoInputs[1]), "Selected input was not saved/applied to HUD.");
         Check((long)generationField.GetValue(null) == generation && ReferenceEquals(GetField<NOMADConfig>(plugin, "_config"), config),
             "Camera selection replaced the aircraft/output owner.");
-        var selectModel = typeof(NOMADPlugin).GetMethod("SelectActiveVideoModel", BindingFlags.Instance | BindingFlags.NonPublic);
+        var selectModel = typeof(NOMADPlugin).GetMethod("UpdateActiveVideoInput", BindingFlags.Instance | BindingFlags.NonPublic);
         Func<NOMADConfig, string, string, bool> saveModel = (owner, name, model) =>
-            WaitUi((System.Threading.Tasks.Task<bool>)selectModel.Invoke(plugin, new object[] { owner, name, model }),
+            WaitUi((System.Threading.Tasks.Task<bool>)selectModel.Invoke(plugin, new object[] { owner, name,
+                (Action<VideoInputProfile>)(value => value.DetectorModelProfilePath = model) }),
                 "model selection persistence");
         string modelPath = Path.Combine(directory, "external-model.json");
         Check(saveModel(config, "Alternate", modelPath) &&

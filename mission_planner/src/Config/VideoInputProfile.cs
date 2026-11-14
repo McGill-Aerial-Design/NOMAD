@@ -25,7 +25,6 @@ namespace NOMAD.MissionPlanner
         // "CPU" (default) or "GPU": EfficientTAM video memory on an NVIDIA DirectX 12 GPU for Object tracking.
         public string ObjectTracker { get; set; } = "CPU";
         public bool GroundPredictionEnabled { get; set; }
-        public double GroundPlaneHeightMeters { get; set; }
         public int CameraDelayEstimateMs { get; set; }
         public int HorizontalFovDeg { get; set; } = 90;
         public int PitchMinDeg { get; set; } = -90;
@@ -64,9 +63,8 @@ namespace NOMAD.MissionPlanner
             if (ObjectTracker != "CPU" && ObjectTracker != "GPU")
             { throw new JsonSerializationException("Object tracker must be CPU or GPU."); }
             if ((TrackingMode != "Object" && TrackingMode != "Area") || CameraDelayEstimateMs < 0 ||
-                CameraDelayEstimateMs > 2000 || double.IsNaN(GroundPlaneHeightMeters) ||
-                double.IsInfinity(GroundPlaneHeightMeters) || Math.Abs(GroundPlaneHeightMeters) > 10000)
-            { throw new JsonSerializationException("Review tracking mode, plane height and camera delay (0..2000 ms)."); }
+                CameraDelayEstimateMs > 2000)
+            { throw new JsonSerializationException("Review tracking mode and camera delay (0..2000 ms)."); }
             if (DetectorModelProfilePath == null || DetectorModelProfilePath.Length > 1024 ||
                 DetectorModelProfilePath.Any(char.IsControl) || HorizontalFovDeg < 5 || HorizontalFovDeg > 170 ||
                 (DetectorModelProfilePath != "" && (!Path.IsPathRooted(DetectorModelProfilePath) ||

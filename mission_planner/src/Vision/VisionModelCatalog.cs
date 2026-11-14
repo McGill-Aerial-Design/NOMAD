@@ -18,17 +18,28 @@ namespace NOMAD.MissionPlanner
     // Profiles are shared by groundstation users of the same MP data directory; weights stay in place.
     internal sealed class VisionModelCatalog
     {
+        internal const string BuiltinName = "Built-in YOLOX Nano (COCO)";
         internal string DirectoryPath { get; }
+        // Operator class and threshold choices for the built-in weights; cameras keep selecting it as "".
+        internal string BuiltinPath => Path.Combine(DirectoryPath, "builtin.json");
         internal VisionModelCatalog(string directory = null)
         { DirectoryPath = Path.GetFullPath(directory ?? Path.Combine(NOMADStorage.PluginsDirectory, "NOMAD", "models")); }
+
+        // The profile path the detector loads: the built-in choice uses its saved settings when present.
+        internal string DetectorPath(string selected) =>
+            string.IsNullOrEmpty(selected) && File.Exists(BuiltinPath) ? BuiltinPath : selected ?? "";
+
+        internal VisionModelProfile LoadBuiltin() =>
+            File.Exists(BuiltinPath) ? VisionModelProfile.Load(BuiltinPath) : VisionModelProfile.Builtin();
 
         internal List<VisionModelChoice> Choices(string current = "")
         {
             var choices = new List<VisionModelChoice>
-            { new VisionModelChoice("", "Built-in YOLOX Nano vehicles") };
+            { new VisionModelChoice("", BuiltinName) };
             if (Directory.Exists(DirectoryPath))
             {
-                string[] files = Directory.EnumerateFiles(DirectoryPath, "*.json").Take(257).ToArray();
+                string[] files = Directory.EnumerateFiles(DirectoryPath, "*.json")
+                    .Where(path => !SamePath(path, BuiltinPath)).Take(257).ToArray();
                 if (files.Length > 256) { throw new FormatException("The model catalog supports at most 256 profiles."); }
                 foreach (string path in files.OrderBy(path => path))
                 {
@@ -58,7 +69,7 @@ namespace NOMAD.MissionPlanner
             {
                 error = "Model catalog unavailable; current model selection is preserved. Review Manage models.";
                 var choices = new List<VisionModelChoice>
-                { new VisionModelChoice("", "Built-in YOLOX Nano vehicles (catalog unavailable)") };
+                { new VisionModelChoice("", BuiltinName + " (catalog unavailable)") };
                 if (!string.IsNullOrEmpty(current))
                 { choices.Add(new VisionModelChoice(current, "Current profile (catalog unavailable)")); }
                 return choices;

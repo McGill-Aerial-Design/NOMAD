@@ -124,6 +124,11 @@ internal static partial class VideoLifetimeTests
             Run("model-only selection preserves source and generic region ownership", ModelSwitchKeepsRegionAndSource);
             Run("model catalog publication follows a shared path across cameras", ModelCatalogSharedPath);
             Run("model construction cancellation joins and disposes during shutdown", ModelLoadShutdown);
+            Run("detection targeting picks, confirms, re-acquires and auto-chooses boxes", DetectionTargetingRules);
+            Run("built-in model classes persist for the built-in choice", BuiltinClassSelection);
+            Run("camera delay probe samples, thresholds, estimates and steps", CameraDelayProbeRules);
+            Run("ground height comes from rangefinder, terrain or HOME", GroundHeightFromTelemetry);
+            Run("clicked and automatic detections follow with the gimbal until Stop", DetectionFollowsGimbal);
             Run("bounded gimbal tracking angles", BoundedTrackingAngles);
             Run("generic visual worker selection, replacement, loss and retirement", GenericVisualWorker);
             Run("pending tracker initialization waits for a fresh result without control admission", PendingRegionInitialization);

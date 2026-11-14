@@ -79,9 +79,10 @@ namespace NOMAD.MissionPlanner
                 SetTrackingMode((VisualTrackingMode)_trackingModeSelector.SelectedIndex);
             _clearAreaButton = VideoControls.ClearButton;
             _clearAreaButton.Click += (sender, args) =>
-            { RetireTracking("Target cleared; select again"); UpdateVisionStatus(); };
+            { CancelFollow(); RetireTracking("Target cleared; select again"); UpdateVisionStatus(); };
             _detectButton = VideoControls.DetectButton;
             _detectButton.Click += (sender, args) => EnableDetection(!_session.DetectionEnabled);
+            VideoControls.AutoFollowButton.Click += (sender, args) => SetAutoFollow(!_autoFollow);
             _trackButton = VideoControls.TrackButton;
             _trackButton.Click += (sender, args) =>
             {
@@ -130,14 +131,11 @@ namespace NOMAD.MissionPlanner
             if (frame == null || !frame.Fresh ||
                 frame.Generation != _session.Generation ||
                 !VideoGeometry.TryImagePoint(point, frame.Image.Size, viewport, out var pixel)) { return false; }
-            var matches = CurrentDetections(frame)
-                ? frame.Detections.Where(detection => detection.Bounds.Contains(pixel)).ToArray()
-                : Array.Empty<VideoDetection>();
-            float minimum = 8 * Math.Max(1, Math.Max(frame.Image.Width, frame.Image.Height) / 640f);
-            bool aided = _trackingMode == VisualTrackingMode.Object && matches.Length == 1 &&
-                matches[0].Bounds.Width >= minimum && matches[0].Bounds.Height >= minimum;
-            var bounds = aided ? matches[0].Bounds : VideoGeometry.DefaultRegion(pixel, frame.Image.Size);
-            return RequestRegion(frame, bounds, aided ? matches[0].Label : null);
+            // Clicking a detection box follows that detection; elsewhere a click selects a default region.
+            var detection = CurrentDetections(frame) && _trackingMode == VisualTrackingMode.Object
+                ? DetectionTargeting.At(frame.Detections, pixel, DetectionTargeting.MinimumSize(frame.Image.Size)) : null;
+            return detection != null ? FollowDetection(frame, detection)
+                : RequestRegion(frame, VideoGeometry.DefaultRegion(pixel, frame.Image.Size), null);
         }
 
         internal bool SelectRegion(RectangleF imageRegion)
@@ -222,9 +220,9 @@ namespace NOMAD.MissionPlanner
             return true;
         }
 
-        internal void StopTracking() => DisarmTracking("Tracking stopped");
-        private void OnManualGimbalInput() => DisarmTracking("Manual gimbal input");
-        private void OnAircraftChanged() => RetireTracking("Aircraft or connection changed; select again");
+        internal void StopTracking() { CancelFollow(); DisarmTracking("Tracking stopped"); }
+        private void OnManualGimbalInput() { CancelFollow(); DisarmTracking("Manual gimbal input"); }
+        private void OnAircraftChanged() { CancelFollow(); RetireTracking("Aircraft or connection changed; select again"); }
 
         private void RetireTracking(string reason)
         {
@@ -247,7 +245,7 @@ namespace NOMAD.MissionPlanner
             _session?.RetireRegion();
         }
 
-        private void SetTrackingStatus(string status)
+        internal void SetTrackingStatus(string status)
         { lock (_visionGate) { _trackingStatus = _trackingFeedback = status; } UpdateVisionStatus(); }
 
         private void RetireTrackingRequest(long revision, string reason)
@@ -498,6 +496,8 @@ namespace NOMAD.MissionPlanner
             _lblStatus.ToolTip = detail;
             _lblVisionStatus.ToolTip = detail;
             _detectButton.Content = _session.DetectionLoading ? "Loading…" : _session.DetectionEnabled ? "Detect on" : "Detect";
+            VideoControls.AutoFollowCaption.Text = _autoFollow ? "Auto follow on" : "Auto follow";
+            AutomationProperties.SetName(VideoControls.AutoFollowButton, VideoControls.AutoFollowCaption.Text);
             VideoControls.TrackCaption.Text = IsTracking ? "Stop tracking" : "Start tracking";
             AutomationProperties.SetName(_trackButton, VideoControls.TrackCaption.Text);
             _trackButton.IsEnabled = IsTracking || (_input.TrackingCalibrated && RegionReady &&
@@ -514,8 +514,14 @@ namespace NOMAD.MissionPlanner
             if (frame == null || !frame.Fresh) { return; }
             var area = VideoGeometry.ImageRectangle(frame.Image.Size, box.ClientSize);
             float scale = area.Width / frame.Image.Width;
-            foreach (var detection in CurrentDetections(frame) ? frame.Detections : Array.Empty<VideoDetection>())
+            var detections = CurrentDetections(frame) ? frame.Detections : Array.Empty<VideoDetection>();
+            var tracked = VerifiedRegion(frame, out var aim);
+            string label;
+            lock (_visionGate) { label = _selectedLabel; }
+            var confirmed = tracked.HasValue ? DetectionTargeting.Confirming(detections, tracked.Value, label) : null;
+            foreach (var detection in detections)
             {
+                if (ReferenceEquals(detection, confirmed)) { continue; }
                 var bounds = detection.Bounds;
                 var display = new RectangleF(area.X + bounds.X * scale, area.Y + bounds.Y * scale,
                     bounds.Width * scale, bounds.Height * scale);
@@ -526,7 +532,7 @@ namespace NOMAD.MissionPlanner
                         Brushes.LimeGreen, display.X, Math.Max(area.Y, display.Y - Font.Height));
                 }
             }
-            PaintSelectedRegion(box, graphics, area, scale);
+            PaintSelectedRegion(box, graphics, area, scale, tracked, aim, confirmed);
         }
     }
 

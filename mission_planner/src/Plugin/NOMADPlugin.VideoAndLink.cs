@@ -173,7 +173,9 @@ namespace NOMAD.MissionPlanner
             return true;
         }
 
-        private async Task<bool> SelectActiveVideoModel(NOMADConfig config, string inputName, string path)
+        // Saves one change to the active camera (model choice, measured delay) and applies it only after the save.
+        private async Task<bool> UpdateActiveVideoInput(NOMADConfig config, string inputName,
+            Action<VideoInputProfile> change)
         {
             var input = config?.SelectedVideoInput;
             if (!IsActiveSession(_videoShutdown) || _savingSettings || !ReferenceEquals(config, _config) ||
@@ -183,16 +185,17 @@ namespace NOMAD.MissionPlanner
             try
             {
                 var snapshot = _profiles.Clone();
-                snapshot.Selected.Config.SelectedVideoInput.DetectorModelProfilePath = path ?? "";
+                change(snapshot.Selected.Config.SelectedVideoInput);
+                snapshot.Selected.Config.SelectedVideoInput.Validate();
                 await Task.Run(() => snapshot.Save());
                 if (!IsActiveSession(session) || !ReferenceEquals(config, _config) ||
                     !ReferenceEquals(input, config.SelectedVideoInput)) { return false; }
-                input.DetectorModelProfilePath = path ?? "";
+                change(input);
                 return true;
             }
             catch (Exception error)
             {
-                Log.Error("Detection model selection was not saved: " + error.Message);
+                Log.Error("Video input change was not saved: " + error.Message);
                 return false;
             }
             finally { _savingSettings = false; }

@@ -10,6 +10,7 @@ namespace NOMAD.MissionPlanner
         {
             ValidateUiThread();
             if (_trackingMode == mode) { return; }
+            CancelFollow();
             RetireTracking("Tracking mode changed; select again"); _trackingMode = mode;
             if (_trackingModeSelector != null) { _trackingModeSelector.SelectedIndex = (int)mode; }
             UpdateVisionStatus();

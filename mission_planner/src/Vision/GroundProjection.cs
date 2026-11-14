@@ -17,13 +17,17 @@ namespace NOMAD.MissionPlanner
         internal double HeadingDegrees { get; }
         internal long CaptureTicks { get; }
         internal string Source { get; }
+        // Ground below the aircraft relative to HOME, from rangefinder or terrain telemetry; 0 means HOME level.
+        internal double GroundHeightAboveHomeMeters { get; }
 
         internal GroundCameraEstimate(object epoch, double latitude, double longitude, double altitudeMsl,
-            double homeAltitudeMsl, double pitch, double roll, double heading, long captureTicks, string source)
+            double homeAltitudeMsl, double pitch, double roll, double heading, long captureTicks, string source,
+            double groundHeightAboveHome = 0)
         {
             Epoch = epoch; Latitude = latitude; Longitude = longitude; AltitudeMslMeters = altitudeMsl;
             HomeAltitudeMslMeters = homeAltitudeMsl; PitchDegrees = pitch; RollDegrees = roll;
             HeadingDegrees = heading; CaptureTicks = captureTicks; Source = source;
+            GroundHeightAboveHomeMeters = groundHeightAboveHome;
         }
     }
 

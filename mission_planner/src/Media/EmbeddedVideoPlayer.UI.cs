@@ -45,8 +45,7 @@ namespace NOMAD.MissionPlanner
                 BackColor = NOMADTheme.CARD_BG, Font = NOMADTheme.Font(),
             };
             VideoControls = new VideoToolbarView();
-            VideoControls.PlayButton.Click += (sender, args) => StartStream();
-            VideoControls.StopButton.Click += (sender, args) => StopStream();
+            VideoControls.PlayButton.Click += (sender, args) => { if (_playbackRequested) { StopStream(); } else { StartStream(); } };
             VideoControls.FullscreenButton.Click += (sender, args) => ToggleFullscreen();
             VideoControls.SnapshotButton.Click += (sender, args) => TakeSnapshot();
             Toolbar = new ElementHost

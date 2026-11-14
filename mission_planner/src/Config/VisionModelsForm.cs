@@ -73,23 +73,29 @@ namespace NOMAD.MissionPlanner
         {
             if (_preparing) { return; }
             string path = Selected()?.Path;
-            _duplicate.IsEnabled = Selected() != null;
-            _edit.IsEnabled = _export.IsEnabled = !string.IsNullOrEmpty(path);
+            _duplicate.IsEnabled = _edit.IsEnabled = Selected() != null;
+            _edit.Content = path == "" ? "Choose classes" : "Edit";
+            _export.IsEnabled = !string.IsNullOrEmpty(path);
             _remove.IsEnabled = !string.IsNullOrEmpty(path) &&
                 VisionModelCatalog.SamePath(Path.GetDirectoryName(path), _catalog.DirectoryPath);
         }
 
-        internal static VisionModelProfile PrepareDuplicate(VisionModelChoice choice, CancellationToken token)
+        internal static VisionModelProfile PrepareDuplicate(VisionModelCatalog catalog, VisionModelChoice choice,
+            CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            var profile = choice.Path == "" ? VisionModelProfile.Builtin() : VisionModelProfile.Load(choice.Path);
-            if (choice.Path == "")
-            {
-                VisionRuntime.EnsureBuiltinModel(token);
-                profile.Model = VisionRuntime.BuiltinModelPath;
-            }
+            var profile = choice.Path == "" ? PrepareBuiltin(catalog, token) : VisionModelProfile.Load(choice.Path);
             token.ThrowIfCancellationRequested();
             profile.Name = profile.Name.Substring(0, Math.Min(75, profile.Name.Length)) + " copy";
+            return profile;
+        }
+
+        // The built-in profile with the operator's saved classes, pointing at the verified extracted weights.
+        private static VisionModelProfile PrepareBuiltin(VisionModelCatalog catalog, CancellationToken token)
+        {
+            var profile = catalog.LoadBuiltin();
+            VisionRuntime.EnsureBuiltinModel(token);
+            profile.Model = VisionRuntime.BuiltinModelPath;
             return profile;
         }
 
@@ -103,7 +109,7 @@ namespace NOMAD.MissionPlanner
             try
             {
                 var token = _shutdown.Token;
-                var profile = await Task.Run(() => PrepareDuplicate(choice, token), token);
+                var profile = await Task.Run(() => PrepareDuplicate(_catalog, choice, token), token);
                 if (!IsDisposed && !token.IsCancellationRequested) { await EditProfile(profile); }
             }
             catch (OperationCanceledException) { }
@@ -123,7 +129,13 @@ namespace NOMAD.MissionPlanner
 
         private async Task Edit(VisionModelChoice choice)
         {
-            if (choice?.Path == "") { throw new InvalidOperationException("The built-in model is read-only. Use Add for another model."); }
+            if (choice?.Path == "")
+            {
+                var token = _shutdown.Token;
+                var builtin = await Task.Run(() => PrepareBuiltin(_catalog, token), token);
+                if (!IsDisposed) { await EditProfile(builtin, _catalog.BuiltinPath, builtin: true); }
+                return;
+            }
             var profile = choice == null ? VisionModelProfile.Builtin() :
                 await Task.Run(() => VisionModelProfile.Load(choice.Path));
             if (IsDisposed) { return; }
@@ -133,11 +145,11 @@ namespace NOMAD.MissionPlanner
             await EditProfile(profile, managed ? choice.Path : null);
         }
 
-        private async Task EditProfile(VisionModelProfile profile, string path = null)
+        private async Task EditProfile(VisionModelProfile profile, string path = null, bool builtin = false)
         {
             while (true)
             {
-                using (var editor = new VisionModelEditorForm(profile))
+                using (var editor = new VisionModelEditorForm(profile, builtin))
                 {
                     if (editor.ShowDialog(this) != DialogResult.OK) { return; }
                     profile = editor.Draft;
@@ -146,7 +158,7 @@ namespace NOMAD.MissionPlanner
                 {
                     var draft = profile;
                     string saved = await Task.Run(() => _catalog.Save(draft, path));
-                    if (!IsDisposed) { await RefreshModels(saved); }
+                    if (!IsDisposed) { await RefreshModels(builtin ? "" : saved); }
                     return;
                 }
                 catch (FormatException error)

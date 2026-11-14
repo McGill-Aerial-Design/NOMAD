@@ -275,7 +275,6 @@ internal static partial class VideoLifetimeTests
             value => value.TrackingMaxRateDegSec = 0, value => value.TrackingMaxRateDegSec = 61,
             value => value.DetectorModelProfilePath = "relative.json",
             value => value.TrackingMode = "area", value => value.TrackingMode = null,
-            value => value.GroundPlaneHeightMeters = double.NaN, value => value.GroundPlaneHeightMeters = 10001,
             value => value.CameraDelayEstimateMs = -1, value => value.CameraDelayEstimateMs = 2001
         })
         {
@@ -288,15 +287,15 @@ internal static partial class VideoLifetimeTests
             var document = new JObject { ["VideoInputs"] = new JArray(new JObject { [field] = new JArray() }) };
             ExpectInvalidVision(() => NOMADConfig.ValidateInputDocument(document));
         }
-        foreach (var field in new[] { "TrackingMode", "GroundPredictionEnabled", "GroundPlaneHeightMeters", "CameraDelayEstimateMs" })
+        foreach (var field in new[] { "TrackingMode", "GroundPredictionEnabled", "CameraDelayEstimateMs" })
         {
             var document = new JObject { ["VideoInputs"] = new JArray(new JObject { [field] = new JArray() }) };
             ExpectInvalidVision(() => NOMADConfig.ValidateInputDocument(document));
         }
         var defaults = JsonConvert.DeserializeObject<VideoInputProfile>("{}");
         Check(defaults.TrackingMode == "Object" && !defaults.GroundPredictionEnabled &&
-            defaults.GroundPlaneHeightMeters == 0 && defaults.CameraDelayEstimateMs == 0,
-            "Older video profiles did not retain conservative tracking defaults");
+            defaults.CameraDelayEstimateMs == 0,
+            "Video profiles lost conservative tracking defaults");
         var config = VideoConfig();
         config.SelectedVideoInput.TrackingCalibrated = true;
         config.SelectedVideoInput.HorizontalFovDeg = 110;

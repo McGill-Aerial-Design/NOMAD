@@ -27,11 +27,12 @@ a restart. This receipt check cannot detect a camera that keeps sending frozen p
 
 ![Video controls and active input selector](images/video-page.png)
 
-The preview fills the page width, with payload controls below it. Choose an input,
-press Play, then click or drag on the video to select a target. **Start tracking**
+The preview fills the page; payload controls are a resizable right sidebar that **Hide** collapses.
+Choose an input, press **Play** (the same button then reads **Stop**), and click or drag on the
+video to select a target. **Start tracking**
 moves the gimbal after calibration and fresh aircraft telemetry are available.
 Failed prerequisites appear below the video and remain visible as frames arrive.
-**More** reveals detection model selection, **Manage models**, **Save observation**
+**More** reveals detection model selection, **Models & classes**, **Save observation**
 and **History**. The playback, tracking and status controls remain available in full screen.
 
 Network inputs accept RTSP codecs supported by the installed GStreamer decoder,
@@ -72,8 +73,8 @@ Continuous-rotation servos need a neutral/speed calibration and are not supporte
 by this position mapping. Servo tracking uses image-error PID feedback, a filtered
 derivative, limited acceleration and anti-windup to move the requested position.
 The servo's own controller still drives its motor. The camera delay estimate and
-receiver buffering reduce feedback gain for delayed imagery. Set the camera delay
-to its measured value; wrong delay or angle calibration can still cause poor tracking.
+receiver buffering reduce feedback gain for delayed imagery. Measure the camera delay
+on the Video page; wrong delay or angle calibration can still cause poor tracking.
 The tracking rate setting limits requested angle change, not measured shaft speed.
 Stop, loss of verified imagery and manual input clear the controller state;
 busy requests do not advance it. No old position sequence is queued for later replay.
@@ -93,6 +94,15 @@ retirement; no remaining axes are sent from a retired gimbal request.
 Choose **Object** or **Area**, then click or drag a selection. **Detect** can propose
 recognized objects but is optional. Once visually verified, select **Start tracking**
 to center the target with the gimbal. Detection/selection alone sends no commands.
+
+With **Detect** on in Object mode, clicking a green detection box follows it: the box seeds the
+visual tracker, and tracking starts once that tracker verifies the region and the usual
+calibration and telemetry checks pass. When the detector agrees with the tracked region, the
+yellow tracker box gains green corners and the class caption. If a followed target is lost,
+the same class within one and a half box sizes of its last position is re-selected for up to
+3 s. **Auto follow** picks the most confident detection near the image center, re-finds it
+after brief loss and moves to the next one when it is gone. Stop, Clear, manual gimbal input,
+a mode change, Stop video or an aircraft change turns Auto follow off.
 The same controls work full screen. **Stop tracking** revokes future requests;
 an already-dispatched host helper may finish.
 
@@ -202,15 +212,19 @@ Video/UI input gaps and telemetry or ownership loss still require an explicit re
 
 ### GPS and altitude search prediction
 
-**Ground prediction** is optional and off by default. Use it only for a horizontal
-surface at a known height relative to HOME; zero means HOME elevation, not terrain
-beneath the camera. Leave it off for walls, uneven terrain or unknown elevation.
+**Ground prediction** is optional and off by default. The ground height below the
+aircraft comes from flight controller telemetry: a downward rangefinder when the
+aircraft is within 30° of level, otherwise terrain data, otherwise HOME elevation.
+Leave it off for walls or steep terrain.
 Fresh GPS/altitude, consistent HOME and a mount-target estimate reproject a verified
 point into a coarse search region. The amber diamond is a hint and never authorizes
 unseen-target steering. A contradictory unique visual match disables the prior.
 
-**Camera delay** (0-2000 ms) declares estimated camera/encoder delay separately from
-RTSP buffering. It requires bracketing telemetry history. Stale/missing data, changed
+**Camera delay** is measured, not typed. Point the camera at a still scene, play live
+video and choose **More → Measure delay**. NOMAD tilts the gimbal 10° four times, times
+the first changed frame after each command, saves the median less receiver buffering
+(0-2000 ms) to this camera and restores the gimbal angle. Settings shows the saved
+value. The hint requires bracketing telemetry history. Stale/missing data, changed
 HOME/binding, shallow rays and unsupported ranges disable the hint. Visual tracking
 remains independent. No measured target coordinate is produced.
 
@@ -234,14 +248,17 @@ measured object position or physical mount feedback.
 
 ### Replace the detection model
 
-The bundled YOLOX Nano detector uses CPU inference and COCO vehicle classes by
-default. Tracking is independent of detection. Open **More → Manage models** on Video or
-**Manage** beside Detection model in Settings:
+The bundled YOLOX Nano detector uses CPU inference and its 80 COCO classes, with
+vehicles selected by default. Open **More → Models & classes** on Video or **Manage**
+beside Detection model in Settings. Select the built-in model and **Choose classes**
+to search and tick the classes and minimum confidence it reports; **Defaults** restores
+vehicles. Its weights, labels and input size stay fixed, and the choice is shared by every
+camera using the built-in model. For custom models:
 
 1. Add trusted ONNX weights or Duplicate a definition, then name it.
 2. Keep labels in model-output order; Import labels reads an ordered text file.
-   Select classes to detect. For a People preset, duplicate the built-in model and select person.
-3. Set input size, score and NMS thresholds. **Test model** validates loading/tensors.
+   Select classes to detect.
+3. Set the minimum confidence; input size and NMS overlap are under Advanced. **Test model** validates loading/tensors.
 4. Save, then select the model on Video. Cancel leaves the draft unsaved.
 
 Definitions live in `NOMAD/models`, shared across aircraft/cameras. They reference

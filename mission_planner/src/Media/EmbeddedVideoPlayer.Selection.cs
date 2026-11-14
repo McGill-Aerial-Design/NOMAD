@@ -26,6 +26,7 @@ namespace NOMAD.MissionPlanner
             var box = (PictureBox)sender;
             if (!_showControls || args.Button != MouseButtons.Left || frame?.Fresh != true ||
                 !VideoGeometry.TryImagePoint(args.Location, frame.Image.Size, box.ClientSize, out _)) { return; }
+            ForgetFollowTarget();
             RetireTracking("Selecting a new region");
             _dragBox = box; _dragStart = args.Location; _dragEnd = args.Location;
             _dragViewport = box.ClientSize; _dragImageSize = frame.Image.Size; _dragGeneration = frame.Generation;
@@ -54,32 +55,43 @@ namespace NOMAD.MissionPlanner
             box.Invalidate();
         }
 
-        private void PaintSelectedRegion(PictureBox box, Graphics graphics, RectangleF area, float scale)
+        // The latest fresh tracker result for the displayed frame and current selection, if verified.
+        private RectangleF? VerifiedRegion(VideoFrame frame, out PointF? aim)
         {
-            var frame = _displayedVideoFrame;
+            aim = null;
             var sample = _latestTrackingSample;
             var result = sample?.Region;
             bool verified = _regionReady && _selectedRegion.HasValue && frame?.Fresh == true &&
                 sample?.Fresh == true && sample.Generation == frame.Generation && frame.Generation == _session.Generation &&
                 sample.ImageSize == frame.Image.Size && result?.Revision == _regionRevision && result.Found &&
                 _session.IsRegionCurrent(_regionRevision);
-            RectangleF? region = verified ? result.Bounds : null;
+            if (!verified) { return null; }
+            aim = result.AimPoint;
+            return result.Bounds;
+        }
+
+        private void PaintSelectedRegion(PictureBox box, Graphics graphics, RectangleF area, float scale,
+            RectangleF? tracked, PointF? aim, VideoDetection confirmed)
+        {
+            RectangleF? region = tracked;
             bool dragging = ReferenceEquals(box, _dragBox);
             if (dragging && VideoGeometry.TryImageRegion(_dragStart, _dragEnd, _dragImageSize,
                 _dragViewport, out var drag)) { region = drag; }
             if (!region.HasValue) { return; }
             var bounds = region.Value;
+            var display = new RectangleF(area.X + bounds.X * scale, area.Y + bounds.Y * scale,
+                bounds.Width * scale, bounds.Height * scale);
             using (var pen = new Pen(Color.Yellow, 2))
             {
                 if (dragging) { pen.DashStyle = DashStyle.Dash; }
-                graphics.DrawRectangle(pen, area.X + bounds.X * scale, area.Y + bounds.Y * scale,
-                    bounds.Width * scale, bounds.Height * scale);
-                if (!dragging && verified && result.AimPoint.HasValue)
+                graphics.DrawRectangle(pen, display.X, display.Y, display.Width, display.Height);
+                if (!dragging && aim.HasValue)
                 {
-                    var point = result.AimPoint.Value;
+                    var point = aim.Value;
                     graphics.DrawEllipse(pen, area.X + point.X * scale - 3, area.Y + point.Y * scale - 3, 6, 6);
                 }
             }
+            if (!dragging && confirmed != null) { PaintConfirmation(graphics, display, confirmed, Font); }
         }
 
         protected override void OnVisibleChanged(EventArgs args)

@@ -22,7 +22,7 @@ namespace NOMAD.MissionPlanner
             var menu = System.Threading.Interlocked.Exchange(ref _hudVideoMenuItem, null);
             NOMADMainScreen.SetVideoShutdown(new System.Threading.CancellationToken(true));
             NOMADMainScreen.SetVideoInputSelection(null);
-            NOMADMainScreen.SetVideoModelSelection(null);
+            NOMADMainScreen.SetVideoInputUpdate(null);
             try { shutdown?.Cancel(); }
             catch (System.Exception error) { Log.Error("Video shutdown cancellation failed: " + error); }
             finally

@@ -93,13 +93,14 @@ namespace NOMAD.MissionPlanner
         private static System.Threading.CancellationToken _videoShutdown;
         private static Action _showSettings;
         private static Func<NOMADConfig, string, bool> _selectVideoInput;
-        private static Func<NOMADConfig, string, string, Task<bool>> _selectVideoModel;
-        internal static Func<NOMADConfig, string, string, Task<bool>> SelectVideoModel => _selectVideoModel == null
-            ? null : (Func<NOMADConfig, string, string, Task<bool>>)SelectCurrentVideoModel;
-        private static Task<bool> SelectCurrentVideoModel(NOMADConfig config, string input, string path) =>
-            _selectVideoModel?.Invoke(config, input, path) ?? Task.FromResult(false);
-        internal static void SetVideoModelSelection(Func<NOMADConfig, string, string, Task<bool>> selectModel)
-        { _selectVideoModel = selectModel; }
+        private static Func<NOMADConfig, string, Action<VideoInputProfile>, Task<bool>> _updateVideoInput;
+        internal static Func<NOMADConfig, string, Action<VideoInputProfile>, Task<bool>> UpdateVideoInput =>
+            _updateVideoInput == null ? null
+                : (Func<NOMADConfig, string, Action<VideoInputProfile>, Task<bool>>)UpdateCurrentVideoInput;
+        private static Task<bool> UpdateCurrentVideoInput(NOMADConfig config, string input, Action<VideoInputProfile> change) =>
+            _updateVideoInput?.Invoke(config, input, change) ?? Task.FromResult(false);
+        internal static void SetVideoInputUpdate(Func<NOMADConfig, string, Action<VideoInputProfile>, Task<bool>> update)
+        { _updateVideoInput = update; }
         internal static Func<NOMADConfig, string, bool> SelectVideoInput => _selectVideoInput == null
             ? null : (Func<NOMADConfig, string, bool>)SelectCurrentVideoInput;
         private static bool SelectCurrentVideoInput(NOMADConfig config, string name) =>

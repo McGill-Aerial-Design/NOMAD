@@ -16,47 +16,68 @@ namespace NOMAD.MissionPlanner
 {
     internal sealed class VisionModelEditorForm : NOMADForm
     {
-        private readonly Wpf.TextBox _name, _model, _hash, _size, _score, _nms;
+        private readonly Wpf.TextBox _name, _model, _hash, _size, _nms;
+        private readonly Wpf.Slider _score;
         private readonly Wpf.DataGrid _classes;
-        private readonly ObservableCollection<ClassRow> _rows = new ObservableCollection<ClassRow>();
+        private readonly ObservableCollection<VisionClassRow> _rows = new ObservableCollection<VisionClassRow>();
         private readonly Wpf.WrapPanel _classActions;
         private readonly Wpf.Button _save, _browse, _test;
         private readonly CancellationTokenSource _shutdown = new CancellationTokenSource();
         private bool _hashing;
         internal VisionModelProfile Draft { get; private set; }
 
-        internal VisionModelEditorForm(VisionModelProfile profile)
+        // Everyday choices (classes, confidence) come first; weights and tensor details sit under Advanced.
+        // The built-in model keeps its embedded weights, labels and input size fixed.
+        internal VisionModelEditorForm(VisionModelProfile profile, bool builtin = false)
         {
-            Text = "Detection model"; ClientSize = new Size(650, 570);
-            MinimumSize = new Size(570, 430);
+            Text = builtin ? VisionModelCatalog.BuiltinName : "Detection model"; ClientSize = new Size(650, 640);
+            MinimumSize = new Size(570, 460);
             StartPosition = FormStartPosition.CenterParent;
             var root = new Wpf.DockPanel { Margin = new Thickness(12) };
             var fields = new Wpf.StackPanel();
             var scroll = new Wpf.ScrollViewer { Content = fields, VerticalScrollBarVisibility = Wpf.ScrollBarVisibility.Auto };
             _name = TextField(fields, "Name", profile.Name);
-            _model = TextField(fields, "ONNX weights", profile.Model); _model.IsReadOnly = true;
+            _name.IsReadOnly = builtin;
+            for (int index = 0; index < profile.Labels.Length; index++)
+            { _rows.Add(new VisionClassRow { Id = index, Label = profile.Labels[index], Detect = profile.AllowedClasses.Contains(index) }); }
+            fields.Children.Add(WpfUi.Section("Classes to detect"));
+            fields.Children.Add(new VisionClassPicker(_rows, builtin ? VisionModelProfile.Builtin().AllowedClasses : null));
+            fields.Children.Add(WpfUi.Section("Minimum confidence"));
+            _score = ConfidenceSlider(fields, profile.ScoreThreshold);
+
+            var advanced = new Wpf.StackPanel();
+            _model = TextField(advanced, "ONNX weights", profile.Model); _model.IsReadOnly = true;
             _browse = WpfUi.Action("Browse…", async () => await BrowseModel());
             _browse.ToolTip = "Choose a trusted local ONNX file, up to 256 MiB.";
-            AddField(fields, "Weights", _browse);
-            _hash = TextField(fields, "SHA256", profile.Sha256); _hash.IsReadOnly = true;
-            _size = TextField(fields, "Input size", profile.InputSize.ToString(CultureInfo.InvariantCulture));
-            _classes = CreateClassTable(profile);
-            AddField(fields, "Classes", _classes);
+            AddField(advanced, "Weights", _browse);
+            _hash = TextField(advanced, "SHA256", profile.Sha256); _hash.IsReadOnly = true;
+            _size = TextField(advanced, "Input size", profile.InputSize.ToString(CultureInfo.InvariantCulture));
+            _classes = CreateClassTable();
+            AddField(advanced, "Class table", _classes);
             _classes.ToolTip = "Rows must match the model's output class order. Detect selects which classes to show.";
             _classActions = new Wpf.WrapPanel();
             _classActions.Children.Add(WpfUi.Action("Add class", () =>
-            { if (_rows.Count < 256) { _rows.Add(new ClassRow { Id = _rows.Count, Label = "" }); } }));
+            { if (_rows.Count < 256) { _rows.Add(new VisionClassRow { Id = _rows.Count, Label = "" }); } }));
             _classActions.Children.Add(WpfUi.Action("Remove class", RemoveClass));
             var import = WpfUi.Action("Import labels", BrowseLabels);
             import.ToolTip = "Replace classes with a text file, one label per line in model output order. All imported classes start selected.";
             _classActions.Children.Add(import);
-            AddField(fields, "", _classActions);
-            _score = TextField(fields, "Minimum score", profile.ScoreThreshold.ToString("R", CultureInfo.CurrentCulture));
-            _nms = TextField(fields, "NMS overlap", profile.NmsThreshold.ToString("R", CultureInfo.CurrentCulture));
+            AddField(advanced, "", _classActions);
+            if (builtin)
+            {
+                foreach (var fixedPart in new System.Windows.UIElement[] { _model, _browse, _hash, _size, _classActions })
+                { fixedPart.IsEnabled = false; }
+                _classes.IsReadOnly = true;
+            }
+            _nms = TextField(advanced, "NMS overlap", profile.NmsThreshold.ToString("R", CultureInfo.CurrentCulture));
+            _nms.ToolTip = "Boxes overlapping more than this are merged; lower values remove more duplicates.";
             var format = WpfUi.Text("YOLOX grid (ONNX)");
-            AddField(fields, "Format", format);
+            AddField(advanced, "Format", format);
             format.ToolTip = "One float input/output. BGR NCHW 0–255, top-left letterbox, padding 114, " +
                 "strides 8/16/32. Other ONNX architectures are unsupported.";
+            fields.Children.Add(new Wpf.Expander { Header = builtin ? "Advanced" : "Model weights and advanced",
+                Content = advanced, IsExpanded = !builtin, Foreground = WpfTheme.Text, Margin = new Thickness(0, 12, 0, 0) });
+
             var actions = new Wpf.WrapPanel();
             _save = WpfUi.Action("Save", AcceptDraft);
             _test = WpfUi.Action("Test model", async () => await TestModel());
@@ -69,14 +90,24 @@ namespace NOMAD.MissionPlanner
             Controls.Add(WpfUi.Host(root));
         }
 
-        private sealed class ClassRow
+        private static Wpf.Slider ConfidenceSlider(Wpf.StackPanel panel, float value)
         {
-            public int Id { get; set; }
-            public string Label { get; set; }
-            public bool Detect { get; set; }
+            var row = new Wpf.DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+            var slider = new Wpf.Slider { Minimum = .01, Maximum = .99, Value = value, SmallChange = .01, LargeChange = .05,
+                TickFrequency = .01, IsSnapToTickEnabled = true, VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                ToolTip = "Lower shows more detections, including false ones; higher shows only confident ones." };
+            System.Windows.Automation.AutomationProperties.SetName(slider, "Minimum confidence");
+            var shown = new Wpf.TextBlock { Width = 44, Margin = new Thickness(8, 0, 0, 0),
+                VerticalAlignment = System.Windows.VerticalAlignment.Center };
+            slider.ValueChanged += (sender, args) => shown.Text = slider.Value.ToString("0.00", CultureInfo.CurrentCulture);
+            shown.Text = slider.Value.ToString("0.00", CultureInfo.CurrentCulture);
+            Wpf.DockPanel.SetDock(shown, Wpf.Dock.Right);
+            row.Children.Add(shown); row.Children.Add(slider);
+            panel.Children.Add(row);
+            return slider;
         }
 
-        private Wpf.DataGrid CreateClassTable(VisionModelProfile profile)
+        private Wpf.DataGrid CreateClassTable()
         {
             var table = new Wpf.DataGrid { Height = 170, AutoGenerateColumns = false, CanUserAddRows = false,
                 CanUserDeleteRows = false, CanUserSortColumns = false, SelectionMode = Wpf.DataGridSelectionMode.Single,
@@ -84,8 +115,6 @@ namespace NOMAD.MissionPlanner
             table.Columns.Add(new Wpf.DataGridTextColumn { Header = "ID", IsReadOnly = true, Binding = new System.Windows.Data.Binding("Id") });
             table.Columns.Add(new Wpf.DataGridTextColumn { Header = "Class", Width = new Wpf.DataGridLength(1, Wpf.DataGridLengthUnitType.Star), Binding = new System.Windows.Data.Binding("Label") });
             table.Columns.Add(new Wpf.DataGridCheckBoxColumn { Header = "Detect", Binding = new System.Windows.Data.Binding("Detect") });
-            for (int index = 0; index < profile.Labels.Length; index++)
-            { _rows.Add(new ClassRow { Id = index, Label = profile.Labels[index], Detect = profile.AllowedClasses.Contains(index) }); }
             return table;
         }
 
@@ -95,7 +124,6 @@ namespace NOMAD.MissionPlanner
             _classes.CancelEdit(Wpf.DataGridEditingUnit.Cell); _classes.CancelEdit(Wpf.DataGridEditingUnit.Row);
             _rows.RemoveAt(index);
             for (int i = 0; i < _rows.Count; i++) { _rows[i].Id = i; }
-            _classes.Items.Refresh();
         }
 
         private void BrowseLabels()
@@ -131,7 +159,7 @@ namespace NOMAD.MissionPlanner
                 labels = lines.ToArray();
             }
             _classes.CancelEdit(Wpf.DataGridEditingUnit.Cell); _classes.CancelEdit(Wpf.DataGridEditingUnit.Row); _rows.Clear();
-            for (int index = 0; index < labels.Length; index++) { _rows.Add(new ClassRow { Id = index, Label = labels[index], Detect = true }); }
+            for (int index = 0; index < labels.Length; index++) { _rows.Add(new VisionClassRow { Id = index, Label = labels[index], Detect = true }); }
         }
 
         private static void AddField(Wpf.StackPanel panel, string label, System.Windows.FrameworkElement control)
@@ -198,7 +226,8 @@ namespace NOMAD.MissionPlanner
             profile.Labels = _rows.Select(row => (row.Label ?? "").Trim()).ToArray();
             profile.AllowedClasses = _rows.Select((row, index) => new { row, index }).Where(item => item.row.Detect)
                 .Select(item => item.index).ToArray();
-            profile.ScoreThreshold = Number(_score, "minimum score", .01f, 1f);
+            profile.ScoreThreshold = (float)Math.Round(_score.Value, 2);
+            if (profile.AllowedClasses.Length == 0) { throw new FormatException("Select at least one class to detect."); }
             profile.NmsThreshold = Number(_nms, "NMS overlap", .001f, .999f);
             profile.Validate();
             if (!Path.IsPathRooted(profile.Model)) { throw new FormatException("Choose the model weights."); }

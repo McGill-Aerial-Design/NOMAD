@@ -33,36 +33,36 @@ namespace NOMAD.MissionPlanner
         {
             _config = config;
             _owner = PayloadController.Current;
-            var rows = new System.Windows.Controls.StackPanel();
+            var rows = new System.Windows.Controls.StackPanel { Margin = new System.Windows.Thickness(NOMADTheme.PAD, 0, NOMADTheme.PAD, NOMADTheme.PAD) };
             var root = new System.Windows.Controls.ScrollViewer
             {
                 VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
-                Content = rows,
+                HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Disabled,
+                Background = WpfTheme.Card, Content = rows,
             };
             WpfRoot = root;
-            Controls.Add(WpfUi.Host(root));
+            var host = WpfUi.Host(root); host.BackColor = NOMADTheme.CARD_BG;
+            Controls.Add(host);
             if (_owner != null && _owner.Owns(config))
             {
                 foreach (var definition in _owner.Definitions)
                 {
-                    var layout = new System.Windows.Controls.Grid { MinWidth = 420, Margin = new System.Windows.Thickness(0, 3, 0, 3) };
-                    layout.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new System.Windows.GridLength(2, System.Windows.GridUnitType.Star) });
-                    layout.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new System.Windows.GridLength(3, System.Windows.GridUnitType.Star) });
-                    layout.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = System.Windows.GridLength.Auto });
-                    layout.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = System.Windows.GridLength.Auto });
-                    var name = WpfUi.Text(definition.Name);
-                    name.VerticalAlignment = System.Windows.VerticalAlignment.Center;
-                    layout.Children.Add(name);
-                    var buttons = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
-                    System.Windows.Controls.Grid.SetColumn(buttons, 3);
+                    // One card per payload: name and target on top, slider below, actions right-aligned.
+                    var layout = new System.Windows.Controls.StackPanel();
+                    var title = new System.Windows.Controls.DockPanel { Margin = new System.Windows.Thickness(0, 0, 0, 4) };
+                    var name = new System.Windows.Controls.TextBlock { Text = definition.Name, FontWeight = System.Windows.FontWeights.SemiBold,
+                        TextTrimming = System.Windows.TextTrimming.CharacterEllipsis };
+                    var buttons = new System.Windows.Controls.WrapPanel { HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+                        Margin = new System.Windows.Thickness(0, 4, 0, 0) };
                     var row = new PayloadRow { Definition = definition,
                         ControllerPwm = _owner.TargetPwm(definition.Id),
-                        Pwm = WpfUi.Text("") };
+                        Pwm = new System.Windows.Controls.TextBlock { Foreground = WpfTheme.SecondaryText,
+                            Margin = new System.Windows.Thickness(8, 0, 0, 0) } };
                     System.Windows.Automation.AutomationProperties.SetName(row.Pwm, definition.Name + " target PWM");
                     System.Windows.Automation.AutomationProperties.SetAutomationId(row.Pwm, definition.Id + ":pwm");
-                    System.Windows.Controls.Grid.SetColumn(row.Pwm, 2);
-                    layout.Children.Add(row.Pwm); layout.Children.Add(buttons);
+                    System.Windows.Controls.DockPanel.SetDock(row.Pwm, System.Windows.Controls.Dock.Right);
+                    title.Children.Add(row.Pwm); title.Children.Add(name);
+                    layout.Children.Add(title);
                     _payloadRows.Add(definition.Id, row);
                     if (definition.Behavior == "ServoPosition")
                     {
@@ -72,7 +72,6 @@ namespace NOMAD.MissionPlanner
                             LargeChange = Math.Max(1, (definition.Maximum - definition.Minimum) / 10) };
                         System.Windows.Automation.AutomationProperties.SetName(row.Slider, definition.Name);
                         System.Windows.Automation.AutomationProperties.SetAutomationId(row.Slider, definition.Id + ":slider");
-                        System.Windows.Controls.Grid.SetColumn(row.Slider, 1);
                         layout.Children.Add(row.Slider);
                         row.Slider.ValueChanged += (sender, args) =>
                         {
@@ -101,15 +100,19 @@ namespace NOMAD.MissionPlanner
                         { SetPwm(row, row.ControllerPwm ?? definition.Neutral); }
                         else { row.Pwm.Text = "Target —"; }
                     }
-                    rows.Children.Add(layout);
+                    layout.Children.Add(buttons);
+                    rows.Children.Add(new System.Windows.Controls.Border { Child = layout, Background = WpfTheme.Input,
+                        BorderBrush = WpfTheme.Outline, BorderThickness = new System.Windows.Thickness(1),
+                        CornerRadius = new System.Windows.CornerRadius(4), Padding = new System.Windows.Thickness(10, 8, 10, 8),
+                        Margin = new System.Windows.Thickness(0, 0, 0, 8) });
                 }
                 _owner.Changed += OnChanged;
             }
             rows.Children.Add(_status);
-            _sliderTimer.Tick += async (sender, args) => await SendSliderAsync();
+            _sliderTimer.Tick += (sender, args) => UiAsync.Run(this, SendSliderAsync, "Payload slider");
             if (_payloadRows.Values.Any(row => row.Definition.Continuous)) { _sliderTimer.Start(); }
         }
-        private void AddButton(PayloadRow row, string label, string operation, System.Windows.Controls.StackPanel buttons)
+        private void AddButton(PayloadRow row, string label, string operation, System.Windows.Controls.Panel buttons)
         {
             var definition = row.Definition;
             var button = WpfUi.Action(label, () => { });
@@ -120,7 +123,7 @@ namespace NOMAD.MissionPlanner
                 if (args.IsRepeat && (args.Key == System.Windows.Input.Key.Enter || args.Key == System.Windows.Input.Key.Space))
                 { args.Handled = true; }
             };
-            button.Click += async (sender, args) =>
+            button.Click += (sender, args) => UiAsync.Run(this, async () =>
             {
                 long revision = Interlocked.Increment(ref row.Revision); row.Pending = false;
                 double? value = operation == "position" ? Position(row) : (double?)null;
@@ -131,7 +134,7 @@ namespace NOMAD.MissionPlanner
                     GimbalController.NotifyServoInput(_config, definition.Channel, pwm);
                 }
                 await SendAsync(definition.Id, operation, value, () => revision == Interlocked.Read(ref row.Revision));
-            };
+            }, "Payload " + operation);
             buttons.Children.Add(button);
         }
         private static void SetSlider(PayloadRow row, int pwm)
@@ -173,7 +176,12 @@ namespace NOMAD.MissionPlanner
             if (IsDisposed || _owner?.Owns(_config) != true) { return; }
             string status = await _owner.ActAsync(id, operation, value,
                 inputStillCurrent: () => !IsDisposed && _owner.Owns(_config) && current());
-            if (!IsDisposed && _owner.Owns(_config)) { _status.Text = status; _status.Visibility = string.IsNullOrWhiteSpace(status) ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible; }
+            UiAsync.RunSync(this, () => { if (_owner.Owns(_config)) { ShowStatus(status); } }, "Payload status");
+        }
+        private void ShowStatus(string status)
+        {
+            _status.Text = status;
+            _status.Visibility = string.IsNullOrWhiteSpace(status) ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
         }
         private void OnChanged(string id)
         {
@@ -181,7 +189,7 @@ namespace NOMAD.MissionPlanner
             { UiAsync.RunSync(this, () =>
                 {
                     if (IsDisposed) { return; }
-                    _status.Text = _owner.Status(id); _status.Visibility = string.IsNullOrWhiteSpace(_status.Text) ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
+                    ShowStatus(_owner.Status(id));
                     if (_payloadRows.TryGetValue(id, out var row))
                     {
                         var pwm = _owner.TargetPwm(id);

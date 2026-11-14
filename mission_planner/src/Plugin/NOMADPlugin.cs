@@ -70,7 +70,7 @@ namespace NOMAD.MissionPlanner
                 _videoShutdown = new System.Threading.CancellationTokenSource();
                 NOMADMainScreen.SetVideoShutdown(_videoShutdown.Token, ShowSettings);
                 NOMADMainScreen.SetVideoInputSelection(SelectActiveVideoInput);
-                NOMADMainScreen.SetVideoModelSelection(SelectActiveVideoModel);
+                NOMADMainScreen.SetVideoInputUpdate(UpdateActiveVideoInput);
                 WarnIfUntestedMissionPlannerVersion();
 
                 // Load configuration

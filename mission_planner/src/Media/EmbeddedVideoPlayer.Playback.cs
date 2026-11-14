@@ -21,7 +21,7 @@ namespace NOMAD.MissionPlanner
         {
             ValidateUiThread();
             if (IsDisposed || _session.State == VideoState.Disposed) { return; }
-            _playbackRequested = true;
+            _playbackRequested = true; ShowPlaybackButton();
             long revision = Interlocked.Increment(ref _playbackRevision);
             _ = StartWhenReadyAsync(revision);
         }
@@ -47,7 +47,7 @@ namespace NOMAD.MissionPlanner
                 Log.Error("Video could not start: " + error);
                 if (!IsDisposed && revision == Volatile.Read(ref _playbackRevision))
                 {
-                    _playbackRequested = false;
+                    _playbackRequested = false; ShowPlaybackButton();
                     _lblStatus.Text = error is FormatException || error is Newtonsoft.Json.JsonSerializationException
                         ? error.Message : "Video could not start; review the input and try again";
                     _lblStatus.Foreground = Brushes.Red;
@@ -58,8 +58,9 @@ namespace NOMAD.MissionPlanner
         public void StopStream()
         {
             ValidateUiThread();
-            _playbackRequested = false;
+            _playbackRequested = false; ShowPlaybackButton();
             long revision = Interlocked.Increment(ref _playbackRevision);
+            CancelFollow();
             RetireTracking("Video stopped");
             try
             {
@@ -76,6 +77,15 @@ namespace NOMAD.MissionPlanner
                 _lblStatus.Foreground = _session.Error == null ? Brushes.Gray : Brushes.Red;
                 _ = UpdateStoppedStatusAsync(revision);
             }
+        }
+
+        private void ShowPlaybackButton()
+        {
+            if (VideoControls == null) { return; }
+            bool playing = _playbackRequested;
+            VideoControls.PlayCaption.Text = playing ? "■ Stop" : "▶ Play";
+            System.Windows.Automation.AutomationProperties.SetName(VideoControls.PlayButton, playing ? "Stop" : "Play");
+            VideoControls.PlayButton.ToolTip = playing ? "Stop video and automatic tracking." : "Play the selected video input.";
         }
 
         private async Task UpdateStoppedStatusAsync(long revision)

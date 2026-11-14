@@ -63,7 +63,7 @@ namespace NOMAD.MissionPlanner
             foreach (var field in numericFields) { _ = field.Value; }
             if (_editingVideoInput != null)
             {
-                var videoFields = new[] { _numVideoLatency, _numVideoQueue, _numGroundPlaneHeight, _numCameraDelay,
+                var videoFields = new[] { _numVideoLatency, _numVideoQueue,
                     _numVisionFov, _numVisionPitchMin, _numVisionPitchMax, _numVisionYawMin, _numVisionYawMax, _numVisionRate };
                 foreach (var field in videoFields) { _ = field.Value; }
             }

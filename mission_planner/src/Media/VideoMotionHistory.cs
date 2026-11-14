@@ -33,6 +33,7 @@ namespace NOMAD.MissionPlanner
         private MAVLink.mavlink_home_position_t? _home;
         private GimbalController.SubmittedPose _lastSubmission;
         private bool _freshGround, _freshAircraft;
+        private double _groundHeight;
         private long _now;
         private long _minimumTicks;
         internal object Epoch => _epoch;
@@ -95,7 +96,7 @@ namespace NOMAD.MissionPlanner
                     out double altitude)) { return false; }
             estimate = new GroundCameraEstimate(_epoch, latitude, longitude, altitude, _home.Value.altitude / 1000.0,
                 pose.Pitch, pose.Roll, GroundProjection.Wrap(pose.Yaw + aircraftHeading),
-                ticks, pose.Source);
+                ticks, pose.Source, _groundHeight);
             return true;
         }
 
@@ -138,6 +139,7 @@ namespace NOMAD.MissionPlanner
                 Add(_positions, new PositionSample(Ticks(positionPacket, utc), position));
                 _lastPosition = positionPacket;
             }
+            _groundHeight = MeasureGroundHeight(position, home.altitude / 1000.0, utc);
             _freshGround = true;
         }
 
@@ -260,6 +262,45 @@ namespace NOMAD.MissionPlanner
                 (6378137 * Math.Cos(position.lat / 1e7 * Math.PI / 180)) * 180 / Math.PI);
             altitude = position.alt / 1000.0 - downSpeed * age;
             return Math.Abs(latitude) <= 85;
+        }
+
+        // Ground below the aircraft relative to HOME, read from the flight controller each position update.
+        private double MeasureGroundHeight(MAVLink.mavlink_global_position_int_t position, double homeMslMeters,
+            DateTime utc)
+        {
+            double? rangefinder = null, terrain = null;
+            var distance = Packet(_mav, MAVLink.MAVLINK_MSG_ID.DISTANCE_SENSOR, _target.Component, utc, .5);
+            if (distance != null)
+            {
+                var sensor = distance.ToStructure<MAVLink.mavlink_distance_sensor_t>();
+                if (sensor.orientation == (byte)MAVLink.MAV_SENSOR_ORIENTATION.MAV_SENSOR_ROTATION_PITCH_270 &&
+                    sensor.current_distance > sensor.min_distance && sensor.current_distance < sensor.max_distance)
+                { rangefinder = sensor.current_distance / 100.0; }
+            }
+            var report = Packet(_mav, MAVLink.MAVLINK_MSG_ID.TERRAIN_REPORT, _target.Component, utc, 3);
+            if (report != null)
+            {
+                var ground = report.ToStructure<MAVLink.mavlink_terrain_report_t>();
+                // The report describes terrain under the aircraft; ignore one from a position ~50 m away or more.
+                double lonScale = Math.Max(.1, Math.Cos(position.lat / 1e7 * Math.PI / 180));
+                if (ground.spacing > 0 && Math.Abs((double)ground.lat - position.lat) < 5000 &&
+                    Math.Abs((double)ground.lon - position.lon) * lonScale < 5000)
+                { terrain = ground.terrain_height; }
+            }
+            var attitude = _lastAttitude?.ToStructure<MAVLink.mavlink_attitude_t>();
+            return GroundHeightAboveHome(position.relative_alt / 1000.0, rangefinder, attitude?.roll ?? 0,
+                attitude?.pitch ?? 0, terrain, homeMslMeters);
+        }
+
+        // A downward rangefinder measures the ground directly; terrain data is next; otherwise HOME is ground level.
+        internal static double GroundHeightAboveHome(double relativeAltitudeMeters, double? rangefinderMeters,
+            double rollRadians, double pitchRadians, double? terrainMslMeters, double homeMslMeters)
+        {
+            double tilt = Math.Cos(rollRadians) * Math.Cos(pitchRadians);
+            double height = rangefinderMeters.HasValue && tilt > Math.Cos(30 * Math.PI / 180)
+                ? relativeAltitudeMeters - rangefinderMeters.Value * tilt
+                : terrainMslMeters.HasValue ? terrainMslMeters.Value - homeMslMeters : 0;
+            return GroundProjection.Finite(height) && Math.Abs(height) <= 10000 ? height : 0;
         }
 
         private bool TryPose(long ticks, out PoseSample pose)

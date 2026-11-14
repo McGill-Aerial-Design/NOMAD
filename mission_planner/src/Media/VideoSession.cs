@@ -56,12 +56,13 @@ namespace NOMAD.MissionPlanner
         internal bool DetectionEnabled { get { lock (_gate) { return _detectionEnabled; } } }
         internal void ConfigureDetection(bool enabled, string modelProfilePath)
         {
+            string detectorPath = new VisionModelCatalog().DetectorPath(modelProfilePath);
             lock (_gate)
             {
                 CancelLater(_visionCancellation);
                 ++_detectionRevision;
                 _detectionEnabled = enabled;
-                _modelProfilePath = modelProfilePath ?? "";
+                _modelProfilePath = detectorPath;
                 _visionError = null;
                 _detectionLoading = false;
                 ClearPendingFrame();

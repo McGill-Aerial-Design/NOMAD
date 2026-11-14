@@ -139,9 +139,9 @@ internal static partial class VideoLifetimeTests
                     .Invoke(manager, new object[] { null }), "model manager refresh");
                 Check(((VisionModelChoice)models.SelectedItem).Path == path, "Catalog refresh reset the selection");
                 models.SelectedIndex = 0;
-                Check(!GetField<System.Windows.Controls.Button>(manager, "_edit").IsEnabled && !GetField<System.Windows.Controls.Button>(manager, "_export").IsEnabled &&
+                Check(GetField<System.Windows.Controls.Button>(manager, "_edit").IsEnabled && !GetField<System.Windows.Controls.Button>(manager, "_export").IsEnabled &&
                     !GetField<System.Windows.Controls.Button>(manager, "_remove").IsEnabled && GetField<System.Windows.Controls.Button>(manager, "_duplicate").IsEnabled,
-                    "Built-in model allowed an invalid management action or could not be duplicated");
+                    "Built-in model lost class editing, allowed export/removal or could not be duplicated");
             }
             string before = File.ReadAllText(path);
             using (var editor = new VisionModelEditorForm(VisionModelProfile.Load(path)))
@@ -165,7 +165,7 @@ internal static partial class VideoLifetimeTests
             File.WriteAllText(external, JsonConvert.SerializeObject(profile));
             Check(catalog.Choices(external).Any(item => item.Path == external), "External current profile was replaced by built-in");
             string externalBefore = File.ReadAllText(external);
-            var externalCopy = VisionModelsForm.PrepareDuplicate(new VisionModelChoice(external, profile.Name), CancellationToken.None);
+            var externalCopy = VisionModelsForm.PrepareDuplicate(catalog, new VisionModelChoice(external, profile.Name), CancellationToken.None);
             string externalCopyPath = catalog.Save(externalCopy);
             Check(externalCopyPath != external && externalCopy.Model == weights && File.ReadAllText(external) == externalBefore,
                 "Duplicating an external model overwrote its source or changed its weights");
@@ -187,7 +187,7 @@ internal static partial class VideoLifetimeTests
     private static void CheckModelDuplicates(VisionModelCatalog catalog, string original)
     {
         string before = File.ReadAllText(original);
-        var copy = VisionModelsForm.PrepareDuplicate(new VisionModelChoice(original, "Owned model"), CancellationToken.None);
+        var copy = VisionModelsForm.PrepareDuplicate(catalog, new VisionModelChoice(original, "Owned model"), CancellationToken.None);
         string saved = catalog.Save(copy);
         var source = VisionModelProfile.Load(original);
         Check(saved != original && copy.Model == source.Model && copy.Sha256 == source.Sha256 &&
@@ -210,11 +210,11 @@ internal static partial class VideoLifetimeTests
         using (var canceled = new CancellationTokenSource())
         {
             canceled.Cancel(); int count = catalog.Choices().Count; bool rejected = false;
-            try { VisionModelsForm.PrepareDuplicate(builtin, canceled.Token); }
+            try { VisionModelsForm.PrepareDuplicate(catalog, builtin, canceled.Token); }
             catch (OperationCanceledException) { rejected = true; }
             Check(rejected && catalog.Choices().Count == count, "Canceled duplicate preparation created a preset");
         }
-        var people = VisionModelsForm.PrepareDuplicate(builtin, CancellationToken.None);
+        var people = VisionModelsForm.PrepareDuplicate(catalog, builtin, CancellationToken.None);
         Check(people.Model == VisionRuntime.BuiltinModelPath && File.Exists(people.Model) &&
             people.Sha256 == VisionModelProfile.BuiltinHash, "Built-in duplicate did not reuse verified cached weights");
         using (var editor = new VisionModelEditorForm(people))
@@ -448,9 +448,9 @@ internal static partial class VideoLifetimeTests
         pipeline = new FakeVideoPipeline();
         string model = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "external-model.json");
         using (var host = new VideoInputPlayer(config, true, CancellationToken.None, () => pipeline, null,
-            (owner, name, path) =>
+            (owner, name, change) =>
             {
-                if (save) { owner.SelectedVideoInput.DetectorModelProfilePath = path; }
+                if (save) { change(owner.SelectedVideoInput); }
                 return System.Threading.Tasks.Task.FromResult(save);
             }))
         {
@@ -478,7 +478,7 @@ internal static partial class VideoLifetimeTests
     {
         var config = TwoInputs();
         using var host = new VideoInputPlayer(config, true, CancellationToken.None, () => new FakeVideoPipeline(),
-            null, (owner, name, path) => Task.FromResult(true));
+            null, (owner, name, change) => Task.FromResult(true));
         var selector = GetField<System.Windows.Controls.ComboBox>(host, "_models");
         WaitUi(() => selector.SelectedItem != null, "initial shared model catalog");
         config.SelectedVideoInputName = "Alternate";
