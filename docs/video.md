@@ -108,10 +108,16 @@ Select tightly around the whole object with visible edges. Drag padding is not
 part of the measured object. The aim can lie between legs or inside a hole;
 foreground evidence establishes identity separately from the aiming pixel.
 The CPU tracker retains original appearance and one verified working view.
-Sparse forward/backward optical flow proposes local motion. A bounded foreground
+For a separated, non-thin object the embedded ViTTrack model proposes each box near
+the motion prediction; optical flow seeded with that displacement aligns the retained
+outline, which must pass the continuity and masked identity checks before steering.
+A confident, uncontested proposal skips segmentation; every fourth frame, or after a
+rejected proposal, segmentation refreshes the outline and the views it learns from.
+Otherwise sparse forward/backward optical flow proposes local motion. A bounded foreground
 pass runs first; a failed appearance/continuity check retries full segmentation.
-Both paths must pass the same identity checks before steering. Unchanged appearances
-do not rebuild the working reference.
+Both paths must pass the same identity checks before steering. Continuity is measured
+from the motion prediction, so an object faster than its own size per frame stays local.
+Unchanged appearances do not rebuild the working reference.
 Small targets with a tight outline, weak foreground separation or an escaping foreground
 component can use the embedded ViTTrack model on the CPU. Its original template stays
 fixed; rejected frames cannot train it or move accepted search bounds. Three matched
@@ -122,7 +128,8 @@ object is present; a later quorum cannot resolve that identity ambiguity. Compet
 peaks without that appearance witness pause tracking.
 Recovery also requires agreement with the last verified appearance and three
 consistent matches. Five seconds without a verified match retires this template
-selection. Its search follows accepted bounds; provisional matches never move them.
+selection. Its search follows accepted bounds plus the last measured velocity, coasting
+for up to ten missed frames; provisional matches never move the accepted bounds.
 Predicted masks are not learned. Small selections can use a larger processing
 image, which costs CPU but cannot recover detail absent from the camera.
 

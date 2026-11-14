@@ -351,12 +351,13 @@ internal static partial class VisualTrackerTests
         using (var tracker = VisualTrackerFactory.Create(CancellationToken.None))
         {
             tracker.Initialize(first, new RectangleF(180, 105, 170, 200), CancellationToken.None);
-            for (int frame = 1; frame <= 8; frame++)
+            // Segmentation refreshes every fourth frame between ViTTrack proposals; three fresh views promote one.
+            for (int frame = 1; frame <= 16; frame++)
             using (var image = TurningObject(false, frame))
             { Check(tracker.Update(image, CancellationToken.None).Found, "Pre-occlusion foreground was never verified"); }
             int learned = ((ObjectVisualTracker)tracker).LearnedViews;
             Check(learned > 0, "Occluder test did not exercise an adapted appearance");
-            for (int frame = 9; frame <= 12; frame++)
+            for (int frame = 17; frame <= 20; frame++)
             using (var image = TurningObject(false, frame))
             using (var graphics = Graphics.FromImage(image))
             {

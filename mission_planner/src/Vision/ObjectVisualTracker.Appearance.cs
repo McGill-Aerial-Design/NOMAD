@@ -19,6 +19,12 @@ namespace NOMAD.MissionPlanner
         private const int MaximumHeldFrames = 10;
         // Position alone binds identity only briefly: a live orbit locked onto an identical decoy 13.6 s after loss.
         private const int MaximumNearbyFrames = 15;
+        // ViTTrack proposes each box of a separated, non-thin object in 2-4 ms; GrabCut segmentation costs 10-35 ms.
+        private CpuTemplateTracker _proposer;
+        private int _proposedFrames;
+        // ponytail: fixed refresh cadence; refresh on a falling identity margin if segmentation still dominates.
+        // Every few proposed frames segment once, keeping the outline, previous-view chain and learned views fresh.
+        private const int ProposedFramesPerRefresh = 3;
         private double _objectAngle;
         private PointF _appearanceAnchor;
         private double[] _lastColour;
@@ -70,6 +76,8 @@ namespace NOMAD.MissionPlanner
                 // Distinctive foreground geometry is stronger evidence than a generic model proposal.
                 _templateTracker.Dispose(); _templateTracker = null;
             }
+            if (_templateTracker == null && !ThinShape(_originalView))
+            { _proposer = CreateTemplate(VisionRuntime.EnsureCpuTemplateModel(token), image, objectBounds, token); }
             Remember(_originalView); RememberFlow(image, _originalView); _following = true;
         }
 
@@ -84,21 +92,26 @@ namespace NOMAD.MissionPlanner
             var previous = _workingView ?? _originalView;
             bool thin = ThinShape(previous);
             var predicted = new PointF(_objectCentre.X + _objectMotion.X, _objectCentre.Y + _objectMotion.Y);
-            var search = new Rectangle((int)Math.Round(predicted.X - _lastObjectBounds.Width / 2f),
+            var fallback = new Rectangle((int)Math.Round(predicted.X - _lastObjectBounds.Width / 2f),
                 (int)Math.Round(predicted.Y - _lastObjectBounds.Height / 2f), _lastObjectBounds.Width, _lastObjectBounds.Height);
-            if (!thin) { search = FlowProposal(image, token) ?? search; }
+            var proposed = thin || _heldFrames > 0 ? null : Propose(image, fallback, token);
+            if (proposed.HasValue && _proposedFrames < ProposedFramesPerRefresh)
+            {
+                var accepted = AcceptProposal(image, previous, proposed.Value, fallback, token);
+                if (accepted != null) { _proposedFrames++; return accepted; }
+            }
+            _proposedFrames = 0;
+            var search = thin ? fallback : proposed ?? FlowProposal(image, token) ?? fallback;
             var seed = ForegroundSeed(image, search);
             // Pad the prior so a turning object's outline can regrow instead of ratcheting to the last tight box.
             var fresh = ObjectForeground.TryExtract(image, Padded(search), seed, _objectAngle, token,
                 expectedColour: thin ? _lastColour : null, restrictToSelection: !thin, fast: true);
-            if (fresh == null || !Continuous(fresh) || !Recognizes(fresh, .55, true))
+            if (fresh == null || !Continuous(fresh, search, fallback) || !Recognizes(fresh, .55, true))
             {
                 fresh?.Dispose();
                 fresh = ObjectForeground.TryExtract(image, Padded(search), seed, _objectAngle, token,
                     expectedColour: thin ? _lastColour : null, restrictToSelection: !thin);
             }
-            var fallback = new Rectangle((int)Math.Round(predicted.X - _lastObjectBounds.Width / 2f),
-                (int)Math.Round(predicted.Y - _lastObjectBounds.Height / 2f), _lastObjectBounds.Width, _lastObjectBounds.Height);
             if (fresh == null && !thin)
             {
                 fresh = ObjectForeground.TryExtract(image, Padded(fallback), ForegroundSeed(image, fallback),
@@ -109,7 +122,7 @@ namespace NOMAD.MissionPlanner
             {
                 var observed = fresh;
                 bool freshSupport = fresh != null;
-                bool freshContinuous = fresh != null && Continuous(fresh);
+                bool freshContinuous = fresh != null && Continuous(fresh, search, fallback);
                 bool freshAccepted = freshContinuous && Recognizes(fresh, .55, true);
                 string freshState = fresh == null ? "none" : !freshContinuous ? "jump " + fresh.Bounds + "/" + fresh.Area :
                     !freshAccepted ? "unrecognized " + fresh.Bounds : "accepted";
@@ -117,13 +130,13 @@ namespace NOMAD.MissionPlanner
                 if (!thin && !freshAccepted)
                 {
                     projected = ObjectForeground.ProjectPrevious(image, previous, search, token);
-                    continuous = projected != null && Continuous(projected);
+                    continuous = projected != null && Continuous(projected, search, fallback);
                     recognized = continuous && Recognizes(projected, .55, true);
                     if (!recognized)
                     {
                         projected?.Dispose();
                         projected = ObjectForeground.ProjectPrevious(image, previous, fallback, token);
-                        continuous = projected != null && Continuous(projected);
+                        continuous = projected != null && Continuous(projected, search, fallback);
                         recognized = continuous && Recognizes(projected, .55, true);
                     }
                     observed = projected; freshSupport = false;
@@ -135,10 +148,11 @@ namespace NOMAD.MissionPlanner
                 if (!continuous || !recognized || (_heldFrames > 0 && !freshSupport))
                 {
                     // Feature geometry can still confirm an unchanged pose when segmentation fragments. Its
-                    // projected box must agree with the last verified outline: on small objects it inflates.
+                    // projected box must agree with the predicted outline: on small objects it inflates.
                     var precise = _heldFrames > 0 ? null : _reference.Refine(image, NativeBox(search), token) ??
                         _workingReference?.Refine(image, NativeBox(search), token);
-                    if (precise.HasValue && Overlap(ManagedBox(precise.Value), _lastObjectBounds) >= .5)
+                    if (precise.HasValue && Math.Max(Overlap(ManagedBox(precise.Value), search),
+                        Overlap(ManagedBox(precise.Value), fallback)) >= .5)
                     { return GeometryResult(precise.Value); }
                     // A brief appearance miss keeps the local track near the last verified state without steering;
                     // unverified foreground never updates that state or trains references.
@@ -165,6 +179,45 @@ namespace NOMAD.MissionPlanner
                 return visible;
             }
             finally { fresh?.Dispose(); projected?.Dispose(); }
+        }
+
+        // ViTTrack's box near the motion prediction, only when it is confident, uncontested and continuous: a jump to
+        // a look-alike elsewhere must not seed segmentation or identity.
+        private Rectangle? Propose(Mat image, Rectangle predicted, CancellationToken token)
+        {
+            if (_proposer == null) { return null; }
+            var proposal = _proposer.Propose(image, predicted, 4, token);
+            var box = Rectangle.Round(proposal.Bounds);
+            bool contested = proposal.Competing >= .3 && proposal.Competing >= proposal.Confidence * .8;
+            double limit = 6 + Math.Max(_lastObjectBounds.Width, _lastObjectBounds.Height) * .65;
+            double shift = Math.Sqrt(Math.Pow(box.X + box.Width / 2f - predicted.X - predicted.Width / 2f, 2) +
+                Math.Pow(box.Y + box.Height / 2f - predicted.Y - predicted.Height / 2f, 2));
+            bool inside = box.Width >= 2 && box.Height >= 2 && box.Left >= 0 && box.Top >= 0 &&
+                box.Right <= image.Width && box.Bottom <= image.Height;
+            return proposal.Confidence >= .5 && !contested && shift <= limit && inside ? box : (Rectangle?)null;
+        }
+
+        // ViTTrack locates the object; optical flow seeded with its displacement aligns the retained outline to a
+        // pixel, which masked fine texture needs. The projection must pass the same continuity and masked identity
+        // (whole object and aim point) checks as an unsegmented frame of the segmentation path below.
+        private VisualTrackingResult AcceptProposal(Mat image, ObjectForeground previous, Rectangle proposed,
+            Rectangle predicted, CancellationToken token)
+        {
+            var guess = new PointF(proposed.X + proposed.Width / 2f - _flowBounds.X - _flowBounds.Width / 2f,
+                proposed.Y + proposed.Height / 2f - _flowBounds.Y - _flowBounds.Height / 2f);
+            var aligned = FlowProposal(image, token, guess);
+            var boxes = aligned.HasValue && aligned != proposed ? new[] { aligned.Value, proposed } : new[] { proposed };
+            foreach (var box in boxes)
+            using (var projected = ObjectForeground.ProjectPrevious(image, previous, box, token))
+            {
+                if (projected == null || !Continuous(projected, predicted, predicted) || !Recognizes(projected, .55, true))
+                { continue; }
+                LastObjectDiagnostic = "ViTTrack proposal " + proposed + (box == proposed ? "" : " aligned " + box) +
+                    " recognized; " + ProcessingImageSize.Width + "x" + ProcessingImageSize.Height;
+                Remember(projected); RememberFlow(image, projected, verifiedProjection: true);
+                return GeometryResult(NativeBox(box));
+            }
+            return null;
         }
 
         private static Rectangle Padded(Rectangle box)
@@ -245,14 +298,19 @@ namespace NOMAD.MissionPlanner
             return found.HasValue ? NativeBox(found.Value) : (OpenCvSharp.Rect?)null;
         }
 
-        private bool Continuous(ObjectForeground candidate)
+        // Continuity is measured from the motion prediction (optical flow or last velocity), not the last position:
+        // a fast object can move more than its own size per frame while its acceleration stays small.
+        private bool Continuous(ObjectForeground candidate, Rectangle search, Rectangle fallback)
         {
             double ratio = candidate.Area / (double)_lastObjectArea;
-            var before = new PointF(_lastObjectBounds.X + _lastObjectBounds.Width / 2f,
-                _lastObjectBounds.Y + _lastObjectBounds.Height / 2f);
-            double shift = Math.Sqrt(Math.Pow(candidate.Centre.X - before.X, 2) + Math.Pow(candidate.Centre.Y - before.Y, 2));
-            return ratio >= .45 && ratio <= 2.2 && shift <= 6 + Math.Max(_lastObjectBounds.Width, _lastObjectBounds.Height) * .65;
+            double limit = 6 + Math.Max(_lastObjectBounds.Width, _lastObjectBounds.Height) * .65;
+            return ratio >= .45 && ratio <= 2.2 &&
+                (Shift(candidate, search) <= limit || Shift(candidate, fallback) <= limit);
         }
+
+        private static double Shift(ObjectForeground candidate, Rectangle expected) =>
+            Math.Sqrt(Math.Pow(candidate.Centre.X - (expected.X + expected.Width / 2f), 2) +
+                Math.Pow(candidate.Centre.Y - (expected.Y + expected.Height / 2f), 2));
 
         private bool Recognizes(ObjectForeground candidate, double threshold, bool localContinuous = false)
         {

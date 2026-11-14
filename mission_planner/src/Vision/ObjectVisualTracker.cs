@@ -30,11 +30,12 @@ namespace NOMAD.MissionPlanner
             token.ThrowIfCancellationRequested();
             VisualTrackingImage.ValidateFrame(frame);
             VisualTrackingImage.ValidateSelection(frame, bounds);
-            // Select the pixel budget once, retaining the original 640-coordinate foreground policy.
+            // Select the pixel budget once, retaining the original 640-coordinate foreground policy. Only an object
+            // narrower than the 48 px appearance patch at 640 needs the 4x-pixel 1280 budget that GrabCut pays for.
             double baselineScale = Math.Min(1, 640.0 / Math.Max(frame.Width, frame.Height));
             int baselineWidth = (int)(bounds.Width * ((int)(frame.Width * baselineScale) / (double)frame.Width));
             int baselineHeight = (int)(bounds.Height * ((int)(frame.Height * baselineScale) / (double)frame.Height));
-            _maximumImageDimension = Math.Min(baselineWidth, baselineHeight) <= 80 ? 1280 : 640;
+            _maximumImageDimension = Math.Min(baselineWidth, baselineHeight) < 48 ? 1280 : 640;
             bool smallSelection = Math.Max(baselineWidth, baselineHeight) <= 80;
             using (var image = VisualTrackingImage.Color(frame, _maximumImageDimension))
             {
@@ -126,7 +127,7 @@ namespace NOMAD.MissionPlanner
         {
             _following = false; _flowImage?.Dispose(); _flowImage = null; _flowPoints = null;
             _recoveryBounds = null; _recoveryMatches = 0; _acceptedViews = 0;
-            _heldFrames = 0; _heldConfirmations = 0;
+            _heldFrames = 0; _heldConfirmations = 0; _proposedFrames = 0;
         }
 
         private void Clear()
@@ -141,7 +142,7 @@ namespace NOMAD.MissionPlanner
             ResetLocalTrack(); _reference?.Dispose(); _reference = null; _appearance?.Dispose(); _appearance = null;
             _workingReference?.Dispose(); _workingReference = null; _workingAppearance?.Dispose(); _workingAppearance = null;
             _originalView?.Dispose(); _originalView = null; _workingView?.Dispose(); _workingView = null;
-            _previousView?.Dispose(); _previousView = null;
+            _previousView?.Dispose(); _previousView = null; _proposer?.Dispose(); _proposer = null;
             _hasObjectCentre = false; _objectMotion = PointF.Empty;
         }
 

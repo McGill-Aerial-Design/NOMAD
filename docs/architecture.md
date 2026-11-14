@@ -149,7 +149,8 @@ remain outside the media fault boundary.
 Default Object tracking uses CPU sparse optical flow for motion proposals, followed by
 foreground geometry and retained-appearance verification; explicit GPU Object tracking uses EfficientTAM
 through DirectML. A small fixed-template ViTTrack CPU model handles tight or poorly separated
-selections after three-frame confirmation; it shares the existing ONNX Runtime CPU provider.
+selections after three-frame confirmation and proposes boxes for separated ones, which the same
+appearance verification must accept; it shares the existing ONNX Runtime CPU provider.
 Area retains its fixed-point tracker. GPU runs sharing model sessions
 are serialized in the child. Calibrations and acceptance obligations remain
 unchanged; process isolation does not qualify real-scene or physical tracking.

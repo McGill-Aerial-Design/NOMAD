@@ -99,6 +99,7 @@ internal static partial class VisualTrackerTests
         AreaTracking();
         PanoramaReturn();
         CpuRenderedDeer();
+        FastMotion();
         BenchmarkPerson();
         GpuObjectTracker(); // Last: it loads the ONNX runtime the checks above must run without.
         Console.WriteLine("PASS: " + _checks + " visual tracker checks.");

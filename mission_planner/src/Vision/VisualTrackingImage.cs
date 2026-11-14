@@ -27,10 +27,12 @@ namespace NOMAD.MissionPlanner
                 var start = inverted ? IntPtr.Add(bits.Scan0, bits.Stride * (frame.Height - 1)) : bits.Scan0;
                 using (var source = Mat.FromPixelData(frame.Height, frame.Width, bgra ? MatType.CV_8UC4 : MatType.CV_8UC3,
                     start, Math.Abs(bits.Stride)))
+                using (var resized = new Mat())
                 {
-                    Cv2.Resize(source, result, size, interpolation: InterpolationFlags.Linear);
+                    // In-place BGRA->BGR makes OpenCV clone the source first (~1 ms per HD frame); convert across.
+                    Cv2.Resize(source, bgra ? resized : result, size, interpolation: InterpolationFlags.Linear);
+                    if (bgra) { Cv2.CvtColor(resized, result, ColorConversionCodes.BGRA2BGR); }
                     if (inverted) { Cv2.Flip(result, result, FlipMode.X); }
-                    if (bgra) { Cv2.CvtColor(result, result, ColorConversionCodes.BGRA2BGR); }
                 }
                 return result;
             }

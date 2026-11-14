@@ -9,6 +9,7 @@ namespace NOMAD.MissionPlanner
     // Selection-time RGB evidence, not a semantic object detector or a source of target identity.
     internal sealed class ObjectForeground : IDisposable
     {
+        // Neutralized only feeds PatchColor; a projection keeps just its sampling footprint, not a whole frame.
         internal Mat Mask, Neutralized, PatchColor, PatchGray, PatchMask;
         internal System.Drawing.Rectangle Bounds;
         internal System.Drawing.PointF Centre;
@@ -125,19 +126,7 @@ namespace NOMAD.MissionPlanner
                     Cv2.FindNonZero(component, points); points.GetArray(out Point[] outline);
                     var rotated = Cv2.MinAreaRect(outline.Select(p => new Point2f(p.X + left, p.Y + top)));
                     result.SetQuad(rotated, previousAngle);
-                    var mean = Cv2.Mean(image, result.Mask);
-                    result.ColourMean = new[] { mean.Val0, mean.Val1, mean.Val2 };
-                    result.Neutralized = new Mat(image.Size(), image.Type(), mean);
-                    image.CopyTo(result.Neutralized, result.Mask);
-                    result.PatchColor = new Mat(); result.PatchMask = new Mat(); result.PatchGray = new Mat();
-                    using (var transform = Cv2.GetPerspectiveTransform(result.Quad,
-                        new[] { new Point2f(0, 0), new Point2f(47, 0), new Point2f(47, 47), new Point2f(0, 47) }))
-                    {
-                        Cv2.WarpPerspective(result.Neutralized, result.PatchColor, transform, new Size(48, 48));
-                        Cv2.WarpPerspective(result.Mask, result.PatchMask, transform, new Size(48, 48),
-                            InterpolationFlags.Nearest);
-                    }
-                    Cv2.CvtColor(result.PatchColor, result.PatchGray, ColorConversionCodes.BGR2GRAY);
+                    result.Sample(image, search);
                     token.ThrowIfCancellationRequested();
                     return result;
                 }
@@ -176,32 +165,57 @@ namespace NOMAD.MissionPlanner
             {
                 double sx = current.Width / (double)previous.Bounds.Width;
                 double sy = current.Height / (double)previous.Bounds.Height;
-                using (var mapping = Mat.FromArray(new double[,] { { sx, 0, current.X - sx * previous.Bounds.X },
-                    { 0, sy, current.Y - sy * previous.Bounds.Y } }))
-                {
-                    result.Mask = new Mat();
-                    Cv2.WarpAffine(previous.Mask, result.Mask, mapping, image.Size(), InterpolationFlags.Nearest);
-                    result.Quad = previous.Quad.Select(p => new Point2f((float)(current.X + (p.X - previous.Bounds.X) * sx),
-                        (float)(current.Y + (p.Y - previous.Bounds.Y) * sy))).ToArray();
-                }
+                var box = new Rect(current.X, current.Y, current.Width, current.Height);
+                result.Quad = previous.Quad.Select(p => new Point2f((float)(current.X + (p.X - previous.Bounds.X) * sx),
+                    (float)(current.Y + (p.Y - previous.Bounds.Y) * sy))).ToArray();
+                result.Mask = new Mat(image.Size(), MatType.CV_8UC1, Scalar.All(0));
+                using (var scale = Mat.FromArray(new double[,] { { sx, 0, 0 }, { 0, sy, 0 } }))
+                using (var source = new Mat(previous.Mask, new Rect(previous.Bounds.X, previous.Bounds.Y,
+                    previous.Bounds.Width, previous.Bounds.Height)))
+                using (var target = new Mat(result.Mask, box))
+                { Cv2.WarpAffine(source, target, scale, box.Size, InterpolationFlags.Nearest); }
                 result.Bounds = current; result.AngleDegrees = previous.AngleDegrees; result.Projected = true;
-                result.Area = Cv2.CountNonZero(result.Mask);
-                var moments = Cv2.Moments(result.Mask, true);
-                result.Centre = new System.Drawing.PointF((float)(moments.M10 / moments.M00), (float)(moments.M01 / moments.M00));
-                var mean = Cv2.Mean(image, result.Mask);
-                result.ColourMean = new[] { mean.Val0, mean.Val1, mean.Val2 };
-                result.Neutralized = new Mat(image.Size(), image.Type(), mean); image.CopyTo(result.Neutralized, result.Mask);
-                result.PatchColor = new Mat(); result.PatchMask = new Mat(); result.PatchGray = new Mat();
-                using (var mapping = Cv2.GetPerspectiveTransform(result.Quad,
-                    new[] { new Point2f(0, 0), new Point2f(47, 0), new Point2f(47, 47), new Point2f(0, 47) }))
+                using (var local = new Mat(result.Mask, box))
                 {
-                    Cv2.WarpPerspective(result.Neutralized, result.PatchColor, mapping, new Size(48, 48));
-                    Cv2.WarpPerspective(result.Mask, result.PatchMask, mapping, new Size(48, 48), InterpolationFlags.Nearest);
+                    result.Area = Cv2.CountNonZero(local);
+                    var moments = Cv2.Moments(local, true);
+                    result.Centre = new System.Drawing.PointF((float)(box.X + moments.M10 / moments.M00),
+                        (float)(box.Y + moments.M01 / moments.M00));
                 }
-                Cv2.CvtColor(result.PatchColor, result.PatchGray, ColorConversionCodes.BGR2GRAY);
+                result.Sample(image, box);
                 token.ThrowIfCancellationRequested(); return result;
             }
             catch { result.Dispose(); throw; }
+        }
+
+        // Colour mean and neutral-background 48x48 patches. The mask is empty outside `extent`, so only it and the
+        // quad's bilinear sampling footprint are read: the same patches as full-frame filling, without frame copies.
+        private void Sample(Mat image, Rect extent)
+        {
+            Scalar mean;
+            using (var colour = new Mat(image, extent))
+            using (var local = new Mat(Mask, extent)) { mean = Cv2.Mean(colour, local); }
+            ColourMean = new[] { mean.Val0, mean.Val1, mean.Val2 };
+            var quad = System.Drawing.Rectangle.FromLTRB((int)Math.Floor(Quad.Min(p => p.X)) - 2,
+                (int)Math.Floor(Quad.Min(p => p.Y)) - 2, (int)Math.Ceiling(Quad.Max(p => p.X)) + 3,
+                (int)Math.Ceiling(Quad.Max(p => p.Y)) + 3);
+            var area = System.Drawing.Rectangle.Intersect(System.Drawing.Rectangle.Union(
+                new System.Drawing.Rectangle(extent.X, extent.Y, extent.Width, extent.Height), quad),
+                new System.Drawing.Rectangle(0, 0, image.Width, image.Height));
+            var footprint = new Rect(area.X, area.Y, area.Width, area.Height);
+            Neutralized = new Mat(footprint.Size, image.Type(), mean);
+            PatchColor = new Mat(); PatchMask = new Mat(); PatchGray = new Mat();
+            using (var colour = new Mat(image, footprint))
+            using (var mask = new Mat(Mask, footprint))
+            using (var mapping = Cv2.GetPerspectiveTransform(
+                Quad.Select(p => new Point2f(p.X - footprint.X, p.Y - footprint.Y)),
+                new[] { new Point2f(0, 0), new Point2f(47, 0), new Point2f(47, 47), new Point2f(0, 47) }))
+            {
+                colour.CopyTo(Neutralized, mask);
+                Cv2.WarpPerspective(Neutralized, PatchColor, mapping, new Size(48, 48));
+                Cv2.WarpPerspective(mask, PatchMask, mapping, new Size(48, 48), InterpolationFlags.Nearest);
+            }
+            Cv2.CvtColor(PatchColor, PatchGray, ColorConversionCodes.BGR2GRAY);
         }
 
         internal ObjectForeground Clone()

@@ -34,7 +34,8 @@ managed dependencies. The worker embeds ONNX Runtime 1.24.4 (DirectML build), Di
 OpenCvSharp, YOLOX Nano, the EfficientTAM Ti512 export and license notices.
 Detection uses the CPU provider; GPU Object tracking is explicit per camera.
 The worker also embeds the pinned 0.7 MB ViTTrack CPU template model and Apache license
-for small or poorly separated selections; this requires no GPU or additional runtime.
+for small or poorly separated selections and box proposals on separated ones; this
+requires no GPU or additional runtime.
 The installed plugin extracts verified assets and performs no downloads.
 `VisionRuntime` retains native C-runtime isolation inside the child (GStreamer can
 also load a conflicting C runtime);
@@ -86,6 +87,9 @@ Missing upstream samples keep the capture polling and do not trigger
 a restart loop. Cleanup and extraction preserve operator files.
 
 The vision gate checks the pinned CPU detector and native runtime load order.
+It also sweeps a rendered HD deer (from rest to about two body lengths per frame) and a textured
+Object; both must stay verified on independent truth, and any verified aim elsewhere fails. A deer that
+accelerates out of the frame must then report no target while its search coasts off-image.
 Set `NOMAD_TEST_TAM_MODEL` to a prepared EfficientTAM export folder for the optional
 NVIDIA/GPU cohort; otherwise that cohort explicitly skips. Optional
 `-TrackingFrames` / `-TrackingGroundTruth` arguments accept an external 120-frame

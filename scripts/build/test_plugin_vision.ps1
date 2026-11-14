@@ -46,6 +46,7 @@ $sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests
 $sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.Gpu.cs'
 $sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.Performance.cs'
 $sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.CpuTemplate.cs'
+$sources += Join-Path $repoRoot 'mission_planner\tests\vision\VisualTrackerTests.FastMotion.cs'
 $resources = @(Get-ChildItem -LiteralPath $runtime -File | ForEach-Object {
     "/resource:$($_.FullName),NOMAD.Vision.$($_.Name)"
 })
