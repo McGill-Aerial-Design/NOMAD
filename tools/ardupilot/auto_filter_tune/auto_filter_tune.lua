@@ -1,15 +1,12 @@
 --[[
- Auto Filter Tune (AFT): guided gyro harmonic-notch setup for multicopters.
+ Auto Filter Tune (AFT): gyro harmonic-notch and low-pass tuning from normal hovers, for ArduCopter
+ and ArduPlane quadplanes. The script never commands the vehicle and never changes filters while armed.
 
- Workflow (the script never commands the vehicle and never changes filters while armed):
-   1. Measure: fly a normal, gentle hover in any mode. The script samples ESC RPM, the
-      filtered gyro, AHRS vibration, throttle, yaw output and the native FFT hover estimate.
-   2. Calculate: after disarm it checks for faults, then prints a recommended notch set.
-   3. Apply: on the ground set AFT_ACTION=1. Previous values are written to aft_session.txt
-      first. Reboot.
-   4. Verify: fly the same hover. After disarm the residual gyro noise is compared with the
-      measurement flight. A worse or faulty flight restores the previous values automatically.
-   5. Accept with AFT_ACTION=2, or restore at any time on the ground with AFT_ACTION=3.
+ Each hover is measured (ESC RPM, filtered gyro, vibration, throttle, yaw output, FFT hover peak) and
+ checked for faults after disarm. A clean hover plans one step (notch, then low-pass, then pruning);
+ the step is applied on the ground after the previous values are saved to aft_session.txt, and the
+ next hover verifies it. A worse or faulty verification flight restores the previous values.
+ AFT_AUTO selects how much of this runs without AFT_ACTION (see its description).
 --]]
 -- luacheck: only 0
 
@@ -58,10 +55,10 @@ local AFT_IMB_PCT = bind("IMB_PCT", 4, 15)
 --[[
   // @Param: AFT_NOTCH_MAX
   // @DisplayName: Notch budget
-  // @Description: Maximum notch filters (sources x harmonics x notch multiplicity x active IMUs). Lua cannot read CPU load, so this is the CPU guard. Lower it on F4/F7 boards.
+  // @Description: Maximum notch filters at a 1 kHz gyro rate (sources x harmonics x notch multiplicity x notched IMUs); the budget shrinks in proportion at faster INS_GYRO_RATE, because each notch runs once per gyro sample. Lua cannot read CPU load, so this is the CPU guard. 16 fits per-motor notches on a quad or hexa at 1 kHz; use about 8 on F4, and raise it (e.g. 48) on an H7 running 2-4 kHz.
   // @Range: 4 64
 --]]
-local AFT_NOTCH_MAX = bind("NOTCH_MAX", 5, 24)
+local AFT_NOTCH_MAX = bind("NOTCH_MAX", 5, 16)
 --[[
   // @Param: AFT_VERIFY_RAT
   // @DisplayName: Verification noise ratio
@@ -108,15 +105,15 @@ local AFT_BLADES = bind("BLADES", 11, 0)
 --[[
   // @Param: AFT_LPF_MAX
   // @DisplayName: Gyro low-pass ceiling
-  // @Description: Once the notches match the recommendation, raise INS_GYRO_FILTER in verified 25% steps up to this. 0 disables the low-pass stage.
+  // @Description: After the notch step, raise INS_GYRO_FILTER to this in one verified step (halfway after a failure). 0: the notch FREQ (the notches cover everything above it). -1 skips the low-pass stage.
   // @Units: Hz
-  // @Range: 0 300
+  // @Range: -1 300
 --]]
 local AFT_LPF_MAX = bind("LPF_MAX", 12, 0)
 --[[
   // @Param: AFT_LPF_RAT
   // @DisplayName: Low-pass step noise ratio
-  // @Description: A low-pass step passes when residual gyro noise is at most this multiple of the flight before it.
+  // @Description: A low-pass step passes when residual gyro noise is at most this multiple of the untuned first flight's.
   // @Range: 1 2
 --]]
 local AFT_LPF_RAT = bind("LPF_RAT", 13, 1.3)
@@ -135,6 +132,10 @@ local AFT_TEMP_RISE = bind("TEMP_RISE", 14, 10)
   // @Values: 0:Manual,1:Auto without reboot,2:Fully automatic
 --]]
 local AFT_AUTO = bind("AUTO", 15, 2)
+
+-- get_roll/get_pitch are deprecated in 4.7 (a deprecated call blocks arming); 4.6 and older lack the _rad names
+local AHRS_ROLL = ahrs.get_roll_rad or ahrs.get_roll
+local AHRS_PITCH = ahrs.get_pitch_rad or ahrs.get_pitch
 
 local STEADY_RAD = 0.6      -- low-passed roll/pitch rate gate for a "steady" sample
 local STOP_FRACTION = 0.1   -- motor at <10% of the others' mean RPM counts as stopped
@@ -203,6 +204,15 @@ local function healthy_imus()
         end
     end
     return n
+end
+
+-- Rate the gyro filters run at: INS_GYRO_RATE applies only to IMUs in INS_FAST_SAMPLE, others run at 1 kHz.
+-- ponytail: the primary is assumed to be IMU1, and a sensor without the chosen rate runs a different one.
+local function gyro_rate_hz()
+    if bits(param:get("INS_FAST_SAMPLE")) & 1 == 0 then
+        return 1000
+    end
+    return 1000 * 2 ^ bits(param:get("INS_GYRO_RATE"))
 end
 
 local function bank_of(name)
@@ -280,22 +290,31 @@ local m = nil
 
 local function new_stats()
     return {
-        steady_s = 0, n = 0, noise_sq = 0, rate_sum = 0, yaw_sum = 0, thr_sum = 0,
-        vibe_sum = 0, vibe_max = 0, rpm_n = 0, rpm_fresh = 0, rpm_sum = {}, pwm_sum = {}, hz_min = math.huge,
+        steady_s = 0, n = 0, noise_sq = 0, noise_n = 0, windows = {}, rate_sum = 0, yaw_sum = 0, thr_sum = 0,
+        vibe_sum = 0, vibe_max = 0, rpm_n = 0, rpm_fresh = 0, rpm_sum = {}, pwm_sum = {},
         stop_ms = {}, spikes = {}, prev_hz = nil, temp_max = nil, unhealthy_ms = 0, last_gyro = nil, last_ms = 0, rate_lp = 0, fault = nil,
         fft_start = param:get("FFT_FREQ_HOVER"),
     }
 end
 
 local function sample(now, dt)
-    -- spool state 3 = THROTTLE_UNLIMITED: excludes spool-up, touchdown and spool-down
-    if not vehicle:get_likely_flying() or motors:get_spool_state() ~= 3 then
-        m.last_gyro = nil
+    -- spool state 3 = THROTTLE_UNLIMITED: excludes spool-up, touchdown and spool-down. A quadplane's (tilt)
+    -- motors also run in forward flight and transitions, where a non-tilting motor may stop: VTOL modes only.
+    local vtol = quadplane == nil or quadplane:in_vtol_mode()
+    if not vehicle:get_likely_flying() or motors:get_spool_state() ~= 3 or not vtol then
+        m.last_gyro, m.last_att = nil, nil
         return
     end
     local g = ins:get_gyro(0)
     local thr = motors:get_throttle()
-    local rate = math.sqrt(g:x() ^ 2 + g:y() ^ 2)
+    -- Body motion from the attitude, not the gyro: |gyro| rectifies motor vibration into a false
+    -- "oscillation" on exactly the noisy frames this script exists to fix. Attitude integrates it away.
+    local roll, pitch = AHRS_ROLL(ahrs), AHRS_PITCH(ahrs)
+    local rate = 0
+    if m.last_att and dt > 0 then
+        rate = math.sqrt((roll - m.last_att[1]) ^ 2 + (pitch - m.last_att[2]) ^ 2) / dt
+    end
+    m.last_att = { roll, pitch }
     m.rate_lp = m.rate_lp + math.min(dt / 0.2, 1) * (rate - m.rate_lp)
     -- a touchdown jolt can flag one sample; a persistent loss of health is a fault
     m.unhealthy_ms = ins:get_gyro_health(0) and 0 or m.unhealthy_ms + dt * 1000
@@ -356,7 +375,6 @@ local function sample(now, dt)
         m.rpm_fresh = m.rpm_fresh + 1
         for i = 1, #motors_out do
             m.rpm_sum[i] = (m.rpm_sum[i] or 0) + hz[i]
-            m.hz_min = math.min(m.hz_min, hz[i])
         end
         -- One motor's RPM jumping >30% between ~10 ms samples while the others hold is a telemetry
         -- glitch (typically a timer/DMA conflict on that output), not a real speed change.
@@ -388,6 +406,12 @@ local function sample(now, dt)
     if m.last_gyro and now - m.last_ms < 30 then
         local dx, dy = g:x() - m.last_gyro:x(), g:y() - m.last_gyro:y()
         m.noise_sq = m.noise_sq + (dx * dx + dy * dy) / 4
+        m.noise_n = m.noise_n + 1
+        -- ~5 s windows: the flight's median window ignores bursts from gusts and position corrections
+        if m.noise_n >= 500 then
+            m.windows[#m.windows + 1] = m.noise_sq / m.noise_n
+            m.noise_sq, m.noise_n = 0, 0
+        end
     end
     m.last_gyro = g
     m.last_ms = now
@@ -405,7 +429,12 @@ local function summarize()
             s.spike_rate, s.spike_motor = rate, i
         end
     end
-    s.noise = math.sqrt(m.noise_sq / (m.n - 1)) * RAD2DEG
+    local w = m.windows
+    if #w == 0 then
+        w = { m.noise_sq / math.max(1, m.noise_n) }
+    end
+    table.sort(w)
+    s.noise = math.sqrt((w[(#w + 1) // 2] + w[#w // 2 + 1]) / 2) * RAD2DEG
     s.osc = m.rate_sum / m.n * RAD2DEG
     s.yaw = m.yaw_sum / m.n
     s.thr = m.thr_sum / m.n
@@ -428,9 +457,12 @@ local function summarize()
     if m.rpm_fresh > 0 then
         local sum, worst, worst_i = 0, 0, 0
         s.motor_hz = {}
+        -- slowest motor's mean hover speed; an instantaneous minimum is one gust or one telemetry dip
+        s.hz_min = math.huge
         for i = 1, #motors_out do
             s.motor_hz[i] = m.rpm_sum[i] / m.rpm_fresh
             sum = sum + s.motor_hz[i]
+            s.hz_min = math.min(s.hz_min, s.motor_hz[i])
         end
         s.hz_mean = sum / #motors_out
         for i = 1, #motors_out do
@@ -440,7 +472,6 @@ local function summarize()
             end
         end
         s.imbalance, s.imbalance_motor = worst, worst_i
-        s.hz_min = m.hz_min
     end
     if (param:get("FFT_ENABLE") or 0) > 0 then
         local fft = param:get("FFT_FREQ_HOVER")
@@ -464,18 +495,23 @@ local function refusal(s)
     if s.vibe_max > AFT_VIBE_MAX:get() then
         return string.format("vibration %.0f m/s/s, fix mounting/props first", s.vibe_max)
     end
-    if math.abs(s.yaw) > AFT_YAW_MAX:get() then
-        return string.format("yaw output bias %.2f, check motor tilt/direction/thrust", s.yaw)
-    end
     if s.osc > AFT_OSC_DPS:get() then
         return string.format("hover rate %.1f deg/s, oscillation: tune PIDs first", s.osc)
-    end
-    if s.out_imbalance > AFT_IMB_PCT:get() then
-        return string.format("motor %d output %.0f%% off mean, check motor/ESC/prop", s.out_motor, s.out_imbalance)
     end
     if s.spike_rate > 0.005 then
         return string.format("motor %d RPM spikes (%.1f%% of samples): output timer/DMA conflict? move ESC "
             .. "to another output", s.spike_motor, s.spike_rate * 100)
+    end
+    -- A tricopter's rear motor carries a different load and its yaw is vectored, so motor balance and
+    -- yaw bias say nothing about its health. Per-motor RPM notches track unequal motors either way.
+    if bits(param:get("FRAME_CLASS") or param:get("Q_FRAME_CLASS")) == 7 then
+        return nil
+    end
+    if math.abs(s.yaw) > AFT_YAW_MAX:get() then
+        return string.format("yaw output bias %.2f, check motor tilt/direction/thrust", s.yaw)
+    end
+    if s.out_imbalance > AFT_IMB_PCT:get() then
+        return string.format("motor %d output %.0f%% off mean, check motor/ESC/prop", s.out_motor, s.out_imbalance)
     end
     if s.fresh >= AFT_RPM_OK:get() and s.imbalance > AFT_IMB_PCT:get() then
         return string.format("motor %d RPM %.0f%% off mean, check motor/prop", s.imbalance_motor, s.imbalance)
@@ -498,9 +534,10 @@ local function recommend(s)
     local function put(name, value)
         rec[#rec + 1] = { name, value }
     end
-    local gyro_hz = 1000 * 2 ^ bits(param:get("INS_GYRO_RATE"))
+    local gyro_hz = gyro_rate_hz()
     local limit_hz = 0.45 * gyro_hz
-    local imus = math.max(1, healthy_imus())
+    -- Notches run on the primary IMU only unless OPTS bit 3 (EnableOnAllIMUs) is set
+    local imus = 1
     -- Starting harmonics for a fresh bank: 1st-3rd covers 2- and 3-blade props (2 blades load the
     -- 2nd, 3 blades the 3rd). An enabled bank keeps its harmonics; the pruning stage trims them.
     local opts, hmncs = 0, bits(AFT_BLADES:get()) == 2 and 3 or 7
@@ -510,18 +547,26 @@ local function recommend(s)
         hmncs = current > 0 and current or hmncs
     end
     local mult = notch_multiplicity(opts)
-    local budget = AFT_NOTCH_MAX:get()
+    -- each notch runs once per gyro sample: AFT_NOTCH_MAX counts 1 kHz filters, so 4 kHz affords a quarter
+    local budget = math.floor(AFT_NOTCH_MAX:get() * 1000 / gyro_hz)
     local rpm_ok = s.hz_mean and s.fresh >= AFT_RPM_OK:get()
     local fft_on = (param:get("FFT_ENABLE") or 0) > 0
     local resonance = nil
 
-    -- The FFT sees the raw spectrum. Match its dominant hover peak to a motor harmonic.
+    -- The FFT sees the raw spectrum. FFT_FREQ_HOVER is the roll and pitch peaks averaged by energy, so when
+    -- the two axes peak on different motor harmonics it lands between them. A resonance there cannot be told
+    -- apart from that, so both harmonics are notched (pruning drops a useless one); only a peak outside the
+    -- harmonic span counts as a frame resonance.
     if s.fft_hz and s.hz_mean then
         local ratio = s.fft_hz / s.hz_mean
         local k = math.floor(ratio + 0.5)
         if k >= 1 and k <= 4 and math.abs(ratio - k) / k < 0.15 then
             say(MAV_INFO, "FFT peak %.0fHz is motor harmonic %d", s.fft_hz, k)
             hmncs = hmncs | (1 << (k - 1))
+        elseif ratio > 1 and ratio < 4 then
+            k = math.floor(ratio)
+            say(MAV_INFO, "FFT peak %.0fHz is between motor harmonics %d and %d", s.fft_hz, k, k + 1)
+            hmncs = hmncs | (3 << (k - 1))
         else
             resonance = s.fft_hz
             say(MAV_INFO, "FFT peak %.0fHz is %.2fx motor freq: separate resonance", s.fft_hz, ratio)
@@ -568,12 +613,15 @@ local function recommend(s)
         end
     end
 
-    -- CPU budget: prefer one notch per motor, then fewer harmonics.
-    -- Per-motor notches are narrow, so they also update at loop rate (OPTS bit 2) to keep up.
+    if opts & 8 ~= 0 then
+        imus = math.max(1, healthy_imus())
+    end
+    -- CPU budget: prefer one notch per motor, then fewer harmonics. Loop-rate updates (OPTS 4) are left
+    -- to the operator: ArduPilot recommends them only on H7-class CPUs, and Lua cannot tell the CPU.
     local sources = 1
     if rpm_ok and #motors_out > 1 and #motors_out * popcount(hmncs) * mult * imus <= budget then
         sources = #motors_out
-        opts = opts | 2 | 4
+        opts = opts | 2
     else
         opts = opts & ~2
     end
@@ -644,13 +692,16 @@ end
 -- Ground actions and stages
 --
 -- Each verified flight is the baseline for the next step, so the tune advances one step per hover:
---   1 notch:  tracking source, FREQ, BW and harmonics from the measurement
---   2 prune:  drop the highest harmonic while residual noise does not rise (unused notches only add lag)
---   3 narrow: cut notch BW by 20% while residual noise does not rise (narrower notches add less lag)
---   4 lpf:    raise INS_GYRO_FILTER by 25% toward its ceiling while noise rises at most AFT_LPF_RAT
+--   1 notch: tracking source, FREQ, BW and harmonics from the measurement
+--   2 lpf:   raise INS_GYRO_FILTER straight to its ceiling (most of the lag the filters add is the
+--            low-pass); after a failure try the geometric midpoint once
+--   3 prune: drop each harmonic above the lowest, top down, while residual noise does not rise. It runs
+--            after the low-pass stage, because a low cutoff hides the harmonics it would judge.
+-- Notch width is not stepped: narrowing below the recommended BW changes the residual by less than the
+-- measurement repeats (about 5%) and saves only about 1-2 degrees of lag at 10 Hz.
 ----------------------------------------------------------------------------------------------------
-local STAGE_NAME = { "notch", "prune", "narrow", "lpf" }
-local STAGE_FLAG = { "notch_done", "prune_done", "bw_done", "lpf_done" }
+local STAGE_NAME = { "notch", "lpf", "prune" }
+local STAGE_FLAG = { "notch_done", "lpf_done", "prune_done" }
 local applied_this_boot = false
 local reboot_at = nil
 
@@ -756,34 +807,35 @@ local function plan_next(s)
         b.notch_done = 1
         say(MAV_INFO, "notches already match the recommendation")
     end
-    local notch_on = (param:get("INS_HNTCH_ENABLE") or 0) > 0
-    if notch_on and (b.prune_done or 0) < 1 then
-        local h = bits(param:get("INS_HNTCH_HMNCS"))
-        if popcount(h) > 1 then
-            local top = 15
-            while h & (1 << top) == 0 do
-                top = top - 1
-            end
-            return 2, { { "INS_HNTCH_HMNCS", h & ~(1 << top) } }
-        end
-        b.prune_done = 1
-    end
-    if notch_on and (b.bw_done or 0) < 1 then
-        local bw, freq = param:get("INS_HNTCH_BW") or 0, param:get("INS_HNTCH_FREQ") or 0
-        local narrower = math.floor(bw * 0.8)
-        -- floor at FREQ/8: narrower than that needs tracking precision the RPM/FFT data rarely has
-        if narrower >= math.max(5, freq / 8) then
-            return 3, { { "INS_HNTCH_BW", narrower } }
-        end
-        b.bw_done = 1
-    end
     if (b.lpf_done or 0) < 1 then
         local cur = param:get("INS_GYRO_FILTER") or 0
-        local higher = math.min(lpf_ceiling(), math.floor(cur * 1.25 + 0.5))
-        if higher > cur then
-            return 4, { { "INS_GYRO_FILTER", higher } }
+        local ceiling = lpf_ceiling()
+        local target = ceiling
+        if (b.lpf_fail or 0) > 0 then
+            target = math.floor(math.sqrt(cur * ceiling) + 0.5)
+            b.lpf_done = 1  -- the midpoint is the last low-pass step, whatever its outcome
+        end
+        if target >= cur + 2 then
+            return 2, { { "INS_GYRO_FILTER", target } }
         end
         b.lpf_done = 1
+    end
+    if (param:get("INS_HNTCH_ENABLE") or 0) > 0 and (b.prune_done or 0) < 1 then
+        local h = bits(param:get("INS_HNTCH_HMNCS"))
+        local k = b.prune_k or 15
+        -- Next set harmonic at or below k. The last one left is tried too, by disabling the bank: at the
+        -- raised low-pass, a notch that removes no measurable noise only costs CPU and lag.
+        while k >= 0 and h & (1 << k) == 0 do
+            k = k - 1
+        end
+        if k >= 0 then
+            b.prune_k = k - 1
+            if h == 1 << k then
+                return 3, { { "INS_HNTCH_ENABLE", 0 } }
+            end
+            return 3, { { "INS_HNTCH_HMNCS", h & ~(1 << k) } }
+        end
+        b.prune_done = 1
     end
     return nil
 end
@@ -801,6 +853,7 @@ local function plan_and_start(s)
     session.rec = rec
     session.base.stage = stage
     session.base.noise = s.noise
+    session.base.noise0 = session.base.noise0 or s.noise  -- the untuned flight
     session.base.temp = s.temp_max or -1000
     session.phase = "PROPOSED"
     if not save_session() then
@@ -880,7 +933,12 @@ local function verify_failure(s, why)
     end
     local stage = session.base.stage or 1
     local ratio = s.noise / session.base.noise
-    local limit = stage == 4 and AFT_LPF_RAT:get() or AFT_VERIFY_RAT:get()
+    local limit = AFT_VERIFY_RAT:get()
+    if stage == 2 then
+        -- A higher cutoff always lets more noise through; that is the trade. It is judged against the untuned
+        -- flight, not the previous one, so a series of small passing steps cannot ratchet the noise up.
+        limit = AFT_LPF_RAT:get() * (session.base.noise0 or session.base.noise) / session.base.noise
+    end
     if ratio > limit then
         return string.format("noise %.2f -> %.2f dps (x%.2f > %.2f)", session.base.noise, s.noise, ratio, limit)
     end
@@ -914,7 +972,7 @@ local function finish_flight(verify_counts)
             return
         end
         if short then
-            say(MAV_WARN, "not verified: %s; hover again", why)
+            say(MAV_WARN, "not verified: %s; hover again, or AFT_ACTION=3 restores", why)
             return
         end
         local stage = session.base.stage or 1
@@ -922,10 +980,21 @@ local function finish_flight(verify_counts)
         if failed then
             say(MAV_ERR, "%s step failed: %s", STAGE_NAME[stage], failed)
             restore()
-            session.base[STAGE_FLAG[stage]] = 1
-            -- a failed notch stage means the measurement cannot be trusted: stop rather than tune on top
-            session.phase = stage == 1 and "DONE" or "IDLE"
-            save_session()
+            if stage == 1 then
+                -- a failed notch stage means the measurement cannot be trusted: stop rather than tune on top
+                session.phase = "DONE"
+                save_session()
+                return
+            end
+            if stage == 2 then
+                local key = (session.base.lpf_fail or 0) < 1 and "lpf_fail" or "lpf_done"
+                session.base[key] = 1
+            end
+            -- The restored filters are the ones the baseline flight flew: plan the next step now
+            -- instead of spending a hover re-measuring them.
+            session.phase = "IDLE"
+            local temp = session.base.temp or -1000
+            plan_and_start({ noise = session.base.noise, temp_max = temp > -1000 and temp or nil })
             return
         end
         say(MAV_NOTICE, "%s step VERIFIED: noise %.2f -> %.2f dps", STAGE_NAME[stage], session.base.noise, s.noise)
@@ -965,7 +1034,7 @@ end
 local function preflight_report()
     motors_out = motor_outputs()
     local loop = param:get("SCHED_LOOP_RATE") or 0
-    local gyro_hz = 1000 * 2 ^ bits(param:get("INS_GYRO_RATE"))
+    local gyro_hz = gyro_rate_hz()
     say(MAV_INFO, "IMUs %d gyro %.0fHz loop %.0fHz motors %d phase %s", healthy_imus(), gyro_hz, loop,
         #motors_out, session.phase)
     local fft = param:get("FFT_ENABLE")
@@ -973,6 +1042,8 @@ local function preflight_report()
         bits(param:get("INS_HNTCH_ENABLE")), bits(param:get("INS_HNTCH_MODE")), param:get("INS_HNTCH_FREQ") or 0,
         bits(param:get("INS_HNTCH_HMNCS")), bits(param:get("INS_HNTCH_OPTS")), param:get("INS_GYRO_FILTER") or 0,
         fft == nil and "not built" or (fft > 0 and "on" or "off"))
+    say(MAV_INFO, "notch budget %d filters at %.0fHz gyro%s", math.floor(AFT_NOTCH_MAX:get() * 1000 / gyro_hz),
+        gyro_hz, (param:get("FSTRATE_ENABLE") or 0) > 0 and ", fast rate thread on" or "")
     if #motors_out == 0 then
         say(MAV_WARN, "no MotorN outputs found; RPM checks disabled")
     end

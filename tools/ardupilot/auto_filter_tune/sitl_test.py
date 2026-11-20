@@ -17,6 +17,7 @@ from pathlib import Path
 from pymavlink import mavutil
 
 HERE = Path(__file__).resolve().parent
+SCRIPT = HERE / "auto_filter_tune.lua"  # sweep.py points this at a saved copy to compare versions
 SPEEDUP = 10
 # SITL motor noise on the 1st+2nd harmonic only (2-blade props). Gyro LPF high enough to see it.
 VEHICLE = {
@@ -34,25 +35,38 @@ VEHICLE = {
 
 
 class Sitl:
-    def __init__(self, ardupilot, params):
+    def __init__(
+        self,
+        ardupilot,
+        params,
+        instance=0,
+        model="quad",
+        defaults=(),
+        binary=None,
+        base="default_params/copter.parm",
+        speedup=SPEEDUP,
+    ):
+        """`base` and `defaults` are parameter files relative to Tools/autotest, loaded before `params`."""
         runs = Path.home() / "aft-sitl-runs"
         runs.mkdir(exist_ok=True)
         self.run = Path(tempfile.mkdtemp(prefix="run-", dir=runs))
         (self.run / "scripts").mkdir()
-        shutil.copy(HERE / "auto_filter_tune.lua", self.run / "scripts")
+        shutil.copy(SCRIPT, self.run / "scripts" / "auto_filter_tune.lua")
         extra = self.run / "extra.parm"
         extra.write_text("".join(f"{k} {v}\n" for k, v in {**VEHICLE, **params}.items()))
-        defaults = f"{ardupilot}/Tools/autotest/default_params/copter.parm,{extra}"
+        files = [base, *defaults]
+        defaults = ",".join([*(f"{ardupilot}/Tools/autotest/{f}" for f in files), str(extra)])
+        self.port = 5760 + 10 * instance
         cmd = [
-            f"{ardupilot}/build/sitl/bin/arducopter",
+            binary or f"{ardupilot}/build/sitl/bin/arducopter",
+            f"-I{instance}",
             "--model",
-            "quad",
+            model,
             "--speedup",
-            str(SPEEDUP),
+            str(speedup),
             "--defaults",
             defaults,
             "-w",
-            "-I0",
             "--home",
             "45.5,-73.6,50,0",
         ]
@@ -61,14 +75,18 @@ class Sitl:
         self.text = []
         self.mark = 0
         self.handled = 0
-        self.connect()
+        try:
+            self.connect()
+        except RuntimeError:
+            self.close()  # a SITL that never came up (e.g. a model that fails to load) must not linger
+            raise
 
     def connect(self):
         deadline = time.time() + 60
         while True:
             try:
                 # no silent auto-reconnect: a reboot must be seen as a dropped link, see reconnect()
-                self.mav = mavutil.mavlink_connection("tcp:127.0.0.1:5760", source_system=250)
+                self.mav = mavutil.mavlink_connection(f"tcp:127.0.0.1:{self.port}", source_system=250)
                 if self.mav.wait_heartbeat(timeout=10):
                     break
             except OSError:
@@ -171,6 +189,19 @@ class Sitl:
             self.handled = len(self.text)
             self.command_reboot()
 
+    def wait_sim(self, seconds):
+        """Pump until `seconds` of simulated time pass: heavy models run slower than SPEEDUP."""
+        start = []
+
+        def done(m):
+            t = getattr(m, "time_boot_ms", None)
+            if t is None:
+                return False
+            start[:] = start or [t]
+            return t - start[0] >= seconds * 1000
+
+        assert self.pump(3 * seconds + 30, done), f"{seconds}s of sim time did not pass"
+
     def command(self, cmd, *args):
         self.mav.mav.command_long_send(1, 1, cmd, 0, *args, *([0] * (7 - len(args))))
         ack = self.pump(5, lambda m: m.get_type() == "COMMAND_ACK" and m.command == cmd)
@@ -187,13 +218,13 @@ class Sitl:
         assert self.command(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 10), "takeoff rejected"
         alt = self.pump(60, lambda m: m.get_type() == "GLOBAL_POSITION_INT" and m.relative_alt > 9000)
         assert alt, "did not reach 9 m"
-        self.pump(hover_s / SPEEDUP + 1)
+        self.wait_sim(hover_s)
         self.mav.set_mode("LAND")
         landed = self.pump(
             90,
             lambda m: (
                 m.get_type() == "HEARTBEAT"
-                and m.type == 2
+                and m.autopilot != 8
                 and not m.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
             ),
         )
@@ -203,7 +234,7 @@ class Sitl:
             # never completes; the vehicle is down, so disarm like a pilot would.
             print("    harness: forced disarm after SITL touchdown tip-over")
             self.command(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0, 21196)
-            landed = self.pump(10, lambda m: m.get_type() == "HEARTBEAT" and m.type == 2 and not m.base_mode & 128)
+            landed = self.pump(10, lambda m: m.get_type() == "HEARTBEAT" and m.autopilot != 8 and not m.base_mode & 128)
         alt = pos.relative_alt / 1000 if pos else "?"
         assert landed, f"did not land and disarm (alt {alt} m, mode {self.mav.flightmode})"
         self.settle()
@@ -220,26 +251,23 @@ class Sitl:
 
 def auto_full(sitl):
     """Hands-off: only hover until DONE; every stage must run and end in a kept or restored step."""
-    for _flight in range(18):
+    for _flight in range(8):
         sitl.fly_hover()
         if sitl.saw("DONE"):
             break
     else:
-        raise AssertionError("tune did not finish within 18 flights")
+        raise AssertionError("tune did not finish within 8 flights")
     log = "\n".join(sitl.text)
-    # Whether a harmonic survives pruning depends on the low-pass in front of it (a 40 Hz LPF already
-    # crushes the 372 Hz 2nd harmonic), so only the stage outcomes are pinned, not the final mask.
-    for step in (
-        "notch step VERIFIED",
-        "prune step",
-        "narrow step VERIFIED",  # the last narrowing (BW 9) sits within noise repeatability: may pass or fail
-        "lpf step VERIFIED",
-    ):
+    for step in ("notch step VERIFIED", "lpf step VERIFIED", "prune step"):
         assert step in log, f"missing '{step}'"
     assert sitl.get("INS_HNTCH_MODE") == 3, "ESC telemetry tracking expected"
-    assert int(sitl.get("INS_HNTCH_HMNCS")) & 1, "pruning must keep the fundamental"
-    assert int(sitl.get("INS_HNTCH_OPTS")) & 6 == 6, "per-motor notches updated at loop rate expected"
-    assert sitl.get("INS_GYRO_FILTER") > 40, "low-pass stage should have raised the cutoff"
+    # The low-pass is raised before pruning, so the 372 Hz 2nd harmonic is no longer hidden behind a
+    # 40 Hz cutoff: pruning must keep exactly SITL's 1st+2nd harmonics.
+    assert int(sitl.get("INS_HNTCH_HMNCS")) == 3, "pruning must keep SITL's 1st and 2nd harmonics"
+    assert int(sitl.get("INS_HNTCH_OPTS")) & 6 == 2, "per-motor notches, no loop-rate updates"
+    # FREQ is 0.8 x the slowest motor's mean hover speed (~186 Hz), and the low-pass rises to it
+    assert sitl.get("INS_HNTCH_FREQ") > 120, "FREQ must follow mean hover RPM, not a momentary dip"
+    assert sitl.get("INS_GYRO_FILTER") > 120, "low-pass stage should have raised the cutoff to FREQ"
 
 
 def manual_mode_waits(sitl):
@@ -250,9 +278,13 @@ def manual_mode_waits(sitl):
 
 
 def esc_fft_harmonic(sitl):
+    """SITL's motor harmonics are equally strong, so roll and pitch can peak on different ones and the
+    energy-weighted FFT_FREQ_HOVER lands between them: either way it is motor noise, not a resonance."""
     sitl.fly_hover(60)
     hit = sitl.wait_text("FFT peak")
-    assert "motor harmonic 1" in hit, f"SITL's dominant peak is the motor fundamental: {hit}"
+    step = sitl.wait_text("notch step")
+    assert "motor harmonic" in hit, f"FFT peak not matched to the motor harmonics: {hit}"
+    assert "HNTC2" not in step, f"motor noise must not earn a second bank: {step}"
 
 
 def frame_resonance(sitl):
@@ -287,6 +319,19 @@ def no_esc_uses_fft(sitl):
     assert "HNTCH_MODE=4" in step and "HNTCH_FM_RAT=1" in step, f"expected FFT-driven notch: {step}"
 
 
+def fast_gyro_rate(sitl):
+    """4 kHz filters cost 4x CPU per notch: the 16-filter budget shrinks to 4, so no per-motor notches.
+
+    SITL registers its IMUs at 1 kHz whatever INS_GYRO_RATE says, so this checks the plan, not the filtering.
+    """
+    sitl.fly_hover()
+    step = sitl.wait_text("notch step")
+    # printed at boot, before the flight's text mark
+    budget = "notch budget 4 filters at 4000Hz gyro, fast rate thread on"
+    assert any(budget in t for t in sitl.text), "budget not scaled to gyro rate"
+    assert "HNTCH_OPTS=0" in step, f"per-motor notches exceed a 4 kHz budget: {step}"
+
+
 def short_hover_refused(sitl):
     sitl.fly_hover(2)
     hit = sitl.wait_text("REFUSED")
@@ -306,6 +351,7 @@ SCENARIOS = {
     "verify_fail_restores": (verify_fail_restores, {}),
     "no_esc_uses_fft": (no_esc_uses_fft, {"SIM_ESC_TELEM": 0, "FFT_ENABLE": 1}),
     "short_hover_refused": (short_hover_refused, {}),
+    "fast_gyro_rate": (fast_gyro_rate, {"INS_FAST_SAMPLE": 1, "INS_GYRO_RATE": 2, "FSTRATE_ENABLE": 1}),
 }
 
 
